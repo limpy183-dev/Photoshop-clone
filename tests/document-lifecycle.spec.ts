@@ -1,0 +1,66 @@
+import { expect, test } from "@playwright/test"
+
+async function openCommand(page: import("@playwright/test").Page, query: string) {
+  await page.locator("body").click({ position: { x: 20, y: 20 } })
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+K" : "Control+K")
+  await page.getByPlaceholder("Search tools, filters, panels, and commands").fill(query)
+  await page.keyboard.press("Enter")
+}
+
+test("closing a dirty document prompts before discarding changes", async ({ page }) => {
+  await page.goto("/")
+  await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
+
+  await openCommand(page, "New Layer")
+  await expect(page.getByText(/Untitled-1.*\*/)).toBeVisible()
+
+  await page.getByLabel("Close document").first().click()
+  await expect(page.getByRole("dialog", { name: /Save changes to Untitled-1/i })).toBeVisible()
+
+  await page.getByRole("button", { name: "Cancel" }).click()
+  await expect(page.getByText(/Untitled-1.*\*/)).toBeVisible()
+})
+
+test("autosave writes separate recovery entries for open documents", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.removeItem("ps-autosave-document-v1")
+    localStorage.removeItem("ps-autosave-documents-v2")
+    localStorage.setItem("ps-preferences", JSON.stringify({ autoSave: true }))
+  })
+
+  await page.goto("/")
+  await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
+  await openCommand(page, "Duplicate Document")
+
+  await page.waitForFunction(() => {
+    const raw = localStorage.getItem("ps-autosave-documents-v2")
+    if (!raw) return false
+    try {
+      const parsed = JSON.parse(raw)
+      return Array.isArray(parsed) && parsed.length >= 2
+    } catch {
+      return false
+    }
+  })
+
+  const names = await page.evaluate(() => {
+    const parsed = JSON.parse(localStorage.getItem("ps-autosave-documents-v2") ?? "[]")
+    return parsed.map((entry: { name: string; documentId: string }) => `${entry.documentId}:${entry.name}`).sort()
+  })
+  expect(names.some((name: string) => name.includes("Untitled-1"))).toBe(true)
+  expect(names.some((name: string) => name.includes("Untitled-1 copy"))).toBe(true)
+})
+
+test("export dialog guards browser-only export limitations", async ({ page }) => {
+  await page.goto("/")
+  await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
+
+  await openCommand(page, "Export As")
+  await expect(page.getByRole("dialog", { name: "Export As" })).toBeVisible()
+  await expect(page.getByText(/PNG export limitations/i)).toBeVisible()
+  await expect(page.getByText(/Layer structure:/i)).toBeVisible()
+
+  await page.getByRole("button", { name: "svg", exact: false }).click()
+  await expect(page.getByText(/SVG export limitations/i)).toBeVisible()
+  await expect(page.getByText(/Editable vector structure:/i)).toBeVisible()
+})

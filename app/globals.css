@@ -1,0 +1,175 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *));
+
+/* Photoshop-style dark interface theme */
+:root {
+  --background: oklch(0.18 0 0);
+  --foreground: oklch(0.92 0 0);
+  --card: oklch(0.22 0 0);
+  --card-foreground: oklch(0.92 0 0);
+  --popover: oklch(0.20 0 0);
+  --popover-foreground: oklch(0.92 0 0);
+  --primary: oklch(0.62 0.18 245);
+  --primary-foreground: oklch(0.98 0 0);
+  --secondary: oklch(0.27 0 0);
+  --secondary-foreground: oklch(0.92 0 0);
+  --muted: oklch(0.24 0 0);
+  --muted-foreground: oklch(0.65 0 0);
+  --accent: oklch(0.30 0 0);
+  --accent-foreground: oklch(0.98 0 0);
+  --destructive: oklch(0.55 0.22 25);
+  --destructive-foreground: oklch(0.98 0 0);
+  --border: oklch(0.30 0 0);
+  --input: oklch(0.24 0 0);
+  --ring: oklch(0.62 0.18 245);
+  --radius: 0.25rem;
+
+  /* Photoshop-specific tokens */
+  --ps-chrome: oklch(0.16 0 0);       /* darkest panel chrome */
+  --ps-panel: oklch(0.22 0 0);        /* mid panel */
+  --ps-panel-2: oklch(0.26 0 0);      /* raised panel */
+  --ps-canvas-bg: oklch(0.32 0 0);    /* canvas surrounding gray */
+  --ps-divider: oklch(0.12 0 0);
+  --ps-text: oklch(0.88 0 0);
+  --ps-text-dim: oklch(0.62 0 0);
+  --ps-accent: oklch(0.62 0.18 245);  /* Adobe-ish blue */
+  --ps-accent-2: oklch(0.72 0.16 245);
+  --ps-warning: oklch(0.78 0.16 80);
+  --ps-tool-active: oklch(0.30 0 0);
+  --ps-tool-hover: oklch(0.28 0 0);
+}
+
+.dark {
+  --background: oklch(0.18 0 0);
+  --foreground: oklch(0.92 0 0);
+  --card: oklch(0.22 0 0);
+  --card-foreground: oklch(0.92 0 0);
+  --popover: oklch(0.20 0 0);
+  --popover-foreground: oklch(0.92 0 0);
+  --primary: oklch(0.62 0.18 245);
+  --primary-foreground: oklch(0.98 0 0);
+  --secondary: oklch(0.27 0 0);
+  --secondary-foreground: oklch(0.92 0 0);
+  --muted: oklch(0.24 0 0);
+  --muted-foreground: oklch(0.65 0 0);
+  --accent: oklch(0.30 0 0);
+  --accent-foreground: oklch(0.98 0 0);
+  --destructive: oklch(0.55 0.22 25);
+  --destructive-foreground: oklch(0.98 0 0);
+  --border: oklch(0.30 0 0);
+  --input: oklch(0.24 0 0);
+  --ring: oklch(0.62 0.18 245);
+}
+
+@theme inline {
+  --font-sans: 'Geist', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-ps-chrome: var(--ps-chrome);
+  --color-ps-panel: var(--ps-panel);
+  --color-ps-panel-2: var(--ps-panel-2);
+  --color-ps-canvas-bg: var(--ps-canvas-bg);
+  --color-ps-divider: var(--ps-divider);
+  --color-ps-text: var(--ps-text);
+  --color-ps-text-dim: var(--ps-text-dim);
+  --color-ps-accent: var(--ps-accent);
+  --color-ps-accent-2: var(--ps-accent-2);
+  --color-ps-warning: var(--ps-warning);
+  --color-ps-tool-active: var(--ps-tool-active);
+  --color-ps-tool-hover: var(--ps-tool-hover);
+  --radius-sm: calc(var(--radius) - 1px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html,
+  body,
+  #__next {
+    height: 100%;
+  }
+  body {
+    @apply bg-[var(--ps-chrome)] text-[var(--ps-text)] select-none;
+    font-size: 12px;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* Custom scrollbars to match Photoshop */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--ps-chrome);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: oklch(0.35 0 0);
+    border-radius: 4px;
+    border: 2px solid var(--ps-chrome);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: oklch(0.45 0 0);
+  }
+  .scrollbar-none {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Transparent checkerboard for canvas */
+.ps-checker {
+  background-image:
+    linear-gradient(45deg, oklch(0.78 0 0) 25%, transparent 25%),
+    linear-gradient(-45deg, oklch(0.78 0 0) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, oklch(0.78 0 0) 75%),
+    linear-gradient(-45deg, transparent 75%, oklch(0.78 0 0) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
+  background-color: oklch(0.92 0 0);
+}
+
+/* Marching ants for selection - photoshop style, scrolling along each edge */
+@keyframes ps-marching-ants {
+  from {
+    background-position: 0 0, 0 100%, 0 0, 100% 0;
+  }
+  to {
+    background-position: 16px 0, -16px 100%, 0 16px, 100% -16px;
+  }
+}
+.ps-marching-ants {
+  background-image:
+    linear-gradient(90deg, #000 50%, #fff 50%),
+    linear-gradient(90deg, #000 50%, #fff 50%),
+    linear-gradient(0deg, #000 50%, #fff 50%),
+    linear-gradient(0deg, #000 50%, #fff 50%);
+  background-repeat: repeat-x, repeat-x, repeat-y, repeat-y;
+  background-size: 8px 1px, 8px 1px, 1px 8px, 1px 8px;
+  background-position: 0 0, 0 100%, 0 0, 100% 0;
+  animation: ps-marching-ants 0.5s linear infinite;
+}

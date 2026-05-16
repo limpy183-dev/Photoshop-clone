@@ -1,0 +1,59 @@
+# Photoshop Clone Project Context
+
+## Project Overview
+This project is a browser-based Photoshop-inspired editor built using modern web technologies. The core goal is to provide practical local canvas workflows for layered image editing, compositing, and many familiar Photoshop-style tools while being explicit about browser-native limits and areas that are approximations rather than Adobe-native integrations.
+
+## Tech Stack
+- **Framework:** Next.js 16 (App Router) with React 19
+- **Styling:** Tailwind CSS with Radix UI primitives for complex UI components (dialogs, accordions, context menus)
+- **State Management:** React Context API (`editor-context.tsx`) combined with complex reducers and mutable refs for high-performance canvas operations
+- **Testing:** Playwright (`tests/`) for automated end-to-end and pixel-perfect regression testing
+- **Core Dependencies:** `ag-psd` for native Adobe Photoshop Document (PSD) parsing and serialization
+
+## Core Architecture
+
+### 1. State & Data Models (`components/photoshop/types.ts`)
+The entire document state is defined in this centralized type definition file. It defines:
+- **`PsDocument`**: The main document state, holding layers, selections, layer comps, history states, and metadata.
+- **`Layer`**: Supports Raster, Type, Shape, Adjustment, Smart Object, and Group layer kinds. Includes properties for masks, smart filters, layer styles (`LayerStyle`), blend modes, and opacity.
+- **`ToolId` & Tool Properties**: Rigid typing for the ~50 supported tools (Brush, Marquee, Lasso, Patch, Liquify, etc.).
+- **Transformation & Selections**: `TransformState` tracks arbitrary affine transformations (tx, ty, rotation, scale, skew) and perspective warping.
+
+### 2. State Management (`components/photoshop/editor-context.tsx`)
+This acts as the global state wrapper. It defines the massive `editorReducer` which processes every user action (adding layers, changing blending modes, tool commits). It maintains the history stack (`undoStack`, `redoStack`) and handles saving/restoring states.
+
+### 3. Rendering Engine (`components/photoshop/canvas-view.tsx`)
+The absolute core of the application (~5,400 lines of code). It manages the actual `<canvas>` elements and handles:
+- **Interaction Logic**: `onPointerDown`, `onPointerMove`, `onPointerUp` to capture complex tool interactions (e.g., drawing strokes, polygon lassos, dragging transform handles).
+- **Brush Engine**: Implements spacing, symmetry (axis and radial), dynamics (jitter), and dual-brush systems using a high-performance stamping loop.
+- **Compositing**: Runs a continuous render loop using `requestAnimationFrame`. Layers are drawn bottom-to-top.
+- **Optimization**: Uses `_canvasPool` to acquire and release offscreen canvases to prevent memory leaks/GC stutters.
+- **Caching**: Implements `_layerStyleCache` and `_smartFilterCache` so complex non-destructive effects are only re-rendered when their underlying pixels or parameters change.
+
+### 4. Image Processing & Logic Modules
+- **`blend-modes.ts`**: Contains exact pixel-math implementations of Photoshop's 26 blend modes (e.g., Overlay, Linear Light, Color Dodge).
+- **`filters.ts` & `filter-worker.ts`**: Implements 50+ local image filters (Gaussian Blur, Unsharp Mask, render clouds, etc.). Heavy operations are currently scheduled/chunked on the main thread; the worker wrapper is a fallback path, not a guaranteed off-main-thread engine.
+- **`layer-styles.ts`**: Implements Drop Shadow, Inner Shadow, Bevel & Emboss, Stroke, and Overlays non-destructively, caching the composite result.
+- **`advanced-subsystems.ts`**: Handles local metadata extraction, limited DICOM/HDR previews, simulated RGB color proofing, and browser-native 3D scene rasterization. It does not provide ICC-accurate conversion, C2PA signing, native Adobe plugin execution, or full RAW/DNG/EXR/PSB decoding.
+- **`tool-helpers.ts`**: Extracts complex tool math out of the main canvas view (e.g., polygon intersection tests, bezier curve generation).
+
+### 5. Document I/O (`components/photoshop/document-io.ts`)
+Converts the internal `PsDocument` state back and forth to an `ag-psd` compatible buffer to load and save native `.psd` files.
+
+### 6. User Interface
+- **Command Palette (`components/photoshop/command-palette.tsx`)**: A central Ctrl+K / Cmd+K fuzzy-search prompt to find tools, layers, menu commands, and panels quickly.
+- **Options Bar (`components/photoshop/options-bar.tsx`)**: Context-sensitive toolbar that changes depending on the currently active tool.
+- **Panels**: The right-hand dock contains complex state viewers/editors:
+  - `LayersPanel`, `HistoryPanel`, `PropertiesPanel`, `BrushSettingsPanel`, `ColorPanel`, `SwatchesPanel`.
+- **Dialogs**: Numerous modals for specific operations like `ExportAsDialog`, `LiquifyDialog` (push/pucker/bloat mesh warping), `FilterDialog` (Smart filters).
+
+### 7. Global Keyboard Shortcuts (`hooks/use-shortcuts.ts`)
+A custom hook that intercepts keyboard events and translates them into Photoshop tool selections or standard commands (Undo/Redo, Copy/Paste, Deselect).
+
+## Improvement & Roadmap Strategy
+- **`Every_photoshop_feature.txt`**: A comprehensive master document listing every feature ever found in Photoshop, used as the benchmark.
+- **`photoshop_improvement_plan.md`**: The tactical roadmap converting the master list into 100 actionable software engineering requirements natively implementable without server-side AI architectures. Focuses on upgrading existing tool limits (like adding shape dynamics to brushes) and building missing dialogs (like Curves).
+
+## Testing
+- **`tests/photoshop-pixel-regression.spec.ts`**: Playwright regression coverage for canvas reachability, visible pixels, and major UI/panel/dialog workflows. It is not a complete pixel-perfect equivalence suite for Photoshop algorithms.
+- **`tests/photoshop-smoke.spec.ts`**: A high-level app mounting check to ensure no fatal JS errors crash the main IDE.

@@ -1,0 +1,90 @@
+import { expect, test } from "@playwright/test"
+
+import {
+  CAPABILITY_STATUS_ORDER,
+  capabilityWarningsForDocument,
+  getCapability,
+  listCapabilities,
+  summarizeCapabilities,
+} from "../components/photoshop/capabilities"
+import { capabilityForAdvancedFormat } from "../components/photoshop/advanced-subsystems"
+import { createDocumentReport } from "../components/photoshop/document-io"
+
+test("capability registry classifies required report tracks", () => {
+  expect(CAPABILITY_STATUS_ORDER).toEqual(["complete", "usable", "approximation", "stub", "unsupported"])
+  expect(getCapability("tool.quick-selection").status).toBe("usable")
+  expect(getCapability("format.psb").status).toBe("unsupported")
+  expect(getCapability("format.openexr").status).toBe("unsupported")
+  expect(getCapability("format.baseline-tiff").status).toBe("approximation")
+  expect(getCapability("format.tga-pnm").status).toBe("usable")
+  expect(getCapability("color.high-bit-pipeline").status).toBe("approximation")
+  expect(getCapability("workflow.photomerge").status).toBe("approximation")
+  expect(getCapability("external.generative-fill").status).toBe("unsupported")
+})
+
+test("capability registry exposes summaries by kind", () => {
+  const summary = summarizeCapabilities(listCapabilities({ kind: "format" }))
+
+  expect(summary.unsupported).toBeGreaterThan(0)
+  expect(summary.usable + summary.approximation + summary.unsupported).toBeGreaterThan(5)
+})
+
+test("document capability warnings explain browser pixel and color limitations", () => {
+  const warnings = capabilityWarningsForDocument({
+    colorMode: "CMYK",
+    bitDepth: 16,
+    layers: [{ kind: "smart-object", smartFilters: [{ enabled: true }] }],
+  })
+
+  expect(warnings.some((warning) => warning.label === "Browser pixel pipeline")).toBe(true)
+  expect(warnings.some((warning) => warning.label === "Color mode")).toBe(true)
+  expect(warnings.some((warning) => warning.label === "Smart filters")).toBe(true)
+})
+
+test("document reports include capability-derived interoperability warnings", () => {
+  const report = createDocumentReport({
+    id: "doc_test",
+    name: "Interop Test",
+    width: 64,
+    height: 64,
+    zoom: 1,
+    layers: [
+      {
+        id: "layer_1",
+        name: "Smart",
+        kind: "smart-object",
+        visible: true,
+        locked: false,
+        opacity: 1,
+        blendMode: "normal",
+        smartFilters: [{ id: "sf_1", filterId: "gaussian-blur", name: "Gaussian Blur", enabled: true, params: {} }],
+      },
+    ],
+    activeLayerId: "layer_1",
+    selectedLayerIds: ["layer_1"],
+    background: "#ffffff",
+    colorMode: "CMYK",
+    bitDepth: 16,
+    selection: { bounds: null, shape: "rect" },
+  } as never, "PSD Export")
+
+  expect(report.items.some((item) => item.label === "Browser pixel pipeline")).toBe(true)
+  expect(report.items.some((item) => item.label === "High-bit editing")).toBe(true)
+  expect(report.items.some((item) => item.label === "Raster export")).toBe(true)
+})
+
+test("advanced format strategy aligns with capability registry limits", () => {
+  expect(capabilityForAdvancedFormat("sample.psb").support).toBe("metadata")
+  expect(capabilityForAdvancedFormat("sample.exr").support).toBe("metadata")
+  expect(capabilityForAdvancedFormat("sample.pdf").support).toBe("metadata")
+  expect(capabilityForAdvancedFormat("sample.heic", "image/heic").support).toBe("metadata")
+  expect(capabilityForAdvancedFormat("sample.hdr").support).toBe("preview")
+  expect(capabilityForAdvancedFormat("sample.dng").support).toBe("preview")
+
+  expect(getCapability("format.psb").status).toBe("unsupported")
+  expect(getCapability("format.openexr").status).toBe("unsupported")
+  expect(getCapability("format.pdf").status).toBe("approximation")
+  expect(getCapability("format.heif").status).toBe("unsupported")
+  expect(getCapability("format.radiance-hdr").status).toBe("approximation")
+  expect(getCapability("format.raw-dng").status).toBe("approximation")
+})

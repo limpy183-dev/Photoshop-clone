@@ -1,0 +1,1053 @@
+Every Photoshop Feature
+Tools (Toolbar)
+Selection Tools
+Move Tool
+Artboard Tool
+Rectangular Marquee Tool
+Elliptical Marquee Tool
+Single Row Marquee Tool
+Single Column Marquee Tool
+Lasso Tool
+Polygonal Lasso Tool
+Magnetic Lasso Tool
+Object Selection Tool
+Quick Selection Tool
+Magic Wand Tool
+Crop & Slice Tools
+Crop Tool
+Perspective Crop Tool
+Slice Tool
+Slice Select Tool
+Measurement Tools
+Eyedropper Tool
+3D Material Eyedropper Tool
+Color Sampler Tool
+Ruler Tool
+Note Tool
+Count Tool
+Retouching Tools
+Spot Healing Brush Tool
+Healing Brush Tool
+Patch Tool
+Content-Aware Move Tool
+Red Eye Tool
+Remove Tool
+Painting Tools
+Brush Tool
+Pencil Tool
+Color Replacement Tool
+Mixer Brush Tool
+Clone/History Tools
+Clone Stamp Tool
+Pattern Stamp Tool
+History Brush Tool
+Art History Brush Tool
+Eraser Tools
+Eraser Tool
+Background Eraser Tool
+Magic Eraser Tool
+Gradient/Fill Tools
+Gradient Tool
+Paint Bucket Tool
+3D Material Drop Tool
+Blur/Sharpen/Smudge Tools
+Blur Tool
+Sharpen Tool
+Smudge Tool
+Dodge/Burn/Sponge Tools
+Dodge Tool
+Burn Tool
+Sponge Tool
+Pen Tools
+Pen Tool
+Freeform Pen Tool
+Curvature Pen Tool
+Add Anchor Point Tool
+Delete Anchor Point Tool
+Convert Point Tool
+Type Tools
+Horizontal Type Tool
+Vertical Type Tool
+Horizontal Type Mask Tool
+Vertical Type Mask Tool
+Path Selection Tools
+Path Selection Tool
+Direct Selection Tool
+Shape Tools
+Rectangle Tool
+Rounded Rectangle Tool
+Ellipse Tool
+Polygon Tool
+Line Tool
+Custom Shape Tool
+Triangle Tool
+Navigation Tools
+Hand Tool
+Rotate View Tool
+Zoom Tool
+Other Toolbar Items
+Foreground/Background Color
+Default Colors (D)
+Switch Colors (X)
+Quick Mask Mode
+Screen Mode Toggle (Standard, Full Screen with Menu Bar, Full Screen)
+Panels
+Layers Panel
+Channels Panel
+Paths Panel
+Color Panel
+Swatches Panel
+Gradients Panel
+Patterns Panel
+History Panel
+Actions Panel
+Properties Panel
+Adjustments Panel
+Brushes Panel
+Brush Settings Panel
+Clone Source Panel
+Character Panel
+Paragraph Panel
+Glyphs Panel
+Info Panel
+Navigator Panel
+Histogram Panel
+Timeline Panel
+Animation Panel
+Libraries Panel (Creative Cloud Libraries)
+Learn Panel
+Styles Panel
+Tool Presets Panel
+Measurement Log Panel
+Notes Panel
+Layer Comps Panel
+Shapes Panel
+Comments Panel
+Discover Panel
+Contextual Task Bar
+Layer Types & Features
+Raster/Pixel Layers
+Background Layer
+Adjustment Layers
+Fill Layers (Solid Color, Gradient, Pattern)
+Shape Layers
+Type/Text Layers
+Smart Objects
+Linked Smart Objects
+Embedded Smart Objects
+Video Layers
+3D Layers
+Layer Groups/Folders
+Linked Layers
+Layer Locking (Lock Transparency, Lock Image, Lock Position, Lock All, Lock Artboard)
+Layer Visibility Toggle
+Layer Opacity
+Layer Fill Opacity
+Layer Naming/Renaming
+Layer Color Coding
+Layer Filtering (by kind, name, effect, mode, attribute, color, smart object, selected, artboard)
+Flatten Image
+Merge Layers
+Merge Visible
+Stamp Visible
+Duplicate Layers
+Rasterize Layers
+Layer Order (Bring to Front, Send to Back, etc.)
+Create Clipping Mask
+Link/Unlink Layers
+Select All Layers
+Select Similar Layers
+Isolate Layers
+Blending Modes
+Normal
+Dissolve
+Behind
+Clear
+Darken
+Multiply
+Color Burn
+Linear Burn
+Darker Color
+Lighten
+Screen
+Color Dodge
+Linear Dodge (Add)
+Lighter Color
+Overlay
+Soft Light
+Hard Light
+Vivid Light
+Linear Light
+Pin Light
+Hard Mix
+Difference
+Exclusion
+Subtract
+Divide
+Hue
+Saturation
+Color
+Luminosity
+Layer Styles / Effects
+Bevel & Emboss
+Inner Bevel
+Outer Bevel
+Emboss
+Pillow Emboss
+Stroke Emboss
+Contour (sub-option)
+Texture (sub-option)
+Stroke
+Inner Shadow
+Inner Glow
+Satin
+Color Overlay
+Gradient Overlay
+Pattern Overlay
+Outer Glow
+Drop Shadow
+Blending Options (Advanced Blending)
+Copy/Paste Layer Styles
+Scale Effects
+Create Layers from Effects
+Global Light
+Style Presets
+Adjustment Layers & Image Adjustments
+Brightness/Contrast
+Levels
+Curves
+Exposure
+Vibrance
+Hue/Saturation
+Color Balance
+Black & White
+Photo Filter
+Channel Mixer
+Color Lookup (LUT)
+Invert
+Posterize
+Threshold
+Gradient Map
+Selective Color
+Shadows/Highlights
+HDR Toning
+Desaturate
+Match Color
+Replace Color
+Equalize
+Auto Tone
+Auto Contrast
+Auto Color
+Filters
+Filter Gallery
+Artistic Filters (Colored Pencil, Cutout, Dry Brush, Film Grain, Fresco, Neon Glow, Paint Daubs, Palette Knife, Plastic Wrap, Poster Edges, Rough Pastels, Smudge Stick, Sponge, Underpainting, Watercolor)
+Brush Strokes (Accented Edges, Angled Strokes, Crosshatch, Dark Strokes, Ink Outlines, Spatter, Sprayed Strokes, Sumi-e)
+Distort Filters (Diffuse Glow, Glass, Ocean Ripple)
+Sketch Filters (Bas Relief, Chalk & Charcoal, Charcoal, Chrome, Conté Crayon, Graphic Pen, Halftone Pattern, Note Paper, Photocopy, Plaster, Reticulation, Stamp, Torn Edges, Water Paper)
+Stylize Filters (Glowing Edges)
+Texture Filters (Craquelure, Grain, Mosaic Tiles, Patchwork, Stained Glass, Texturizer)
+Blur Filters
+Average
+Blur
+Blur More
+Box Blur
+Gaussian Blur
+Lens Blur
+Motion Blur
+Radial Blur
+Shape Blur
+Smart Blur
+Surface Blur
+Tilt-Shift Blur (Blur Gallery)
+Field Blur (Blur Gallery)
+Iris Blur (Blur Gallery)
+Path Blur (Blur Gallery)
+Spin Blur (Blur Gallery)
+Distort Filters
+Displace
+Pinch
+Polar Coordinates
+Ripple
+Shear
+Spherize
+Twirl
+Wave
+ZigZag
+Noise Filters
+Add Noise
+Despeckle
+Dust & Scratches
+Median
+Reduce Noise
+Pixelate Filters
+Color Halftone
+Crystallize
+Facet
+Fragment
+Mezzotint
+Mosaic
+Pointillize
+Render Filters
+Clouds
+Difference Clouds
+Fibers
+Flame
+Picture Frame
+Tree
+Lens Flare
+Lighting Effects
+Sharpen Filters
+Sharpen
+Sharpen Edges
+Sharpen More
+Smart Sharpen
+Unsharp Mask
+Stylize Filters
+Diffuse
+Emboss
+Extrude
+Find Edges
+Oil Paint
+Solarize
+Tiles
+Trace Contour
+Wind
+Other Filters
+Custom
+High Pass
+Maximum
+Minimum
+Offset
+De-Interlace
+NTSC Colors
+Neural Filters (AI-Powered)
+Skin Smoothing
+JPEG Artifacts Removal
+Style Transfer
+Smart Portrait
+Makeup Transfer
+Depth Blur
+Color Transfer
+Super Zoom
+Photo Restoration
+Colorize
+Landscape Mixer
+Harmonization
+Scene Mixer
+Camera Raw Filter
+Basic Adjustments
+Tone Curve
+Detail (Sharpening/Noise Reduction)
+HSL/Grayscale
+Split Toning / Color Grading
+Lens Correction
+Effects (Grain, Vignette, Dehaze)
+Calibration
+Optics
+Geometry
+Presets
+Snapshots
+Masking (in Camera Raw)
+Radial Gradient
+Linear Gradient
+Brush
+Color Range
+Luminance Range
+Depth Range
+Select Subject
+Select Sky
+Select Background
+Adaptive Wide Angle Filter
+Lens Correction Filter
+Liquify Filter
+Forward Warp Tool
+Reconstruct Tool
+Smooth Tool
+Twirl Clockwise Tool
+Pucker Tool
+Bloat Tool
+Push Left Tool
+Freeze Mask Tool
+Thaw Mask Tool
+Face Tool (Face-Aware Liquify)
+Load/Save Mesh
+Vanishing Point Filter
+Selection Features
+Select All
+Deselect
+Reselect
+Inverse Selection
+All Layers
+Deselect Layers
+Find Layers
+Color Range Selection
+Focus Area Selection
+Select Subject (AI)
+Select Sky (AI)
+Select and Mask Workspace
+Refine Edge Brush Tool
+Quick Selection Tool (in S&M)
+Brush Tool (in S&M)
+Lasso Tool (in S&M)
+Object Selection Tool (in S&M)
+Hand/Zoom Tools
+View Modes (Onion Skin, Marching Ants, Overlay, On Black, On White, Black & White, On Layers)
+Smart Radius
+Global Refinements (Smooth, Feather, Contrast, Shift Edge)
+Output To options
+Decontaminate Colors
+Modify Selection (Border, Smooth, Expand, Contract, Feather)
+Grow Selection
+Similar Selection
+Transform Selection
+Save Selection
+Load Selection
+Quick Mask Mode
+Masking
+Layer Masks
+Vector Masks
+Clipping Masks
+Quick Mask
+Filter Masks (Smart Filter Masks)
+Channel Masks
+Apply Mask
+Disable/Enable Mask
+Unlink Mask from Layer
+Refine Mask
+Mask Density
+Mask Feather
+Select and Mask
+Intersect Mask with Selection
+Add Mask to Selection
+Subtract Mask from Selection
+Channels
+RGB Channel
+Red Channel
+Green Channel
+Blue Channel
+CMYK Channels (Cyan, Magenta, Yellow, Black)
+Lab Channels (Lightness, a, b)
+Alpha Channels
+Spot Color Channels
+Load Channel as Selection
+Save Selection as Channel
+Channel Calculations
+Apply Image
+Split Channels
+Merge Channels
+Type / Text Features
+Point Text
+Paragraph/Area Text
+Text on a Path
+Text Inside a Shape
+Warped Text (Arc, Arch, Bulge, Shell, Flag, Wave, Fish, Rise, Fisheye, Inflate, Squeeze, Twist, etc.)
+Font Selection
+Font Size
+Font Style (Bold, Italic, etc.)
+Font Weight
+Font Width
+Leading
+Kerning (Metrics, Optical, Manual)
+Tracking
+Vertical Scale
+Horizontal Scale
+Baseline Shift
+Text Color
+Anti-Aliasing (None, Sharp, Crisp, Strong, Smooth)
+Alignment (Left, Center, Right)
+Justification Options
+Indentation
+Space Before/After Paragraph
+Hyphenation
+OpenType Features (Ligatures, Stylistic Alternates, Swash, Ordinals, Fractions, etc.)
+Variable Fonts Support
+Font Preview
+Match Font (AI font detection)
+Find/Replace Text
+Spell Check
+Paragraph Styles
+Character Styles
+Convert Text to Shape
+Convert Text to Path
+Rasterize Type
+3D Text (Extrude)
+Faux Bold / Faux Italic
+All Caps / Small Caps
+Superscript / Subscript
+Underline / Strikethrough
+Language Selection
+Emoji Support
+Transform Features
+Free Transform
+Scale
+Rotate
+Skew
+Distort
+Perspective
+Warp
+Custom Warp
+Preset Warps (Arc, Arch, Bulge, Shell Upper/Lower, Flag, Wave, Fish, Rise, Fisheye, Inflate, Squeeze, Twist)
+Split Warp (Horizontal, Vertical, Crosswise)
+Warp Grid Options
+Flip Horizontal
+Flip Vertical
+Rotate 180°
+Rotate 90° Clockwise
+Rotate 90° Counter-Clockwise
+Content-Aware Scale
+Puppet Warp
+Perspective Warp
+Again (Repeat Transform)
+Interpolation Methods (Nearest Neighbor, Bilinear, Bicubic, Bicubic Smoother, Bicubic Sharper, Bicubic Automatic)
+Image Menu Features
+Image Mode (Bitmap, Grayscale, Duotone, Indexed Color, RGB, CMYK, Lab, Multichannel)
+Bits per Channel (8-bit, 16-bit, 32-bit)
+Color Table
+Image Size
+Canvas Size
+Image Rotation (Arbitrary, 180°, 90° CW, 90° CCW, Flip Canvas Horizontal/Vertical)
+Crop
+Trim
+Reveal All
+Duplicate Image
+Apply Image
+Calculations
+Variables (Define, Data Sets)
+Apply Data Set
+Trap
+Canvas & Document Features
+New Document
+Document Presets (Photo, Print, Art & Illustration, Web, Mobile, Film & Video, Custom)
+Custom Canvas Sizes
+Resolution Settings (PPI/DPI)
+Color Mode Selection
+Background Contents (White, Black, Transparent, Custom)
+Artboards
+Multiple Artboards
+Pixel Aspect Ratio
+Canvas Extension Color
+Rulers
+Guides
+Smart Guides
+Grid
+Snap to Grid/Guides/Layers/Document Bounds/Slices
+Guide Layouts (New Guide Layout)
+Lock Guides
+Clear Guides
+File Handling / Import & Export
+Open/Import
+Open
+Open As
+Open As Smart Object
+Open Recent
+Browse in Bridge
+Place Embedded
+Place Linked
+Import (Video Frames to Layers, Notes, Variable Data Sets, WIA Support)
+Generate Image Assets
+Open from Creative Cloud Libraries
+Save/Export
+Save
+Save As
+Save a Copy
+Export As
+Export for Web (Legacy)
+Quick Export as PNG/JPG
+Export Paths to Illustrator
+Export Artboards to Files
+Export Layers to Files
+Export Color Lookup Tables
+Export Video/Animation (Render Video)
+Supported File Formats
+PSD (Photoshop Document)
+PSB (Large Document Format)
+TIFF
+JPEG
+PNG
+GIF
+BMP
+PDF
+EPS
+SVG
+WebP
+HEIF/HEIC
+Raw Formats (CR2, CR3, NEF, ARW, DNG, RAF, ORF, etc.)
+PBM
+PCX
+Pixar
+Targa (TGA)
+OpenEXR
+Radiance (HDR)
+DICOM
+IFF
+Photoshop PDF
+Photoshop DCS 1.0 / 2.0
+Photoshop Raw
+Scitex CT
+Cineon
+Portable Bit Map
+JPEG 2000
+AVIF
+Automation & Scripting
+Actions
+Record Actions
+Play Actions
+Batch Processing
+Insert Menu Item
+Insert Stop
+Insert Path
+Action Sets
+Button Mode
+Conditional Actions
+Automate Menu
+Batch
+PDF Presentation
+Create Droplet
+Crop and Straighten Photos
+Contact Sheet II
+Conditional Mode Change
+Fit Image
+Lens Correction (batch)
+Merge to HDR Pro
+Photomerge (Panorama)
+Scripts
+Image Processor
+Delete All Empty Layers
+Flatten All Layer Effects
+Flatten All Masks
+Script Events Manager
+Load Files into Stack
+Load Multiple DICOM Files
+Statistics
+Browse (Script files)
+JavaScript Scripting
+AppleScript Support (Mac)
+VBScript Support (Windows)
+ExtendScript Toolkit
+UXP Plugin Development
+CEP (Common Extensibility Platform)
+Color Management
+Color Settings
+Assign Profile
+Convert to Profile
+ICC Color Profiles
+Working Spaces (sRGB, Adobe RGB, ProPhoto RGB, etc.)
+CMYK Profiles
+Rendering Intents (Perceptual, Saturation, Relative Colorimetric, Absolute Colorimetric)
+Proof Colors
+Proof Setup (Working CMYK, Working Cyan/Magenta/Yellow/Black Plate, Macintosh/Windows RGB, Monitor RGB, Color Blindness Protanopia/Deuteranopia, Custom)
+Gamut Warning
+Soft Proofing
+Color Management Policies (Off, Preserve Embedded, Convert to Working)
+Brush Features
+Brush Tip Shape (Round, Custom, Bristle, Erodible)
+Brush Size
+Brush Hardness
+Brush Opacity
+Brush Flow
+Brush Smoothing
+Brush Angle
+Brush Roundness
+Brush Spacing
+Shape Dynamics (Size Jitter, Angle Jitter, Roundness Jitter, Flip X/Y, Minimum Diameter, etc.)
+Scattering
+Texture
+Dual Brush
+Color Dynamics (Foreground/Background Jitter, Hue/Saturation/Brightness Jitter, Purity)
+Transfer (Opacity Jitter, Flow Jitter)
+Brush Pose
+Noise
+Wet Edges
+Build-up
+Smoothing
+Protect Texture
+Brush Presets
+Import/Export Brushes (ABR files)
+Brush Folders/Organization
+Pressure Sensitivity (Pen Tablet)
+Tilt Sensitivity
+Rotation Sensitivity
+Symmetry Painting
+Vertical Symmetry
+Horizontal Symmetry
+Dual Axis Symmetry
+Diagonal Symmetry
+Wavy Symmetry
+Circle Symmetry
+Spiral Symmetry
+Parallel Lines Symmetry
+Radial Symmetry
+Mandala Symmetry
+Pen / Vector Path Features
+Create Paths
+Create Shape Layers
+Create Pixel-based shapes
+Bézier Curve Drawing
+Curvature Pen Drawing
+Freeform Path Drawing
+Magnetic Freeform Pen
+Add/Delete Anchor Points
+Convert Smooth to Corner Points
+Path Operations (Combine, Subtract, Intersect, Exclude)
+Align Path Components
+Distribute Path Components
+Make Selection from Path
+Fill Path
+Stroke Path
+Define Custom Shape from Path
+Clipping Path
+Work Path
+Save/Rename Paths
+Export Paths to Illustrator
+Path Alignment Options
+Shape Features
+Live Shape Properties (Corner Radius, etc.)
+Shape Fill (Solid Color, Gradient, Pattern, None)
+Shape Stroke (Color, Width, Alignment, Dash/Dot patterns, Cap/Join options)
+Shape Alignment
+Shape Distribution
+Custom Shapes Library
+Define Custom Shape
+Shape Path Operations (Unite, Subtract, Intersect, Exclude)
+Smart Object Features
+Convert to Smart Object
+Place as Smart Object
+Linked Smart Objects
+Embedded Smart Objects
+Edit Contents
+Replace Contents
+Export Contents
+Non-destructive Transforms
+Non-destructive Filters (Smart Filters)
+Smart Filter Masks
+Edit/Reorder Smart Filters
+Relink to File
+Convert to Layers
+Stack Mode (Mean, Median, Minimum, Maximum, etc.)
+Reveal in Finder/Explorer
+Compositing Features
+Layer Blending Modes
+Layer Opacity/Fill
+Advanced Blending Options
+Blend If Sliders (This Layer / Underlying Layer)
+Knockout (Shallow / Deep)
+Blend Interior Effects as Group
+Blend Clipped Layers as Group
+Transparency Shapes Layer
+Layer Mask Hides Effects
+Vector Mask Hides Effects
+Auto-Blend Layers (Panorama, Focus Stacking)
+Auto-Align Layers
+Content-Aware Fill
+Content-Aware Scale
+Content-Aware Move
+Content-Aware Extend
+Content-Aware Patch
+Generative Fill (AI)
+Generative Expand (AI)
+Sky Replacement
+Apply Image
+Calculations
+Photomerge (Panorama Stitching)
+HDR Merge (Merge to HDR Pro)
+Focus Stacking
+AI / Sensei Features
+Select Subject
+Select Sky
+Remove Background
+Generative Fill
+Generative Expand
+Neural Filters
+Content-Aware Fill
+Content-Aware Crop
+Sky Replacement
+Object Selection Tool
+Enhance Details (Super Resolution via Camera Raw)
+Match Font
+Colorize (Neural Filter)
+Face-Aware Liquify
+Depth Blur (Neural Filter)
+Auto Tone / Auto Color / Auto Contrast
+Skin Smoothing (Neural Filter)
+Smart Portrait (Neural Filter)
+Style Transfer (Neural Filter)
+Photo Restoration (Neural Filter)
+Scene Recognition
+Remove Tool (AI-powered)
+Contextual Task Bar Suggestions
+3D Features (Legacy/Deprecated)
+3D Object Creation (Mesh from Depth Map, 3D Postcard, basic shapes)
+3D Layer
+3D Extrusion from text/path/layer
+3D Material Editing
+3D Textures
+3D Lighting (Point, Spot, Infinite, Image-Based)
+3D Camera
+3D Scene Panel
+3D Mesh Editing
+3D Rendering
+3D Painting (Paint on 3D surfaces)
+3D Object Rotation/Translation/Scaling
+3D Cross Sections
+3D Print Settings
+3D Ground Plane
+3D Shadow Catching
+3D Object Snapping
+Import 3D Files (OBJ, 3DS, DAE, KMZ, U3D, etc.)
+Export 3D Layers
+Video & Animation Features
+Timeline Panel (Video Timeline / Frame Animation)
+Video Layers
+Frame-by-Frame Animation
+Tweened Animation
+Keyframe Animation (Position, Opacity, Style, Global Lighting, Text Warp, Transform)
+Import Video
+Split Video Clips
+Trim Video Clips
+Video Layer Duration
+Transition Effects (Fade, Cross Fade)
+Audio Tracks
+Audio Playback
+Onion Skinning
+Frame Rate Settings
+Render Video (Export as H.264, QuickTime, DPX, image sequence, GIF, etc.)
+Video Groups
+Blank Video Layer
+Create Frame Animation
+Convert Frame Animation to Timeline
+Looping Options (Once, 3 Times, Forever)
+Frame Delay Settings
+Measurement & Analysis
+Ruler Tool
+Measurement Scale
+Measurement Log
+Count Tool
+Place Scale Marker
+Record Measurements
+Set Measurement Scale (Custom, Default)
+Printing Features
+Print Dialog
+Print Size Preview
+Color Management (Photoshop Manages Colors, Printer Manages Colors)
+Rendering Intent Selection
+Print Resolution
+Position & Size on Page
+Print Selected Area
+Print Marks (Registration Marks, Corner Crop Marks, Center Crop Marks, Description, Labels)
+Background Color for Print
+Border
+Bleed
+Proof Print
+Preferences & Settings
+General Preferences
+Interface (UI Color Theme, UI Scaling, UI Font Size)
+Workspace Preferences
+Tools Preferences
+History Log
+File Handling
+Export Preferences
+Performance (RAM Usage, Scratch Disks, GPU Settings, Cache Levels, Cache Tile Size)
+Scratch Disks
+Cursors (Standard, Precise, Normal Brush Tip, Full Size Brush Tip, Crosshair)
+Transparency & Gamut
+Units & Rulers
+Guides, Grid & Slices
+Plug-ins
+Type Preferences
+3D Preferences
+Technology Previews
+Camera Raw Preferences
+Workspace Features
+Default Workspaces (Essentials, 3D, Graphic and Web, Motion, Painting, Photography)
+Custom Workspaces
+Save/Delete/Reset Workspaces
+Dockable Panels
+Floating Panels
+Panel Groups
+Tabbed Documents
+Floating Document Windows
+Arrange Documents (Tile, 2-up, 4-up, etc.)
+Application Frame (Mac)
+Full Screen Modes
+Toolbar Customization (Edit Toolbar)
+Contextual Task Bar
+View Features
+Zoom In/Out
+Fit on Screen
+Actual Pixels / 100%
+Print Size
+Pixel Grid (at high zoom)
+Snap
+Snap To (Guides, Grid, Layers, Slices, Document Bounds, All, None)
+Show/Hide Extras (Guides, Grid, Slices, Notes, Pixel Grid, Layer Edges, Selection Edges, Target Path, Count, Smart Guides, etc.)
+Proof Colors
+Proof Setup
+Gamut Warning
+Rulers
+Lock Guides
+New Guide
+New Guide Layout
+Clear Guides
+Lock Slices
+Clear Slices
+32-bit Preview Options
+HDR Features
+Merge to HDR Pro
+32-bit HDR Editing
+HDR Toning
+32-bit Preview Options
+Exposure Adjustment for 32-bit
+Panorama Features
+Photomerge (Auto, Perspective, Cylindrical, Spherical, Collage, Reposition)
+Auto-Align Layers
+Auto-Blend Layers
+Content-Aware Fill for edges
+Adaptive Wide Angle correction
+Spherical Panorama editing
+Content-Aware Features
+Content-Aware Fill (Edit menu version with workspace)
+Content-Aware Fill (Spot Healing)
+Content-Aware Scale
+Content-Aware Move
+Content-Aware Extend
+Content-Aware Patch
+Content-Aware Crop
+Web Features
+Export for Web (Legacy)
+Export As
+Quick Export
+Slicing (User Slices, Layer-Based Slices)
+Image Maps
+Web Color Picker
+HTML/CSS output (via slices)
+Responsive Design Artboards
+SVG Export
+WebP Export
+Asset Generation (Generator)
+Device Preview
+Batch / Productivity Features
+Batch Processing
+Image Processor
+Droplets
+Contact Sheets
+PDF Presentation
+Variable Data / Data-Driven Graphics
+File Info / Metadata Editing
+IPTC Metadata
+EXIF Data Viewing
+History Features
+History Panel
+History States (configurable number)
+Linear/Non-Linear History
+Create New Document from History State
+Create Snapshot
+History Brush Tool
+Art History Brush Tool
+Clear History
+Step Forward/Backward
+History Log (to metadata, text file, or both)
+Patterns
+Define Pattern
+Pattern Fill Layer
+Pattern Stamp Tool
+Pattern Overlay (Layer Style)
+Scripted Patterns (Brick Fill, Cross Weave, etc.)
+Pattern Preview Mode
+Import/Export Patterns
+Gradients
+Gradient Editor
+Gradient Presets
+Gradient Types (Linear, Radial, Angle, Reflected, Diamond, Freeform)
+Noise Gradients
+Gradient Fill Layer
+Gradient Overlay (Layer Style)
+Gradient Map Adjustment
+Import/Export Gradients
+Freeform Gradient (Point mode, Line mode)
+Plugin / Extension Support
+Photoshop Plugins (8BF, etc.)
+Filter Plugins
+Automation Plugins
+File Format Plugins
+UXP Plugins (modern)
+CEP Extensions (HTML panels)
+Creative Cloud Marketplace
+Third-party Plugin Support (Nik Collection, Topaz, etc.)
+Generator Plugins
+Creative Cloud Integration
+Creative Cloud Libraries
+Cloud Documents
+Sync Settings
+Adobe Fonts (Typekit Integration)
+Adobe Stock Integration
+Share for Review
+Creative Cloud App
+Invite to Edit
+Cloud PSD
+Sync Presets (Brushes, Swatches, Gradients, Patterns, Styles, Shapes, etc.)
+Photoshop on iPad Integration
+Version History (Cloud Documents)
+Comments Panel
+Photoshop on iPad Features
+Cloud Document Sync
+Touch Interface
+Apple Pencil Support
+Core tools available on iPad
+Swipe gestures
+Sidebar/Taskbar
+Accessibility Features
+Keyboard Shortcuts
+Customizable Keyboard Shortcuts
+Customizable Menus
+Screen Reader Support
+High Contrast UI
+Scalable UI
+Color Blind Proofing (Protanopia, Deuteranopia)
+Touch Bar Support (MacBook Pro)
+Performance Features
+GPU Acceleration
+OpenCL Support
+Metal Support (Mac)
+DirectX Support (Windows)
+Multithreading
+Scratch Disk Management
+Cache Levels & Tile Size
+RAM Allocation
+Background Save
+Background Export
+Large Document Support (PSB up to 300,000 × 300,000 px)
+64-bit Architecture
+Apple Silicon (M1/M2/M3) Native Support
+Miscellaneous Features
+Preset Manager
+Keyboard Shortcut Customization
+Menu Customization
+Color Picker (Adobe, Windows/macOS, HUD Color Picker)
+HUD Color Picker
+Content Credentials (NFT / Provenance)
+Edit in Photoshop (from Lightroom, Bridge, Camera Raw)
+Send to Photoshop (from other apps)
+Copy CSS
+Copy SVG
+Image Assets Generator
+Embed Color Profile
+Convert to sRGB on Export
+Rich Tooltips
+Home Screen / Start Workspace
+Search (Edit > Search or Cmd/Ctrl+F)
+Educational/Tutorial Links
+What's New notifications
+Sample files
+Clipping Path for InDesign/Illustrator
+Duotone Mode
+Indexed Color Mode / Color Table editing
+Multichannel Mode
+Bitmap Mode (Halftone Screen, Diffusion Dither, Pattern Dither, etc.)
+Notes (Annotation tool)
+Metadata Templates
+XMP Metadata
+File Info
+Copyright & Contact Info embedding
+Flatten Transparency
+Rasterize (Layer, Smart Object, Type, Shape, Fill Content, Vector Mask, All Layers)
+Purge (Undo, Clipboard, Histories, All, Video Cache)

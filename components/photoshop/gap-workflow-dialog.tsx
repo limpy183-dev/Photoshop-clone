@@ -1,0 +1,375 @@
+"use client"
+
+import * as React from "react"
+import { toast } from "sonner"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { compositeLayer } from "./blend-modes"
+import { makeCanvas, makeDocument, useEditor } from "./editor-context"
+import { downloadText, loadImageFromFile } from "./document-io"
+import type { AlphaChannel, BlendMode, Layer } from "./types"
+
+export type GapWorkflowKind =
+  | "apply-image"
+  | "calculations"
+  | "load-stack"
+  | "photomerge"
+  | "hdr-merge"
+  | "focus-stack"
+  | "stack-statistics"
+  | "pdf-presentation"
+  | "scripted-pattern"
+  | "image-assets"
+
+const blendModes: BlendMode[] = ["normal", "multiply", "screen", "overlay", "soft-light", "difference", "darken", "lighten"]
+
+function uid(prefix: string) {
+  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
+}
+
+export function GapWorkflowDialog({
+  workflow,
+  onOpenChange,
+}: {
+  workflow: GapWorkflowKind | null
+  onOpenChange: (open: boolean) => void
+}) {
+  const { activeDoc, activeLayer, dispatch, commit, createDocument } = useEditor()
+  const [sourceId, setSourceId] = React.useState("")
+  const [sourceId2, setSourceId2] = React.useState("")
+  const [blend, setBlend] = React.useState<BlendMode>("normal")
+  const [opacity, setOpacity] = React.useState(100)
+  const [files, setFiles] = React.useState<File[]>([])
+  const [stat, setStat] = React.useState<"mean" | "median" | "min" | "max">("median")
+  const [pattern, setPattern] = React.useState<"brick" | "cross-weave" | "random-fill">("brick")
+  const [busy, setBusy] = React.useState(false)
+  const open = workflow !== null
+
+  React.useEffect(() => {
+    if (!activeDoc) return
+    setSourceId((activeDoc.layers.find((layer) => layer.id !== activeDoc.activeLayerId && layer.kind !== "group") ?? activeLayer ?? activeDoc.layers[0])?.id ?? "")
+    setSourceId2((activeDoc.layers.find((layer) => layer.id !== activeDoc.activeLayerId && layer.kind !== "group") ?? activeDoc.layers[0])?.id ?? "")
+  }, [activeDoc, activeLayer, workflow])
+
+  const close = () => onOpenChange(false)
+
+  const runApplyImage = () => {
+    if (!activeLayer || !activeDoc || activeLayer.locked) return
+    const src = activeDoc.layers.find((layer) => layer.id === sourceId)
+    if (!src || typeof src.canvas.getContext !== "function") return
+    const tmp = makeCanvas(activeDoc.width, activeDoc.height)
+    tmp.getContext("2d")!.drawImage(activeLayer.canvas, 0, 0)
+    compositeLayer(tmp.getContext("2d")!, src.canvas, blend, opacity / 100, 1)
+    activeLayer.canvas.getContext("2d")!.clearRect(0, 0, activeDoc.width, activeDoc.height)
+    activeLayer.canvas.getContext("2d")!.drawImage(tmp, 0, 0)
+    commit("Apply Image", [activeLayer.id])
+    close()
+  }
+
+  const runCalculations = () => {
+    if (!activeDoc) return
+    const a = activeDoc.layers.find((layer) => layer.id === sourceId)
+    const b = activeDoc.layers.find((layer) => layer.id === sourceId2)
+    if (!a || !b) return
+    const imgA = a.canvas.getContext("2d")!.getImageData(0, 0, activeDoc.width, activeDoc.height)
+    const imgB = b.canvas.getContext("2d")!.getImageData(0, 0, activeDoc.width, activeDoc.height)
+    const mask = makeCanvas(activeDoc.width, activeDoc.height)
+    const out = mask.getContext("2d")!.createImageData(activeDoc.width, activeDoc.height)
+    for (let i = 0; i < out.data.length; i += 4) {
+      const va = (imgA.data[i] + imgA.data[i + 1] + imgA.data[i + 2]) / 3
+      const vb = (imgB.data[i] + imgB.data[i + 1] + imgB.data[i + 2]) / 3
+      const value = blend === "multiply" ? (va * vb) / 255 : blend === "screen" ? 255 - ((255 - va) * (255 - vb)) / 255 : (va + vb) / 2
+      out.data[i] = out.data[i + 1] = out.data[i + 2] = value
+      out.data[i + 3] = 255
+    }
+    mask.getContext("2d")!.putImageData(out, 0, 0)
+    const channel: AlphaChannel = { id: uid("alpha"), name: `Calculation ${(activeDoc.channels?.length ?? 0) + 1}`, canvas: mask }
+    dispatch({ type: "save-selection", channel })
+    commit("Calculations Alpha Channel", [])
+    close()
+  }
+
+  const loadCanvases = async () => {
+    const loaded = []
+    for (const file of files) {
+      const img = await loadImageFromFile(file)
+      const canvas = makeCanvas(img.naturalWidth, img.naturalHeight)
+      canvas.getContext("2d")!.drawImage(img, 0, 0)
+      loaded.push({ name: file.name, canvas })
+    }
+    return loaded
+  }
+
+  const runFileWorkflow = async () => {
+    if (!workflow || !files.length) return
+    setBusy(true)
+    try {
+      const loaded = await loadCanvases()
+      if (workflow === "pdf-presentation") {
+        const pages = loaded.map((item) => `<section><img src="${item.canvas.toDataURL("image/png")}" alt="${escapeHtml(item.name)}"><p>${escapeHtml(item.name)}</p></section>`).join("\n")
+        downloadText(`<!doctype html><html><head><meta charset="utf-8"><title>PDF Presentation</title><style>body{margin:0;font-family:sans-serif}section{height:100vh;page-break-after:always;display:grid;place-items:center;background:#111;color:#fff}img{max-width:95vw;max-height:88vh}p{margin:0 0 24px}</style></head><body>${pages}</body></html>`, "pdf-presentation.html", "text/html")
+        close()
+        return
+      }
+      const result = workflow === "photomerge"
+        ? photomerge(loaded)
+        : workflow === "hdr-merge"
+          ? mergeStack(loaded, "mean")
+          : workflow === "focus-stack"
+            ? focusStack(loaded)
+            : workflow === "stack-statistics"
+              ? mergeStack(loaded, stat)
+              : null
+      if (result) {
+        const doc = makeDocument(titleForWorkflow(workflow), result.width, result.height, "transparent")
+        const layer = doc.layers.find((candidate) => candidate.id === doc.activeLayerId)
+        if (layer) layer.canvas.getContext("2d")!.drawImage(result, 0, 0)
+        createDocument(doc, titleForWorkflow(workflow))
+      } else {
+        const width = Math.max(...loaded.map((item) => item.canvas.width))
+        const height = Math.max(...loaded.map((item) => item.canvas.height))
+        const doc = makeDocument("Loaded Stack", width, height, "transparent")
+        doc.layers = loaded.map((item) => {
+          const canvas = makeCanvas(width, height)
+          canvas.getContext("2d")!.drawImage(item.canvas, (width - item.canvas.width) / 2, (height - item.canvas.height) / 2)
+          return { id: uid("layer"), name: item.name, kind: "raster", visible: true, locked: false, opacity: 1, blendMode: "normal", canvas } satisfies Layer
+        })
+        doc.activeLayerId = doc.layers[0]?.id ?? doc.activeLayerId
+        doc.selectedLayerIds = doc.activeLayerId ? [doc.activeLayerId] : []
+        createDocument(doc, "Load Files into Stack")
+      }
+      close()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Workflow failed")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const runPattern = () => {
+    if (!activeDoc) return
+    const canvas = makeCanvas(activeDoc.width, activeDoc.height)
+    drawScriptedPattern(canvas, pattern)
+    const layer: Layer = { id: uid("layer"), name: `Pattern ${pattern}`, kind: "raster", visible: true, locked: false, opacity: 1, blendMode: "normal", canvas }
+    dispatch({ type: "add-layer", layer })
+    window.setTimeout(() => commit("Scripted Pattern", [layer.id]), 0)
+    close()
+  }
+
+  const layers = activeDoc?.layers.filter((layer) => layer.kind !== "group") ?? []
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-[680px] border-[var(--ps-divider)] bg-[var(--ps-panel)] text-[var(--ps-text)]">
+        <DialogHeader>
+          <DialogTitle>{workflow ? titleForWorkflow(workflow) : "Workflow"}</DialogTitle>
+        </DialogHeader>
+        {workflow === "apply-image" || workflow === "calculations" ? (
+          <div className="grid gap-3 text-[11px]">
+            <Field label="Source Layer">
+              <select value={sourceId} onChange={(event) => setSourceId(event.target.value)} className={selectClass}>{layers.map((layer) => <option key={layer.id} value={layer.id}>{layer.name}</option>)}</select>
+            </Field>
+            {workflow === "calculations" ? (
+              <Field label="Second Source">
+                <select value={sourceId2} onChange={(event) => setSourceId2(event.target.value)} className={selectClass}>{layers.map((layer) => <option key={layer.id} value={layer.id}>{layer.name}</option>)}</select>
+              </Field>
+            ) : null}
+            <Field label="Blend">
+              <select value={blend} onChange={(event) => setBlend(event.target.value as BlendMode)} className={selectClass}>{blendModes.map((mode) => <option key={mode} value={mode}>{mode}</option>)}</select>
+            </Field>
+            {workflow === "apply-image" ? <Field label="Opacity"><input type="number" min={0} max={100} value={opacity} onChange={(event) => setOpacity(Number(event.target.value) || 0)} className={inputClass} /></Field> : null}
+          </div>
+        ) : workflow === "scripted-pattern" ? (
+          <Field label="Pattern">
+            <select value={pattern} onChange={(event) => setPattern(event.target.value as typeof pattern)} className={selectClass}>
+              <option value="brick">Brick Fill</option>
+              <option value="cross-weave">Cross Weave</option>
+              <option value="random-fill">Random Fill</option>
+            </select>
+          </Field>
+        ) : workflow === "image-assets" ? (
+          <div className="text-[11px] text-[var(--ps-text-dim)]">This opens the local visible-layer export workflow. It is not Photoshop Generator or a folder watcher.</div>
+        ) : (
+          <div className="grid gap-3 text-[11px]">
+            <input type="file" multiple accept="image/*" onChange={(event) => setFiles(Array.from(event.target.files ?? []))} className={inputClass} />
+            <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2 text-[var(--ps-text-dim)]">
+              File workflows use browser-decoded 8-bit image pixels. Photomerge, HDR merge, focus stack, and stack statistics are local approximations, not Photoshop camera RAW, HDR Pro, or lens-aware merge engines.
+            </div>
+            {workflow === "stack-statistics" ? (
+              <Field label="Statistic">
+                <select value={stat} onChange={(event) => setStat(event.target.value as typeof stat)} className={selectClass}>
+                  <option value="mean">Mean</option>
+                  <option value="median">Median</option>
+                  <option value="min">Minimum</option>
+                  <option value="max">Maximum</option>
+                </select>
+              </Field>
+            ) : null}
+            <div className="text-[var(--ps-text-dim)]">{files.length} file{files.length === 1 ? "" : "s"} selected</div>
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={close}>Cancel</Button>
+          <Button
+            disabled={busy || (isFileWorkflow(workflow) && !files.length)}
+            onClick={() => {
+              if (workflow === "apply-image") runApplyImage()
+              else if (workflow === "calculations") runCalculations()
+              else if (workflow === "scripted-pattern") runPattern()
+              else if (workflow === "image-assets") {
+                window.dispatchEvent(new CustomEvent("ps-open-batch-export", { detail: { scope: "visible-layers" } }))
+                close()
+              } else void runFileWorkflow()
+            }}
+          >
+            {busy ? "Running..." : "Run"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function isFileWorkflow(workflow: GapWorkflowKind | null) {
+  return workflow === "load-stack" || workflow === "photomerge" || workflow === "hdr-merge" || workflow === "focus-stack" || workflow === "stack-statistics" || workflow === "pdf-presentation"
+}
+
+function titleForWorkflow(workflow: GapWorkflowKind) {
+  const labels: Record<GapWorkflowKind, string> = {
+    "apply-image": "Apply Image",
+    calculations: "Calculations",
+    "load-stack": "Load Files into Stack",
+    photomerge: "Photomerge",
+    "hdr-merge": "Merge to HDR",
+    "focus-stack": "Focus Stack",
+    "stack-statistics": "Stack Statistics",
+    "pdf-presentation": "PDF Presentation",
+    "scripted-pattern": "Scripted Patterns",
+    "image-assets": "Image Assets Generator",
+  }
+  return labels[workflow]
+}
+
+function photomerge(items: { name: string; canvas: HTMLCanvasElement }[]) {
+  const overlap = 0.18
+  const height = Math.max(...items.map((item) => item.canvas.height))
+  const width = Math.round(items.reduce((sum, item, index) => sum + item.canvas.width * (index === 0 ? 1 : 1 - overlap), 0))
+  const out = makeCanvas(width, height)
+  const ctx = out.getContext("2d")!
+  let x = 0
+  for (const [index, item] of items.entries()) {
+    ctx.globalAlpha = 1
+    ctx.drawImage(item.canvas, x, (height - item.canvas.height) / 2)
+    x += Math.round(item.canvas.width * (index === 0 ? 1 : 1 - overlap))
+  }
+  return out
+}
+
+function mergeStack(items: { canvas: HTMLCanvasElement }[], mode: "mean" | "median" | "min" | "max") {
+  const width = Math.max(...items.map((item) => item.canvas.width))
+  const height = Math.max(...items.map((item) => item.canvas.height))
+  const data = items.map((item) => imageDataCentered(item.canvas, width, height))
+  const out = makeCanvas(width, height)
+  const img = out.getContext("2d")!.createImageData(width, height)
+  for (let i = 0; i < img.data.length; i += 4) {
+    for (let c = 0; c < 4; c++) {
+      const values = data.map((source) => source.data[i + c]).sort((a, b) => a - b)
+      img.data[i + c] =
+        mode === "min" ? values[0] :
+        mode === "max" ? values[values.length - 1] :
+        mode === "median" ? values[Math.floor(values.length / 2)] :
+        values.reduce((sum, value) => sum + value, 0) / values.length
+    }
+  }
+  out.getContext("2d")!.putImageData(img, 0, 0)
+  return out
+}
+
+function focusStack(items: { canvas: HTMLCanvasElement }[]) {
+  const width = Math.max(...items.map((item) => item.canvas.width))
+  const height = Math.max(...items.map((item) => item.canvas.height))
+  const data = items.map((item) => imageDataCentered(item.canvas, width, height))
+  const out = makeCanvas(width, height)
+  const img = out.getContext("2d")!.createImageData(width, height)
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let best = 0
+      let bestScore = -1
+      for (let s = 0; s < data.length; s++) {
+        const score = localContrast(data[s], x, y)
+        if (score > bestScore) {
+          best = s
+          bestScore = score
+        }
+      }
+      const i = (y * width + x) * 4
+      img.data[i] = data[best].data[i]
+      img.data[i + 1] = data[best].data[i + 1]
+      img.data[i + 2] = data[best].data[i + 2]
+      img.data[i + 3] = data[best].data[i + 3]
+    }
+  }
+  out.getContext("2d")!.putImageData(img, 0, 0)
+  return out
+}
+
+function imageDataCentered(canvas: HTMLCanvasElement, width: number, height: number) {
+  const tmp = makeCanvas(width, height)
+  tmp.getContext("2d")!.drawImage(canvas, (width - canvas.width) / 2, (height - canvas.height) / 2)
+  return tmp.getContext("2d")!.getImageData(0, 0, width, height)
+}
+
+function localContrast(img: ImageData, x: number, y: number) {
+  const center = luminanceAt(img, x, y)
+  return Math.abs(center - luminanceAt(img, x - 1, y)) + Math.abs(center - luminanceAt(img, x + 1, y)) + Math.abs(center - luminanceAt(img, x, y - 1)) + Math.abs(center - luminanceAt(img, x, y + 1))
+}
+
+function luminanceAt(img: ImageData, x: number, y: number) {
+  const sx = Math.max(0, Math.min(img.width - 1, x))
+  const sy = Math.max(0, Math.min(img.height - 1, y))
+  const i = (sy * img.width + sx) * 4
+  return 0.299 * img.data[i] + 0.587 * img.data[i + 1] + 0.114 * img.data[i + 2]
+}
+
+function drawScriptedPattern(canvas: HTMLCanvasElement, pattern: "brick" | "cross-weave" | "random-fill") {
+  const ctx = canvas.getContext("2d")!
+  ctx.fillStyle = "#f8fafc"
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+  if (pattern === "brick") {
+    const w = 96, h = 42
+    for (let y = 0; y < canvas.height; y += h) {
+      for (let x = (Math.floor(y / h) % 2) * -w / 2; x < canvas.width; x += w) {
+        ctx.fillStyle = `hsl(${18 + ((x + y) % 18)}, 58%, ${46 + ((x + y) % 9)}%)`
+        ctx.fillRect(x + 2, y + 2, w - 4, h - 4)
+      }
+    }
+  } else if (pattern === "cross-weave") {
+    ctx.strokeStyle = "#334155"
+    for (let i = -canvas.height; i < canvas.width; i += 14) {
+      ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i + canvas.height, canvas.height); ctx.stroke()
+      ctx.beginPath(); ctx.moveTo(i, canvas.height); ctx.lineTo(i + canvas.height, 0); ctx.stroke()
+    }
+  } else {
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    for (let i = 0; i < img.data.length; i += 4) {
+      const n = Math.sin(i * 12.9898) * 43758.5453
+      const v = Math.floor((n - Math.floor(n)) * 255)
+      img.data[i] = v
+      img.data[i + 1] = 90 + v * 0.45
+      img.data[i + 2] = 255 - v * 0.35
+      img.data[i + 3] = 255
+    }
+    ctx.putImageData(img, 0, 0)
+  }
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[ch] ?? ch)
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return <label className="grid gap-1 text-[11px] text-[var(--ps-text-dim)]">{label}{children}</label>
+}
+
+const inputClass = "h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px] text-[var(--ps-text)] outline-none"
+const selectClass = inputClass
