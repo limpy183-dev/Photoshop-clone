@@ -1,0 +1,217 @@
+"use client"
+
+import * as React from "react"
+import {
+  AlignLeft,
+  Archive,
+  BarChart3,
+  BookOpen,
+  CircleDot,
+  Code2,
+  Eye,
+  Film,
+  Grid3X3,
+  History,
+  Info,
+  Layers,
+  Library,
+  MessageSquare,
+  MousePointer2,
+  Navigation,
+  Paintbrush,
+  Palette,
+  PenTool,
+  Pipette,
+  Play,
+  Ruler,
+  Scissors,
+  Search,
+  SlidersHorizontal,
+  Sparkles,
+  Stamp,
+  StickyNote,
+  Type,
+} from "lucide-react"
+import { ActionsPanel } from "./panels/actions-panel"
+import { AdjustmentsPanel } from "./panels/adjustments-panel"
+import { AnnotationsPanel } from "./panels/annotations-panel"
+import { AssetsPanel } from "./panels/assets-panel"
+import { BrushPanel } from "./panels/brush-panel"
+import { ChannelsPanel } from "./panels/channels-panel"
+import { CharacterPanel, ParagraphPanel } from "./panels/character-paragraph-panels"
+import { CloneSourcePanel } from "./panels/clone-source-panel"
+import { ColorPanel } from "./panels/color-panel"
+import {
+  AnimationPanel,
+  CommentsPanel,
+  DiscoverPanel,
+  GlyphsPanel,
+  LearnPanel,
+  LibrariesPanel,
+  MeasurementLogPanel,
+  NotesPanel,
+  ShapesPanel,
+  StylesPanel,
+} from "./panels/gap-panels"
+import { GradientsPanel } from "./panels/gradients-panel"
+import { GuidesPanel } from "./panels/guides-panel"
+import { HistoryPanel } from "./panels/history-panel"
+import { HistogramPanel, InfoPanel, NavigatorPanel } from "./panels/inspection-panels"
+import { LayerCompsPanel } from "./panels/layer-comps-panel"
+import { LayersPanel } from "./panels/layers-panel"
+import { PathsPanel } from "./panels/paths-panel"
+import { PatternsPanel } from "./panels/patterns-panel"
+import { PropertiesPanel } from "./panels/properties-panel"
+import { ScriptingPanel } from "./panels/scripting-panel"
+import { SelectionStudioPanel } from "./panels/selection-studio-panel"
+import { SlicesPanel } from "./panels/slices-panel"
+import { SwatchesPanel } from "./panels/swatches-panel"
+import { TimelinePanel } from "./panels/timeline-panel"
+import { ToolPresetsPanel } from "./panels/tool-presets-panel"
+
+export type PanelStack = "upper" | "lower"
+export type PanelDockMode = "expanded" | "compact" | "hidden"
+export type PanelComplexity = "core" | "standard" | "advanced" | "specialized"
+export type WorkspacePresetId = "essentials" | "photography" | "painting" | "web"
+
+export const PANEL_CATEGORIES = [
+  "Core",
+  "Color and Assets",
+  "Type and Vector",
+  "Inspection and Guides",
+  "Selection",
+  "Motion and Automation",
+  "Collaboration and Learning",
+] as const
+
+export type PanelCategory = (typeof PANEL_CATEGORIES)[number]
+
+export interface PhotoshopPanelDefinition {
+  id: string
+  label: string
+  stack: PanelStack
+  category: PanelCategory
+  complexity: PanelComplexity
+  icon: React.ComponentType<{ className?: string }>
+  keywords: string[]
+  render: () => React.ReactNode
+}
+
+export interface WorkspacePanelPreset {
+  id: WorkspacePresetId
+  label: string
+  topHeight: number
+  dockWidth: number
+  topActive: string
+  bottomActive: string
+  upperPinned: string[]
+  lowerPinned: string[]
+  mode: PanelDockMode
+}
+
+export const PANEL_DEFINITIONS: PhotoshopPanelDefinition[] = [
+  { id: "color", label: "Color", stack: "upper", category: "Core", complexity: "core", icon: Palette, keywords: ["foreground", "background", "picker"], render: () => <ColorPanel /> },
+  { id: "swatches", label: "Swatches", stack: "upper", category: "Color and Assets", complexity: "standard", icon: Grid3X3, keywords: ["palette", "colors", "preset"], render: () => <SwatchesPanel /> },
+  { id: "gradients", label: "Gradients", stack: "upper", category: "Color and Assets", complexity: "standard", icon: CircleDot, keywords: ["gradient", "preset", "fill"], render: () => <GradientsPanel /> },
+  { id: "patterns", label: "Patterns", stack: "upper", category: "Color and Assets", complexity: "standard", icon: Pipette, keywords: ["pattern", "texture", "fill"], render: () => <PatternsPanel /> },
+  { id: "brush", label: "Brush", stack: "upper", category: "Core", complexity: "core", icon: Paintbrush, keywords: ["painting", "dynamics", "tip"], render: () => <BrushPanel /> },
+  { id: "glyphs", label: "Glyphs", stack: "upper", category: "Type and Vector", complexity: "advanced", icon: Type, keywords: ["font", "typography", "characters"], render: () => <GlyphsPanel /> },
+  { id: "styles", label: "Styles", stack: "upper", category: "Type and Vector", complexity: "standard", icon: Sparkles, keywords: ["effects", "layer fx", "preset"], render: () => <StylesPanel /> },
+  { id: "shapes", label: "Shapes", stack: "upper", category: "Type and Vector", complexity: "standard", icon: CircleDot, keywords: ["vector", "shape", "custom"], render: () => <ShapesPanel /> },
+  { id: "tool-presets", label: "Tool Setups", stack: "upper", category: "Core", complexity: "standard", icon: SlidersHorizontal, keywords: ["tool presets", "setups", "brush presets"], render: () => <ToolPresetsPanel /> },
+  { id: "character", label: "Character", stack: "upper", category: "Type and Vector", complexity: "standard", icon: Type, keywords: ["font", "type", "text"], render: () => <CharacterPanel /> },
+  { id: "paragraph", label: "Paragraph", stack: "upper", category: "Type and Vector", complexity: "standard", icon: AlignLeft, keywords: ["text", "type", "alignment"], render: () => <ParagraphPanel /> },
+  { id: "navigator", label: "Navigator", stack: "upper", category: "Inspection and Guides", complexity: "standard", icon: Navigation, keywords: ["zoom", "pan", "view"], render: () => <NavigatorPanel /> },
+  { id: "histogram", label: "Histogram", stack: "upper", category: "Inspection and Guides", complexity: "standard", icon: BarChart3, keywords: ["levels", "exposure", "photo"], render: () => <HistogramPanel /> },
+  { id: "info", label: "Info", stack: "upper", category: "Inspection and Guides", complexity: "standard", icon: Info, keywords: ["readout", "coordinates", "sampler"], render: () => <InfoPanel /> },
+  { id: "properties", label: "Properties", stack: "upper", category: "Core", complexity: "core", icon: SlidersHorizontal, keywords: ["layer", "document", "tool"], render: () => <PropertiesPanel /> },
+  { id: "selection-studio", label: "Selection", stack: "upper", category: "Selection", complexity: "standard", icon: MousePointer2, keywords: ["select", "mask", "subject"], render: () => <SelectionStudioPanel /> },
+  { id: "guides", label: "Guides", stack: "upper", category: "Inspection and Guides", complexity: "standard", icon: Ruler, keywords: ["grid", "rulers", "layout"], render: () => <GuidesPanel /> },
+  { id: "adjustments", label: "Adjustments", stack: "upper", category: "Core", complexity: "core", icon: CircleDot, keywords: ["photo", "color", "tonal"], render: () => <AdjustmentsPanel /> },
+  { id: "assets", label: "Assets", stack: "upper", category: "Color and Assets", complexity: "standard", icon: Archive, keywords: ["export", "library", "web"], render: () => <AssetsPanel /> },
+  { id: "libraries", label: "Libraries", stack: "upper", category: "Color and Assets", complexity: "advanced", icon: Library, keywords: ["cloud", "assets", "stock"], render: () => <LibrariesPanel /> },
+  { id: "learn", label: "Learn", stack: "upper", category: "Collaboration and Learning", complexity: "specialized", icon: BookOpen, keywords: ["tutorial", "help", "education"], render: () => <LearnPanel /> },
+  { id: "discover", label: "Discover", stack: "upper", category: "Collaboration and Learning", complexity: "specialized", icon: Search, keywords: ["search", "learn", "help"], render: () => <DiscoverPanel /> },
+
+  { id: "layers", label: "Layers", stack: "lower", category: "Core", complexity: "core", icon: Layers, keywords: ["layer", "stack", "visibility"], render: () => <LayersPanel /> },
+  { id: "channels", label: "Channels", stack: "lower", category: "Core", complexity: "standard", icon: Eye, keywords: ["alpha", "rgb", "mask"], render: () => <ChannelsPanel /> },
+  { id: "paths", label: "Paths", stack: "lower", category: "Type and Vector", complexity: "standard", icon: PenTool, keywords: ["vector", "pen", "path"], render: () => <PathsPanel /> },
+  { id: "history", label: "History", stack: "lower", category: "Core", complexity: "core", icon: History, keywords: ["undo", "states", "snapshot"], render: () => <HistoryPanel /> },
+  { id: "actions", label: "Actions", stack: "lower", category: "Motion and Automation", complexity: "standard", icon: Play, keywords: ["macro", "automation", "record"], render: () => <ActionsPanel /> },
+  { id: "layer-comps", label: "Layer Comps", stack: "lower", category: "Core", complexity: "advanced", icon: Layers, keywords: ["compositions", "states", "presentation"], render: () => <LayerCompsPanel /> },
+  { id: "clone-source", label: "Clone Source", stack: "lower", category: "Core", complexity: "advanced", icon: Stamp, keywords: ["clone", "stamp", "source"], render: () => <CloneSourcePanel /> },
+  { id: "timeline", label: "Timeline", stack: "lower", category: "Motion and Automation", complexity: "advanced", icon: Play, keywords: ["video", "animation", "frames"], render: () => <TimelinePanel /> },
+  { id: "animation", label: "Animation", stack: "lower", category: "Motion and Automation", complexity: "advanced", icon: Film, keywords: ["frames", "gif", "motion"], render: () => <AnimationPanel /> },
+  { id: "comments", label: "Comments", stack: "lower", category: "Collaboration and Learning", complexity: "specialized", icon: MessageSquare, keywords: ["review", "collaboration", "notes"], render: () => <CommentsPanel /> },
+  { id: "annotations", label: "Annotations", stack: "lower", category: "Collaboration and Learning", complexity: "specialized", icon: StickyNote, keywords: ["markup", "review", "notes"], render: () => <AnnotationsPanel /> },
+  { id: "notes", label: "Notes", stack: "lower", category: "Collaboration and Learning", complexity: "specialized", icon: StickyNote, keywords: ["note", "document", "annotation"], render: () => <NotesPanel /> },
+  { id: "measurement-log", label: "Measurement Log", stack: "lower", category: "Inspection and Guides", complexity: "specialized", icon: Ruler, keywords: ["measure", "count", "analysis"], render: () => <MeasurementLogPanel /> },
+  { id: "slices", label: "Slices", stack: "lower", category: "Motion and Automation", complexity: "advanced", icon: Scissors, keywords: ["web", "export", "slice"], render: () => <SlicesPanel /> },
+  { id: "scripting", label: "Scripting", stack: "lower", category: "Motion and Automation", complexity: "specialized", icon: Code2, keywords: ["automation", "code", "script"], render: () => <ScriptingPanel /> },
+]
+
+export const PANEL_BY_ID = new Map(PANEL_DEFINITIONS.map((panel) => [panel.id, panel]))
+
+export const WORKSPACE_PRESETS: Record<WorkspacePresetId, WorkspacePanelPreset> = {
+  essentials: {
+    id: "essentials",
+    label: "Essentials",
+    topHeight: 360,
+    dockWidth: 380,
+    topActive: "color",
+    bottomActive: "layers",
+    upperPinned: ["color", "properties", "adjustments", "swatches"],
+    lowerPinned: ["layers", "history", "channels", "paths"],
+    mode: "expanded",
+  },
+  photography: {
+    id: "photography",
+    label: "Photography",
+    topHeight: 400,
+    dockWidth: 400,
+    topActive: "histogram",
+    bottomActive: "layers",
+    upperPinned: ["histogram", "adjustments", "navigator", "info", "color"],
+    lowerPinned: ["layers", "history", "channels", "actions"],
+    mode: "expanded",
+  },
+  painting: {
+    id: "painting",
+    label: "Painting",
+    topHeight: 420,
+    dockWidth: 380,
+    topActive: "brush",
+    bottomActive: "layers",
+    upperPinned: ["brush", "tool-presets", "color", "swatches"],
+    lowerPinned: ["layers", "history", "actions"],
+    mode: "expanded",
+  },
+  web: {
+    id: "web",
+    label: "Web",
+    topHeight: 380,
+    dockWidth: 400,
+    topActive: "assets",
+    bottomActive: "layers",
+    upperPinned: ["assets", "properties", "guides", "slices"],
+    lowerPinned: ["layers", "layer-comps", "comments"],
+    mode: "expanded",
+  },
+}
+
+export const WORKSPACE_PRESET_OPTIONS = Object.values(WORKSPACE_PRESETS)
+
+export function panelsForStack(stack: PanelStack) {
+  return PANEL_DEFINITIONS.filter((panel) => panel.stack === stack)
+}
+
+export function panelById(id: string) {
+  return PANEL_BY_ID.get(id)
+}
+
+export function panelsByCategory(panels: readonly PhotoshopPanelDefinition[] = PANEL_DEFINITIONS) {
+  return PANEL_CATEGORIES.map((category) => ({
+    category,
+    panels: panels.filter((panel) => panel.category === category),
+  })).filter((group) => group.panels.length > 0)
+}

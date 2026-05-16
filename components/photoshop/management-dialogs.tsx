@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useEditor } from "./editor-context"
+import { WORKSPACE_PRESET_OPTIONS, type WorkspacePresetId } from "./panel-registry"
 import type { RecentDocument } from "./recent-documents"
 
 type WorkspaceSummary = { name: string; savedAt?: number }
@@ -143,7 +144,7 @@ export function WorkspaceManagerDialog({
     toast.success("Workspace saved")
     refreshSoon()
   }
-  const applyPreset = (preset: "essentials" | "photography" | "painting") => {
+  const applyPreset = (preset: WorkspacePresetId) => {
     window.dispatchEvent(new CustomEvent("ps-apply-workspace-preset", { detail: { preset } }))
   }
   const applySaved = (workspaceName: string) => {
@@ -178,10 +179,12 @@ export function WorkspaceManagerDialog({
               Save Current
             </Button>
           </div>
-          <div className="grid grid-cols-3 gap-2">
-            <Button variant="outline" size="sm" onClick={() => applyPreset("essentials")}>Essentials</Button>
-            <Button variant="outline" size="sm" onClick={() => applyPreset("photography")}>Photography</Button>
-            <Button variant="outline" size="sm" onClick={() => applyPreset("painting")}>Painting</Button>
+          <div className="grid grid-cols-4 gap-2">
+            {WORKSPACE_PRESET_OPTIONS.map((preset) => (
+              <Button key={preset.id} variant="outline" size="sm" onClick={() => applyPreset(preset.id)}>
+                {preset.label}
+              </Button>
+            ))}
           </div>
           <div className="max-h-[300px] overflow-y-auto rounded-sm border border-[var(--ps-divider)]">
             {savedWorkspaces.length ? (

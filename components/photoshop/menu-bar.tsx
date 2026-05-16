@@ -58,6 +58,12 @@ import {
   NewGuideDialog,
 } from "./workspace-dialogs"
 import {
+  PANEL_CATEGORIES,
+  PANEL_DEFINITIONS,
+  WORKSPACE_PRESET_OPTIONS,
+  type WorkspacePresetId,
+} from "./panel-registry"
+import {
   createDocumentReport,
   deserializePsdFile,
   deserializeProject,
@@ -187,7 +193,7 @@ export function MenuBar({ onOpenNew }: { onOpenNew: () => void }) {
 
   const refreshWorkspaces = React.useCallback(() => {
     try {
-      const parsed = JSON.parse(localStorage.getItem("ps-workspaces-v1") ?? "[]")
+      const parsed = JSON.parse(localStorage.getItem("ps-workspaces-v2") ?? localStorage.getItem("ps-workspaces-v1") ?? "[]")
       setSavedWorkspaces(Array.isArray(parsed) ? parsed : [])
     } catch {
       setSavedWorkspaces([])
@@ -1015,8 +1021,12 @@ export function MenuBar({ onOpenNew }: { onOpenNew: () => void }) {
     input.click()
   }
 
-  const applyWorkspacePreset = (preset: "essentials" | "photography" | "painting") => {
+  const applyWorkspacePreset = (preset: WorkspacePresetId) => {
     window.dispatchEvent(new CustomEvent("ps-apply-workspace-preset", { detail: { preset } }))
+  }
+
+  const openPanel = (id: string) => {
+    window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: id }))
   }
 
   const saveCurrentWorkspace = () => {
@@ -2380,11 +2390,11 @@ export function MenuBar({ onOpenNew }: { onOpenNew: () => void }) {
           <DropdownMenuTrigger className={menuClass}>Window</DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-64">
             <DropdownMenuLabel>Workspace</DropdownMenuLabel>
-            <DropdownMenuItem onSelect={() => applyWorkspacePreset("essentials")}>
-              Essentials (Default)
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => applyWorkspacePreset("photography")}>Photography</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => applyWorkspacePreset("painting")}>Painting</DropdownMenuItem>
+            {WORKSPACE_PRESET_OPTIONS.map((preset) => (
+              <DropdownMenuItem key={preset.id} onSelect={() => applyWorkspacePreset(preset.id)}>
+                {preset.id === "essentials" ? `${preset.label} (Default)` : preset.label}
+              </DropdownMenuItem>
+            ))}
             {savedWorkspaces.length ? (
               <>
                 <DropdownMenuSeparator />
@@ -2414,6 +2424,30 @@ export function MenuBar({ onOpenNew }: { onOpenNew: () => void }) {
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuLabel>Panels</DropdownMenuLabel>
+            {PANEL_CATEGORIES.map((category) => {
+              const panels = PANEL_DEFINITIONS.filter((panel) => panel.category === category)
+              return (
+                <DropdownMenuSub key={category}>
+                  <DropdownMenuSubTrigger>{category}</DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent className="w-60">
+                    {panels.map((panel) => (
+                      <DropdownMenuItem key={panel.id} onSelect={() => openPanel(panel.id)}>
+                        {panel.label}
+                        <DropdownMenuShortcut className="capitalize">{panel.complexity}</DropdownMenuShortcut>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              )
+            })}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => setLayerCompsOpen(true)}>
+              Layer Comps...
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setColorLabelsOpen(true)}>
+              Color Labels...
+            </DropdownMenuItem>
+            {/*
             <DropdownMenuItem>✓ Layers</DropdownMenuItem>
             <DropdownMenuItem>✓ Color</DropdownMenuItem>
             <DropdownMenuItem>✓ Properties</DropdownMenuItem>
@@ -2452,6 +2486,7 @@ export function MenuBar({ onOpenNew }: { onOpenNew: () => void }) {
             <DropdownMenuItem onSelect={() => {
               window.dispatchEvent(new CustomEvent("ps-switch-panel", { detail: "paths" }))
             }}>Paths</DropdownMenuItem>
+            */}
           </DropdownMenuContent>
         </DropdownMenu>
 

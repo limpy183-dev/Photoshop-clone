@@ -491,7 +491,7 @@ test("patterns panel validates stored patterns and exposes library controls", as
   await page.goto("/")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
-  await page.getByRole("button", { name: "Patterns", exact: true }).click()
+  await page.getByLabel("Upper panel picker").selectOption("patterns")
   await expect(page.getByText("No patterns defined yet.")).toBeVisible()
   await expect(page.getByRole("button", { name: "Import patterns" })).toBeVisible()
   await expect(page.getByRole("button", { name: "Export patterns" })).toBeDisabled()
@@ -511,10 +511,12 @@ test("right dock exposes overflowing panels through named browser and pickers", 
   await expect(page.getByLabel("Upper panel picker")).toBeVisible()
   await expect(page.getByLabel("Lower panel picker")).toBeVisible()
 
-  await page.getByRole("button", { name: "Paragraph", exact: true }).click()
+  await page.getByRole("button", { name: "More upper panels" }).click()
+  await page.getByPlaceholder("Search upper panels").fill("Paragraph")
+  await page.getByRole("button", { name: "Open Paragraph panel" }).click()
   await expect(page.getByText("Select a text layer to edit paragraph properties.")).toBeVisible()
 
-  await page.getByRole("button", { name: "Character", exact: true }).click()
+  await page.getByLabel("Upper panel picker").selectOption("character")
   await expect(page.getByText("Select a text layer to edit character properties.")).toBeVisible()
 
   await page.getByLabel("Maximize Upper panel stack").click()
@@ -523,14 +525,17 @@ test("right dock exposes overflowing panels through named browser and pickers", 
   await page.getByLabel("Restore Upper panel stack").click()
   await expect(page.getByLabel("Lower panel picker")).toBeVisible()
 
-  await page.getByRole("button", { name: "Timeline", exact: true }).click()
+  await page.getByRole("button", { name: "More lower panels" }).click()
+  await page.getByPlaceholder("Search lower panels").fill("Timeline")
+  await page.getByRole("button", { name: "Open Timeline panel" }).click()
   await expect(page.getByText("Capture layer visibility states as animation frames.")).toBeVisible()
 
-  await page.getByRole("button", { name: "Annotations", exact: true }).click()
+  await page.getByLabel("Lower panel picker").selectOption("annotations")
   await expect(page.getByText("No notes")).toBeVisible()
 
-  await page.getByLabel("Hide Lower panel browser").click()
-  await expect(page.getByText("Show all panels")).toBeVisible()
-  await page.getByText("Show all panels").click()
-  await expect(page.getByRole("button", { name: "Scripting", exact: true })).toBeVisible()
+  await page.getByRole("button", { name: "More lower panels" }).click()
+  await page.getByPlaceholder("Search lower panels").fill("Scripting")
+  await expect(page.getByRole("button", { name: "Open Scripting panel" })).toBeVisible()
+  await page.getByRole("button", { name: "Pin Scripting panel" }).click()
+  await expect(page.getByTestId("panel-dock").getByRole("button", { name: "Scripting", exact: true })).toBeVisible()
 })

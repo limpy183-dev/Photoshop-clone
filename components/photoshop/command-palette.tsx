@@ -8,6 +8,7 @@ import { useEditor } from "./editor-context"
 import { selectionToMaskCanvas } from "./tool-helpers"
 import type { ToolId } from "./types"
 import { toast } from "sonner"
+import { PANEL_DEFINITIONS } from "./panel-registry"
 
 interface CommandPaletteProps {
   open: boolean
@@ -20,6 +21,7 @@ interface CommandItem {
   group: string
   title: string
   hint?: string
+  searchText?: string
   disabled?: boolean
   disabledReason?: string
   run: () => void
@@ -70,35 +72,13 @@ const TOOL_COMMANDS: { tool: ToolId; title: string; hint: string }[] = [
   { tool: "zoom", title: "Zoom Tool", hint: "Z" },
 ]
 
-const PANEL_COMMANDS = [
-  ["layers", "Layers Panel"],
-  ["properties", "Properties Panel"],
-  ["selection-studio", "Selection Studio Panel"],
-  ["guides", "Guides Panel"],
-  ["adjustments", "Adjustments Panel"],
-  ["assets", "Asset Library Panel"],
-  ["timeline", "Timeline Panel"],
-  ["annotations", "Annotations Panel"],
-  ["slices", "Slice Manager Panel"],
-  ["scripting", "Scripting Console"],
-  ["navigator", "Navigator Panel"],
-  ["histogram", "Histogram Panel"],
-  ["history", "History Panel"],
-  ["actions", "Actions Panel"],
-  ["layer-comps", "Layer Comps Panel"],
-  ["tool-presets", "Tool Presets Panel"],
-  ["clone-source", "Clone Source Panel"],
-  ["glyphs", "Glyphs Panel"],
-  ["animation", "Animation Panel"],
-  ["libraries", "Libraries Panel"],
-  ["learn", "Learn Panel"],
-  ["comments", "Comments Panel"],
-  ["discover", "Discover Panel"],
-  ["measurement-log", "Measurement Log Panel"],
-  ["notes", "Notes Panel"],
-  ["shapes", "Shapes Panel"],
-  ["styles", "Styles Panel"],
-] as const
+const PANEL_COMMAND_TITLES: Record<string, string> = {
+  assets: "Asset Library Panel",
+  "selection-studio": "Selection Studio Panel",
+  scripting: "Scripting Console",
+  slices: "Slice Manager Panel",
+  "tool-presets": "Tool Presets Panel",
+}
 
 export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPaletteProps) {
   const { activeDoc, activeLayer, closedDocuments, dispatch, newLayer, newGroup, duplicateDocument, closeOtherDocuments, reopenClosedDocument } = useEditor()
@@ -656,13 +636,16 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
       },
     ]
 
-    for (const [id, title] of PANEL_COMMANDS) {
+    for (const panel of PANEL_DEFINITIONS) {
+      const title = PANEL_COMMAND_TITLES[panel.id] ?? `${panel.label} Panel`
       items.push({
-        id: `panel-${id}`,
-        group: "Panels",
+        id: `panel-${panel.id}`,
+        group: `Panels: ${panel.category}`,
         title,
+        hint: panel.complexity,
+        searchText: `${panel.label} Panel ${panel.category} ${panel.keywords.join(" ")}`,
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: id }))
+          window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: panel.id }))
           close()
         },
       })
@@ -704,7 +687,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
     if (!q) return commands.slice(0, 60)
     return commands
       .filter((command) =>
-        `${command.group} ${command.title} ${command.hint ?? ""}`.toLowerCase().includes(q),
+        `${command.group} ${command.title} ${command.hint ?? ""} ${command.searchText ?? ""}`.toLowerCase().includes(q),
       )
       .slice(0, 80)
   }, [commands, query])

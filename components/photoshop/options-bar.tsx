@@ -52,6 +52,7 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { CustomShapeId, GradientStop, TextAntiAliasMode, ToolId } from "./types"
+import { WORKSPACE_PRESET_OPTIONS, type WorkspacePresetId } from "./panel-registry"
 
 const Divider = () => <div className="w-px h-5 bg-[var(--ps-divider)] mx-2" />
 
@@ -79,6 +80,32 @@ const SHAPE_LIBRARY: { id: CustomShapeId; label: string; Icon: React.ComponentTy
 
 export function OptionsBar() {
   const { tool, brush, dispatch, gradient, foreground, background, eraser, cloneSource } = useEditor()
+  const workspaceRef = React.useRef<HTMLSelectElement>(null)
+  const [workspace, setWorkspace] = React.useState<WorkspacePresetId>("essentials")
+
+  React.useEffect(() => {
+    try {
+      const saved = localStorage.getItem("ps-current-workspace-preset") as WorkspacePresetId | null
+      if (saved && WORKSPACE_PRESET_OPTIONS.some((preset) => preset.id === saved)) {
+        setWorkspace(saved)
+        if (workspaceRef.current) workspaceRef.current.value = saved
+      }
+    } catch {}
+    const handler = (event: Event) => {
+      const preset = String((event as CustomEvent).detail?.preset ?? "") as WorkspacePresetId
+      if (WORKSPACE_PRESET_OPTIONS.some((option) => option.id === preset)) {
+        setWorkspace(preset)
+        if (workspaceRef.current) workspaceRef.current.value = preset
+      }
+    }
+    window.addEventListener("ps-workspace-preset-changed", handler)
+    return () => window.removeEventListener("ps-workspace-preset-changed", handler)
+  }, [])
+
+  const applyWorkspace = React.useCallback((preset: WorkspacePresetId) => {
+    setWorkspace(preset)
+    window.dispatchEvent(new CustomEvent("ps-apply-workspace-preset", { detail: { preset } }))
+  }, [])
 
   return (
     <div className="h-9 bg-[var(--ps-panel)] border-b border-[var(--ps-divider)] flex items-center px-2 gap-2 text-[11px]">
@@ -136,11 +163,16 @@ export function OptionsBar() {
 
       <div className="flex items-center gap-1">
         <span className={labelClass}>Workspace:</span>
-        <select className="h-6 bg-[var(--ps-panel)] border border-[var(--ps-divider)] rounded-sm text-[11px] px-1">
-          <option>Essentials</option>
-          <option>Photography</option>
-          <option>Painting</option>
-          <option>Web</option>
+        <select
+          ref={workspaceRef}
+          aria-label="Workspace preset"
+          defaultValue={workspace}
+          onChange={(event) => applyWorkspace(event.currentTarget.value as WorkspacePresetId)}
+          className="h-6 bg-[var(--ps-panel)] border border-[var(--ps-divider)] rounded-sm text-[11px] px-1"
+        >
+          {WORKSPACE_PRESET_OPTIONS.map((preset) => (
+            <option key={preset.id} value={preset.id}>{preset.label}</option>
+          ))}
         </select>
       </div>
     </div>

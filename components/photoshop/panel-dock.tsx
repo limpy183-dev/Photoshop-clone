@@ -1,99 +1,43 @@
 "use client"
 
 import * as React from "react"
-import { LayersPanel } from "./panels/layers-panel"
-import { ChannelsPanel } from "./panels/channels-panel"
-import { PathsPanel } from "./panels/paths-panel"
-import { ColorPanel } from "./panels/color-panel"
-import { SwatchesPanel } from "./panels/swatches-panel"
-import { PatternsPanel } from "./panels/patterns-panel"
-import { GradientsPanel } from "./panels/gradients-panel"
-import { HistoryPanel } from "./panels/history-panel"
-import { PropertiesPanel } from "./panels/properties-panel"
-import { BrushPanel } from "./panels/brush-panel"
-import { HistogramPanel, InfoPanel, NavigatorPanel } from "./panels/inspection-panels"
-import { CharacterPanel, ParagraphPanel } from "./panels/character-paragraph-panels"
-import { ActionsPanel } from "./panels/actions-panel"
-import { AdjustmentsPanel } from "./panels/adjustments-panel"
-import { AssetsPanel } from "./panels/assets-panel"
-import { TimelinePanel } from "./panels/timeline-panel"
-import { ScriptingPanel } from "./panels/scripting-panel"
-import { SelectionStudioPanel } from "./panels/selection-studio-panel"
-import { AnnotationsPanel } from "./panels/annotations-panel"
-import { GuidesPanel } from "./panels/guides-panel"
-import { SlicesPanel } from "./panels/slices-panel"
-import { ToolPresetsPanel } from "./panels/tool-presets-panel"
-import { CloneSourcePanel } from "./panels/clone-source-panel"
-import { LayerCompsPanel } from "./panels/layer-comps-panel"
 import {
-  AnimationPanel,
-  CommentsPanel,
-  DiscoverPanel,
-  GlyphsPanel,
-  LearnPanel,
-  LibrariesPanel,
-  MeasurementLogPanel,
-  NotesPanel,
-  ShapesPanel,
-  StylesPanel,
-} from "./panels/gap-panels"
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronUp,
+  Columns3,
+  GripVertical,
+  Maximize2,
+  Minimize2,
+  MoreHorizontal,
+  Pin,
+  PinOff,
+  Search,
+} from "lucide-react"
 import { cn } from "@/lib/utils"
-import { Archive, BarChart3, BookOpen, ChevronDown, ChevronUp, Code2, Eye, Film, Info, Layers, Library, Maximize2, MessageSquare, Minimize2, Navigation, Palette, History, Search, SlidersHorizontal, Paintbrush, PenTool, Grid3X3, Pipette, CircleDot, Type, AlignLeft, Play, MousePointer2, StickyNote, Ruler, Scissors, Sparkles, Stamp } from "lucide-react"
-
-interface PanelGroup {
-  defaultTab: string
-  tabs: { id: string; label: string; icon: React.ComponentType<{ className?: string }>; render: () => React.ReactNode }[]
-}
-
-const TOP: PanelGroup = {
-  defaultTab: "color",
-  tabs: [
-    { id: "color", label: "Color", icon: Palette, render: () => <ColorPanel /> },
-    { id: "swatches", label: "Swatches", icon: Grid3X3, render: () => <SwatchesPanel /> },
-    { id: "gradients", label: "Gradients", icon: CircleDot, render: () => <GradientsPanel /> },
-    { id: "patterns", label: "Patterns", icon: Pipette, render: () => <PatternsPanel /> },
-    { id: "brush", label: "Brush", icon: Paintbrush, render: () => <BrushPanel /> },
-    { id: "glyphs", label: "Glyphs", icon: Type, render: () => <GlyphsPanel /> },
-    { id: "styles", label: "Styles", icon: Sparkles, render: () => <StylesPanel /> },
-    { id: "shapes", label: "Shapes", icon: CircleDot, render: () => <ShapesPanel /> },
-    { id: "tool-presets", label: "Tool Setups", icon: SlidersHorizontal, render: () => <ToolPresetsPanel /> },
-    { id: "character", label: "Character", icon: Type, render: () => <CharacterPanel /> },
-    { id: "paragraph", label: "Paragraph", icon: AlignLeft, render: () => <ParagraphPanel /> },
-    { id: "navigator", label: "Navigator", icon: Navigation, render: () => <NavigatorPanel /> },
-    { id: "histogram", label: "Histogram", icon: BarChart3, render: () => <HistogramPanel /> },
-    { id: "info", label: "Info", icon: Info, render: () => <InfoPanel /> },
-    { id: "properties", label: "Properties", icon: SlidersHorizontal, render: () => <PropertiesPanel /> },
-    { id: "selection-studio", label: "Selection", icon: MousePointer2, render: () => <SelectionStudioPanel /> },
-    { id: "guides", label: "Guides", icon: Ruler, render: () => <GuidesPanel /> },
-    { id: "adjustments", label: "Adjustments", icon: CircleDot, render: () => <AdjustmentsPanel /> },
-    { id: "assets", label: "Assets", icon: Archive, render: () => <AssetsPanel /> },
-    { id: "libraries", label: "Libraries", icon: Library, render: () => <LibrariesPanel /> },
-    { id: "learn", label: "Learn", icon: BookOpen, render: () => <LearnPanel /> },
-    { id: "discover", label: "Discover", icon: Search, render: () => <DiscoverPanel /> },
-  ],
-}
-
-const BOTTOM: PanelGroup = {
-  defaultTab: "layers",
-  tabs: [
-    { id: "layers", label: "Layers", icon: Layers, render: () => <LayersPanel /> },
-    { id: "channels", label: "Channels", icon: Eye, render: () => <ChannelsPanel /> },
-    { id: "paths", label: "Paths", icon: PenTool, render: () => <PathsPanel /> },
-    { id: "history", label: "History", icon: History, render: () => <HistoryPanel /> },
-    { id: "actions", label: "Actions", icon: Play, render: () => <ActionsPanel /> },
-    { id: "layer-comps", label: "Layer Comps", icon: Layers, render: () => <LayerCompsPanel /> },
-    { id: "clone-source", label: "Clone Source", icon: Stamp, render: () => <CloneSourcePanel /> },
-    { id: "timeline", label: "Timeline", icon: Play, render: () => <TimelinePanel /> },
-    { id: "animation", label: "Animation", icon: Film, render: () => <AnimationPanel /> },
-    { id: "comments", label: "Comments", icon: MessageSquare, render: () => <CommentsPanel /> },
-    { id: "annotations", label: "Annotations", icon: StickyNote, render: () => <AnnotationsPanel /> },
-    { id: "notes", label: "Notes", icon: StickyNote, render: () => <NotesPanel /> },
-    { id: "measurement-log", label: "Measurement Log", icon: Ruler, render: () => <MeasurementLogPanel /> },
-    { id: "slices", label: "Slices", icon: Scissors, render: () => <SlicesPanel /> },
-    { id: "scripting", label: "Scripting", icon: Code2, render: () => <ScriptingPanel /> },
-  ],
-}
 import { ResizeHandle } from "./resize-handle"
+import {
+  PANEL_CATEGORIES,
+  PANEL_DEFINITIONS,
+  WORKSPACE_PRESETS,
+  panelById,
+  panelsByCategory,
+  panelsForStack,
+  type PanelDockMode,
+  type PanelStack,
+  type PhotoshopPanelDefinition,
+  type WorkspacePanelPreset,
+  type WorkspacePresetId,
+} from "./panel-registry"
+
+const DOCK_STATE_KEY = "ps-panel-dock-state-v2"
+const WORKSPACES_KEY = "ps-workspaces-v2"
+const LEGACY_WORKSPACES_KEY = "ps-workspaces-v1"
+const CURRENT_WORKSPACE_KEY = "ps-current-workspace-preset"
+const TOP_MIN_HEIGHT = 220
+const BOTTOM_MIN_HEIGHT = 180
+const SPLITTER_HEIGHT = 12
 
 interface WorkspaceLayout {
   name: string
@@ -101,19 +45,89 @@ interface WorkspaceLayout {
   dockWidth: number
   topTab: string
   bottomTab: string
+  upperPinned: string[]
+  lowerPinned: string[]
+  dockMode: PanelDockMode
   savedAt: number
 }
 
-const WORKSPACES_KEY = "ps-workspaces-v1"
+interface SavedDockState {
+  topHeight?: number
+  topActive?: string
+  bottomActive?: string
+  upperPinned?: string[]
+  lowerPinned?: string[]
+  mode?: PanelDockMode
+  recentPanels?: string[]
+}
+
+const upperPanels = panelsForStack("upper")
+const lowerPanels = panelsForStack("lower")
+
+function isDockMode(value: unknown): value is PanelDockMode {
+  return value === "expanded" || value === "compact" || value === "hidden"
+}
+
+function validPanelIds(stack: PanelStack) {
+  return new Set(panelsForStack(stack).map((panel) => panel.id))
+}
+
+function normalizePinned(stack: PanelStack, ids: unknown, fallback: readonly string[]) {
+  const valid = validPanelIds(stack)
+  const source = Array.isArray(ids) ? ids : fallback
+  const normalized = source
+    .map((id) => String(id))
+    .filter((id, index, list) => valid.has(id) && list.indexOf(id) === index)
+  return normalized.length ? normalized : fallback.filter((id) => valid.has(id))
+}
+
+function readDockState(): SavedDockState | null {
+  if (typeof window === "undefined") return null
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DOCK_STATE_KEY) ?? "null")
+    return parsed && typeof parsed === "object" ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function normalizeWorkspaceLayout(input: unknown): WorkspaceLayout | null {
+  if (!input || typeof input !== "object") return null
+  const source = input as Partial<WorkspaceLayout> & {
+    topTab?: unknown
+    bottomTab?: unknown
+    topActive?: unknown
+    bottomActive?: unknown
+    mode?: unknown
+  }
+  const name = String(source.name ?? "").trim()
+  if (!name) return null
+  const topTab = String(source.topTab ?? source.topActive ?? WORKSPACE_PRESETS.essentials.topActive)
+  const bottomTab = String(source.bottomTab ?? source.bottomActive ?? WORKSPACE_PRESETS.essentials.bottomActive)
+  return {
+    name,
+    topHeight: Number.isFinite(Number(source.topHeight)) ? Number(source.topHeight) : WORKSPACE_PRESETS.essentials.topHeight,
+    dockWidth: Number.isFinite(Number(source.dockWidth)) ? Number(source.dockWidth) : WORKSPACE_PRESETS.essentials.dockWidth,
+    topTab,
+    bottomTab,
+    upperPinned: normalizePinned("upper", source.upperPinned, WORKSPACE_PRESETS.essentials.upperPinned),
+    lowerPinned: normalizePinned("lower", source.lowerPinned, WORKSPACE_PRESETS.essentials.lowerPinned),
+    dockMode: isDockMode(source.dockMode) ? source.dockMode : isDockMode(source.mode) ? source.mode : "expanded",
+    savedAt: Number.isFinite(Number(source.savedAt)) ? Number(source.savedAt) : Date.now(),
+  }
+}
 
 function readWorkspaces(): WorkspaceLayout[] {
   if (typeof window === "undefined") return []
-  try {
-    const parsed = JSON.parse(localStorage.getItem(WORKSPACES_KEY) ?? "[]")
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
+  for (const key of [WORKSPACES_KEY, LEGACY_WORKSPACES_KEY]) {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(key) ?? "[]")
+      if (Array.isArray(parsed) && parsed.length) {
+        return parsed.map(normalizeWorkspaceLayout).filter(Boolean) as WorkspaceLayout[]
+      }
+    } catch {}
   }
+  return []
 }
 
 function writeWorkspaces(workspaces: WorkspaceLayout[]) {
@@ -121,41 +135,62 @@ function writeWorkspaces(workspaces: WorkspaceLayout[]) {
   window.dispatchEvent(new CustomEvent("ps-workspaces-changed", { detail: workspaces }))
 }
 
-const WORKSPACE_PRESETS: Record<string, WorkspaceLayout> = {
-  essentials: { name: "Essentials", topHeight: 380, dockWidth: 380, topTab: "color", bottomTab: "layers", savedAt: 0 },
-  photography: { name: "Photography", topHeight: 400, dockWidth: 400, topTab: "histogram", bottomTab: "layers", savedAt: 0 },
-  painting: { name: "Painting", topHeight: 420, dockWidth: 380, topTab: "brush", bottomTab: "actions", savedAt: 0 },
+function presetToLayout(preset: WorkspacePanelPreset): WorkspaceLayout {
+  return {
+    name: preset.label,
+    topHeight: preset.topHeight,
+    dockWidth: preset.dockWidth,
+    topTab: preset.topActive,
+    bottomTab: preset.bottomActive,
+    upperPinned: preset.upperPinned,
+    lowerPinned: preset.lowerPinned,
+    dockMode: preset.mode,
+    savedAt: 0,
+  }
 }
 
-const TOP_MIN_HEIGHT = 220
-const BOTTOM_MIN_HEIGHT = 180
-const SPLITTER_HEIGHT = 12
+function setCurrentWorkspacePreset(id: WorkspacePresetId) {
+  try {
+    localStorage.setItem(CURRENT_WORKSPACE_KEY, id)
+  } catch {}
+  window.dispatchEvent(new CustomEvent("ps-workspace-preset-changed", { detail: { preset: id } }))
+}
+
+function moveItem(ids: string[], id: string, delta: number) {
+  const index = ids.indexOf(id)
+  const nextIndex = index + delta
+  if (index < 0 || nextIndex < 0 || nextIndex >= ids.length) return ids
+  const next = ids.slice()
+  const [item] = next.splice(index, 1)
+  next.splice(nextIndex, 0, item)
+  return next
+}
 
 export function PanelDock({ width }: { width?: number }) {
   const dockRef = React.useRef<HTMLDivElement>(null)
   const [dockHeight, setDockHeight] = React.useState(0)
-  const [topHeight, setTopHeight] = React.useState(380)
-  const [topActive, setTopActive] = React.useState(TOP.defaultTab)
-  const [bottomActive, setBottomActive] = React.useState(BOTTOM.defaultTab)
+  const [topHeight, setTopHeight] = React.useState(WORKSPACE_PRESETS.essentials.topHeight)
+  const [topActive, setTopActive] = React.useState(WORKSPACE_PRESETS.essentials.topActive)
+  const [bottomActive, setBottomActive] = React.useState(WORKSPACE_PRESETS.essentials.bottomActive)
+  const [upperPinned, setUpperPinned] = React.useState(() => WORKSPACE_PRESETS.essentials.upperPinned)
+  const [lowerPinned, setLowerPinned] = React.useState(() => WORKSPACE_PRESETS.essentials.lowerPinned)
+  const [mode, setMode] = React.useState<PanelDockMode>("expanded")
   const [solo, setSolo] = React.useState<"top" | "bottom" | null>(null)
+  const [recentPanels, setRecentPanels] = React.useState<string[]>([])
+  const hydratedRef = React.useRef(false)
   const topHeightRef = React.useRef(topHeight)
   const topActiveRef = React.useRef(topActive)
   const bottomActiveRef = React.useRef(bottomActive)
+  const upperPinnedRef = React.useRef(upperPinned)
+  const lowerPinnedRef = React.useRef(lowerPinned)
+  const modeRef = React.useRef(mode)
   const widthRef = React.useRef(width)
+
   const topMax = dockHeight > 0 ? Math.max(TOP_MIN_HEIGHT, dockHeight - BOTTOM_MIN_HEIGHT - SPLITTER_HEIGHT) : 720
   const clampTopHeight = React.useCallback(
     (value: number) => Math.max(TOP_MIN_HEIGHT, Math.min(topMax, value)),
     [topMax],
   )
-
-  const applyLayout = React.useCallback((layout: WorkspaceLayout) => {
-    setTopHeight(clampTopHeight(layout.topHeight))
-    if (TOP.tabs.some((tab) => tab.id === layout.topTab)) setTopActive(layout.topTab)
-    if (BOTTOM.tabs.some((tab) => tab.id === layout.bottomTab)) setBottomActive(layout.bottomTab)
-    if (Number.isFinite(layout.dockWidth)) {
-      window.dispatchEvent(new CustomEvent("ps-set-dock-width", { detail: layout.dockWidth }))
-    }
-  }, [clampTopHeight])
 
   React.useEffect(() => {
     topHeightRef.current = topHeight
@@ -170,33 +205,117 @@ export function PanelDock({ width }: { width?: number }) {
   }, [bottomActive])
 
   React.useEffect(() => {
+    upperPinnedRef.current = upperPinned
+  }, [upperPinned])
+
+  React.useEffect(() => {
+    lowerPinnedRef.current = lowerPinned
+  }, [lowerPinned])
+
+  React.useEffect(() => {
+    modeRef.current = mode
+  }, [mode])
+
+  React.useEffect(() => {
     widthRef.current = width
   }, [width])
 
-  const saveTopHeight = React.useCallback(() => {
-    try { localStorage.setItem("ps-panel-split", String(topHeightRef.current)) } catch { }
+  const updateRecent = React.useCallback((id: string) => {
+    setRecentPanels((current) => [id, ...current.filter((item) => item !== id)].slice(0, 10))
   }, [])
+
+  const activatePanel = React.useCallback((id: string, expand = false) => {
+    const panel = panelById(id)
+    if (!panel) return
+    if (panel.stack === "upper") setTopActive(panel.id)
+    if (panel.stack === "lower") setBottomActive(panel.id)
+    updateRecent(panel.id)
+    if (expand || modeRef.current !== "expanded") setMode("expanded")
+  }, [updateRecent])
+
+  const pinPanel = React.useCallback((id: string) => {
+    const panel = panelById(id)
+    if (!panel) return
+    const update = (current: string[]) => current.includes(panel.id) ? current : [...current, panel.id]
+    if (panel.stack === "upper") setUpperPinned(update)
+    if (panel.stack === "lower") setLowerPinned(update)
+    activatePanel(panel.id)
+  }, [activatePanel])
+
+  const unpinPanel = React.useCallback((id: string) => {
+    const panel = panelById(id)
+    if (!panel) return
+    const fallback = panel.stack === "upper" ? WORKSPACE_PRESETS.essentials.upperPinned : WORKSPACE_PRESETS.essentials.lowerPinned
+    const setPinned = panel.stack === "upper" ? setUpperPinned : setLowerPinned
+    setPinned((current) => {
+      if (!current.includes(panel.id) || current.length <= 1) return current
+      const next = current.filter((item) => item !== panel.id)
+      const nextActive = next[0] ?? fallback[0]
+      if (panel.stack === "upper" && topActiveRef.current === panel.id) setTopActive(nextActive)
+      if (panel.stack === "lower" && bottomActiveRef.current === panel.id) setBottomActive(nextActive)
+      return next
+    })
+  }, [])
+
+  const movePinnedPanel = React.useCallback((stack: PanelStack, id: string, delta: number) => {
+    if (stack === "upper") setUpperPinned((current) => moveItem(current, id, delta))
+    if (stack === "lower") setLowerPinned((current) => moveItem(current, id, delta))
+  }, [])
+
+  const applyLayout = React.useCallback((layout: WorkspaceLayout) => {
+    setTopHeight(clampTopHeight(layout.topHeight))
+    setUpperPinned(normalizePinned("upper", layout.upperPinned, WORKSPACE_PRESETS.essentials.upperPinned))
+    setLowerPinned(normalizePinned("lower", layout.lowerPinned, WORKSPACE_PRESETS.essentials.lowerPinned))
+    if (panelById(layout.topTab)?.stack === "upper") setTopActive(layout.topTab)
+    if (panelById(layout.bottomTab)?.stack === "lower") setBottomActive(layout.bottomTab)
+    setMode(layout.dockMode)
+    setSolo(null)
+    if (Number.isFinite(layout.dockWidth)) {
+      window.dispatchEvent(new CustomEvent("ps-set-dock-width", { detail: layout.dockWidth }))
+    }
+  }, [clampTopHeight])
 
   React.useEffect(() => {
-    try {
-      const saved = localStorage.getItem("ps-panel-split")
-      const parsed = Number(saved)
-      if (Number.isFinite(parsed)) setTopHeight(Math.max(TOP_MIN_HEIGHT, parsed))
-    } catch { }
-  }, [])
+    const saved = readDockState()
+    if (saved) {
+      if (Number.isFinite(Number(saved.topHeight))) setTopHeight(clampTopHeight(Number(saved.topHeight)))
+      if (panelById(String(saved.topActive ?? ""))?.stack === "upper") setTopActive(String(saved.topActive))
+      if (panelById(String(saved.bottomActive ?? ""))?.stack === "lower") setBottomActive(String(saved.bottomActive))
+      setUpperPinned(normalizePinned("upper", saved.upperPinned, WORKSPACE_PRESETS.essentials.upperPinned))
+      setLowerPinned(normalizePinned("lower", saved.lowerPinned, WORKSPACE_PRESETS.essentials.lowerPinned))
+      if (isDockMode(saved.mode)) setMode(saved.mode)
+      if (Array.isArray(saved.recentPanels)) {
+        setRecentPanels(saved.recentPanels.map(String).filter((id) => panelById(id)).slice(0, 10))
+      }
+    } else {
+      try {
+        const savedSplit = localStorage.getItem("ps-panel-split")
+        const parsed = Number(savedSplit)
+        if (Number.isFinite(parsed)) setTopHeight(Math.max(TOP_MIN_HEIGHT, parsed))
+      } catch {}
+    }
+    hydratedRef.current = true
+  }, [clampTopHeight])
 
-  const resizePanelSplit = React.useCallback(
-    (delta: number) => {
-      setTopHeight((height) => clampTopHeight(height + delta))
-    },
-    [clampTopHeight],
-  )
+  React.useEffect(() => {
+    if (!hydratedRef.current) return
+    try {
+      localStorage.setItem(DOCK_STATE_KEY, JSON.stringify({
+        topHeight,
+        topActive,
+        bottomActive,
+        upperPinned,
+        lowerPinned,
+        mode,
+        recentPanels,
+      }))
+    } catch {}
+  }, [topHeight, topActive, bottomActive, upperPinned, lowerPinned, mode, recentPanels])
 
   React.useEffect(() => {
     const openPanel = (event: Event) => {
       const id = String((event as CustomEvent).detail ?? "")
-      if (TOP.tabs.some((tab) => tab.id === id)) setTopActive(id)
-      if (BOTTOM.tabs.some((tab) => tab.id === id)) setBottomActive(id)
+      activatePanel(id, true)
     }
     const saveWorkspace = (event: Event) => {
       const name = String((event as CustomEvent).detail?.name ?? "").trim()
@@ -205,9 +324,12 @@ export function PanelDock({ width }: { width?: number }) {
       workspaces.push({
         name,
         topHeight: topHeightRef.current,
-        dockWidth: widthRef.current ?? 380,
+        dockWidth: widthRef.current ?? WORKSPACE_PRESETS.essentials.dockWidth,
         topTab: topActiveRef.current,
         bottomTab: bottomActiveRef.current,
+        upperPinned: upperPinnedRef.current,
+        lowerPinned: lowerPinnedRef.current,
+        dockMode: modeRef.current,
         savedAt: Date.now(),
       })
       writeWorkspaces(workspaces.sort((a, b) => a.name.localeCompare(b.name)))
@@ -222,8 +344,10 @@ export function PanelDock({ width }: { width?: number }) {
       writeWorkspaces(readWorkspaces().filter((workspace) => workspace.name !== name))
     }
     const applyPreset = (event: Event) => {
-      const preset = String((event as CustomEvent).detail?.preset ?? "essentials")
-      applyLayout(WORKSPACE_PRESETS[preset] ?? WORKSPACE_PRESETS.essentials)
+      const presetId = String((event as CustomEvent).detail?.preset ?? "essentials") as WorkspacePresetId
+      const preset = WORKSPACE_PRESETS[presetId] ?? WORKSPACE_PRESETS.essentials
+      applyLayout(presetToLayout(preset))
+      setCurrentWorkspacePreset(preset.id)
     }
     window.addEventListener("ps-open-panel", openPanel)
     window.addEventListener("ps-switch-panel", openPanel)
@@ -239,7 +363,7 @@ export function PanelDock({ width }: { width?: number }) {
       window.removeEventListener("ps-delete-workspace", deleteWorkspace)
       window.removeEventListener("ps-apply-workspace-preset", applyPreset)
     }
-  }, [applyLayout])
+  }, [activatePanel, applyLayout])
 
   React.useEffect(() => {
     const node = dockRef.current
@@ -259,21 +383,91 @@ export function PanelDock({ width }: { width?: number }) {
     setTopHeight((height) => clampTopHeight(height))
   }, [clampTopHeight])
 
+  const saveTopHeight = React.useCallback(() => {
+    try {
+      localStorage.setItem("ps-panel-split", String(topHeightRef.current))
+    } catch {}
+  }, [])
+
+  const resizePanelSplit = React.useCallback(
+    (delta: number) => {
+      setTopHeight((height) => clampTopHeight(height + delta))
+    },
+    [clampTopHeight],
+  )
+
+  const dockWidth = mode === "expanded" ? width ?? WORKSPACE_PRESETS.essentials.dockWidth : mode === "compact" ? 48 : 34
+
+  if (mode === "hidden") {
+    return (
+      <div
+        ref={dockRef}
+        data-testid="panel-dock"
+        data-mode="hidden"
+        className="shrink-0 border-l border-[var(--ps-divider)] bg-[var(--ps-panel)]"
+        style={{ width: dockWidth }}
+      >
+        <div className="flex h-full flex-col items-center gap-1 px-1 py-2">
+          <button
+            type="button"
+            aria-label="Show panel dock"
+            title="Show panel dock"
+            onClick={() => setMode("expanded")}
+            className="flex h-7 w-7 items-center justify-center rounded-sm text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (mode === "compact") {
+    return (
+      <div
+        ref={dockRef}
+        data-testid="panel-dock"
+        data-mode="compact"
+        className="shrink-0 border-l border-[var(--ps-divider)] bg-[var(--ps-panel)]"
+        style={{ width: dockWidth }}
+      >
+        <CompactRail
+          upperPinned={upperPinned}
+          lowerPinned={lowerPinned}
+          topActive={topActive}
+          bottomActive={bottomActive}
+          onOpen={(id) => activatePanel(id, true)}
+          onExpand={() => setMode("expanded")}
+          onHide={() => setMode("hidden")}
+        />
+      </div>
+    )
+  }
+
   return (
     <div
       ref={dockRef}
+      data-testid="panel-dock"
+      data-mode="expanded"
       className="shrink-0 bg-[var(--ps-panel)] border-l border-[var(--ps-divider)] flex flex-col select-none"
-      style={{ width: width ?? 380 }}
+      style={{ width: dockWidth }}
     >
+      <DockHeader onCompact={() => setMode("compact")} onHide={() => setMode("hidden")} />
       {solo !== "bottom" ? (
-        <PanelGroupView
+        <PanelStackView
           label="Upper"
-          group={TOP}
+          stack="upper"
+          panels={upperPanels}
+          pinnedIds={upperPinned}
+          active={topActive}
           flex={solo === "top"}
           height={solo === "top" ? undefined : topHeight}
-          active={topActive}
-          onActiveChange={setTopActive}
+          recentPanels={recentPanels}
           isSolo={solo === "top"}
+          onActiveChange={activatePanel}
+          onPin={pinPanel}
+          onUnpin={unpinPanel}
+          onMovePinned={movePinnedPanel}
           onToggleSolo={() => setSolo(solo === "top" ? null : "top")}
         />
       ) : null}
@@ -286,13 +480,19 @@ export function PanelDock({ width }: { width?: number }) {
         />
       ) : null}
       {solo !== "top" ? (
-        <PanelGroupView
+        <PanelStackView
           label="Lower"
-          group={BOTTOM}
-          flex={true}
+          stack="lower"
+          panels={lowerPanels}
+          pinnedIds={lowerPinned}
           active={bottomActive}
-          onActiveChange={setBottomActive}
+          flex={true}
+          recentPanels={recentPanels}
           isSolo={solo === "bottom"}
+          onActiveChange={activatePanel}
+          onPin={pinPanel}
+          onUnpin={unpinPanel}
+          onMovePinned={movePinnedPanel}
           onToggleSolo={() => setSolo(solo === "bottom" ? null : "bottom")}
         />
       ) : null}
@@ -300,94 +500,200 @@ export function PanelDock({ width }: { width?: number }) {
   )
 }
 
-function PanelGroupView({
+function DockHeader({ onCompact, onHide }: { onCompact: () => void; onHide: () => void }) {
+  return (
+    <div className="flex h-8 shrink-0 items-center gap-1 border-b border-[var(--ps-divider)] bg-[var(--ps-chrome)] px-2">
+      <Columns3 className="h-3.5 w-3.5 text-[var(--ps-text-dim)]" />
+      <span className="min-w-0 flex-1 text-[11px] font-medium text-[var(--ps-text)]">Panels</span>
+      <button
+        type="button"
+        aria-label="Compact panel dock"
+        title="Compact panel dock"
+        onClick={onCompact}
+        className="flex h-6 w-6 items-center justify-center rounded-sm text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]"
+      >
+        <ChevronsLeft className="h-3.5 w-3.5" />
+      </button>
+      <button
+        type="button"
+        aria-label="Hide panel dock"
+        title="Hide panel dock"
+        onClick={onHide}
+        className="flex h-6 w-6 items-center justify-center rounded-sm text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]"
+      >
+        <ChevronRight className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  )
+}
+
+function CompactRail({
+  upperPinned,
+  lowerPinned,
+  topActive,
+  bottomActive,
+  onOpen,
+  onExpand,
+  onHide,
+}: {
+  upperPinned: string[]
+  lowerPinned: string[]
+  topActive: string
+  bottomActive: string
+  onOpen: (id: string) => void
+  onExpand: () => void
+  onHide: () => void
+}) {
+  const ids = [...upperPinned, ...lowerPinned].filter((id, index, list) => list.indexOf(id) === index)
+  const panels = ids.map(panelById).filter(Boolean) as PhotoshopPanelDefinition[]
+  return (
+    <div className="flex h-full flex-col items-center gap-1 px-1 py-2">
+      <button
+        type="button"
+        aria-label="Expand panel dock"
+        title="Expand panel dock"
+        onClick={onExpand}
+        className="flex h-7 w-7 items-center justify-center rounded-sm text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]"
+      >
+        <ChevronLeft className="h-3.5 w-3.5" />
+      </button>
+      <div className="my-1 h-px w-6 bg-[var(--ps-divider)]" />
+      <div className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto">
+        {panels.map((panel) => {
+          const active = panel.id === topActive || panel.id === bottomActive
+          return (
+            <button
+              key={panel.id}
+              type="button"
+              aria-label={`Open ${panel.label} panel from rail`}
+              title={panel.label}
+              onClick={() => onOpen(panel.id)}
+              className={cn(
+                "relative flex h-7 w-7 items-center justify-center rounded-sm transition-colors",
+                active
+                  ? "bg-[var(--ps-tool-active)] text-[var(--ps-text)]"
+                  : "text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]",
+              )}
+            >
+              <panel.icon className="h-3.5 w-3.5" />
+              {active ? <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-[var(--ps-accent)]" /> : null}
+            </button>
+          )
+        })}
+      </div>
+      <div className="my-1 h-px w-6 bg-[var(--ps-divider)]" />
+      <button
+        type="button"
+        aria-label="Hide panel dock"
+        title="Hide panel dock"
+        onClick={onHide}
+        className="flex h-7 w-7 items-center justify-center rounded-sm text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]"
+      >
+        <ChevronRight className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  )
+}
+
+function PanelStackView({
   label,
-  group,
+  stack,
+  panels,
+  pinnedIds,
+  active,
   flex,
   height,
-  active,
-  onActiveChange,
+  recentPanels,
   isSolo,
+  onActiveChange,
+  onPin,
+  onUnpin,
+  onMovePinned,
   onToggleSolo,
 }: {
   label: string
-  group: PanelGroup
+  stack: PanelStack
+  panels: PhotoshopPanelDefinition[]
+  pinnedIds: string[]
+  active: string
   flex: boolean
   height?: number
-  active: string
-  onActiveChange: (id: string) => void
+  recentPanels: string[]
   isSolo: boolean
+  onActiveChange: (id: string) => void
+  onPin: (id: string) => void
+  onUnpin: (id: string) => void
+  onMovePinned: (stack: PanelStack, id: string, delta: number) => void
   onToggleSolo: () => void
 }) {
-  const [showBrowser, setShowBrowser] = React.useState(true)
-  const tab = group.tabs.find((t) => t.id === active) ?? group.tabs[0]
-  const selectPanel = React.useCallback(
-    (id: string) => {
-      if (!group.tabs.some((candidate) => candidate.id === id)) return
-      onActiveChange(id)
-    },
-    [group.tabs, onActiveChange],
-  )
-  const handleSelectPanel = React.useCallback(
-    (event: React.ChangeEvent<HTMLSelectElement> | React.FormEvent<HTMLSelectElement>) => {
-      selectPanel(event.currentTarget.value)
-    },
-    [selectPanel],
-  )
+  const [moreOpen, setMoreOpen] = React.useState(false)
+  const activePanel = panels.find((panel) => panel.id === active) ?? panels[0]
+  const pinnedPanels = pinnedIds.map(panelById).filter((panel): panel is PhotoshopPanelDefinition => !!panel && panel.stack === stack)
+  const activeIsPinned = pinnedIds.includes(activePanel.id)
+  const activeIndex = pinnedIds.indexOf(activePanel.id)
+  const shownTabs = activeIsPinned ? pinnedPanels : [activePanel, ...pinnedPanels]
 
   return (
     <div
-      className={cn("flex flex-col bg-[var(--ps-panel)] min-h-0", flex && "flex-1")}
+      className={cn("relative flex flex-col bg-[var(--ps-panel)] min-h-0", flex && "flex-1")}
       style={!flex ? { height } : undefined}
     >
-      {/* ---- Header: compact icon strip ---- */}
-      <div className="bg-[var(--ps-chrome)] border-b border-[var(--ps-divider)] px-1 py-1">
+      <select
+        key={activePanel.id}
+        aria-label={`${label} panel picker`}
+        defaultValue={activePanel.id}
+        onChange={(event) => onActiveChange(event.currentTarget.value)}
+        className="sr-only"
+      >
+        {panels.map((panel) => (
+          <option key={panel.id} value={panel.id}>{panel.label}</option>
+        ))}
+      </select>
+
+      <div className="border-b border-[var(--ps-divider)] bg-[var(--ps-chrome)] px-1.5 py-1">
         <div className="flex items-center gap-1">
-          <select
-            aria-label={`${label} panel picker`}
-            value={active}
-            onInput={handleSelectPanel}
-            onChange={handleSelectPanel}
-            className="h-6 max-w-[128px] shrink-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[11px] text-[var(--ps-text)]"
-          >
-            {group.tabs.map((t) => (
-              <option key={t.id} value={t.id}>{t.label}</option>
-            ))}
-          </select>
-          {/* Icon strip — scrollable single row of icons for quick switching */}
-          <div className="flex-1 min-w-0 flex items-center gap-0.5 overflow-x-auto scrollbar-none">
-            {group.tabs.map((t) => {
-              const isActive = t.id === active
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  aria-label={t.label}
-                  title={t.label}
-                  onClick={() => {
-                    selectPanel(t.id)
-                    if (label === "Upper" && t.id === "patterns") setShowBrowser(false)
-                  }}
-                  className={cn(
-                    "flex shrink-0 h-6 w-6 items-center justify-center rounded-sm transition-colors",
-                    isActive
-                      ? "bg-[var(--ps-tool-active)] text-[var(--ps-text)] ring-1 ring-[var(--ps-accent)]"
-                      : "text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]",
-                  )}
-                >
-                  <t.icon className="h-3.5 w-3.5" />
-                </button>
-              )
-            })}
+          <activePanel.icon className="h-3.5 w-3.5 shrink-0 text-[var(--ps-text-dim)]" />
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[11px] font-medium text-[var(--ps-text)]">{activePanel.label}</div>
+            {!activeIsPinned ? <div className="text-[9px] uppercase tracking-wide text-[var(--ps-text-dim)]">temporary</div> : null}
           </div>
           <button
             type="button"
-            aria-label={showBrowser ? `Hide ${label} panel browser` : `Show ${label} panel browser`}
-            title={showBrowser ? "Hide panel browser" : "Show panel browser"}
-            onClick={() => setShowBrowser((value) => !value)}
+            aria-label={activeIsPinned ? `Unpin ${activePanel.label} panel` : `Pin ${activePanel.label} panel`}
+            title={activeIsPinned ? "Unpin active panel" : "Pin active panel"}
+            onClick={() => activeIsPinned ? onUnpin(activePanel.id) : onPin(activePanel.id)}
             className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]"
           >
-            {showBrowser ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+            {activeIsPinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+          </button>
+          <button
+            type="button"
+            aria-label={`Move active ${stack} panel left`}
+            title="Move active pinned panel left"
+            disabled={!activeIsPinned || activeIndex <= 0}
+            onClick={() => onMovePinned(stack, activePanel.id, -1)}
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)] disabled:opacity-30 disabled:hover:bg-transparent"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            aria-label={`Move active ${stack} panel right`}
+            title="Move active pinned panel right"
+            disabled={!activeIsPinned || activeIndex === -1 || activeIndex >= pinnedIds.length - 1}
+            onClick={() => onMovePinned(stack, activePanel.id, 1)}
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)] disabled:opacity-30 disabled:hover:bg-transparent"
+          >
+            <ChevronRight className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            aria-label={`More ${stack} panels`}
+            title="More panels"
+            onClick={() => setMoreOpen((open) => !open)}
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]"
+          >
+            <MoreHorizontal className="h-3.5 w-3.5" />
           </button>
           <button
             type="button"
@@ -396,48 +702,211 @@ function PanelGroupView({
             onClick={onToggleSolo}
             className="flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]"
           >
-            {isSolo ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+            {isSolo ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
           </button>
         </div>
-        {/* Expanded browser grid — hidden by default */}
-        {showBrowser ? (
-          <div
-            className="mt-1 grid gap-1"
-            style={{ gridTemplateColumns: "repeat(auto-fit, minmax(104px, 1fr))" }}
-          >
-            {group.tabs.map((t) => {
-              const isActive = t.id === active
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  aria-label={`Open ${t.label} panel`}
-                  title={t.label}
-                  onClick={() => { selectPanel(t.id); setShowBrowser(false) }}
-                  className={cn(
-                    "flex h-7 min-w-0 items-center gap-1.5 rounded-sm border px-2 text-left text-[11px]",
-                    isActive
-                      ? "border-[var(--ps-accent)] bg-[var(--ps-tool-active)] text-[var(--ps-text)]"
-                      : "border-[var(--ps-divider)] bg-[var(--ps-panel-2)] text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]",
-                  )}
-                >
-                  <t.icon className="h-3 w-3 shrink-0" />
-                  <span className="truncate">{t.label}</span>
-                </button>
-              )
-            })}
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setShowBrowser(true)}
-            className="mt-1 h-7 w-full rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-left text-[11px] text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]"
-          >
-            Show all panels
-          </button>
-        )}
+
+        <div className="mt-1 flex min-w-0 items-center gap-1 overflow-x-auto">
+          {shownTabs.map((panel) => {
+            const selected = panel.id === activePanel.id
+            return (
+              <button
+                key={panel.id}
+                type="button"
+                draggable={activeIsPinned}
+                aria-label={panel.label}
+                title={panel.label}
+                onDragStart={(event) => event.dataTransfer.setData("text/plain", panel.id)}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  const dragged = event.dataTransfer.getData("text/plain")
+                  const from = pinnedIds.indexOf(dragged)
+                  const to = pinnedIds.indexOf(panel.id)
+                  if (from < 0 || to < 0 || from === to) return
+                  const delta = to > from ? 1 : -1
+                  let next = pinnedIds
+                  while (next.indexOf(dragged) !== to) {
+                    onMovePinned(stack, dragged, delta)
+                    next = moveItem(next, dragged, delta)
+                  }
+                }}
+                onClick={() => onActiveChange(panel.id)}
+                className={cn(
+                  "flex h-7 min-w-0 shrink-0 items-center gap-1.5 rounded-sm px-2 text-left text-[11px] transition-colors",
+                  selected
+                    ? "bg-[var(--ps-tool-active)] text-[var(--ps-text)] ring-1 ring-[var(--ps-accent)]"
+                    : "bg-[var(--ps-panel-2)] text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]",
+                  !pinnedIds.includes(panel.id) && "border border-dashed border-[var(--ps-divider)]",
+                )}
+              >
+                <panel.icon className="h-3 w-3 shrink-0" />
+                <span className="max-w-[88px] truncate">{panel.label}</span>
+                {pinnedIds.includes(panel.id) ? <GripVertical className="h-3 w-3 shrink-0 opacity-40" /> : null}
+              </button>
+            )
+          })}
+        </div>
       </div>
-      <div className="flex-1 min-h-0 overflow-hidden overflow-y-auto">{tab.render()}</div>
+
+      {moreOpen ? (
+        <MorePanelBrowser
+          stack={stack}
+          panels={panels}
+          pinnedIds={pinnedIds}
+          recentPanels={recentPanels}
+          onOpen={(id) => {
+            onActiveChange(id)
+            setMoreOpen(false)
+          }}
+          onPin={onPin}
+          onUnpin={onUnpin}
+          onClose={() => setMoreOpen(false)}
+        />
+      ) : null}
+
+      <div className="flex-1 min-h-0 overflow-hidden overflow-y-auto">{activePanel.render()}</div>
+    </div>
+  )
+}
+
+function MorePanelBrowser({
+  stack,
+  panels,
+  pinnedIds,
+  recentPanels,
+  onOpen,
+  onPin,
+  onUnpin,
+  onClose,
+}: {
+  stack: PanelStack
+  panels: PhotoshopPanelDefinition[]
+  pinnedIds: string[]
+  recentPanels: string[]
+  onOpen: (id: string) => void
+  onPin: (id: string) => void
+  onUnpin: (id: string) => void
+  onClose: () => void
+}) {
+  const [query, setQuery] = React.useState("")
+  const normalizedQuery = query.trim().toLowerCase()
+  const filtered = panels.filter((panel) => {
+    if (!normalizedQuery) return true
+    return [
+      panel.label,
+      panel.category,
+      panel.complexity,
+      ...panel.keywords,
+    ].join(" ").toLowerCase().includes(normalizedQuery)
+  })
+  const recent = recentPanels
+    .map(panelById)
+    .filter((panel): panel is PhotoshopPanelDefinition => !!panel && panel.stack === stack && !pinnedIds.includes(panel.id))
+    .slice(0, 4)
+
+  return (
+    <div className="absolute left-2 right-2 top-[78px] z-50 max-h-[min(520px,calc(100%-90px))] overflow-hidden rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] shadow-2xl">
+      <div className="flex items-center gap-2 border-b border-[var(--ps-divider)] bg-[var(--ps-chrome)] px-2 py-2">
+        <Search className="h-3.5 w-3.5 text-[var(--ps-text-dim)]" />
+        <input
+          autoFocus
+          placeholder={`Search ${stack} panels`}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          className="h-7 min-w-0 flex-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px] text-[var(--ps-text)] outline-none"
+        />
+        <button
+          type="button"
+          aria-label="Close panel browser"
+          title="Close"
+          onClick={onClose}
+          className="flex h-7 w-7 items-center justify-center rounded-sm text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]"
+        >
+          <ChevronUp className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="max-h-[430px] overflow-y-auto p-2">
+        {!normalizedQuery && recent.length ? (
+          <PanelBrowserSection
+            title="Recent"
+            panels={recent}
+            pinnedIds={pinnedIds}
+            onOpen={onOpen}
+            onPin={onPin}
+            onUnpin={onUnpin}
+          />
+        ) : null}
+        {panelsByCategory(filtered).map(({ category, panels: categoryPanels }) => (
+          <PanelBrowserSection
+            key={category}
+            title={category}
+            panels={categoryPanels}
+            pinnedIds={pinnedIds}
+            onOpen={onOpen}
+            onPin={onPin}
+            onUnpin={onUnpin}
+          />
+        ))}
+        {!filtered.length ? (
+          <div className="px-2 py-8 text-center text-[11px] text-[var(--ps-text-dim)]">No matching panels.</div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function PanelBrowserSection({
+  title,
+  panels,
+  pinnedIds,
+  onOpen,
+  onPin,
+  onUnpin,
+}: {
+  title: string
+  panels: PhotoshopPanelDefinition[]
+  pinnedIds: string[]
+  onOpen: (id: string) => void
+  onPin: (id: string) => void
+  onUnpin: (id: string) => void
+}) {
+  const ordered = (PANEL_CATEGORIES as readonly string[]).includes(title)
+    ? panels
+    : panels.slice().sort((a, b) => a.label.localeCompare(b.label))
+  return (
+    <div className="mb-3 last:mb-0">
+      <div className="mb-1 px-1 text-[10px] font-medium uppercase tracking-wide text-[var(--ps-text-dim)]">{title}</div>
+      <div className="grid grid-cols-1 gap-1">
+        {ordered.map((panel) => {
+          const pinned = pinnedIds.includes(panel.id)
+          return (
+            <div key={`${title}-${panel.id}`} className="grid grid-cols-[1fr_auto] gap-1">
+              <button
+                type="button"
+                aria-label={`Open ${panel.label} panel`}
+                onClick={() => onOpen(panel.id)}
+                className="flex min-w-0 items-center gap-2 rounded-sm bg-[var(--ps-panel-2)] px-2 py-1.5 text-left text-[11px] text-[var(--ps-text)] hover:bg-[var(--ps-tool-hover)]"
+              >
+                <panel.icon className="h-3.5 w-3.5 shrink-0 text-[var(--ps-text-dim)]" />
+                <span className="min-w-0 flex-1 truncate">{panel.label}</span>
+                <span className="shrink-0 rounded-sm border border-[var(--ps-divider)] px-1 text-[9px] uppercase text-[var(--ps-text-dim)]">
+                  {panel.complexity}
+                </span>
+              </button>
+              <button
+                type="button"
+                aria-label={pinned ? `Unpin ${panel.label} panel` : `Pin ${panel.label} panel`}
+                title={pinned ? "Unpin panel" : "Pin panel"}
+                onClick={() => pinned ? onUnpin(panel.id) : onPin(panel.id)}
+                className="flex h-8 w-8 items-center justify-center rounded-sm bg-[var(--ps-panel-2)] text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]"
+              >
+                {pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+              </button>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

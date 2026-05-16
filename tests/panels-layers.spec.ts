@@ -56,7 +56,7 @@ test("layer lock controls do not render mojibake glyphs", async ({ page }) => {
 
 test("properties panel layer blend changes are undoable", async ({ page }) => {
   await page.goto("/")
-  await page.getByRole("button", { name: "Open Properties panel" }).click()
+  await page.getByTestId("panel-dock").getByRole("button", { name: "Properties", exact: true }).click()
 
   await page.getByText("Blend", { exact: true }).locator("xpath=..").locator("select").selectOption("multiply")
 
