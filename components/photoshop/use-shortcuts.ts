@@ -1,14 +1,21 @@
 "use client"
 
 import * as React from "react"
-import { useEditor } from "./editor-context"
-import type { ToolId } from "./types"
+import { makeCanvas, useEditor } from "./editor-context"
+import type { AdjustmentType, ToolId } from "./types"
 import {
   effectiveShortcut,
   loadCustomShortcuts,
   shortcutMatchesEvent,
   shortcutPrimaryKey,
 } from "./shortcuts"
+import { requestCanvasZoom } from "./zoom-events"
+import {
+  createAdjustmentLayer as createAdjustmentLayerModel,
+  invertAdjustmentMask,
+  isAdjustmentNoop,
+} from "./adjustment-layers"
+import { FILTERS } from "./filters"
 
 type ToolShortcutGroup = {
   shortcutId: string
@@ -82,6 +89,7 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
     copySelection,
     pasteAsLayer,
     requestCloseDocument,
+    requestRender,
   } = useEditor()
 
   React.useEffect(() => {
@@ -100,11 +108,34 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
       const overrides = loadCustomShortcuts()
       const isShortcut = (id: string) => shortcutMatchesEvent(effectiveShortcut(id, overrides), e)
       const meta = e.metaKey || e.ctrlKey
-      const requestZoom = (detail: { zoom?: number; factor?: number }) => {
-        window.dispatchEvent(new CustomEvent("ps-request-zoom", { detail }))
+      const addAdjustmentLayer = (filterId: AdjustmentType) => {
+        if (!activeDoc) return
+        const filter = FILTERS[filterId]
+        if (!filter) return
+        const layer = createAdjustmentLayerModel({
+          filterId,
+          width: activeDoc.width,
+          height: activeDoc.height,
+          layers: activeDoc.layers,
+          makeCanvas,
+        })
+        dispatch({ type: "add-layer", layer })
+        if (!isAdjustmentNoop(layer.adjustment)) requestRender()
+        window.setTimeout(() => commit(`New ${filter.name} Adjustment`, [layer.id]), 0)
       }
-      const openFilter = (id: string) => {
-        window.dispatchEvent(new CustomEvent("ps-open-filter", { detail: id }))
+
+      const invertActiveAdjustmentMask = () => {
+        if (!activeDoc || !activeLayer || activeLayer.kind !== "adjustment") return false
+        const mask = invertAdjustmentMask({
+          layer: activeLayer,
+          width: activeDoc.width,
+          height: activeDoc.height,
+          makeCanvas,
+        })
+        dispatch({ type: "set-layer-mask", id: activeLayer.id, mask })
+        requestRender()
+        window.setTimeout(() => commit("Invert Adjustment Mask", [activeLayer.id]), 0)
+        return true
       }
 
       if (isShortcut("command-palette")) {
@@ -178,27 +209,27 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
 
       if (isShortcut("img-levels")) {
         e.preventDefault()
-        if (activeLayer) openFilter("levels")
+        addAdjustmentLayer("levels")
         return
       }
       if (isShortcut("img-curves")) {
         e.preventDefault()
-        if (activeLayer) openFilter("curves")
+        addAdjustmentLayer("curves")
         return
       }
       if (isShortcut("img-huesat")) {
         e.preventDefault()
-        if (activeLayer) openFilter("hue-saturation")
+        addAdjustmentLayer("hue-saturation")
         return
       }
       if (isShortcut("img-colorbal")) {
         e.preventDefault()
-        if (activeLayer) openFilter("color-balance")
+        addAdjustmentLayer("color-balance")
         return
       }
       if (isShortcut("img-invert")) {
         e.preventDefault()
-        if (activeLayer) openFilter("invert")
+        if (!invertActiveAdjustmentMask()) addAdjustmentLayer("invert")
         return
       }
       if (isShortcut("img-imgsize")) {
@@ -304,17 +335,17 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
 
       if (isShortcut("view-zoomin")) {
         e.preventDefault()
-        if (activeDoc) requestZoom({ factor: 1.25 })
+        if (activeDoc) requestCanvasZoom({ factor: 1.25 })
         return
       }
       if (isShortcut("view-zoomout")) {
         e.preventDefault()
-        if (activeDoc) requestZoom({ factor: 1 / 1.25 })
+        if (activeDoc) requestCanvasZoom({ factor: 1 / 1.25 })
         return
       }
       if (isShortcut("view-fit") || isShortcut("view-100")) {
         e.preventDefault()
-        requestZoom({ zoom: 1 })
+        requestCanvasZoom({ zoom: 1 })
         return
       }
       if (isShortcut("view-grid")) {
@@ -428,5 +459,6 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
     copySelection,
     pasteAsLayer,
     requestCloseDocument,
+    requestRender,
   ])
 }

@@ -21,6 +21,7 @@ import {
   Link2,
   Link2Off,
   CircleSlash2,
+  CornerDownRight,
   Search,
   Filter,
   ListChecks,
@@ -53,6 +54,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import type { AdjustmentType, BlendMode, Layer, LayerKind } from "../types"
+import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop } from "../adjustment-layers"
 
 const BLENDS: BlendMode[] = [
   "normal",
@@ -97,6 +99,32 @@ export const COLOR_LABELS: { id: NonNullable<Layer["colorLabel"]>; bg: string; l
   { id: "gray", bg: "#7d7d7d", label: "Gray" },
 ]
 
+function adjustmentMaskState(layer: Layer) {
+  if (layer.kind !== "adjustment") return undefined
+  if (layer.maskEnabled === false) return "disabled"
+  if (!layer.mask) return "none"
+  const ctx = layer.mask.getContext("2d")
+  if (!ctx) return "none"
+  const points = [
+    [0, 0],
+    [Math.max(0, Math.floor(layer.mask.width / 2)), Math.max(0, Math.floor(layer.mask.height / 2))],
+    [Math.max(0, layer.mask.width - 1), 0],
+    [0, Math.max(0, layer.mask.height - 1)],
+    [Math.max(0, layer.mask.width - 1), Math.max(0, layer.mask.height - 1)],
+  ]
+  let min = 255
+  let max = 0
+  for (const [x, y] of points) {
+    const px = ctx.getImageData(x, y, 1, 1).data
+    const lum = (px[0] + px[1] + px[2]) / 3
+    min = Math.min(min, lum)
+    max = Math.max(max, lum)
+  }
+  if (max <= 8) return "hidden"
+  if (min >= 247) return "revealed"
+  return "mixed"
+}
+
 export function LayersPanel() {
   const {
     activeDoc,
@@ -113,6 +141,8 @@ export function LayersPanel() {
   const [dragId, setDragId] = React.useState<string | null>(null)
   const [hoverId, setHoverId] = React.useState<string | null>(null)
   const [hoverPos, setHoverPos] = React.useState<"above" | "below" | "into">("above")
+  const [altDown, setAltDown] = React.useState(false)
+  const [altClipLayerId, setAltClipLayerId] = React.useState<string | null>(null)
   const [contextMenu, setContextMenu] = React.useState<{ layerId: string; x: number; y: number } | null>(null)
   const searchRef = React.useRef<HTMLInputElement>(null)
 
@@ -138,6 +168,30 @@ export function LayersPanel() {
     }
     window.addEventListener("ps-focus-layer-search", handler)
     return () => window.removeEventListener("ps-focus-layer-search", handler)
+  }, [])
+
+  React.useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Alt") setAltDown(true)
+    }
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key === "Alt") {
+        setAltDown(false)
+        setAltClipLayerId(null)
+      }
+    }
+    const onBlur = () => {
+      setAltDown(false)
+      setAltClipLayerId(null)
+    }
+    window.addEventListener("keydown", onKeyDown)
+    window.addEventListener("keyup", onKeyUp)
+    window.addEventListener("blur", onBlur)
+    return () => {
+      window.removeEventListener("keydown", onKeyDown)
+      window.removeEventListener("keyup", onKeyUp)
+      window.removeEventListener("blur", onBlur)
+    }
   }, [])
 
   if (!activeDoc) return null
@@ -197,6 +251,18 @@ export function LayersPanel() {
     window.setTimeout(() => commit(label, ids), 0)
   }
 
+  const canClipToLayerBelow = (layer: Layer) => {
+    if (layer.kind === "group" || layerLocked(layer)) return false
+    return activeDoc.layers.findIndex((candidate) => candidate.id === layer.id) > 0
+  }
+
+  const toggleClipToLayerBelow = (layer: Layer) => {
+    if (!canClipToLayerBelow(layer)) return
+    dispatch({ type: "toggle-layer-clipped", id: layer.id })
+    requestRender()
+    window.setTimeout(() => commit(layer.clipped ? "Release Clipping Mask" : "Create Clipping Mask", [layer.id]), 0)
+  }
+
   const toggleLayerLock = (id: string, type: "all" | "transparency" | "draw" | "move" | "legacy") => {
     const action =
       type === "all"
@@ -215,22 +281,15 @@ export function LayersPanel() {
   const createAdjustmentLayer = (filterId: AdjustmentType) => {
     const filter = FILTERS[filterId]
     if (!filter) return
-    const params: Record<string, number | string | boolean> = {}
-    for (const param of filter.params) params[param.key] = param.default
-    const mask = makeCanvas(activeDoc.width, activeDoc.height, "#ffffff")
-    const layer: Layer = {
-      id: `adj_${Math.random().toString(36).slice(2, 9)}`,
-      name: filter.name,
-      kind: "adjustment",
-      visible: true,
-      locked: false,
-      opacity: 1,
-      blendMode: "normal",
-      canvas: makeCanvas(activeDoc.width, activeDoc.height),
-      mask,
-      adjustment: { type: filterId, params },
-    }
+    const layer = createAdjustmentLayerModel({
+      filterId,
+      width: activeDoc.width,
+      height: activeDoc.height,
+      layers: activeDoc.layers,
+      makeCanvas,
+    })
     dispatch({ type: "add-layer", layer })
+    if (!isAdjustmentNoop(layer.adjustment)) requestRender()
     setTimeout(() => commit(`New ${filter.name} Adjustment`, [layer.id]), 0)
   }
 
@@ -252,6 +311,12 @@ export function LayersPanel() {
       return
     }
     if (e.metaKey || e.ctrlKey) {
+      if (layer.kind === "adjustment") {
+        dispatch({ type: "toggle-layer-clipped", id: layer.id })
+        requestRender()
+        window.setTimeout(() => commit(layer.clipped ? "Unclip Adjustment Layer" : "Clip Adjustment Layer", [layer.id]), 0)
+        return
+      }
       const set = new Set(activeDoc.selectedLayerIds)
       if (set.has(layer.id)) {
         set.delete(layer.id)
@@ -267,6 +332,12 @@ export function LayersPanel() {
       return
     }
     dispatch({ type: "set-active-layer", id: layer.id })
+  }
+
+  const openAdjustmentSettings = (layer: Layer) => {
+    if (layer.kind !== "adjustment") return
+    dispatch({ type: "set-active-layer", id: layer.id })
+    window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "adjustments" }))
   }
 
   return (
@@ -457,14 +528,22 @@ export function LayersPanel() {
           const isInGroup = !!l.parentId
           const isLocked = layerLocked(l)
           const isMoveLocked = layerMoveLocked(l)
+          const canAltClip = canClipToLayerBelow(l)
+          const isAltClipTarget = altDown && canAltClip && altClipLayerId === l.id
           const colorBg =
             l.colorLabel && l.colorLabel !== "none"
               ? COLOR_LABELS.find((c) => c.id === l.colorLabel)?.bg
               : undefined
+          const maskState = adjustmentMaskState(l)
           return (
             <div
               key={l.id}
-              draggable={!isMoveLocked}
+              data-testid={`layer-row-${l.name}`}
+              data-layer-kind={l.kind || "raster"}
+              data-adjustment-clipped={l.kind === "adjustment" ? String(!!l.clipped) : undefined}
+              data-adjustment-mask={maskState}
+              data-alt-clip-target={isAltClipTarget ? "true" : undefined}
+              draggable={!isMoveLocked && !altDown}
               onDragStart={(e) => {
                 const ids = activeDoc.selectedLayerIds.includes(l.id) ? activeDoc.selectedLayerIds : [l.id]
                 const draggedLayers = ids
@@ -533,13 +612,25 @@ export function LayersPanel() {
                 setHoverId(null)
               }}
               onClick={(e) => onLayerClick(e, l)}
+              onDoubleClick={() => openAdjustmentSettings(l)}
+              onMouseEnter={(e) => {
+                if (canAltClip && (altDown || e.altKey)) setAltClipLayerId(l.id)
+              }}
+              onMouseMove={(e) => {
+                if (canAltClip && (altDown || e.altKey)) setAltClipLayerId(l.id)
+                else if (altClipLayerId === l.id) setAltClipLayerId(null)
+              }}
+              onMouseLeave={() => {
+                if (altClipLayerId === l.id) setAltClipLayerId(null)
+              }}
               onContextMenu={(e) => {
                 e.preventDefault()
                 dispatch({ type: "set-active-layer", id: l.id })
                 setContextMenu({ layerId: l.id, x: e.clientX, y: e.clientY })
               }}
               className={cn(
-                "flex items-center gap-1.5 px-1.5 py-1 border-b border-[var(--ps-divider)]/60 cursor-pointer relative",
+                "flex items-center gap-1.5 px-1.5 py-1 border-b border-[var(--ps-divider)]/60 cursor-pointer relative scroll-mt-12 scroll-mb-12",
+                altDown && canAltClip && "cursor-alias",
                 isActive
                   ? "bg-[var(--ps-tool-active)]"
                   : isSelected
@@ -564,6 +655,28 @@ export function LayersPanel() {
 
               {isActive ? (
                 <span className="absolute left-0 top-0 bottom-0 w-0.5 bg-[var(--ps-accent)]" />
+              ) : null}
+
+              {isAltClipTarget ? (
+                <button
+                  type="button"
+                  data-testid={`alt-clip-link-${l.name}`}
+                  aria-label={`${l.clipped ? "Release" : "Clip"} ${l.name} to layer below`}
+                  title={l.clipped ? "Release clipping mask" : "Clip to layer below"}
+                  className="absolute -bottom-2 left-8 right-2 z-30 flex h-4 items-center justify-center gap-1 rounded-sm border border-[var(--ps-accent)] bg-[var(--ps-panel)] text-[9px] text-[var(--ps-text)] shadow-lg cursor-alias"
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                  }}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    toggleClipToLayerBelow(l)
+                  }}
+                >
+                  <Link2 className="h-3 w-3 text-[var(--ps-accent)]" />
+                  {l.clipped ? "Release" : "Clip"}
+                </button>
               ) : null}
 
               {/* Color label */}
@@ -617,13 +730,27 @@ export function LayersPanel() {
                 ) : (
                   <Folder className="w-4 h-4 text-[var(--ps-accent-2)] shrink-0" />
                 )
+              ) : l.kind === "adjustment" ? (
+                <>
+                  {l.clipped ? (
+                    <CornerDownRight
+                      className="h-3 w-3 shrink-0 text-[var(--ps-accent-2)]"
+                      data-testid={`adjustment-clip-icon-${l.name}`}
+                      aria-label="Adjustment clipped to layer below"
+                    />
+                  ) : (
+                    <span className="h-3 w-3 shrink-0" aria-hidden />
+                  )}
+                  <AdjustmentThumb layer={l} />
+                  <AdjustmentMaskThumb layer={l} maskState={maskState ?? "none"} />
+                </>
               ) : (
                 <LayerThumb layer={l} />
               )}
 
-              <KindIcon kind={l.kind || "raster"} />
+              {l.kind === "adjustment" ? null : <KindIcon kind={l.kind || "raster"} />}
 
-              {l.clipped ? (
+              {l.clipped && l.kind !== "adjustment" ? (
                 <CircleSlash2
                   className="w-2.5 h-2.5 text-[var(--ps-text-dim)] shrink-0"
                   aria-label="Clipped"
@@ -641,6 +768,7 @@ export function LayersPanel() {
                   if (!isLocked) commitLayerChange("Rename Layer", [l.id])
                 }}
                 onClick={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
                 className="bg-transparent flex-1 text-[11px] outline-none focus:bg-[var(--ps-panel-2)] px-1 rounded-sm min-w-0 disabled:cursor-not-allowed disabled:opacity-70"
               />
 
@@ -1013,6 +1141,55 @@ function KindIcon({ kind }: { kind: LayerKind }) {
   if (kind === "artboard") return <SquareIcon className={cls} aria-label="Artboard" />
   if (kind === "raster") return <PenTool className={cls} aria-label="Pixel" />
   return null
+}
+
+function AdjustmentThumb({ layer }: { layer: Layer }) {
+  const label = layer.adjustment ? FILTERS[layer.adjustment.type]?.name ?? layer.adjustment.type : "Adjustment"
+  return (
+    <div
+      data-testid={`adjustment-thumb-${layer.name}`}
+      title={`${label} adjustment`}
+      aria-label={`${label} adjustment thumbnail`}
+      className="flex h-6 w-8 shrink-0 items-center justify-center rounded-[2px] border border-[var(--ps-divider)] bg-[radial-gradient(circle_at_34%_34%,#f8fafc_0_18%,#9ca3af_19%_42%,#27272a_43%_100%)]"
+    >
+      <Palette className="h-3.5 w-3.5 text-white drop-shadow" />
+    </div>
+  )
+}
+
+function AdjustmentMaskThumb({ layer, maskState }: { layer: Layer; maskState: string }) {
+  const ref = React.useRef<HTMLCanvasElement>(null)
+
+  React.useEffect(() => {
+    const dst = ref.current
+    if (!dst) return
+    const ctx = dst.getContext("2d")!
+    ctx.clearRect(0, 0, dst.width, dst.height)
+    ctx.fillStyle = "#222"
+    ctx.fillRect(0, 0, dst.width, dst.height)
+    if (layer.mask && typeof layer.mask.getContext === "function") {
+      ctx.drawImage(layer.mask, 0, 0, dst.width, dst.height)
+    } else {
+      ctx.strokeStyle = "#777"
+      ctx.strokeRect(3, 3, dst.width - 6, dst.height - 6)
+      ctx.beginPath()
+      ctx.moveTo(4, 4)
+      ctx.lineTo(dst.width - 4, dst.height - 4)
+      ctx.stroke()
+    }
+  }, [layer.mask, maskState])
+
+  return (
+    <canvas
+      ref={ref}
+      width={32}
+      height={24}
+      data-testid={`adjustment-mask-thumb-${layer.name}`}
+      title={`Adjustment mask: ${maskState}`}
+      aria-label={`Adjustment mask ${maskState}`}
+      className="h-6 w-8 shrink-0 rounded-[2px] border border-[var(--ps-divider)] bg-[var(--ps-panel-2)]"
+    />
+  )
 }
 
 function LayerThumb({ layer }: { layer: Layer }) {

@@ -37,8 +37,12 @@ interface LegacyPreflightItem {
   detail: string
 }
 
+const legacyAlphaBoundsCache = new WeakMap<HTMLCanvasElement, { x: number; y: number; w: number; h: number } | null>()
+
 function alphaBounds(layer: Layer) {
   const canvas = layer.canvas
+  const cached = legacyAlphaBoundsCache.get(canvas)
+  if (cached !== undefined) return cached
   const ctx = canvas.getContext?.("2d")
   if (!ctx || canvas.width <= 0 || canvas.height <= 0) return null
   const img = ctx.getImageData(0, 0, canvas.width, canvas.height)
@@ -58,7 +62,9 @@ function alphaBounds(layer: Layer) {
       }
     }
   }
-  return any ? { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 } : null
+  const result = any ? { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 } : null
+  legacyAlphaBoundsCache.set(canvas, result)
+  return result
 }
 
 function clamp(value: number, min: number, max: number) {

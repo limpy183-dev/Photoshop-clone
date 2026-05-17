@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { useEditor } from "./editor-context"
+import { requestCanvasZoom } from "./zoom-events"
 import { Slider } from "@/components/ui/slider"
 import { Input } from "@/components/ui/input"
 import {
@@ -717,25 +718,25 @@ export function OptionsBar() {
   }
 
   function ZoomOptions() {
-    const { activeDoc, dispatch } = useEditor()
+    const { activeDoc } = useEditor()
     return (
       <>
         <ZoomIn className="w-3.5 h-3.5" />
         <button
           className="h-6 px-2 border border-[var(--ps-divider)] rounded-sm bg-[var(--ps-panel)] hover:bg-[var(--ps-tool-hover)]"
-          onClick={() => dispatch({ type: "set-zoom", zoom: 1 })}
+          onClick={() => requestCanvasZoom({ zoom: 1 })}
         >
           100%
         </button>
         <button
           className="h-6 px-2 border border-[var(--ps-divider)] rounded-sm bg-[var(--ps-panel)] hover:bg-[var(--ps-tool-hover)]"
-          onClick={() => activeDoc && dispatch({ type: "set-zoom", zoom: 0.5 })}
+          onClick={() => activeDoc && requestCanvasZoom({ zoom: 0.5 })}
         >
           Fit Screen
         </button>
         <button
           className="h-6 px-2 border border-[var(--ps-divider)] rounded-sm bg-[var(--ps-panel)] hover:bg-[var(--ps-tool-hover)]"
-          onClick={() => dispatch({ type: "set-zoom", zoom: 2 })}
+          onClick={() => requestCanvasZoom({ zoom: 2 })}
         >
           200%
         </button>

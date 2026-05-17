@@ -2,6 +2,7 @@ const BYTES_PER_PIXEL = 4
 const MIB = 1024 * 1024
 const DEFAULT_TILE_SIZE = 512
 const DEFAULT_MEMORY_BUDGET_MB = 1024
+const COMPOSITE_CACHE_MAX_PIXELS = 16_000_000
 const HISTORY_MAX_PATCHES = 24
 const HISTORY_MAX_PATCH_AREA_RATIO = 0.42
 const HISTORY_MAX_PATCH_CHAIN_AREA_RATIO = 0.9
@@ -94,6 +95,17 @@ export interface MergeWorkflowTilingPlan extends TileGridPlan {
   memoryPeakMB: number
   fullFrameWorkingSetMB: number
   warnings: string[]
+}
+
+export interface CompositeCacheInput extends CanvasSize {
+  forcedRender?: boolean
+  maxCachePixels?: number
+}
+
+export interface CompositeCachePlan {
+  storeCache: boolean
+  reason: "cacheable" | "forced-render" | "large-canvas"
+  pixelCount: number
 }
 
 function positiveInt(value: number | undefined, fallback: number) {
@@ -242,4 +254,19 @@ export function planMergeWorkflowTiling(input: MergeWorkflowTilingInput): MergeW
     fullFrameWorkingSetMB,
     warnings,
   }
+}
+
+export function planCompositeCache(input: CompositeCacheInput): CompositeCachePlan {
+  const width = positiveInt(input.width, 1)
+  const height = positiveInt(input.height, 1)
+  const pixelCount = width * height
+  const maxCachePixels = positiveInt(input.maxCachePixels, COMPOSITE_CACHE_MAX_PIXELS)
+
+  if (input.forcedRender) {
+    return { storeCache: false, reason: "forced-render", pixelCount }
+  }
+  if (pixelCount > maxCachePixels) {
+    return { storeCache: false, reason: "large-canvas", pixelCount }
+  }
+  return { storeCache: true, reason: "cacheable", pixelCount }
 }

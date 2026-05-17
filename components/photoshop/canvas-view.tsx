@@ -8,10 +8,15 @@ import { applyFilterPreview, PixelBatchReader } from "./filter-worker"
 import { applyModeAndColorManagement } from "./advanced-subsystems"
 import { addAnchorPointToPath, convertAnchorPoint, deleteNearestAnchorPoint, nearestAnchorPoint } from "./vector-path-operations"
 import { normalizeBrushPointerSample, type BrushPointerSample } from "./brush-engine"
+import { planCompositeCache } from "./performance-engine"
+import { createRafCoalescer, type RafCoalescer } from "./raf-coalescer"
+import { containsSelectionPoint, createSelectionHitTester, type SelectionHitTester } from "./selection-hit-testing"
+import { isAdjustmentNoop } from "./adjustment-layers"
 
 // Canvas identity cache for composite fingerprinting — gives each canvas a stable numeric ID
 const _canvasIdMap = new WeakMap<HTMLCanvasElement, number>()
 let _nextCanvasId = 1
+const ZOOM_COMMIT_IDLE_MS = 420
 function _assignCanvasId(canvas: HTMLCanvasElement): number {
   const id = _nextCanvasId++
   _canvasIdMap.set(canvas, id)
@@ -61,6 +66,12 @@ interface DirtyRect {
   y: number
   w: number
   h: number
+}
+
+interface MouseMoveDetail {
+  x: number
+  y: number
+  inside: boolean
 }
 
 interface StampOptions {
@@ -200,6 +211,7 @@ export function CanvasView() {
   const stageRef = React.useRef<HTMLDivElement>(null)
   const panRef = React.useRef({ x: 0, y: 0 })
   const [viewZoom, setViewZoom] = React.useState(activeDoc?.zoom ?? 1)
+  const layoutZoomRef = React.useRef(activeDoc?.zoom ?? 1)
   const visualZoomRef = React.useRef(activeDoc?.zoom ?? 1)
   const pendingZoomRef = React.useRef<number | null>(null)
   const zoomFrameRef = React.useRef<number | null>(null)
@@ -241,23 +253,34 @@ export function CanvasView() {
   const strokeDistRef = React.useRef(0)
   const strokeCompositeRef = React.useRef<StrokeCompositeState | null>(null)
   const lastBrushPointerSampleRef = React.useRef<BrushPointerSample | null>(null)
+  const selectionHitTesterRef = React.useRef<SelectionHitTester | null>(null)
+  const mouseMoveCoalescerRef = React.useRef<RafCoalescer<MouseMoveDetail> | null>(null)
   const transparencyLockMaskRef = React.useRef<HTMLCanvasElement | null>(null)
   const eraserSourceRef = React.useRef<HTMLCanvasElement | null>(null)
 
+  React.useEffect(() => {
+    const coalescer = createRafCoalescer<MouseMoveDetail>((detail) => {
+      window.dispatchEvent(new CustomEvent("ps-mousemove", { detail }))
+    })
+    mouseMoveCoalescerRef.current = coalescer
+    return () => {
+      coalescer.cancel()
+      if (mouseMoveCoalescerRef.current === coalescer) mouseMoveCoalescerRef.current = null
+    }
+  }, [])
+
+  const applyStageTransform = React.useCallback((transientScale = 1) => {
+    const stage = stageRef.current
+    if (!stage) return
+    const scale = Math.abs(transientScale - 1) > 0.0001 ? ` scale(${transientScale})` : ""
+    stage.style.transform = `translate(${panRef.current.x}px, ${panRef.current.y}px) rotate(${activeDoc?.rotation ?? 0}deg)${scale}`
+  }, [activeDoc?.rotation])
+
   const applyZoomStyles = React.useCallback(
-    (zoom: number) => {
+    (zoom: number, transient = true) => {
       if (!activeDoc) return
-      const displayW = activeDoc.width * zoom
-      const displayH = activeDoc.height * zoom
-      const stage = stageRef.current
-      if (stage) {
-        const width = `${displayW}px`
-        const height = `${displayH}px`
-        stage.style.width = width
-        stage.style.height = height
-        stage.style.minWidth = width
-        stage.style.minHeight = height
-      }
+      const scale = transient ? zoom / Math.max(0.0001, layoutZoomRef.current) : 1
+      applyStageTransform(scale)
       const imageRendering = zoom >= 4 ? "pixelated" : "auto"
       if (compositeRef.current) compositeRef.current.style.imageRendering = imageRendering
       if (overlayRef.current) overlayRef.current.style.imageRendering = imageRendering
@@ -267,7 +290,7 @@ export function CanvasView() {
         cursor.style.height = `${brush.size * zoom}px`
       }
     },
-    [activeDoc, brush.size],
+    [activeDoc, applyStageTransform, brush.size],
   )
 
   const applyViewZoom = React.useCallback(
@@ -295,7 +318,7 @@ export function CanvasView() {
         const committedZoom = visualZoomRef.current
         setViewZoom(committedZoom)
         dispatch({ type: "set-zoom", zoom: committedZoom })
-      }, 120)
+      }, ZOOM_COMMIT_IDLE_MS)
     },
     [applyZoomStyles, dispatch],
   )
@@ -313,8 +336,13 @@ export function CanvasView() {
     visualZoomRef.current = next
     pendingZoomRef.current = null
     setViewZoom(next)
-    window.requestAnimationFrame(() => applyZoomStyles(next))
+    window.requestAnimationFrame(() => applyZoomStyles(next, false))
   }, [activeDoc?.id, activeDoc?.zoom, applyZoomStyles])
+
+  React.useLayoutEffect(() => {
+    layoutZoomRef.current = viewZoom
+    applyZoomStyles(viewZoom, false)
+  }, [viewZoom, applyZoomStyles])
 
   React.useEffect(() => {
     const zoomRequestHandler = (event: Event) => {
@@ -343,7 +371,13 @@ export function CanvasView() {
   /* ---- composite render ---- */
 
   // Composite cache: skip full re-composite when layer state hasn't changed
-  const compositeCacheRef = React.useRef<{ fingerprint: string; canvas: HTMLCanvasElement | null }>({ fingerprint: "", canvas: null })
+  const compositeCacheRef = React.useRef<{
+    fingerprint: string
+    drawnFingerprint: string
+    width: number
+    height: number
+    canvas: HTMLCanvasElement | null
+  }>({ fingerprint: "", drawnFingerprint: "", width: 0, height: 0, canvas: null })
 
   const compose = React.useCallback((force = false) => {
     const cv = compositeRef.current
@@ -359,24 +393,34 @@ export function CanvasView() {
       if (!layer.visible) { fp += `H|`; continue }
       if (layer.kind === "group") continue
       const canvasId = _canvasIdMap.get(layer.canvas) ?? _assignCanvasId(layer.canvas)
+      const maskId = layer.mask ? _canvasIdMap.get(layer.mask) ?? _assignCanvasId(layer.mask) : ""
       fp += [
         layer.id,
         layer.kind ?? "raster",
         canvasId,
+        maskId,
+        layer.maskEnabled === false ? 0 : 1,
         layer.opacity,
         layer.fillOpacity ?? 1,
         layer.blendMode,
         layer.clipped ? 1 : 0,
+        layer.adjustment ? `${layer.adjustment.type}:${JSON.stringify(layer.adjustment.params)}` : "",
         layer.style ? JSON.stringify(layer.style) : "",
         filterPreviews[layer.id] ? _canvasIdMap.get(filterPreviews[layer.id]) ?? _assignCanvasId(filterPreviews[layer.id]) : "",
       ].join(":") + "|"
     }
 
     const cache = compositeCacheRef.current
+    if (!force && cache.drawnFingerprint === fp && cache.width === cv.width && cache.height === cv.height) {
+      return
+    }
     if (!force && cache.fingerprint === fp && cache.canvas) {
       const ctx = cv.getContext("2d")!
       ctx.clearRect(0, 0, cv.width, cv.height)
       ctx.drawImage(cache.canvas, 0, 0)
+      cache.drawnFingerprint = fp
+      cache.width = cv.width
+      cache.height = cv.height
       return
     }
 
@@ -421,20 +465,20 @@ export function CanvasView() {
       ctx.restore()
     }
 
-    // Store in cache for future hits
-    const cached = makeCanvas(cv.width, cv.height)
-    cached.getContext("2d")!.drawImage(cv, 0, 0)
-    compositeCacheRef.current = { fingerprint: fp, canvas: cached }
+    const cachePlan = planCompositeCache({ width: cv.width, height: cv.height, forcedRender: force })
+    if (cachePlan.storeCache) {
+      const cached = makeCanvas(cv.width, cv.height)
+      cached.getContext("2d")!.drawImage(cv, 0, 0)
+      compositeCacheRef.current = { fingerprint: fp, drawnFingerprint: fp, width: cv.width, height: cv.height, canvas: cached }
+    } else {
+      compositeCacheRef.current = { fingerprint: "", drawnFingerprint: fp, width: cv.width, height: cv.height, canvas: null }
+    }
   }, [activeDoc, filterPreviews])
 
   React.useEffect(() => {
     compose()
     return subscribeRender(() => compose(true))
   }, [compose, subscribeRender])
-
-  React.useEffect(() => {
-    requestRender()
-  }, [activeDoc, requestRender])
 
   /* ---- coords ---- */
 
@@ -470,36 +514,8 @@ export function CanvasView() {
 
   /* ---- selection mask helper ---- */
   function withinSelection(p: { x: number; y: number }): boolean {
-    if (!activeDoc?.selection.bounds) return true
-
-    const sel = activeDoc.selection
-    const b = sel.bounds
-    if (!b) return true
-
-    if (p.x < 0 || p.y < 0 || p.x >= activeDoc.width || p.y >= activeDoc.height) {
-      return false
-    }
-
-    if (sel.mask) {
-      const ctx = sel.mask.getContext("2d")
-      if (!ctx) return false
-
-      const px = ctx.getImageData(Math.floor(p.x), Math.floor(p.y), 1, 1).data
-      return px[3] > 8
-    }
-
-    if (sel.shape === "ellipse") {
-      const rx = b.w / 2
-      const ry = b.h / 2
-      if (rx <= 0 || ry <= 0) return false
-
-      const cx = b.x + rx
-      const cy = b.y + ry
-
-      return ((p.x - cx) ** 2) / (rx ** 2) + ((p.y - cy) ** 2) / (ry ** 2) <= 1
-    }
-
-    return p.x >= b.x && p.x < b.x + b.w && p.y >= b.y && p.y < b.y + b.h
+    if (!activeDoc) return true
+    return selectionHitTesterRef.current?.contains(p) ?? containsSelectionPoint(activeDoc.width, activeDoc.height, activeDoc.selection, p)
   }
 
   function maskBounds(mask: HTMLCanvasElement) {
@@ -670,6 +686,11 @@ export function CanvasView() {
       return { ctx: cv.getContext("2d")!, canvas: cv }
     }
     if (!layerAllowsDrawing(activeLayer)) return null
+    if (activeLayer.kind === "adjustment") {
+      if (activeLayer.maskEnabled === false || !activeLayer.mask) return null
+      const ctx = activeLayer.mask.getContext("2d")
+      return ctx ? { ctx, canvas: activeLayer.mask } : null
+    }
     if (typeof activeLayer.canvas.getContext !== "function") return null
     return { ctx: activeLayer.canvas.getContext("2d")!, canvas: activeLayer.canvas }
   }
@@ -2416,6 +2437,7 @@ export function CanvasView() {
   /* ---- pointer down ---- */
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button === 2) return
     if (!activeDoc) return
       ; (e.target as Element).setPointerCapture?.(e.pointerId)
     const pt = getCanvasPoint(e.clientX, e.clientY)
@@ -3087,6 +3109,7 @@ export function CanvasView() {
       strokeDabRef.current = 0
       strokeDistRef.current = 0
       lastBrushPointerSampleRef.current = null
+      selectionHitTesterRef.current = createSelectionHitTester(activeDoc.width, activeDoc.height, activeDoc.selection)
       drawingRef.current = { type: "stroke", last: pt, smooth: pt }
       drawSegment(null, pt, pointerBrushInput(e, pt))
     }
@@ -3105,15 +3128,14 @@ export function CanvasView() {
     }
 
     // status bar
-    window.dispatchEvent(
-      new CustomEvent("ps-mousemove", {
-        detail: {
-          x: pt.x,
-          y: pt.y,
-          inside: pt.x >= 0 && pt.y >= 0 && pt.x <= (activeDoc?.width ?? 0) && pt.y <= (activeDoc?.height ?? 0),
-        },
-      }),
-    )
+    const mouseDetail = {
+      x: pt.x,
+      y: pt.y,
+      inside: pt.x >= 0 && pt.y >= 0 && pt.x <= (activeDoc?.width ?? 0) && pt.y <= (activeDoc?.height ?? 0),
+    }
+    const coalescer = mouseMoveCoalescerRef.current
+    if (coalescer) coalescer.push(mouseDetail)
+    else window.dispatchEvent(new CustomEvent("ps-mousemove", { detail: mouseDetail }))
 
     const drag = drawingRef.current
     if (drag.type === null) {
@@ -3131,8 +3153,7 @@ export function CanvasView() {
 
     if (drag.type === "pan" && drag.panStart) {
       panRef.current = { x: e.clientX - drag.panStart.x, y: e.clientY - drag.panStart.y }
-      const stage = stageRef.current
-      if (stage) stage.style.transform = `translate(${panRef.current.x}px, ${panRef.current.y}px) rotate(${activeDoc?.rotation ?? 0}deg)`
+      applyStageTransform()
       return
     }
 
@@ -3411,6 +3432,7 @@ export function CanvasView() {
       eraserSourceRef.current = null
       eraserSampleRef.current = null
       lastBrushPointerSampleRef.current = null
+      selectionHitTesterRef.current = null
       schedulePaintCommit(label, changedLayerIds)
       return
     }
@@ -4030,13 +4052,11 @@ export function CanvasView() {
         x: (activeDoc.width / 2 - detail.x) * zoom,
         y: (activeDoc.height / 2 - detail.y) * zoom,
       }
-      if (stageRef.current) {
-        stageRef.current.style.transform = `translate(${panRef.current.x}px, ${panRef.current.y}px) rotate(${activeDoc.rotation ?? 0}deg)`
-      }
+      applyStageTransform()
     }
     window.addEventListener("ps-navigator-pan", navigatorPanHandler)
     return () => window.removeEventListener("ps-navigator-pan", navigatorPanHandler)
-  }, [activeDoc])
+  }, [activeDoc, applyStageTransform])
 
   function commitTextEdit() {
     if (!editingText || !activeDoc) return
@@ -4684,8 +4704,7 @@ export function CanvasView() {
       applyViewZoom(visualZoomRef.current * factor)
     } else {
       panRef.current = { x: panRef.current.x - e.deltaX, y: panRef.current.y - e.deltaY }
-      const stage = stageRef.current
-      if (stage) stage.style.transform = `translate(${panRef.current.x}px, ${panRef.current.y}px) rotate(${activeDoc.rotation ?? 0}deg)`
+      applyStageTransform()
     }
   }
 
@@ -4736,7 +4755,7 @@ export function CanvasView() {
   const cursorStyle = cursorForTool(tool, showBrushCursor)
 
   return (
-    <div ref={containerRef} data-canvas-root className="flex-1 relative overflow-hidden bg-[var(--ps-canvas-bg)]" onWheel={onWheel}>
+    <div ref={containerRef} data-canvas-root className="flex-1 relative overflow-hidden bg-[var(--ps-canvas-bg)]" onWheelCapture={onWheel}>
       {activeDoc && <Rulers width={activeDoc.width} height={activeDoc.height} zoom={viewZoom} onCreateGuide={(orient, pos) => {
         const id = `g_${Math.random().toString(36).slice(2, 8)}`
         dispatch({ type: "add-guide", guide: { id, orientation: orient, position: Math.round(pos) } })
@@ -4760,7 +4779,8 @@ export function CanvasView() {
             height: displayH,
             minWidth: displayW,
             minHeight: displayH,
-            transform: `rotate(${activeDoc.rotation ?? 0}deg)`,
+            transform: `translate(${panRef.current.x}px, ${panRef.current.y}px) rotate(${activeDoc.rotation ?? 0}deg)`,
+            willChange: "transform",
           }}
         >
           <div className="absolute inset-0 ps-checker" />
@@ -5881,6 +5901,7 @@ function applyAdjustmentLayer(
   clipMask?: HTMLCanvasElement | null,
 ) {
   if (!layer.adjustment) return
+  if (layer.opacity <= 0 || isAdjustmentNoop(layer.adjustment)) return
   const filter = getFilter(layer.adjustment.type)
   if (!filter) return
   const before = ctx.getImageData(0, 0, width, height)
@@ -5890,6 +5911,10 @@ function applyAdjustmentLayer(
   const mask = maskCtx ? maskCtx.getImageData(0, 0, Math.min(layer.mask!.width, width), Math.min(layer.mask!.height, height)) : null
   const clipCtx = clipMask?.getContext("2d") ?? null
   const clip = clipCtx ? clipCtx.getImageData(0, 0, Math.min(clipMask!.width, width), Math.min(clipMask!.height, height)) : null
+  if (!mask && !clip && opacity >= 1) {
+    ctx.putImageData(after, 0, 0)
+    return
+  }
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const i = (y * width + x) * 4

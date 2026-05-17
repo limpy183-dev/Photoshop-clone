@@ -60,6 +60,8 @@ import type {
 import { createSmartObjectSource, markSmartObjectLinked, replaceSmartObjectContents } from "./smart-objects"
 import { compositeLayer, getNativeComposite } from "./blend-modes"
 import { loadPreferencesFromStorage, recordHistoryLogEntryFromStorage } from "./preferences-engine"
+import { createHistoryJumpScheduler, type HistoryJumpScheduler } from "./history-jump-scheduler"
+import { isAdjustmentNoop } from "./adjustment-layers"
 import {
   borderSelectionMask,
   contractSelectionMask,
@@ -301,6 +303,23 @@ function makeCanvas(w: number, h: number, fill?: string): HTMLCanvasElement {
 
 function isLayerChangeHints(value: ChangedLayerIds | undefined): value is LayerChangeHints {
   return !!value && value !== "all" && !Array.isArray(value)
+}
+
+function changedLayerIdsList(changedLayerIds: ChangedLayerIds | undefined): string[] | null {
+  if (!changedLayerIds || changedLayerIds === "all") return null
+  if (!isLayerChangeHints(changedLayerIds)) return [...changedLayerIds]
+  return changedLayerIds.ids ? [...changedLayerIds.ids] : Object.keys(changedLayerIds.bounds ?? {})
+}
+
+function commitAffectsComposite(doc: PsDocument, changedLayerIds: ChangedLayerIds | undefined) {
+  const ids = changedLayerIdsList(changedLayerIds)
+  if (!ids) return true
+  if (!ids.length) return true
+  return ids.some((id) => {
+    const layer = doc.layers.find((candidate) => candidate.id === id)
+    if (!layer) return true
+    return !(layer.kind === "adjustment" && isAdjustmentNoop(layer.adjustment))
+  })
 }
 
 function normalizeDirtyRect(rect: DirtyRect | undefined, width: number, height: number): DirtyRect | null {
@@ -3408,6 +3427,17 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     (cb: () => void) => renderBusRef.current!.subscribe(cb),
     [],
   )
+  const historyJumpSchedulerRef = React.useRef<HistoryJumpScheduler | null>(null)
+  const performHistoryJumpRef = React.useRef<(index: number) => void>(() => {})
+
+  React.useEffect(() => {
+    const scheduler = createHistoryJumpScheduler((index) => performHistoryJumpRef.current(index))
+    historyJumpSchedulerRef.current = scheduler
+    return () => {
+      scheduler.cancel()
+      if (historyJumpSchedulerRef.current === scheduler) historyJumpSchedulerRef.current = null
+    }
+  }, [])
   const [closeRequest, setCloseRequest] = React.useState<{ ids: string[]; currentId: string; saving?: boolean } | null>(null)
   const closeRequestRef = React.useRef(closeRequest)
   closeRequestRef.current = closeRequest
@@ -3497,10 +3527,6 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     }
     return result
   }, [state.documents, state.documentLifecycle, state.histories])
-
-  React.useEffect(() => {
-    requestRender()
-  }, [activeDoc, requestRender])
 
   // Initialize SSR-safe canvases on the client
   React.useEffect(() => {
@@ -3604,13 +3630,12 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
         })
       }).catch(console.error)
 
-      // Trigger render immediately for responsiveness
-      requestRender()
+      if (commitAffectsComposite(doc, changedLayerIds)) requestRender()
     },
     [requestRender],
   )
 
-  const jumpHistory = React.useCallback(
+  const performHistoryJump = React.useCallback(
     (index: number) => {
       const current = stateRef.current
       const doc = current.documents.find((d) => d.id === current.activeDocId)
@@ -3634,6 +3659,29 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     },
     [requestRender],
   )
+  performHistoryJumpRef.current = performHistoryJump
+
+  const jumpHistory = React.useCallback((index: number) => {
+    const current = stateRef.current
+    const doc = current.documents.find((d) => d.id === current.activeDocId)
+    const docHist = doc ? current.histories[doc.id] : null
+    if (!docHist) {
+      performHistoryJump(index)
+      return
+    }
+    const safeIdx = clamp(index, 0, docHist.entries.length - 1)
+    const delta = safeIdx - docHist.index
+    const scheduler = historyJumpSchedulerRef.current
+    if (!scheduler) {
+      performHistoryJump(safeIdx)
+      return
+    }
+    if (Math.abs(delta) === 1) {
+      scheduler.requestStep(docHist.index, delta, 0, docHist.entries.length - 1)
+    } else {
+      scheduler.request(safeIdx)
+    }
+  }, [performHistoryJump])
 
   const createHistorySnapshot = React.useCallback(
     (name?: string) => {

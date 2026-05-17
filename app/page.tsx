@@ -21,6 +21,7 @@ import {
   loadPreferencesFromStorage,
   normalizePreferences,
 } from "@/components/photoshop/preferences-engine"
+import { requestCanvasZoom } from "@/components/photoshop/zoom-events"
 
 const STATUS_BAR_VISIBILITY_KEY = "ps-status-bar-visible"
 
@@ -195,7 +196,9 @@ function Workspace() {
   return (
     <main
       className="h-screen w-screen flex flex-col bg-[var(--ps-chrome)] text-[var(--ps-text)]"
-      onClick={closeContextMenu}
+      onClick={(event) => {
+        if (event.button === 0) closeContextMenu()
+      }}
       onContextMenu={openContextMenu}
     >
       <MenuBar
@@ -224,7 +227,7 @@ function Workspace() {
         onClose={closeContextMenu}
         onCommandPalette={() => setCommandOpen(true)}
         onToggleStatusBar={toggleStatusBarVisibility}
-        onZoom={(zoom) => dispatch({ type: "set-zoom", zoom })}
+        onZoom={(zoom) => requestCanvasZoom({ zoom })}
       />
       <NewDocumentDialog open={newOpen} onOpenChange={setNewOpen} />
       <ImageSizeDialog open={imageSizeOpen} onOpenChange={setImageSizeOpen} />

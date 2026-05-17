@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test"
 
 import {
   estimateHistoryMemoryBudget,
+  planCompositeCache,
   planBrushStrokeBenchmark,
   planLargeCanvasBenchmark,
   planMergeWorkflowTiling,
@@ -131,4 +132,24 @@ test("expensive filters and merge workflows get tiled plans with overlap and yie
   expect(merge.tileCount).toBe(32)
   expect(merge.estimatedCompositeOps).toBe(384)
   expect(merge.memoryPeakMB).toBeLessThan(merge.fullFrameWorkingSetMB)
+})
+
+test("composite cache policy avoids full-frame copies during forced and huge renders", () => {
+  expect(planCompositeCache({ width: 1920, height: 1080, forcedRender: false })).toEqual({
+    storeCache: true,
+    reason: "cacheable",
+    pixelCount: 2_073_600,
+  })
+
+  expect(planCompositeCache({ width: 1920, height: 1080, forcedRender: true })).toEqual({
+    storeCache: false,
+    reason: "forced-render",
+    pixelCount: 2_073_600,
+  })
+
+  expect(planCompositeCache({ width: 8192, height: 4096, forcedRender: false })).toEqual({
+    storeCache: false,
+    reason: "large-canvas",
+    pixelCount: 33_554_432,
+  })
 })

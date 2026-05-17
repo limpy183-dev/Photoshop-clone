@@ -7,6 +7,7 @@ import { getFilter } from "../filters"
 import { applyLayerStyle } from "../layer-styles"
 import { Slider } from "@/components/ui/slider"
 import type { BlendMode, Layer, PsDocument } from "../types"
+import { requestCanvasZoom } from "../zoom-events"
 
 function makePanelCanvas(w: number, h: number) {
   const c = document.createElement("canvas")
@@ -205,7 +206,7 @@ export function NavigatorPanel() {
           max={3200}
           step={5}
           value={[Math.round(activeDoc.zoom * 100)]}
-          onValueChange={(v) => dispatch({ type: "set-zoom", zoom: v[0] / 100 })}
+          onValueChange={(v) => requestCanvasZoom({ zoom: v[0] / 100 })}
           className="flex-1"
         />
         <span className="tabular-nums w-12 text-right">{Math.round(activeDoc.zoom * 100)}%</span>

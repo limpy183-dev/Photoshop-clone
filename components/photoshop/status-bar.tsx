@@ -4,9 +4,10 @@ import * as React from "react"
 import { X } from "lucide-react"
 import { describeDocumentColorHonesty } from "./color-pipeline"
 import { useEditor } from "./editor-context"
+import { requestCanvasZoom } from "./zoom-events"
 
 export function StatusBar({ onHide }: { onHide?: () => void }) {
-  const { activeDoc, dispatch, tool, brush, foreground } = useEditor()
+  const { activeDoc, tool, brush, foreground } = useEditor()
   const [zoomInput, setZoomInput] = React.useState("")
   const colorHonesty = React.useMemo(
     () => activeDoc ? describeDocumentColorHonesty(activeDoc) : null,
@@ -52,7 +53,7 @@ export function StatusBar({ onHide }: { onHide?: () => void }) {
           if (e.key === "Enter") {
             const num = parseFloat(zoomInput.replace("%", ""))
             if (!Number.isNaN(num)) {
-              dispatch({ type: "set-zoom", zoom: num / 100 })
+              requestCanvasZoom({ zoom: num / 100 })
             }
           }
         }}

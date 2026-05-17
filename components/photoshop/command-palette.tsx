@@ -4,11 +4,12 @@ import * as React from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { FILTERS } from "./filters"
-import { useEditor } from "./editor-context"
+import { makeCanvas, useEditor } from "./editor-context"
 import { selectionToMaskCanvas } from "./tool-helpers"
 import type { ToolId } from "./types"
 import { toast } from "sonner"
 import { PANEL_DEFINITIONS } from "./panel-registry"
+import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop, isAdjustmentType } from "./adjustment-layers"
 
 interface CommandPaletteProps {
   open: boolean
@@ -81,7 +82,7 @@ const PANEL_COMMAND_TITLES: Record<string, string> = {
 }
 
 export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPaletteProps) {
-  const { activeDoc, activeLayer, closedDocuments, dispatch, newLayer, newGroup, duplicateDocument, closeOtherDocuments, reopenClosedDocument } = useEditor()
+  const { activeDoc, activeLayer, closedDocuments, dispatch, newLayer, newGroup, duplicateDocument, closeOtherDocuments, reopenClosedDocument, commit, requestRender } = useEditor()
   const [query, setQuery] = React.useState("")
   const [activeIndex, setActiveIndex] = React.useState(0)
 
@@ -636,6 +637,21 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
       },
     ]
 
+    const addAdjustmentLayer = (filterId: string) => {
+      if (!activeDoc || !isAdjustmentType(filterId)) return
+      const filter = FILTERS[filterId]
+      const layer = createAdjustmentLayerModel({
+        filterId,
+        width: activeDoc.width,
+        height: activeDoc.height,
+        layers: activeDoc.layers,
+        makeCanvas,
+      })
+      dispatch({ type: "add-layer", layer })
+      if (!isAdjustmentNoop(layer.adjustment)) requestRender()
+      window.setTimeout(() => commit(`New ${filter.name} Adjustment`, [layer.id]), 0)
+    }
+
     for (const panel of PANEL_DEFINITIONS) {
       const title = PANEL_COMMAND_TITLES[panel.id] ?? `${panel.label} Panel`
       items.push({
@@ -665,6 +681,21 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
     }
 
     for (const filter of Object.values(FILTERS).slice().sort((a, b) => a.name.localeCompare(b.name))) {
+      if (isAdjustmentType(filter.id)) {
+        items.push({
+          id: `adjustment-${filter.id}`,
+          group: "Adjustments",
+          title: `${filter.name} Adjustment Layer`,
+          hint: "non-destructive",
+          disabled: !!needsDocument,
+          disabledReason: needsDocument,
+          run: () => {
+            addAdjustmentLayer(filter.id)
+            close()
+          },
+        })
+        continue
+      }
       items.push({
         id: `filter-${filter.id}`,
         group: "Filters",
@@ -680,7 +711,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
     }
 
     return items
-  }, [activeDoc, activeLayer, close, closedDocuments, dispatch, duplicateDocument, closeOtherDocuments, reopenClosedDocument, newGroup, newLayer, onOpenNew])
+  }, [activeDoc, activeLayer, close, closedDocuments, dispatch, duplicateDocument, closeOtherDocuments, reopenClosedDocument, newGroup, newLayer, onOpenNew, commit, requestRender])
 
   const filtered = React.useMemo(() => {
     const q = query.trim().toLowerCase()

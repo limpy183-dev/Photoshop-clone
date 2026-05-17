@@ -33,6 +33,26 @@ test("top menu bar switches menus on hover after a menu is open", async ({ page 
   await expect(page.getByRole("menuitem", { name: /New/ }).first()).toHaveCount(0)
 })
 
+test("arrow submenu commands expand into a usable flyout", async ({ page }) => {
+  await page.goto("/")
+  await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
+
+  await openTopMenu(page, "Edit")
+  const parentMenu = page.locator('[data-slot="menubar-content"]').first()
+  await expect(parentMenu).toBeVisible()
+
+  await page.getByRole("menuitem", { name: "Transform", exact: true }).hover()
+  const submenu = page.locator('[data-slot="menubar-sub-content"]').filter({ hasText: "Flip Horizontal" }).first()
+  await expect(submenu).toBeVisible()
+  await expect(page.getByRole("menuitem", { name: "Flip Horizontal" })).toBeVisible()
+
+  const parentBox = await parentMenu.boundingBox()
+  const submenuBox = await submenu.boundingBox()
+  expect(parentBox).not.toBeNull()
+  expect(submenuBox).not.toBeNull()
+  expect(submenuBox!.x).toBeGreaterThan(parentBox!.x + parentBox!.width * 0.8)
+})
+
 test("selection commands stay reachable and load selection expands even without saved channels", async ({ page }) => {
   await page.goto("/")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)

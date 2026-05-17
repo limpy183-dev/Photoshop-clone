@@ -91,7 +91,7 @@ import {
   selectionToMaskCanvas,
 } from "./tool-helpers"
 import { MAX_PROJECT_FILE_BYTES, assertFileSize } from "./canvas-limits"
-import type { DocumentModeSettings, Layer, LayerStyle, TextAntiAliasMode } from "./types"
+import type { AdjustmentType, DocumentModeSettings, Layer, LayerStyle, TextAntiAliasMode } from "./types"
 import {
   applyTextInsideShape,
   convertTextToEditablePath,
@@ -99,6 +99,8 @@ import {
   diagnoseDocumentFonts,
   matchFontForLayer,
 } from "./typography-engine"
+import { requestCanvasZoom } from "./zoom-events"
+import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop } from "./adjustment-layers"
 
 const menuClass =
   "h-7 px-2 inline-flex items-center text-[12px] text-[var(--ps-text)] hover:bg-[var(--ps-tool-hover)] data-[state=open]:bg-[var(--ps-tool-active)] rounded-none outline-none cursor-default"
@@ -142,6 +144,7 @@ export function MenuBar({
     toggleQuickMask,
     history,
     historyIndex,
+    requestRender,
     foreground,
     background,
     selectedLayers,
@@ -606,6 +609,26 @@ export function MenuBar({
     if (selectedLayers.every((l) => l.locked)) return
     setOpenFilter(filterId)
     setLastFilter(filterId)
+  }
+
+  const addAdjustmentLayer = (filterId: AdjustmentType) => {
+    if (!activeDoc) {
+      toast.info("Open a document before adding an adjustment layer.")
+      return
+    }
+    const filter = FILTERS[filterId]
+    if (!filter) return
+    const layer = createAdjustmentLayerModel({
+      filterId,
+      width: activeDoc.width,
+      height: activeDoc.height,
+      layers: activeDoc.layers,
+      makeCanvas,
+    })
+    dispatch({ type: "add-layer", layer })
+    if (!isAdjustmentNoop(layer.adjustment)) requestRender()
+    setLastFilter(filterId)
+    window.setTimeout(() => commit(`New ${filter.name} Adjustment`, [layer.id]), 0)
   }
 
   const rotateImage = (deg: number) => {
@@ -1508,81 +1531,71 @@ export function MenuBar({
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>Adjustments</DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => openFilterDialog("levels")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("levels")}>
                   Levels… <DropdownMenuShortcut>⌘L</DropdownMenuShortcut>
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("curves")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("curves")}>
                   Curves… <DropdownMenuShortcut>⌘M</DropdownMenuShortcut>
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("brightness-contrast")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("brightness-contrast")}>
                   Brightness/Contrast…
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("exposure")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("exposure")}>
                   Exposure…
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("vibrance")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("vibrance")}>
                   Vibrance…
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("hue-saturation")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("hue-saturation")}>
                   Hue/Saturation… <DropdownMenuShortcut>⌘U</DropdownMenuShortcut>
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("color-balance")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("color-balance")}>
                   Color Balance… <DropdownMenuShortcut>⌘B</DropdownMenuShortcut>
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("black-white")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("black-white")}>
                   Black & White…
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("photo-filter")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("photo-filter")}>
                   Photo Filter…
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("channel-mixer")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("channel-mixer")}>
                   Channel Mixer…
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("color-lookup")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("color-lookup")}>
                   Color Lookup…
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("invert")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("invert")}>
                   Invert <DropdownMenuShortcut>⌘I</DropdownMenuShortcut>
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("posterize")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("posterize")}>
                   Posterize…
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("threshold")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("threshold")}>
                   Threshold…
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("gradient-map")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("gradient-map")}>
                   Gradient Map…
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("selective-color")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("selective-color")}>
                   Selective Color…
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("shadows-highlights")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("shadows-highlights")}>
                   Shadows/Highlights…
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("hdr-toning")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("hdr-toning")}>
                   HDR Toning…
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("desaturate")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("desaturate")}>
                   Desaturate
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("match-color")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("match-color")}>
                   Match Color
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("replace-color")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("replace-color")}>
                   Replace Color…
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("equalize")}>
+                <DropdownMenuItem onSelect={() => addAdjustmentLayer("equalize")}>
                   Equalize
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => applyInstant("invert")}>
-                  Invert <DropdownMenuShortcut>⌘I</DropdownMenuShortcut>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => applyInstant("grayscale")}>
-                  Black & White
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => applyInstant("sepia")}>
-                  Sepia
                 </DropdownMenuItem>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
@@ -2409,19 +2422,19 @@ export function MenuBar({
           <DropdownMenuTrigger className={menuClass}>View</DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-72">
             <DropdownMenuItem
-              onSelect={() => activeDoc && dispatch({ type: "set-zoom", zoom: activeDoc.zoom * 2 })}
+              onSelect={() => activeDoc && requestCanvasZoom({ factor: 2 })}
             >
               Zoom In <DropdownMenuShortcut>⌘+</DropdownMenuShortcut>
             </DropdownMenuItem>
             <DropdownMenuItem
-              onSelect={() => activeDoc && dispatch({ type: "set-zoom", zoom: activeDoc.zoom / 2 })}
+              onSelect={() => activeDoc && requestCanvasZoom({ factor: 0.5 })}
             >
               Zoom Out <DropdownMenuShortcut>⌘-</DropdownMenuShortcut>
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatch({ type: "set-zoom", zoom: 1 })}>
+            <DropdownMenuItem onSelect={() => requestCanvasZoom({ zoom: 1 })}>
               100% <DropdownMenuShortcut>⌘1</DropdownMenuShortcut>
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatch({ type: "set-zoom", zoom: 0.5 })}>
+            <DropdownMenuItem onSelect={() => requestCanvasZoom({ zoom: 0.5 })}>
               Fit on Screen <DropdownMenuShortcut>⌘0</DropdownMenuShortcut>
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => openAdvancedTab("preview")} disabled={!activeDoc}>

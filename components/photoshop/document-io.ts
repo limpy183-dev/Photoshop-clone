@@ -15,6 +15,7 @@ import { compositeLayer } from "./blend-modes"
 import { getFilter } from "./filters"
 import { applyLayerStyle } from "./layer-styles"
 import { applyModeAndColorManagement } from "./advanced-subsystems"
+import { isAdjustmentNoop } from "./adjustment-layers"
 import { capabilityWarningsForDocument } from "./capabilities"
 import {
   MAX_PROJECT_CHANNELS,
@@ -611,6 +612,7 @@ function applySmartFiltersForIo(source: HTMLCanvasElement, smartFilters: Layer["
 
 function applyAdjustmentForIo(ctx: CanvasRenderingContext2D, layer: Layer, width: number, height: number, clipMask?: HTMLCanvasElement | null) {
   if (!layer.adjustment) return
+  if (layer.opacity <= 0 || isAdjustmentNoop(layer.adjustment)) return
   const filter = getFilter(layer.adjustment.type)
   if (!filter) return
   const before = ctx.getImageData(0, 0, width, height)
@@ -620,6 +622,10 @@ function applyAdjustmentForIo(ctx: CanvasRenderingContext2D, layer: Layer, width
   const mask = maskCtx ? maskCtx.getImageData(0, 0, Math.min(layer.mask!.width, width), Math.min(layer.mask!.height, height)) : null
   const clipCtx = clipMask?.getContext("2d") ?? null
   const clip = clipCtx ? clipCtx.getImageData(0, 0, Math.min(clipMask!.width, width), Math.min(clipMask!.height, height)) : null
+  if (!mask && !clip && opacity >= 1) {
+    ctx.putImageData(after, 0, 0)
+    return
+  }
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const i = (y * width + x) * 4

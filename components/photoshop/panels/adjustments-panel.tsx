@@ -3,11 +3,16 @@
 import * as React from "react"
 import { useEditor, makeCanvas } from "../editor-context"
 import { FILTERS, type FilterParam } from "../filters"
-import { renderDocumentComposite } from "../document-io"
 import { Slider } from "@/components/ui/slider"
 import { Checkbox } from "@/components/ui/checkbox"
 import { CircleDot, Link, PaintBucket, SlidersHorizontal } from "lucide-react"
 import type { AdjustmentType, Layer } from "../types"
+import {
+  adjustmentParamsWithDefaults,
+  createAdjustmentLayer as createAdjustmentLayerModel,
+  invertAdjustmentMask,
+  isAdjustmentNoop,
+} from "../adjustment-layers"
 
 const ADJUSTMENTS: AdjustmentType[] = [
   "brightness-contrast",
@@ -41,23 +46,17 @@ export function AdjustmentsPanel() {
   const createAdjustmentLayer = (filterId: AdjustmentType) => {
     const filter = FILTERS[filterId]
     if (!filter) return
-    const params: Record<string, number | string | boolean> = {}
-    for (const param of filter.params) params[param.key] = param.default
-    const layer: Layer = {
-      id: `adj_${Math.random().toString(36).slice(2, 9)}`,
-      name: filter.name,
-      kind: "adjustment",
-      visible: true,
-      locked: false,
-      opacity: 1,
-      blendMode: "normal",
+    const layer = createAdjustmentLayerModel({
+      filterId,
+      width: activeDoc.width,
+      height: activeDoc.height,
+      layers: activeDoc.layers,
+      makeCanvas,
       clipped: clipToBelow,
-      canvas: makeCanvas(activeDoc.width, activeDoc.height),
-      mask: withMask ? makeCanvas(activeDoc.width, activeDoc.height, "#ffffff") : null,
-      adjustment: { type: filterId, params },
-    }
+      withMask,
+    })
     dispatch({ type: "add-layer", layer })
-    requestRender()
+    if (!isAdjustmentNoop(layer.adjustment)) requestRender()
     window.setTimeout(() => commit(`New ${filter.name} Adjustment`, [layer.id]), 0)
   }
 
@@ -83,16 +82,12 @@ export function AdjustmentsPanel() {
 
   const invertMask = () => {
     if (!adjustmentLayer?.mask) return
-    const mask = makeCanvas(adjustmentLayer.mask.width, adjustmentLayer.mask.height)
-    const ctx = mask.getContext("2d")!
-    ctx.drawImage(adjustmentLayer.mask, 0, 0)
-    const img = ctx.getImageData(0, 0, mask.width, mask.height)
-    for (let i = 0; i < img.data.length; i += 4) {
-      img.data[i] = 255 - img.data[i]
-      img.data[i + 1] = 255 - img.data[i + 1]
-      img.data[i + 2] = 255 - img.data[i + 2]
-    }
-    ctx.putImageData(img, 0, 0)
+    const mask = invertAdjustmentMask({
+      layer: adjustmentLayer,
+      width: activeDoc.width,
+      height: activeDoc.height,
+      makeCanvas,
+    })
     dispatch({ type: "set-layer-mask", id: adjustmentLayer.id, mask })
     requestRender()
     window.setTimeout(() => commit("Invert Adjustment Mask", [adjustmentLayer.id]), 0)
@@ -135,7 +130,7 @@ export function AdjustmentsPanel() {
         {!adjustmentLayer || !filterDef ? (
           <PanelEmpty text="Select an adjustment layer to edit its properties." />
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-3" data-testid="adjustment-editor">
             <div className="flex items-center justify-between">
               <div>
                 <div className="font-medium">{filterDef.name}</div>
@@ -155,21 +150,42 @@ export function AdjustmentsPanel() {
               </button>
             </div>
 
-            <div className="rounded-sm border border-[var(--ps-divider)]">
-              <div className="flex items-center gap-2 border-b border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1 text-[10px] uppercase text-[var(--ps-text-dim)]">
-                <SlidersHorizontal className="h-3 w-3" />
-                Controls
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_104px]">
+              <div className="rounded-sm border border-[var(--ps-divider)]" data-testid="adjustment-settings-column">
+                <div className="flex items-center gap-2 border-b border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1 text-[10px] uppercase text-[var(--ps-text-dim)]">
+                  <SlidersHorizontal className="h-3 w-3" />
+                  Controls
+                </div>
+                <div className="space-y-2 p-2">
+                  {filterDef.params.length ? (
+                    filterDef.params.map((param) => (
+                      <AdjustmentParamControl
+                        key={param.key}
+                        param={param}
+                        value={adjustmentLayer.adjustment!.params[param.key] ?? param.default}
+                        onChange={(value) => updateAdjustmentParam(param.key, value)}
+                      />
+                    ))
+                  ) : (
+                    <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-4 text-center text-[10px] text-[var(--ps-text-dim)]">
+                      This adjustment has no sliders.
+                    </div>
+                  )}
+                </div>
               </div>
-              <div className="space-y-2 p-2">
-                <AdjustmentVisual doc={activeDoc} layer={adjustmentLayer} />
-                {filterDef.params.map((param) => (
-                  <AdjustmentParamControl
-                    key={param.key}
-                    param={param}
-                    value={adjustmentLayer.adjustment!.params[param.key] ?? param.default}
-                    onChange={(value) => updateAdjustmentParam(param.key, value)}
-                  />
-                ))}
+              <div className="rounded-sm border border-[var(--ps-divider)]" data-testid="adjustment-preview-column">
+                <div className="border-b border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1 text-[10px] uppercase text-[var(--ps-text-dim)]">
+                  Preview
+                </div>
+                <div className="space-y-2 p-2">
+                  <AdjustmentVisual doc={activeDoc} layer={adjustmentLayer} />
+                  <div className="flex items-center gap-2">
+                    <MaskPreview mask={adjustmentLayer.mask} />
+                    <div className="min-w-0 text-[9px] leading-3 text-[var(--ps-text-dim)]">
+                      {adjustmentLayer.mask ? "Mask" : "No mask"}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -247,11 +263,8 @@ function AdjustmentVisual({ doc, layer }: { doc: NonNullable<ReturnType<typeof u
       ctx.fillRect(0, 20, canvas.width, 52)
       return
     }
-    const source = renderDocumentComposite(doc, { transparent: false, matte: "#000000" })
-    const sampleScale = Math.min(1, 192 / Math.max(source.width, source.height))
-    const tmp = makeCanvas(Math.max(1, Math.round(source.width * sampleScale)), Math.max(1, Math.round(source.height * sampleScale)))
-    tmp.getContext("2d")!.drawImage(source, 0, 0, tmp.width, tmp.height)
-    const img = tmp.getContext("2d")!.getImageData(0, 0, tmp.width, tmp.height)
+    const source = renderAdjustmentPreviewSample(doc)
+    const img = source.getContext("2d")!.getImageData(0, 0, source.width, source.height)
     const hist = new Array<number>(256).fill(0)
     for (let i = 0; i < img.data.length; i += 4) {
       const lum = Math.round(0.299 * img.data[i] + 0.587 * img.data[i + 1] + 0.114 * img.data[i + 2])
@@ -269,6 +282,32 @@ function AdjustmentVisual({ doc, layer }: { doc: NonNullable<ReturnType<typeof u
     ctx.stroke()
   }, [doc, layer])
   return <canvas ref={ref} className="block w-full rounded-sm border border-[var(--ps-divider)]" />
+}
+
+function renderAdjustmentPreviewSample(doc: NonNullable<ReturnType<typeof useEditor>["activeDoc"]>) {
+  const sampleScale = Math.min(1, 192 / Math.max(doc.width, doc.height))
+  const canvas = makeCanvas(Math.max(1, Math.round(doc.width * sampleScale)), Math.max(1, Math.round(doc.height * sampleScale)))
+  const ctx = canvas.getContext("2d")!
+  ctx.fillStyle = "#000000"
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+  for (const layer of doc.layers) {
+    if (!layer.visible || layer.kind === "group") continue
+    if (layer.kind === "adjustment" && layer.adjustment) {
+      if (isAdjustmentNoop(layer.adjustment)) continue
+      const filter = FILTERS[layer.adjustment.type]
+      if (!filter) continue
+      const before = ctx.getImageData(0, 0, canvas.width, canvas.height)
+      const after = filter.apply(before, adjustmentParamsWithDefaults(layer.adjustment.type, layer.adjustment.params))
+      ctx.putImageData(after, 0, 0)
+      continue
+    }
+    if (typeof layer.canvas.getContext !== "function") continue
+    ctx.save()
+    ctx.globalAlpha = Math.max(0, Math.min(1, layer.opacity))
+    ctx.drawImage(layer.canvas, 0, 0, canvas.width, canvas.height)
+    ctx.restore()
+  }
+  return canvas
 }
 
 function AdjustmentParamControl({
