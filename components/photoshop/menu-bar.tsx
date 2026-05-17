@@ -116,7 +116,17 @@ type SavePickerWindow = Window & {
   }) => Promise<FileSystemFileHandleLike>
 }
 
-export function MenuBar({ onOpenNew }: { onOpenNew: () => void }) {
+interface MenuBarProps {
+  onOpenNew: () => void
+  statusBarVisible?: boolean
+  onToggleStatusBar?: () => void
+}
+
+export function MenuBar({
+  onOpenNew,
+  statusBarVisible = true,
+  onToggleStatusBar,
+}: MenuBarProps) {
   const {
     documents,
     dispatch,
@@ -2309,6 +2319,9 @@ export function MenuBar({ onOpenNew }: { onOpenNew: () => void }) {
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => openAdvancedTab("preview")} disabled={!activeDoc}>
               Device Preview...
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => onToggleStatusBar?.()} disabled={!onToggleStatusBar}>
+              {statusBarVisible ? "Hide Info Bar" : "Show Info Bar"}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem

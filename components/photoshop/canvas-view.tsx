@@ -17,7 +17,6 @@ function _assignCanvasId(canvas: HTMLCanvasElement): number {
   _canvasIdMap.set(canvas, id)
   return id
 }
-import { ContextualTaskBar } from "./contextual-task-bar"
 import { cn } from "@/lib/utils"
 import {
   healStamp,
@@ -4738,7 +4737,6 @@ export function CanvasView() {
 
   return (
     <div ref={containerRef} data-canvas-root className="flex-1 relative overflow-hidden bg-[var(--ps-canvas-bg)]" onWheel={onWheel}>
-      <ContextualTaskBar />
       {activeDoc && <Rulers width={activeDoc.width} height={activeDoc.height} zoom={viewZoom} onCreateGuide={(orient, pos) => {
         const id = `g_${Math.random().toString(36).slice(2, 8)}`
         dispatch({ type: "add-guide", guide: { id, orientation: orient, position: Math.round(pos) } })

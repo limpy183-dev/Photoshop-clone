@@ -4,6 +4,7 @@ import * as React from "react"
 import {
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   ChevronsLeft,
   ChevronUp,
   Columns3,
@@ -35,9 +36,10 @@ const DOCK_STATE_KEY = "ps-panel-dock-state-v2"
 const WORKSPACES_KEY = "ps-workspaces-v2"
 const LEGACY_WORKSPACES_KEY = "ps-workspaces-v1"
 const CURRENT_WORKSPACE_KEY = "ps-current-workspace-preset"
-const TOP_MIN_HEIGHT = 220
-const BOTTOM_MIN_HEIGHT = 180
+const TOP_MIN_HEIGHT = 78
+const BOTTOM_MIN_HEIGHT = 78
 const SPLITTER_HEIGHT = 12
+const SPLIT_SNAP_DISTANCE = 44
 
 interface WorkspaceLayout {
   name: string
@@ -48,6 +50,7 @@ interface WorkspaceLayout {
   upperPinned: string[]
   lowerPinned: string[]
   dockMode: PanelDockMode
+  upperHidden?: boolean
   savedAt: number
 }
 
@@ -59,6 +62,7 @@ interface SavedDockState {
   lowerPinned?: string[]
   mode?: PanelDockMode
   recentPanels?: string[]
+  upperHidden?: boolean
 }
 
 const upperPanels = panelsForStack("upper")
@@ -113,6 +117,7 @@ function normalizeWorkspaceLayout(input: unknown): WorkspaceLayout | null {
     upperPinned: normalizePinned("upper", source.upperPinned, WORKSPACE_PRESETS.essentials.upperPinned),
     lowerPinned: normalizePinned("lower", source.lowerPinned, WORKSPACE_PRESETS.essentials.lowerPinned),
     dockMode: isDockMode(source.dockMode) ? source.dockMode : isDockMode(source.mode) ? source.mode : "expanded",
+    upperHidden: !!source.upperHidden,
     savedAt: Number.isFinite(Number(source.savedAt)) ? Number(source.savedAt) : Date.now(),
   }
 }
@@ -145,6 +150,7 @@ function presetToLayout(preset: WorkspacePanelPreset): WorkspaceLayout {
     upperPinned: preset.upperPinned,
     lowerPinned: preset.lowerPinned,
     dockMode: preset.mode,
+    upperHidden: false,
     savedAt: 0,
   }
 }
@@ -166,6 +172,13 @@ function moveItem(ids: string[], id: string, delta: number) {
   return next
 }
 
+function snapHeight(value: number, min: number, max: number) {
+  const clamped = Math.max(min, Math.min(max, value))
+  if (clamped - min <= SPLIT_SNAP_DISTANCE) return min
+  if (max - clamped <= SPLIT_SNAP_DISTANCE) return max
+  return clamped
+}
+
 export function PanelDock({ width }: { width?: number }) {
   const dockRef = React.useRef<HTMLDivElement>(null)
   const [dockHeight, setDockHeight] = React.useState(0)
@@ -176,6 +189,8 @@ export function PanelDock({ width }: { width?: number }) {
   const [lowerPinned, setLowerPinned] = React.useState(() => WORKSPACE_PRESETS.essentials.lowerPinned)
   const [mode, setMode] = React.useState<PanelDockMode>("expanded")
   const [solo, setSolo] = React.useState<"top" | "bottom" | null>(null)
+  const [upperHidden, setUpperHidden] = React.useState(false)
+  const [allPanelsOpen, setAllPanelsOpen] = React.useState(false)
   const [recentPanels, setRecentPanels] = React.useState<string[]>([])
   const hydratedRef = React.useRef(false)
   const topHeightRef = React.useRef(topHeight)
@@ -184,16 +199,29 @@ export function PanelDock({ width }: { width?: number }) {
   const upperPinnedRef = React.useRef(upperPinned)
   const lowerPinnedRef = React.useRef(lowerPinned)
   const modeRef = React.useRef(mode)
+  const upperHiddenRef = React.useRef(upperHidden)
   const widthRef = React.useRef(width)
+  const rawTopHeightRef = React.useRef(topHeight)
+  const resizingSplitRef = React.useRef(false)
 
   const topMax = dockHeight > 0 ? Math.max(TOP_MIN_HEIGHT, dockHeight - BOTTOM_MIN_HEIGHT - SPLITTER_HEIGHT) : 720
   const clampTopHeight = React.useCallback(
     (value: number) => Math.max(TOP_MIN_HEIGHT, Math.min(topMax, value)),
     [topMax],
   )
+  const snapTopHeight = React.useCallback(
+    (value: number) => snapHeight(value, TOP_MIN_HEIGHT, topMax),
+    [topMax],
+  )
+  const splitState = upperHidden || solo === "bottom" || topHeight <= TOP_MIN_HEIGHT + 1
+    ? "layers-max"
+    : solo === "top" || topHeight >= topMax - 1
+      ? "layers-min"
+      : "balanced"
 
   React.useEffect(() => {
     topHeightRef.current = topHeight
+    if (!resizingSplitRef.current) rawTopHeightRef.current = topHeight
   }, [topHeight])
 
   React.useEffect(() => {
@@ -215,6 +243,10 @@ export function PanelDock({ width }: { width?: number }) {
   React.useEffect(() => {
     modeRef.current = mode
   }, [mode])
+
+  React.useEffect(() => {
+    upperHiddenRef.current = upperHidden
+  }, [upperHidden])
 
   React.useEffect(() => {
     widthRef.current = width
@@ -269,6 +301,7 @@ export function PanelDock({ width }: { width?: number }) {
     if (panelById(layout.topTab)?.stack === "upper") setTopActive(layout.topTab)
     if (panelById(layout.bottomTab)?.stack === "lower") setBottomActive(layout.bottomTab)
     setMode(layout.dockMode)
+    setUpperHidden(!!layout.upperHidden)
     setSolo(null)
     if (Number.isFinite(layout.dockWidth)) {
       window.dispatchEvent(new CustomEvent("ps-set-dock-width", { detail: layout.dockWidth }))
@@ -284,6 +317,7 @@ export function PanelDock({ width }: { width?: number }) {
       setUpperPinned(normalizePinned("upper", saved.upperPinned, WORKSPACE_PRESETS.essentials.upperPinned))
       setLowerPinned(normalizePinned("lower", saved.lowerPinned, WORKSPACE_PRESETS.essentials.lowerPinned))
       if (isDockMode(saved.mode)) setMode(saved.mode)
+      setUpperHidden(!!saved.upperHidden)
       if (Array.isArray(saved.recentPanels)) {
         setRecentPanels(saved.recentPanels.map(String).filter((id) => panelById(id)).slice(0, 10))
       }
@@ -307,10 +341,11 @@ export function PanelDock({ width }: { width?: number }) {
         upperPinned,
         lowerPinned,
         mode,
+        upperHidden,
         recentPanels,
       }))
     } catch {}
-  }, [topHeight, topActive, bottomActive, upperPinned, lowerPinned, mode, recentPanels])
+  }, [topHeight, topActive, bottomActive, upperPinned, lowerPinned, mode, upperHidden, recentPanels])
 
   React.useEffect(() => {
     const openPanel = (event: Event) => {
@@ -330,6 +365,7 @@ export function PanelDock({ width }: { width?: number }) {
         upperPinned: upperPinnedRef.current,
         lowerPinned: lowerPinnedRef.current,
         dockMode: modeRef.current,
+        upperHidden: upperHiddenRef.current,
         savedAt: Date.now(),
       })
       writeWorkspaces(workspaces.sort((a, b) => a.name.localeCompare(b.name)))
@@ -380,10 +416,12 @@ export function PanelDock({ width }: { width?: number }) {
   }, [])
 
   React.useEffect(() => {
-    setTopHeight((height) => clampTopHeight(height))
-  }, [clampTopHeight])
+    setTopHeight((height) => snapTopHeight(height))
+  }, [snapTopHeight])
 
   const saveTopHeight = React.useCallback(() => {
+    resizingSplitRef.current = false
+    rawTopHeightRef.current = topHeightRef.current
     try {
       localStorage.setItem("ps-panel-split", String(topHeightRef.current))
     } catch {}
@@ -391,9 +429,14 @@ export function PanelDock({ width }: { width?: number }) {
 
   const resizePanelSplit = React.useCallback(
     (delta: number) => {
-      setTopHeight((height) => clampTopHeight(height + delta))
+      if (!resizingSplitRef.current) {
+        rawTopHeightRef.current = topHeightRef.current
+        resizingSplitRef.current = true
+      }
+      rawTopHeightRef.current += delta
+      setTopHeight(snapTopHeight(rawTopHeightRef.current))
     },
-    [clampTopHeight],
+    [snapTopHeight],
   )
 
   const dockWidth = mode === "expanded" ? width ?? WORKSPACE_PRESETS.essentials.dockWidth : mode === "compact" ? 48 : 34
@@ -449,11 +492,36 @@ export function PanelDock({ width }: { width?: number }) {
       ref={dockRef}
       data-testid="panel-dock"
       data-mode="expanded"
-      className="shrink-0 bg-[var(--ps-panel)] border-l border-[var(--ps-divider)] flex flex-col select-none"
+      data-split={splitState}
+      data-upper-hidden={upperHidden ? "true" : "false"}
+      className="relative shrink-0 bg-[var(--ps-panel)] border-l border-[var(--ps-divider)] flex flex-col select-none"
       style={{ width: dockWidth }}
     >
-      <DockHeader onCompact={() => setMode("compact")} onHide={() => setMode("hidden")} />
-      {solo !== "bottom" ? (
+      <DockHeader
+        upperHidden={upperHidden}
+        onOpenPanels={() => setAllPanelsOpen((open) => !open)}
+        onToggleUpper={() => {
+          setUpperHidden((hidden) => !hidden)
+          setSolo(null)
+        }}
+        onCompact={() => setMode("compact")}
+        onHide={() => setMode("hidden")}
+      />
+      {allPanelsOpen ? (
+        <AllPanelBrowser
+          recentPanels={recentPanels}
+          upperPinned={upperPinned}
+          lowerPinned={lowerPinned}
+          onOpen={(id) => {
+            activatePanel(id, true)
+            setAllPanelsOpen(false)
+          }}
+          onPin={pinPanel}
+          onUnpin={unpinPanel}
+          onClose={() => setAllPanelsOpen(false)}
+        />
+      ) : null}
+      {!upperHidden && solo !== "bottom" ? (
         <PanelStackView
           label="Upper"
           stack="upper"
@@ -471,10 +539,9 @@ export function PanelDock({ width }: { width?: number }) {
           onToggleSolo={() => setSolo(solo === "top" ? null : "top")}
         />
       ) : null}
-      {solo === null ? (
-        <ResizeHandle
-          direction="vertical"
-          className="h-3 bg-[var(--ps-divider)]/80 hover:bg-[var(--ps-accent)]/50"
+      {!upperHidden && solo === null ? (
+        <PanelSplitter
+          splitState={splitState}
           onResize={resizePanelSplit}
           onResizeEnd={saveTopHeight}
         />
@@ -500,11 +567,40 @@ export function PanelDock({ width }: { width?: number }) {
   )
 }
 
-function DockHeader({ onCompact, onHide }: { onCompact: () => void; onHide: () => void }) {
+function DockHeader({
+  upperHidden,
+  onOpenPanels,
+  onToggleUpper,
+  onCompact,
+  onHide,
+}: {
+  upperHidden: boolean
+  onOpenPanels: () => void
+  onToggleUpper: () => void
+  onCompact: () => void
+  onHide: () => void
+}) {
   return (
     <div className="flex h-8 shrink-0 items-center gap-1 border-b border-[var(--ps-divider)] bg-[var(--ps-chrome)] px-2">
-      <Columns3 className="h-3.5 w-3.5 text-[var(--ps-text-dim)]" />
-      <span className="min-w-0 flex-1 text-[11px] font-medium text-[var(--ps-text)]">Panels</span>
+      <button
+        type="button"
+        aria-label="Panels"
+        title="Open all panels"
+        onClick={onOpenPanels}
+        className="flex min-w-0 flex-1 items-center gap-1.5 rounded-sm px-1.5 py-1 text-left text-[11px] font-medium text-[var(--ps-text)] hover:bg-[var(--ps-tool-hover)]"
+      >
+        <Columns3 className="h-3.5 w-3.5 shrink-0 text-[var(--ps-text-dim)]" />
+        <span className="truncate">Panels</span>
+      </button>
+      <button
+        type="button"
+        aria-label={upperHidden ? "Show pinned panels section" : "Hide pinned panels section"}
+        title={upperHidden ? "Show pinned panels section" : "Hide pinned panels section"}
+        onClick={onToggleUpper}
+        className="flex h-6 w-6 items-center justify-center rounded-sm text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]"
+      >
+        {upperHidden ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
+      </button>
       <button
         type="button"
         aria-label="Compact panel dock"
@@ -523,6 +619,37 @@ function DockHeader({ onCompact, onHide }: { onCompact: () => void; onHide: () =
       >
         <ChevronRight className="h-3.5 w-3.5" />
       </button>
+    </div>
+  )
+}
+
+function PanelSplitter({
+  splitState,
+  onResize,
+  onResizeEnd,
+}: {
+  splitState: "balanced" | "layers-max" | "layers-min"
+  onResize: (delta: number) => void
+  onResizeEnd: () => void
+}) {
+  const label = splitState === "layers-max" ? "Layers max" : splitState === "layers-min" ? "Layers min" : ""
+  return (
+    <div className="relative h-4 shrink-0">
+      <ResizeHandle
+        direction="vertical"
+        ariaLabel="Resize panel stack"
+        className={cn(
+          "h-4 bg-[var(--ps-divider)]/70 hover:bg-[var(--ps-accent)]/45",
+          splitState !== "balanced" && "bg-[var(--ps-accent)]/35 before:bg-[var(--ps-accent)]",
+        )}
+        onResize={onResize}
+        onResizeEnd={onResizeEnd}
+      />
+      {label ? (
+        <div className="pointer-events-none absolute left-1/2 top-1/2 z-40 -translate-x-1/2 -translate-y-1/2 rounded-sm border border-[var(--ps-accent)] bg-[var(--ps-panel)] px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-[var(--ps-text)] shadow">
+          {label}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -827,6 +954,95 @@ function MorePanelBrowser({
         </button>
       </div>
       <div className="max-h-[430px] overflow-y-auto p-2">
+        {!normalizedQuery && recent.length ? (
+          <PanelBrowserSection
+            title="Recent"
+            panels={recent}
+            pinnedIds={pinnedIds}
+            onOpen={onOpen}
+            onPin={onPin}
+            onUnpin={onUnpin}
+          />
+        ) : null}
+        {panelsByCategory(filtered).map(({ category, panels: categoryPanels }) => (
+          <PanelBrowserSection
+            key={category}
+            title={category}
+            panels={categoryPanels}
+            pinnedIds={pinnedIds}
+            onOpen={onOpen}
+            onPin={onPin}
+            onUnpin={onUnpin}
+          />
+        ))}
+        {!filtered.length ? (
+          <div className="px-2 py-8 text-center text-[11px] text-[var(--ps-text-dim)]">No matching panels.</div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function AllPanelBrowser({
+  recentPanels,
+  upperPinned,
+  lowerPinned,
+  onOpen,
+  onPin,
+  onUnpin,
+  onClose,
+}: {
+  recentPanels: string[]
+  upperPinned: string[]
+  lowerPinned: string[]
+  onOpen: (id: string) => void
+  onPin: (id: string) => void
+  onUnpin: (id: string) => void
+  onClose: () => void
+}) {
+  const [query, setQuery] = React.useState("")
+  const pinnedIds = React.useMemo(
+    () => [...upperPinned, ...lowerPinned].filter((id, index, list) => list.indexOf(id) === index),
+    [lowerPinned, upperPinned],
+  )
+  const normalizedQuery = query.trim().toLowerCase()
+  const filtered = PANEL_DEFINITIONS.filter((panel) => {
+    if (!normalizedQuery) return true
+    return [
+      panel.label,
+      panel.category,
+      panel.stack,
+      panel.complexity,
+      ...panel.keywords,
+    ].join(" ").toLowerCase().includes(normalizedQuery)
+  })
+  const recent = recentPanels
+    .map(panelById)
+    .filter((panel): panel is PhotoshopPanelDefinition => !!panel && !pinnedIds.includes(panel.id))
+    .slice(0, 5)
+
+  return (
+    <div className="absolute left-2 right-2 top-9 z-50 max-h-[min(620px,calc(100%-44px))] overflow-hidden rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] shadow-2xl">
+      <div className="flex items-center gap-2 border-b border-[var(--ps-divider)] bg-[var(--ps-chrome)] px-2 py-2">
+        <Search className="h-3.5 w-3.5 text-[var(--ps-text-dim)]" />
+        <input
+          autoFocus
+          placeholder="Search all panels"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          className="h-7 min-w-0 flex-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px] text-[var(--ps-text)] outline-none"
+        />
+        <button
+          type="button"
+          aria-label="Close all panels browser"
+          title="Close"
+          onClick={onClose}
+          className="flex h-7 w-7 items-center justify-center rounded-sm text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]"
+        >
+          <ChevronUp className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="max-h-[540px] overflow-y-auto p-2">
         {!normalizedQuery && recent.length ? (
           <PanelBrowserSection
             title="Recent"
