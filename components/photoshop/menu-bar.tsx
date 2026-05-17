@@ -3,17 +3,18 @@
 import * as React from "react"
 import { toast } from "sonner"
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuShortcut,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+  Menubar,
+  MenubarContent as DropdownMenuContent,
+  MenubarItem as DropdownMenuItem,
+  MenubarLabel as DropdownMenuLabel,
+  MenubarMenu as DropdownMenu,
+  MenubarSeparator as DropdownMenuSeparator,
+  MenubarShortcut as DropdownMenuShortcut,
+  MenubarSub as DropdownMenuSub,
+  MenubarSubContent as DropdownMenuSubContent,
+  MenubarSubTrigger as DropdownMenuSubTrigger,
+  MenubarTrigger as DropdownMenuTrigger,
+} from "@/components/ui/menubar"
 import { useEditor, makeDocument, makeCanvas, type DocumentLifecycleState, type FileSystemFileHandleLike } from "./editor-context"
 import { compositeLayer } from "./blend-modes"
 import { FilterDialog } from "./filter-dialog"
@@ -413,13 +414,47 @@ export function MenuBar({
     setAdvancedOpen(true)
   }
 
+  const closeOtherDocumentsFromMenu = () => {
+    if (!activeDoc) {
+      toast.info("Open a document before closing other documents.")
+      return
+    }
+    if (documents.length < 2) {
+      toast.info("There are no other open documents to close.")
+      return
+    }
+    closeOtherDocuments(activeDoc.id)
+  }
+
+  const reopenClosedDocumentFromMenu = () => {
+    if (!closedDocuments.length) {
+      toast.info("No closed documents are available to reopen.")
+      return
+    }
+    reopenClosedDocument()
+  }
+
   const copyLayerStyle = () => {
-    if (!activeLayer?.style) return
+    if (!activeLayer) {
+      toast.info("Select a layer before copying a layer style.")
+      return
+    }
+    if (!activeLayer.style) {
+      toast.info("The active layer has no layer style to copy.")
+      return
+    }
     dispatch({ type: "set-style-clipboard", style: cloneLayerStyle(activeLayer.style) })
   }
 
   const pasteLayerStyle = () => {
-    if (!styleClipboard || !selectedLayers.length) return
+    if (!styleClipboard) {
+      toast.info("Copy a layer style before pasting one.")
+      return
+    }
+    if (!selectedLayers.length) {
+      toast.info("Select at least one layer before pasting a layer style.")
+      return
+    }
     const ids: string[] = []
     for (const layer of selectedLayers) {
       dispatch({ type: "set-layer-style", id: layer.id, style: cloneLayerStyle(styleClipboard) })
@@ -429,21 +464,46 @@ export function MenuBar({
   }
 
   const clearLayerStyle = () => {
-    if (!selectedLayers.length) return
+    if (!selectedLayers.length) {
+      toast.info("Select at least one layer before clearing layer styles.")
+      return
+    }
     const ids = selectedLayers.filter((layer) => layer.style).map((layer) => layer.id)
-    if (!ids.length) return
+    if (!ids.length) {
+      toast.info("The selected layers do not have layer styles to clear.")
+      return
+    }
     for (const id of ids) dispatch({ type: "set-layer-style", id, style: undefined })
     setTimeout(() => commit("Clear Layer Style", ids), 0)
   }
 
   const toggleLayerMaskEnabled = () => {
-    if (!activeLayer?.mask) return
+    if (!activeLayer) {
+      toast.info("Select a layer before toggling its mask.")
+      return
+    }
+    if (!activeLayer.mask) {
+      toast.info("Add a layer mask before toggling mask visibility.")
+      return
+    }
     dispatch({ type: "set-layer-mask-enabled", id: activeLayer.id, enabled: activeLayer.maskEnabled === false })
     setTimeout(() => commit(activeLayer.maskEnabled === false ? "Enable Layer Mask" : "Disable Layer Mask", [activeLayer.id]), 0)
   }
 
   const applyLayerMask = () => {
-    if (!activeLayer?.mask || typeof activeLayer.canvas.getContext !== "function") return
+    if (!activeLayer) {
+      toast.info("Select a layer before applying a mask.")
+      return
+    }
+    if (!activeLayer.mask) {
+      toast.info("Add a layer mask before applying it.")
+      return
+    }
+    if (activeLayer.locked) {
+      toast.info("Unlock the active layer before applying its mask.")
+      return
+    }
+    if (typeof activeLayer.canvas.getContext !== "function") return
     const ctx = activeLayer.canvas.getContext("2d")!
     ctx.save()
     ctx.globalCompositeOperation = "destination-in"
@@ -451,6 +511,26 @@ export function MenuBar({
     ctx.restore()
     dispatch({ type: "set-layer-mask", id: activeLayer.id, mask: null })
     setTimeout(() => commit("Apply Layer Mask", [activeLayer.id]), 0)
+  }
+
+  const editSmartObjectContentsFromMenu = () => {
+    if (!activeLayer) {
+      toast.info("Select a smart object layer before editing its contents.")
+      return
+    }
+    if (!activeLayer.smartObject && activeLayer.kind !== "smart-object") {
+      toast.info("Convert the active layer to a smart object before editing its contents.")
+      return
+    }
+    editSmartObject(activeLayer)
+  }
+
+  const updateSmartObjectParentFromMenu = () => {
+    if (!activeDoc?.smartObjectParent) {
+      toast.info("Open a smart object contents document before updating its parent.")
+      return
+    }
+    updateSmartObjectParent()
   }
 
   const fillForeground = (with_: "fg" | "bg" | "white" | "black" | "transparent") => {
@@ -474,7 +554,22 @@ export function MenuBar({
   }
 
   const fillContentAware = () => {
-    if (!activeDoc || !activeLayer || activeLayer.locked || !activeDoc.selection.bounds) return
+    if (!activeDoc) {
+      toast.info("Open a document before using Content-Aware Fill.")
+      return
+    }
+    if (!activeLayer) {
+      toast.info("Select a layer before using Content-Aware Fill.")
+      return
+    }
+    if (activeLayer.locked) {
+      toast.info("Unlock the active layer before using Content-Aware Fill.")
+      return
+    }
+    if (!activeDoc.selection.bounds) {
+      toast.info("Create a selection before using Content-Aware Fill.")
+      return
+    }
     const mask = selectionToMaskCanvas(activeDoc.width, activeDoc.height, activeDoc.selection)
     if (!mask) return
     const maskData = mask.getContext("2d")!.getImageData(0, 0, activeDoc.width, activeDoc.height)
@@ -1065,6 +1160,8 @@ export function MenuBar({
           </div>
         </div>
 
+        <Menubar className="h-full min-w-0 flex-1 justify-start gap-0 rounded-none border-0 bg-transparent p-0 shadow-none">
+
         {/* File */}
         <DropdownMenu>
           <DropdownMenuTrigger className={menuClass}>File</DropdownMenuTrigger>
@@ -1127,10 +1224,10 @@ export function MenuBar({
             <DropdownMenuItem onSelect={() => duplicateDocument()} disabled={!activeDoc}>
               Duplicate Document...
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => activeDoc && closeOtherDocuments(activeDoc.id)} disabled={!activeDoc || documents.length < 2}>
+            <DropdownMenuItem onSelect={closeOtherDocumentsFromMenu}>
               Close Others
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => reopenClosedDocument()} disabled={!closedDocuments.length}>
+            <DropdownMenuItem onSelect={reopenClosedDocumentFromMenu}>
               Reopen Closed Document
             </DropdownMenuItem>
             <DropdownMenuSeparator />
@@ -1321,7 +1418,6 @@ export function MenuBar({
             </DropdownMenuItem>
             <DropdownMenuItem
               onSelect={fillContentAware}
-              disabled={!activeLayer || activeLayer.locked || !activeDoc?.selection.bounds}
             >
               Content-Aware Fill...
             </DropdownMenuItem>
@@ -1495,13 +1591,11 @@ export function MenuBar({
               <DropdownMenuSubContent>
                 <DropdownMenuItem
                   onSelect={() => openSelectionOperation("expand")}
-                  disabled={!activeDoc?.selection.bounds}
                 >
                   Expand...
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onSelect={() => openSelectionOperation("contract")}
-                  disabled={!activeDoc?.selection.bounds}
                 >
                   Contract...
                 </DropdownMenuItem>
@@ -1613,13 +1707,13 @@ export function MenuBar({
                   Blending Options...
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={copyLayerStyle} disabled={!activeLayer?.style}>
+                <DropdownMenuItem onSelect={copyLayerStyle}>
                   Copy Layer Style
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={pasteLayerStyle} disabled={!styleClipboard || !selectedLayers.length}>
+                <DropdownMenuItem onSelect={pasteLayerStyle}>
                   Paste Layer Style
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={clearLayerStyle} disabled={!selectedLayers.some((layer) => !!layer.style)}>
+                <DropdownMenuItem onSelect={clearLayerStyle}>
                   Clear Layer Style
                 </DropdownMenuItem>
               </DropdownMenuSubContent>
@@ -1652,29 +1746,32 @@ export function MenuBar({
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onSelect={toggleLayerMaskEnabled}
-                  disabled={!activeLayer?.mask}
                 >
                   {activeLayer?.maskEnabled === false ? "Enable Mask" : "Disable Mask"}
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onSelect={() => setSelectMaskOpen(true)}
-                  disabled={!activeLayer?.mask}
                 >
                   Refine Mask...
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onSelect={applyLayerMask}
-                  disabled={!activeLayer?.mask || activeLayer.locked}
                 >
                   Apply Mask
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onSelect={() => {
-                    if (activeLayer)
-                      dispatch({ type: "set-layer-mask", id: activeLayer.id, mask: null })
-                    setTimeout(() => commit("Delete Mask", activeLayer ? [activeLayer.id] : undefined), 0)
+                    if (!activeLayer) {
+                      toast.info("Select a layer before deleting a mask.")
+                      return
+                    }
+                    if (!activeLayer.mask) {
+                      toast.info("Add a layer mask before deleting it.")
+                      return
+                    }
+                    dispatch({ type: "set-layer-mask", id: activeLayer.id, mask: null })
+                    setTimeout(() => commit("Delete Mask", [activeLayer.id]), 0)
                   }}
-                  disabled={!activeLayer?.mask}
                 >
                   Delete Mask
                 </DropdownMenuItem>
@@ -1691,14 +1788,12 @@ export function MenuBar({
               Convert to Smart Object
             </DropdownMenuItem>
             <DropdownMenuItem
-              onSelect={() => editSmartObject(activeLayer)}
-              disabled={!activeLayer || (!activeLayer.smartObject && activeLayer.kind !== "smart-object")}
+              onSelect={editSmartObjectContentsFromMenu}
             >
               Edit Smart Object Contents
             </DropdownMenuItem>
             <DropdownMenuItem
-              onSelect={updateSmartObjectParent}
-              disabled={!activeDoc?.smartObjectParent}
+              onSelect={updateSmartObjectParentFromMenu}
             >
               Update Parent Smart Object
             </DropdownMenuItem>
@@ -1797,7 +1892,14 @@ export function MenuBar({
             </DropdownMenuItem>
             <DropdownMenuItem
               onSelect={() => {
-                if (!activeLayer?.text || !activeDoc) return
+                if (!activeDoc) {
+                  toast.info("Open a document before placing text inside a shape.")
+                  return
+                }
+                if (!activeLayer?.text) {
+                  toast.info("Select a text layer before placing text inside a shape.")
+                  return
+                }
                 const shapeLayer = activeDoc.layers.find((layer) => layer.id !== activeLayer.id && layer.shape)
                 if (!shapeLayer?.shape) {
                   toast.info("Select or create a shape layer to use as the text container.")
@@ -1808,7 +1910,6 @@ export function MenuBar({
                 rasterizeText(activeLayer.canvas, next)
                 setTimeout(() => commit("Text Inside Shape", [activeLayer.id]), 0)
               }}
-              disabled={!activeLayer?.text}
             >
               Text Inside Shape
             </DropdownMenuItem>
@@ -1851,7 +1952,14 @@ export function MenuBar({
             </DropdownMenuItem>
             <DropdownMenuItem
               onSelect={() => {
-                if (!activeDoc || !activeLayer?.text) return
+                if (!activeDoc) {
+                  toast.info("Open a document before creating 3D text.")
+                  return
+                }
+                if (!activeLayer?.text) {
+                  toast.info("Select a text layer before creating 3D text extrusion.")
+                  return
+                }
                 const scene = createTextExtrusionScene({
                   ...activeLayer.text,
                   extrusion: activeLayer.text.extrusion ?? { enabled: true, depth: 30, bevel: 3, angle: 35, color: activeLayer.text.color },
@@ -1873,7 +1981,6 @@ export function MenuBar({
                 dispatch({ type: "add-layer", layer })
                 setTimeout(() => commit("Create 3D Text", [layer.id]), 0)
               }}
-              disabled={!activeLayer?.text || !activeDoc}
             >
               3D Text Extrusion
             </DropdownMenuItem>
@@ -1917,7 +2024,14 @@ export function MenuBar({
             </DropdownMenuItem>
             <DropdownMenuItem
               onSelect={() => {
-                if (!activeDoc?.selection.bounds) return
+                if (!activeDoc) {
+                  toast.info("Open a document before saving a selection.")
+                  return
+                }
+                if (!activeDoc.selection.bounds) {
+                  toast.info("Create a selection before saving it.")
+                  return
+                }
                 const sel = activeDoc.selection
                 const inverseMask = makeCanvas(activeDoc.width, activeDoc.height)
                 const ictx = inverseMask.getContext("2d")!
@@ -2014,19 +2128,16 @@ export function MenuBar({
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onSelect={() => openSelectionOperation("expand")}
-              disabled={!activeDoc?.selection.bounds}
             >
               Expand...
             </DropdownMenuItem>
             <DropdownMenuItem
               onSelect={() => openSelectionOperation("contract")}
-              disabled={!activeDoc?.selection.bounds}
             >
               Contract...
             </DropdownMenuItem>
             <DropdownMenuItem
               onSelect={() => openSelectionOperation("similar")}
-              disabled={!activeDoc?.selection.bounds}
             >
               Similar…
             </DropdownMenuItem>
@@ -2036,19 +2147,16 @@ export function MenuBar({
               <DropdownMenuSubContent>
                 <DropdownMenuItem
                   onSelect={() => openSelectionOperation("feather")}
-                  disabled={!activeDoc?.selection.bounds}
                 >
                   Feather… <DropdownMenuShortcut>⇧F6</DropdownMenuShortcut>
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onSelect={() => openSelectionOperation("border")}
-                  disabled={!activeDoc?.selection.bounds}
                 >
                   Border…
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onSelect={() => openSelectionOperation("smooth")}
-                  disabled={!activeDoc?.selection.bounds}
                 >
                   Smooth…
                 </DropdownMenuItem>
@@ -2064,12 +2172,11 @@ export function MenuBar({
                 dispatch({ type: "save-selection", channel: { id, name: `Alpha ${(activeDoc.channels?.length ?? 0) + 1}`, canvas: c } })
                 commit("Save Selection", [])
               }}
-              disabled={!activeDoc?.selection.bounds}
             >
               Save Selection…
             </DropdownMenuItem>
             <DropdownMenuSub>
-              <DropdownMenuSubTrigger disabled={!(activeDoc?.channels?.length)}>Load Selection</DropdownMenuSubTrigger>
+              <DropdownMenuSubTrigger>Load Selection</DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
                 {(activeDoc?.channels ?? []).map((ch) => (
                   <DropdownMenuItem
@@ -2512,6 +2619,7 @@ export function MenuBar({
             <DropdownMenuItem onSelect={() => setFileInfoOpen(true)} disabled={!activeDoc}>System Info…</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        </Menubar>
       </div>
 
       <FilterDialog filterId={openFilter} onClose={() => setOpenFilter(null)} />

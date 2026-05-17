@@ -43,7 +43,7 @@ test("status info bar can be hidden and restored from View menu", async ({ page 
   await page.getByRole("button", { name: "Hide info bar" }).click()
   await expect(page.getByTestId("status-bar")).toHaveCount(0)
 
-  await page.getByRole("button", { name: "View", exact: true }).click()
+  await page.getByRole("menuitem", { name: "View", exact: true }).click()
   await page.getByRole("menuitem", { name: /Show Info Bar/ }).click()
   await expect(page.getByTestId("status-bar")).toBeVisible()
 })

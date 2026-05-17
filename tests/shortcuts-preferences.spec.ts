@@ -36,7 +36,7 @@ test("custom combo shortcut override controls image size runtime handler", async
 
 test("edit preferences does not advertise the command palette shortcut", async ({ page }) => {
   await page.goto("/")
-  await page.getByRole("button", { name: "Edit" }).click()
+  await page.getByRole("menuitem", { name: "Edit", exact: true }).click()
 
   const preferencesItem = page.getByRole("menuitem", { name: /^Preferences/ })
   await expect(preferencesItem).toBeVisible()
