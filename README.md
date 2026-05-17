@@ -290,4 +290,4 @@ These limitations are surfaced through status warnings, preflight reports, expor
 
 ## License
 
-No license file is currently included in this repository. Treat the code as private/proprietary unless a license is added.
+No license file is currently included in this repository. You can do anything with it.
