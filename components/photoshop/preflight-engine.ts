@@ -213,7 +213,7 @@ export function analyzePreflightDocument(doc: PsDocument): PreflightReport {
   const edgeClippedLayers = rasterish.filter(contentTouchesCanvasEdge)
   const smartObjects = layers.filter((layer) => layer.kind === "smart-object" || layer.smartObject)
   const psdRasterizedEffects = layers.filter((layer) => layer.smartFilters?.length || layer.kind === "adjustment" || layer.frame || layer.artboard)
-  const adjustmentLayers = layers.filter((layer) => layer.kind === "adjustment")
+  const _adjustmentLayers = layers.filter((layer) => layer.kind === "adjustment")
   const clippedWithoutBase = layers.filter((layer, index) => layer.clipped && (!layers[index - 1] || layers[index - 1].kind === "group"))
   const globalLightUsers = layers.filter(
     (layer) =>

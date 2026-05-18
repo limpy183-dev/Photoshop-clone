@@ -1,11 +1,40 @@
 import type { Metadata } from 'next'
-import { Geist, Geist_Mono } from 'next/font/google'
+import Script from 'next/script'
 import { Analytics } from '@vercel/analytics/next'
 import { Toaster } from '@/components/ui/sonner'
 import './globals.css'
 
-const _geist = Geist({ subsets: ["latin"] });
-const _geistMono = Geist_Mono({ subsets: ["latin"] });
+const stripExtensionHydrationAttributes = `
+(() => {
+  const ATTRIBUTES = ["bis_skin_checked"];
+  const strip = (root) => {
+    if (!root || root.nodeType !== 1) return;
+    for (const attr of ATTRIBUTES) {
+      if (root.hasAttribute?.(attr)) root.removeAttribute(attr);
+    }
+    root.querySelectorAll?.(ATTRIBUTES.map((attr) => "[" + attr + "]").join(",")).forEach((node) => {
+      for (const attr of ATTRIBUTES) node.removeAttribute(attr);
+    });
+  };
+  strip(document.documentElement);
+  const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      if (mutation.type === "attributes") {
+        strip(mutation.target);
+      } else {
+        mutation.addedNodes.forEach(strip);
+      }
+    }
+  });
+  observer.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ATTRIBUTES,
+    childList: true,
+    subtree: true,
+  });
+  window.addEventListener("load", () => window.setTimeout(() => observer.disconnect(), 5000), { once: true });
+})();
+`
 
 export const metadata: Metadata = {
   title: 'Photoshop Web — Image Editor',
@@ -25,6 +54,11 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark bg-background" suppressHydrationWarning>
       <body className="font-sans antialiased overflow-hidden" suppressHydrationWarning>
+        <Script
+          id="strip-extension-hydration-attributes"
+          strategy="beforeInteractive"
+          dangerouslySetInnerHTML={{ __html: stripExtensionHydrationAttributes }}
+        />
         {children}
         <Toaster position="bottom-right" richColors closeButton />
         {process.env.NODE_ENV === 'production' && <Analytics />}

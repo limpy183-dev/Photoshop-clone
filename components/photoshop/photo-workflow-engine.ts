@@ -66,7 +66,7 @@ function pixelIndex(img: ImageData, x: number, y: number) {
   return (y * img.width + x) * 4
 }
 
-function lumaAt(img: ImageData, x: number, y: number) {
+function _lumaAt(img: ImageData, x: number, y: number) {
   const sx = clamp(x, 0, img.width - 1)
   const sy = clamp(y, 0, img.height - 1)
   const i = pixelIndex(img, sx, sy)

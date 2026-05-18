@@ -1,18 +1,35 @@
-# v0 runtime files
+# v0 sandbox internal files
 __v0_runtime_loader.js
 __v0_devtools.tsx
 __v0_jsx-dev-runtime.ts
+.snowflake/
+.v0-trash/
+.vercel/
+
+# Environment variables
+.env*.local
 
 # Common ignores
 node_modules
 .next/
-.env*.local
 .DS_Store
 
-# Local build/test output
+# Editor / agent local config
+.claude/
+
+# TypeScript incremental build info
+tsconfig.tsbuildinfo
+
+# Alternate package-manager lockfile (this project uses npm; package-lock.json is the source of truth)
+pnpm-lock.yaml
+yarn.lock
+
+# Dev server & test logs (any file ending in .log at the repo root or under artifacts/)
+*.log
+artifacts/*.log
+artifacts/dev-server-*.out.log
+artifacts/dev-server-*.err.log
+
+# Playwright test artifacts
 test-results/
 playwright-report/
-*.tsbuildinfo
-
-# Local logs
-*.log

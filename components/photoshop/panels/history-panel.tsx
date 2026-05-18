@@ -11,6 +11,7 @@ export function HistoryPanel() {
     historyIndex,
     snapshots,
     jumpHistory,
+    stepHistoryBy,
     activeDoc,
     createHistorySnapshot,
     restoreHistorySnapshot,
@@ -120,7 +121,13 @@ export function HistoryPanel() {
         <button
           title="Step backward"
           aria-label="Step backward"
-          onClick={() => jumpHistory(Math.max(0, historyIndex - 1))}
+          // Calling stepHistoryBy(-1) reads the latest history index from
+          // the editor's internal stateRef instead of the closure value
+          // captured at render time. This matters when the user clicks
+          // the button rapidly: each click advances exactly one step
+          // even if the React re-render with the new historyIndex
+          // hasn't committed yet.
+          onClick={() => stepHistoryBy(-1)}
           className="flex h-7 w-7 items-center justify-center rounded-sm hover:bg-[var(--ps-tool-hover)] disabled:opacity-40"
           disabled={historyIndex <= 0}
         >
@@ -129,7 +136,7 @@ export function HistoryPanel() {
         <button
           title="Step forward"
           aria-label="Step forward"
-          onClick={() => jumpHistory(Math.min(history.length - 1, historyIndex + 1))}
+          onClick={() => stepHistoryBy(1)}
           className="flex h-7 w-7 items-center justify-center rounded-sm hover:bg-[var(--ps-tool-hover)] disabled:opacity-40"
           disabled={historyIndex >= history.length - 1}
         >

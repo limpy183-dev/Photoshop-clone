@@ -31,13 +31,13 @@ const blendMultiply = (b: number, s: number) => b * s
 const blendColorBurn = (b: number, s: number) =>
   s === 0 ? 0 : clamp01(1 - (1 - b) / s)
 const blendLinearBurn = (b: number, s: number) => clamp01(b + s - 1)
-const blendDarkerColor = (_b: number, _s: number) => 0 // handled per-pixel (needs all 3 channels)
+const _blendDarkerColor = (_b: number, _s: number) => 0 // handled per-pixel (needs all 3 channels)
 const blendLighten = (b: number, s: number) => Math.max(b, s)
 const blendScreen = (b: number, s: number) => 1 - (1 - b) * (1 - s)
 const blendColorDodge = (b: number, s: number) =>
   s >= 1 ? 1 : clamp01(b / (1 - s))
 const blendLinearDodge = (b: number, s: number) => clamp01(b + s)
-const blendLighterColor = (_b: number, _s: number) => 0 // handled per-pixel
+const _blendLighterColor = (_b: number, _s: number) => 0 // handled per-pixel
 const blendOverlay = (b: number, s: number) =>
   b < 0.5 ? 2 * b * s : 1 - 2 * (1 - b) * (1 - s)
 const blendSoftLight = (b: number, s: number) => {
@@ -106,7 +106,7 @@ function lum(r: number, g: number, b: number) {
   return 0.299 * r + 0.587 * g + 0.114 * b
 }
 
-function sat(r: number, g: number, b: number) {
+function _sat(r: number, g: number, b: number) {
   return Math.max(r, g, b) - Math.min(r, g, b)
 }
 
@@ -116,36 +116,50 @@ function clipColor(r: number, g: number, b: number): [number, number, number] {
   const x = Math.max(r, g, b)
   let rr = r, gg = g, bb = b
   if (n < 0) {
-    rr = l + (rr - l) * l / (l - n)
-    gg = l + (gg - l) * l / (l - n)
-    bb = l + (bb - l) * l / (l - n)
+    // Guard against l === n which would make (l - n) zero. When the
+    // luminance equals the minimum channel the colour is already at the
+    // black point and no scaling is needed.
+    const denom = l - n
+    if (denom > 1e-9) {
+      rr = l + (rr - l) * l / denom
+      gg = l + (gg - l) * l / denom
+      bb = l + (bb - l) * l / denom
+    }
   }
   if (x > 1) {
-    rr = l + (rr - l) * (1 - l) / (x - l)
-    gg = l + (gg - l) * (1 - l) / (x - l)
-    bb = l + (bb - l) * (1 - l) / (x - l)
+    // Same guard: x === l would divide by zero.
+    const denom = x - l
+    if (denom > 1e-9) {
+      rr = l + (rr - l) * (1 - l) / denom
+      gg = l + (gg - l) * (1 - l) / denom
+      bb = l + (bb - l) * (1 - l) / denom
+    }
   }
   return [clamp01(rr), clamp01(gg), clamp01(bb)]
 }
 
-function setLum(r: number, g: number, b: number, l: number): [number, number, number] {
+function _setLum(r: number, g: number, b: number, l: number): [number, number, number] {
   const d = l - lum(r, g, b)
   return clipColor(r + d, g + d, b + d)
 }
 
-function setSat(r: number, g: number, b: number, s: number): [number, number, number] {
-  // Sort channels and remap
+function _setSat(r: number, g: number, b: number, s: number): [number, number, number] {
+  // Sort channels and remap. When all three channels are equal (a pure
+  // grey) returning [0,0,0] would crush the result to black for the
+  // hue/saturation/color blend modes; instead preserve the original
+  // grey level so downstream setLum still has a sensible base.
   const arr: [number, number][] = [[r, 0], [g, 1], [b, 2]]
   arr.sort((a, b) => a[0] - b[0])
   const out = [0, 0, 0]
   if (arr[2][0] > arr[0][0]) {
     out[arr[1][1]] = ((arr[1][0] - arr[0][0]) * s) / (arr[2][0] - arr[0][0])
     out[arr[2][1]] = s
+    out[arr[0][1]] = 0
   } else {
-    out[arr[1][1]] = 0
-    out[arr[2][1]] = 0
+    // All channels equal — already desaturated. Return as-is so that
+    // setLum can adjust luminosity from a meaningful base value.
+    return [r, g, b]
   }
-  out[arr[0][1]] = 0
   return [out[0], out[1], out[2]]
 }
 

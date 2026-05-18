@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { useEditor } from "./editor-context"
+import { useMounted } from "./use-mounted"
 import { requestCanvasZoom } from "./zoom-events"
 import { Slider } from "@/components/ui/slider"
 import { Input } from "@/components/ui/input"
@@ -81,6 +82,13 @@ const SHAPE_LIBRARY: { id: CustomShapeId; label: string; Icon: React.ComponentTy
 
 export function OptionsBar() {
   const { tool, brush, dispatch, gradient, foreground, background, eraser, cloneSource } = useEditor()
+  // brush.size is loaded from localStorage post-hydrate, so the Radix
+  // Slider's internal `<SliderRange right="X%">` would mismatch between
+  // SSR (defaults) and the first client render (persisted). We render a
+  // same-width spacer until mount, then swap in the real slider — the
+  // input field next to it stays mounted so the user can still edit
+  // brush size before the slider appears (typically a few ms).
+  const mounted = useMounted()
   const workspaceRef = React.useRef<HTMLSelectElement>(null)
   const [workspace, setWorkspace] = React.useState<WorkspacePresetId>("essentials")
 
@@ -199,14 +207,18 @@ export function OptionsBar() {
             }
             className={numInputClass}
           />
-          <Slider
-            min={1}
-            max={300}
-            step={1}
-            value={[brush.size]}
-            onValueChange={(v) => dispatch({ type: "set-brush", brush: { size: v[0] } })}
-            className="w-24"
-          />
+          {mounted ? (
+            <Slider
+              min={1}
+              max={300}
+              step={1}
+              value={[brush.size]}
+              onValueChange={(v) => dispatch({ type: "set-brush", brush: { size: v[0] } })}
+              className="w-24"
+            />
+          ) : (
+            <div className="w-24" aria-hidden />
+          )}
         </div>
         <Divider />
         <div className="flex items-center gap-1.5">
@@ -1214,8 +1226,8 @@ export function OptionsBar() {
     )
   }
 
-  function TransformOptionsLegacy() {
-    const { activeLayer, dispatch } = useEditor()
+  function _TransformOptionsLegacy() {
+    const { activeLayer, dispatch: _dispatch } = useEditor()
     return (
       <>
         <button
@@ -1374,11 +1386,11 @@ function GradientStopsEditor({
 
 function approximateColor(stops: GradientStop[], offset: number) {
   let prev = stops[0]
-  let next = stops[stops.length - 1]
+  let _next = stops[stops.length - 1]
   for (let i = 0; i < stops.length - 1; i++) {
     if (stops[i].offset <= offset && stops[i + 1].offset >= offset) {
       prev = stops[i]
-      next = stops[i + 1]
+      _next = stops[i + 1]
       break
     }
   }

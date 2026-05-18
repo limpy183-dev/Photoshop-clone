@@ -21,7 +21,7 @@ import {
   type SelectAndMaskOutputTarget,
   type SelectAndMaskViewMode,
 } from "./photo-workflow-engine"
-import { Paintbrush, Eraser, Hand, ZoomIn, Lasso, Scissors, CircleDot } from "lucide-react"
+import { Paintbrush, Hand, ZoomIn, Lasso, Scissors, CircleDot } from "lucide-react"
 import type { Layer } from "./types"
 
 type ViewMode = SelectAndMaskViewMode

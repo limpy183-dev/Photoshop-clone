@@ -6,7 +6,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { useEditor, makeCanvas } from "./editor-context"
 import { downloadText, loadImageFromFile } from "./document-io"
 import { buildContentAwareFillPlan, contentAwareFill, focusAreaMask, rasterizeText, selectionFromMask, selectionToMaskCanvas } from "./tool-helpers"

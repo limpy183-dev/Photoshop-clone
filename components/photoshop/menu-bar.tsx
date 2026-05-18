@@ -17,47 +17,189 @@ import {
 } from "@/components/ui/menubar"
 import { useEditor, makeDocument, makeCanvas, type DocumentLifecycleState, type FileSystemFileHandleLike } from "./editor-context"
 import { compositeLayer } from "./blend-modes"
-import { FilterDialog } from "./filter-dialog"
 import { FILTERS } from "./filters"
-import { ImageSizeDialog } from "./image-size-dialog"
-import { CanvasSizeDialog } from "./canvas-size-dialog"
-import { StrokeDialog } from "./stroke-dialog"
-import { ColorRangeDialog } from "./color-range-dialog"
-import { RefineEdgeDialog } from "./refine-edge-dialog"
-import { LiquifyDialog } from "./liquify-dialog"
-import { PuppetWarpDialog } from "./puppet-warp-dialog"
-import { LayerStyleDialog } from "./layer-style-dialog"
-import { WarpTextDialog } from "./warp-text-dialog"
-import { LayerCompsDialog } from "./layer-comps-dialog"
-import { ColorLabelsDialog } from "./color-labels-dialog"
-import { ExportAsDialog } from "./export-as-dialog"
-import { BatchExportDialog } from "./batch-export-dialog"
-import { BatchProcessingDialog, ImageProcessorDialog } from "./processing-dialogs"
-import { DocumentReportDialog } from "./document-report-dialog"
-import { PreflightDialog } from "./preflight-dialog"
-import { FilterGalleryDialog } from "./filter-gallery"
-import { CameraRawDialog } from "./camera-raw-dialog"
-import { SelectAndMaskDialog } from "./select-and-mask"
-import { FileInfoDialog } from "./file-info-dialog"
-import { AdvancedSubsystemsDialog, type AdvancedSubsystemTab } from "./advanced-subsystems-dialog"
 import { renderThreeDScene } from "./advanced-subsystems"
-import { AlgorithmicOperationsDialog } from "./algorithmic-operations-dialog"
-import { GapWorkflowDialog, type GapWorkflowKind } from "./gap-workflow-dialog"
-import { PreferencesDialog } from "./preferences-dialog"
-import { KeyboardShortcutsDialog } from "./keyboard-shortcuts-dialog"
-import { AboutDialog } from "./about-dialog"
-import {
-  RecentDocumentsDialog,
-  SelectionOperationDialog,
-  WorkspaceManagerDialog,
-  type SelectionOperation,
-} from "./management-dialogs"
-import {
-  ContactSheetDialog,
-  GridSettingsDialog,
-  GuideLayoutDialog,
-  NewGuideDialog,
-} from "./workspace-dialogs"
+import type { AdvancedSubsystemTab } from "./advanced-subsystems-dialog"
+import type { GapWorkflowKind } from "./gap-workflow-dialog"
+import type { SelectionOperation } from "./management-dialogs"
+import { lazyDialog } from "./lazy-dialog"
+
+// All dialogs below are lazy-mounted: the JS chunk is fetched only the first
+// time the user opens the dialog, and the component returns null until then.
+// This keeps ~480KB of dialog source out of the workspace's eager bundle and
+// out of the React tree on idle re-renders.
+const FilterDialog = lazyDialog<{ filterId: string | null; onClose: () => void }>(
+  () => import("./filter-dialog").then((m) => ({ default: m.FilterDialog })),
+  (p) => p.filterId != null,
+)
+const ImageSizeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./image-size-dialog").then((m) => ({ default: m.ImageSizeDialog })),
+)
+const CanvasSizeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./canvas-size-dialog").then((m) => ({ default: m.CanvasSizeDialog })),
+)
+const StrokeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./stroke-dialog").then((m) => ({ default: m.StrokeDialog })),
+)
+const ColorRangeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./color-range-dialog").then((m) => ({ default: m.ColorRangeDialog })),
+)
+const RefineEdgeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./refine-edge-dialog").then((m) => ({ default: m.RefineEdgeDialog })),
+)
+const LiquifyDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./liquify-dialog").then((m) => ({ default: m.LiquifyDialog })),
+)
+const PuppetWarpDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./puppet-warp-dialog").then((m) => ({ default: m.PuppetWarpDialog })),
+)
+const LayerStyleDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./layer-style-dialog").then((m) => ({ default: m.LayerStyleDialog })),
+)
+const WarpTextDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./warp-text-dialog").then((m) => ({ default: m.WarpTextDialog })),
+)
+const LayerCompsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./layer-comps-dialog").then((m) => ({ default: m.LayerCompsDialog })),
+)
+const ColorLabelsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./color-labels-dialog").then((m) => ({ default: m.ColorLabelsDialog })),
+)
+const ExportAsDialog = lazyDialog<{
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  initial?: unknown
+}>(
+  () => import("./export-as-dialog").then((m) => ({ default: m.ExportAsDialog as unknown as React.ComponentType<{
+    open: boolean
+    onOpenChange: (open: boolean) => void
+    initial?: unknown
+  }> })),
+)
+const BatchExportDialog = lazyDialog<{
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  initial?: unknown
+}>(
+  () => import("./batch-export-dialog").then((m) => ({ default: m.BatchExportDialog as unknown as React.ComponentType<{
+    open: boolean
+    onOpenChange: (open: boolean) => void
+    initial?: unknown
+  }> })),
+)
+const BatchProcessingDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./processing-dialogs").then((m) => ({ default: m.BatchProcessingDialog })),
+)
+const ImageProcessorDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./processing-dialogs").then((m) => ({ default: m.ImageProcessorDialog })),
+)
+const DocumentReportDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./document-report-dialog").then((m) => ({ default: m.DocumentReportDialog })),
+)
+const PreflightDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./preflight-dialog").then((m) => ({ default: m.PreflightDialog })),
+)
+const FilterGalleryDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./filter-gallery").then((m) => ({ default: m.FilterGalleryDialog })),
+)
+const CameraRawDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./camera-raw-dialog").then((m) => ({ default: m.CameraRawDialog })),
+)
+const SelectAndMaskDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./select-and-mask").then((m) => ({ default: m.SelectAndMaskDialog })),
+)
+const FileInfoDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./file-info-dialog").then((m) => ({ default: m.FileInfoDialog })),
+)
+const AdvancedSubsystemsDialog = lazyDialog<{
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  initialTab?: AdvancedSubsystemTab
+}>(
+  () => import("./advanced-subsystems-dialog").then((m) => ({ default: m.AdvancedSubsystemsDialog as unknown as React.ComponentType<{
+    open: boolean
+    onOpenChange: (open: boolean) => void
+    initialTab?: AdvancedSubsystemTab
+  }> })),
+)
+const AlgorithmicOperationsDialog = lazyDialog<{
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}>(
+  () => import("./algorithmic-operations-dialog").then((m) => ({ default: m.AlgorithmicOperationsDialog })),
+)
+const GapWorkflowDialog = lazyDialog<{
+  workflow: GapWorkflowKind | null
+  onOpenChange: (open: boolean) => void
+}>(
+  () => import("./gap-workflow-dialog").then((m) => ({ default: m.GapWorkflowDialog as unknown as React.ComponentType<{
+    workflow: GapWorkflowKind | null
+    onOpenChange: (open: boolean) => void
+  }> })),
+  (p) => p.workflow != null,
+)
+const PreferencesDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./preferences-dialog").then((m) => ({ default: m.PreferencesDialog })),
+)
+const KeyboardShortcutsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./keyboard-shortcuts-dialog").then((m) => ({ default: m.KeyboardShortcutsDialog })),
+)
+const AboutDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./about-dialog").then((m) => ({ default: m.AboutDialog })),
+)
+const RecentDocumentsDialog = lazyDialog<{
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  recents: RecentDocument[]
+  onOpenRecent: (recent: RecentDocument) => void | Promise<void>
+  onRemoveRecent: (id: string) => void
+  onClearRecents: () => void
+}>(
+  () => import("./management-dialogs").then((m) => ({ default: m.RecentDocumentsDialog as unknown as React.ComponentType<{
+    open: boolean
+    onOpenChange: (open: boolean) => void
+    recents: RecentDocument[]
+    onOpenRecent: (recent: RecentDocument) => void | Promise<void>
+    onRemoveRecent: (id: string) => void
+    onClearRecents: () => void
+  }> })),
+)
+const SelectionOperationDialog = lazyDialog<{
+  operation: SelectionOperation | null
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}>(
+  () => import("./management-dialogs").then((m) => ({ default: m.SelectionOperationDialog as unknown as React.ComponentType<{
+    operation: SelectionOperation | null
+    open: boolean
+    onOpenChange: (open: boolean) => void
+  }> })),
+)
+const WorkspaceManagerDialog = lazyDialog<{
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  savedWorkspaces: { name: string; savedAt?: number }[]
+  onRefresh: () => void
+}>(
+  () => import("./management-dialogs").then((m) => ({ default: m.WorkspaceManagerDialog as unknown as React.ComponentType<{
+    open: boolean
+    onOpenChange: (open: boolean) => void
+    savedWorkspaces: { name: string; savedAt?: number }[]
+    onRefresh: () => void
+  }> })),
+)
+const ContactSheetDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./workspace-dialogs").then((m) => ({ default: m.ContactSheetDialog })),
+)
+const GridSettingsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./workspace-dialogs").then((m) => ({ default: m.GridSettingsDialog })),
+)
+const GuideLayoutDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./workspace-dialogs").then((m) => ({ default: m.GuideLayoutDialog })),
+)
+const NewGuideDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./workspace-dialogs").then((m) => ({ default: m.NewGuideDialog })),
+)
 import {
   PANEL_CATEGORIES,
   PANEL_DEFINITIONS,
@@ -142,17 +284,15 @@ export function MenuBar({
     editSmartObject,
     updateSmartObjectParent,
     toggleQuickMask,
-    history,
-    historyIndex,
     requestRender,
     foreground,
     background,
     selectedLayers,
-    jumpHistory,
+    stepHistoryBy,
     createDocument,
     copySelection,
     pasteAsLayer,
-    clipboard,
+    clipboard: _clipboard,
     styleClipboard,
     closedDocuments,
     documentStatuses,
@@ -161,7 +301,7 @@ export function MenuBar({
     closeOtherDocuments,
     reopenClosedDocument,
     markDocumentSaved,
-    setDocumentLifecycle,
+    setDocumentLifecycle: _setDocumentLifecycle,
   } = useEditor()
   const [openFilter, setOpenFilter] = React.useState<string | null>(null)
   const [lastFilter, setLastFilter] = React.useState<string | null>(null)
@@ -410,8 +550,12 @@ export function MenuBar({
     }
   }, [dispatch])
 
-  const undo = () => historyIndex > 0 && jumpHistory(historyIndex - 1)
-  const redo = () => historyIndex < history.length - 1 && jumpHistory(historyIndex + 1)
+  // Read the latest history bounds from the editor's stateRef each
+  // call so rapid menu clicks always step exactly one entry, even if
+  // the closure-captured `historyIndex` from the previous render is
+  // still the old value.
+  const undo = () => stepHistoryBy(-1)
+  const redo = () => stepHistoryBy(1)
   const openAdvancedTab = (tab: AdvancedSubsystemTab) => {
     setAdvancedTab(tab)
     setAdvancedOpen(true)
@@ -1072,7 +1216,7 @@ export function MenuBar({
     void saveProjectDocument(activeDoc?.id, "save")
   }
 
-  const saveProjectAs = () => {
+  const _saveProjectAs = () => {
     void saveProjectDocument(activeDoc?.id, "save-as")
   }
 

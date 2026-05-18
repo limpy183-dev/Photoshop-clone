@@ -47,9 +47,13 @@ export function DocumentTabs() {
     if (!sourceDocId || !rawIds || sourceDocId === targetDocId) return
     event.preventDefault()
     try {
-      const layerIds = JSON.parse(rawIds) as string[]
-      if (Array.isArray(layerIds) && layerIds.length) {
-        moveLayersToDocument(sourceDocId, targetDocId, layerIds, !event.shiftKey)
+      const parsed: unknown = JSON.parse(rawIds)
+      if (
+        Array.isArray(parsed) &&
+        parsed.length > 0 &&
+        parsed.every((id) => typeof id === "string" && id.length > 0)
+      ) {
+        moveLayersToDocument(sourceDocId, targetDocId, parsed as string[], !event.shiftKey)
       }
     } catch {}
   }

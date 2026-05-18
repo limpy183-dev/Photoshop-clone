@@ -32,7 +32,7 @@ function hexToRgb(hex: string) {
   return { r: (v >> 16) & 255, g: (v >> 8) & 255, b: v & 255 }
 }
 
-function withAlpha(hex: string, opacity: number) {
+function _withAlpha(hex: string, opacity: number) {
   const { r, g, b } = hexToRgb(hex)
   return `rgba(${r},${g},${b},${clamp(opacity ?? 1)})`
 }

@@ -589,7 +589,10 @@ function hueSaturation(
   colorize = false,
 ): ImageData {
   const out = new Uint8ClampedArray(src.data)
-  const targetHue = ((hueShift % 360) + 360) / 360
+  // Hue is normalised to [0, 1). Without the second `% 360` a hueShift of 0
+  // produces 360/360 = 1.0 which lies outside the valid range and
+  // mis-renders red as the very next adjacent hue when colorize is on.
+  const targetHue = (((hueShift % 360) + 360) % 360) / 360
   for (let i = 0; i < out.length; i += 4) {
     const before = rgbToHsl(out[i], out[i + 1], out[i + 2])
     const mask = colorize ? 1 : hueRangeMask(before.h, before.s, range)
@@ -660,7 +663,7 @@ function grayscale(src: ImageData): ImageData {
   return new ImageData(out, src.width, src.height)
 }
 
-function blackWhite(src: ImageData, reds: number, yellows: number, greens: number, cyans: number, blues: number, magentas: number): ImageData {
+function _blackWhite(src: ImageData, reds: number, yellows: number, greens: number, cyans: number, blues: number, magentas: number): ImageData {
   // Black & White adjustment with channel mixing controls
   // Parameters are in range -100 to 100, representing percentage shift from default mix
   const out = new Uint8ClampedArray(src.data)
@@ -687,7 +690,7 @@ function blackWhite(src: ImageData, reds: number, yellows: number, greens: numbe
 
     // Apply adjustments based on hue ranges
     // Normalize hue to 0-1 range
-    let hue = h
+    const hue = h
 
     // Red range (0-30° and 330-360°)
     if (hue < 0.083 || hue > 0.917) {
@@ -768,7 +771,7 @@ function posterize(src: ImageData, levels: number): ImageData {
   return new ImageData(out, src.width, src.height)
 }
 
-function curves(
+function _curves(
   src: ImageData,
   shadow: number,
   midtone: number,
@@ -801,7 +804,7 @@ function curves(
   return new ImageData(out, src.width, src.height)
 }
 
-function colorBalance(
+function _colorBalance(
   src: ImageData,
   cyanRed: number,
   magentaGreen: number,
@@ -880,7 +883,7 @@ function channelMixer(
   return new ImageData(out, src.width, src.height)
 }
 
-function vibrance(src: ImageData, amount: number): ImageData {
+function _vibrance(src: ImageData, amount: number): ImageData {
   const out = new Uint8ClampedArray(src.data)
   const a = amount / 100
   for (let i = 0; i < out.length; i += 4) {
@@ -985,7 +988,7 @@ function replaceColor(src: ImageData, hue: number, tolerance: number, lightness:
   return new ImageData(out, src.width, src.height)
 }
 
-function matchColor(src: ImageData): ImageData {
+function _matchColor(src: ImageData): ImageData {
   // Simple implementation: match to average color
   const out = new Uint8ClampedArray(src.data)
   let rSum = 0, gSum = 0, bSum = 0, count = 0
@@ -1109,9 +1112,9 @@ function hdrTonning(src: ImageData, radius: number, strength: number): ImageData
     const bb = blurred.data[i + 2]
 
     // Calculate local contrast
-    let contrastR = ((r - br) * strength) / 100
-    let contrastG = ((g - bg) * strength) / 100
-    let contrastB = ((b - bb) * strength) / 100
+    const contrastR = ((r - br) * strength) / 100
+    const contrastG = ((g - bg) * strength) / 100
+    const contrastB = ((b - bb) * strength) / 100
 
     // Apply local contrast
     out[i] = clamp8(r + contrastR)
@@ -1145,7 +1148,7 @@ function colorLookup(src: ImageData, lutStrength: number): ImageData {
   return new ImageData(out, src.width, src.height)
 }
 
-function gradientMap(src: ImageData): ImageData {
+function _gradientMap(src: ImageData): ImageData {
   // Simplified gradient map - maps luminance to a gradient from black to white
   // In a full implementation, this would use a gradient defined by two colors
   const out = new Uint8ClampedArray(src.data)

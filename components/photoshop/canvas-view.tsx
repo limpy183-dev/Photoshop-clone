@@ -1,10 +1,9 @@
 "use client"
 
 import * as React from "react"
-import { useEditor, makeCanvas as makeCanvasCtx } from "./editor-context"
+import { useEditor } from "./editor-context"
 import { compositeLayer } from "./blend-modes"
 import { getFilter } from "./filters"
-import { applyFilterPreview, PixelBatchReader } from "./filter-worker"
 import { applyModeAndColorManagement } from "./advanced-subsystems"
 import { addAnchorPointToPath, convertAnchorPoint, deleteNearestAnchorPoint, nearestAnchorPoint } from "./vector-path-operations"
 import { normalizeBrushPointerSample, type BrushPointerSample } from "./brush-engine"
@@ -218,7 +217,7 @@ export function CanvasView() {
   const zoomCommitTimerRef = React.useRef<number | null>(null)
 
   /* ---- cursor style preference ---- */
-  const [cursorPref, setCursorPref] = React.useState<"standard" | "precise" | "brush-size">("brush-size")
+  const [, setCursorPref] = React.useState<"standard" | "precise" | "brush-size">("brush-size")
   React.useEffect(() => {
     const read = () => {
       try {
@@ -1717,9 +1716,9 @@ export function CanvasView() {
         stampWithScatter(ctx, to.x, to.y, foreground, w, h, input, scatterAmt, scatterCnt, scatterCntJ, strokeAngle, stampOptions)
       } else {
         // Accumulate distance and place dabs at exact spacing intervals
-        let remaining = strokeDistRef.current + dist
-        const dx = dist > 0 ? (to.x - from.x) / dist : 0
-        const dy = dist > 0 ? (to.y - from.y) / dist : 0
+        const _remaining = strokeDistRef.current + dist
+        const _dx = dist > 0 ? (to.x - from.x) / dist : 0
+        const _dy = dist > 0 ? (to.y - from.y) / dist : 0
         // Start position: offset by how much distance was already accumulated
         let walked = spacing - strokeDistRef.current
         while (walked <= dist) {
@@ -2437,10 +2436,20 @@ export function CanvasView() {
   /* ---- pointer down ---- */
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.button === 2) return
     if (!activeDoc) return
       ; (e.target as Element).setPointerCapture?.(e.pointerId)
     const pt = getCanvasPoint(e.clientX, e.clientY)
+
+    // Alt+right-drag is a brush-size gesture, not a context-menu gesture.
+    // Plain right-click still falls through to the global custom context menu.
+    if (e.altKey && showBrushCursor && (e.button === 0 || e.button === 2)) {
+      e.preventDefault()
+      drawingRef.current = { type: "brush-resize", start: pt }
+      brushResizeRef.current = { startClientX: e.clientX, startSize: brush.size }
+      return
+    }
+
+    if (e.button === 2) return
 
     // Pan with hand tool / middle mouse / spacebar overlay (tool is hand)
     if (tool === "hand" || e.button === 1) {
@@ -2448,13 +2457,6 @@ export function CanvasView() {
         type: "pan",
         panStart: { x: e.clientX - panRef.current.x, y: e.clientY - panRef.current.y },
       }
-      return
-    }
-
-    // Alt+drag on brush tools: resize brush (eyedropper fires on Alt+click with no drag in pointerUp)
-    if (e.altKey && showBrushCursor) {
-      drawingRef.current = { type: "brush-resize", start: pt }
-      brushResizeRef.current = { startClientX: e.clientX, startSize: brush.size }
       return
     }
 
@@ -3169,7 +3171,11 @@ export function CanvasView() {
 
     if (drag.type === "stroke") {
       const last = drag.last ?? pt
-      const k = 1 - brush.smoothing / 110
+      // Smoothing: 0 -> no smoothing (k=1), 100 -> heavy smoothing (~0.09).
+      // Clamp to [0,1] so a stale prefs value > 110 cannot produce a
+      // negative `k`, which would extrapolate past the cursor and make
+      // the smoothed point oscillate violently.
+      const k = Math.max(0, Math.min(1, 1 - brush.smoothing / 110))
       const sx = (drag.smooth?.x ?? pt.x) + (pt.x - (drag.smooth?.x ?? pt.x)) * k
       const sy = (drag.smooth?.y ?? pt.y) + (pt.y - (drag.smooth?.y ?? pt.y)) * k
       const cur = { x: sx, y: sy }
@@ -3384,6 +3390,18 @@ export function CanvasView() {
   /* ---- pointer up ---- */
 
   const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    // Ensure pointer capture is released even if React's synthetic
+    // pointer handling is interrupted (touch/pen handoff, devtools,
+    // dragging across iframes). setPointerCapture was set in
+    // onPointerDown; releasing here mirrors it.
+    try {
+      const target = e.target as Element | null
+      if (target?.hasPointerCapture?.(e.pointerId)) {
+        target.releasePointerCapture(e.pointerId)
+      }
+    } catch {
+      /* no-op: some browsers throw if the capture was already released */
+    }
     const drag = drawingRef.current
     const pt = getCanvasPoint(e.clientX, e.clientY)
 
@@ -4715,7 +4733,17 @@ export function CanvasView() {
   const onPointerLeave = () => {
     const cur = cursorRef.current
     if (cur) cur.style.opacity = "0"
-    onPointerUp({ clientX: 0, clientY: 0 } as React.PointerEvent<HTMLDivElement>)
+    // Previously this called onPointerUp with a synthesised
+    // { clientX: 0, clientY: 0 } event. That produced a stroke commit at
+    // canvas coordinates (0, 0), tainting every layer with a stray dab
+    // in the top-left corner whenever the pointer crossed out of the
+    // canvas mid-stroke. Strokes now stay in progress when the pointer
+    // leaves; the real onPointerUp on the window/document still fires
+    // when the user releases the button (browsers route a captured
+    // pointer's pointerup back to the captured element regardless of
+    // the leave). For non-stroke transient state (marquee preview, pan)
+    // there is nothing to commit on leave, so simply hiding the cursor
+    // is sufficient.
   }
 
   if (!activeDoc) {
@@ -4861,6 +4889,12 @@ export function CanvasView() {
         {showBrushCursor ? (
           <div
             className="rounded-full border border-black mix-blend-difference"
+            // brush.size is loaded from localStorage post-hydrate, so the
+            // SSR width may not match the first client render. The cursor
+            // is invisible at hydration time (parent has opacity:0 until
+            // the user actually moves the mouse over the canvas), so
+            // suppressing the warning is harmless.
+            suppressHydrationWarning
             style={{
               width: brush.size * viewZoom,
               height: brush.size * viewZoom,
@@ -5566,7 +5600,7 @@ function hexToRgba(hex: string, alpha: number) {
   return `rgba(${r},${g},${b},${alpha})`
 }
 
-function createSelectSubjectMask(width: number, height: number): ImageData {
+function _createSelectSubjectMask(width: number, height: number): ImageData {
   // Create a heuristic-based selection for subject detection
   // In a real implementation, this would use an actual AI model
   const imageData = new ImageData(width, height)
@@ -5604,7 +5638,7 @@ function createSelectSubjectMask(width: number, height: number): ImageData {
   return imageData
 }
 
-function createSelectSkyMask(width: number, height: number): ImageData {
+function _createSelectSkyMask(width: number, height: number): ImageData {
   // Implement a heuristic-based sky detection algorithm
   // This provides effective sky selection for many common image types
   const imageData = new ImageData(width, height)
@@ -5612,7 +5646,7 @@ function createSelectSkyMask(width: number, height: number): ImageData {
 
   // Create a selection that's stronger at the top (where sky usually is)
   // and gradually decreases towards the bottom
-  const skyHeight = height * 0.6 // Sky typically occupies the top portion
+  const _skyHeight = height * 0.6 // Sky typically occupies the top portion
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -5643,7 +5677,7 @@ function createSelectSkyMask(width: number, height: number): ImageData {
   return imageData
 }
 
-function createSelectBackgroundMask(width: number, height: number): ImageData {
+function _createSelectBackgroundMask(width: number, height: number): ImageData {
   // Implement a heuristic-based background detection algorithm
   // This provides effective background selection for many common image types
   const imageData = new ImageData(width, height)
@@ -5651,7 +5685,7 @@ function createSelectBackgroundMask(width: number, height: number): ImageData {
 
   // Create a selection that's stronger at the bottom (where background usually is)
   // and gradually decreases towards the top
-  const backgroundStart = height * 0.4 // Background typically starts from the middle going down
+  const _backgroundStart = height * 0.4 // Background typically starts from the middle going down
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -6124,7 +6158,7 @@ function transformHandles(t: TransformDragState): { x: number; y: number; id: Tr
   const right = mid(c[1], c[2])
   const bottom = mid(c[2], c[3])
   const left = mid(c[3], c[0])
-  const center = mid(c[0], c[2])
+  const _center = mid(c[0], c[2])
   // rotate handle: 24px above top-mid in transformed space
   const rad = (t.rotation * Math.PI) / 180
   const rot = { x: top.x + 0 * Math.cos(rad) - -24 * Math.sin(rad), y: top.y + 0 * Math.sin(rad) + -24 * Math.cos(rad) }

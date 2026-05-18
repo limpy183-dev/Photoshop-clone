@@ -200,6 +200,30 @@ function getCompressedBlobId(canvas: HTMLCanvasElement): string | null {
 }
 
 /**
+ * Free any compressed-canvas blobs referenced by these history entries
+ * from `_compressedCanvasStore`. Called when entries are dropped from
+ * history (undo limit trim, redo branch discard, history reset, etc.) so
+ * the global blob store does not grow unbounded across long editing
+ * sessions. Each entry may contain multiple layer snapshots; each
+ * snapshot canvas may be a 1×1 placeholder pointing at a blob via its
+ * `__compressedBlobId` patch, or a real canvas (which holds no blob and
+ * is GC'd normally).
+ */
+function releaseEntryBlobs(entry: HistoryEntry | null | undefined): void {
+  if (!entry?.layers) return
+  for (const layerSnap of entry.layers) {
+    if (!layerSnap?.canvas || !isCompressedCanvas(layerSnap.canvas)) continue
+    const blobId = getCompressedBlobId(layerSnap.canvas)
+    if (blobId) _compressedCanvasStore.delete(blobId)
+  }
+}
+
+/** Bulk-release blobs from many entries. */
+function releaseEntriesBlobs(entries: ReadonlyArray<HistoryEntry | null | undefined>): void {
+  for (const entry of entries) releaseEntryBlobs(entry)
+}
+
+/**
  * Compress old history entries in the background to reduce memory.
  * Called after push-history when there are enough entries.
  */
@@ -236,20 +260,47 @@ function scheduleHistoryCompression(entries: HistoryEntry[], currentIndex: numbe
 }
 
 /**
- * Decompress a layer snapshot's canvas if it's compressed.
- * Returns the original canvas if not compressed.
+ * Decompress all compressed-placeholder canvases in a history entry,
+ * mutating each layer snapshot in place to point at a real
+ * `HTMLCanvasElement` carrying the original pixels. Subsequent visits
+ * skip the work because the snapshot's canvas is no longer a placeholder.
+ *
+ * The blob is removed from `_compressedCanvasStore` once consumed because
+ * the snapshot now owns the pixels directly. This is correct: the
+ * compression scheduler only ever compresses entries that are *older* than
+ * `COMPRESS_AFTER_N` from the cursor, never the latest, so a freshly
+ * decompressed entry will not be re-compressed unless `COMPRESS_AFTER_N`
+ * more pushes occur — at which point the canvas is hot in memory anyway
+ * and the scheduler will pick it up via its normal `isCompressedCanvas`
+ * skip-check.
  */
-export async function ensureDecompressed(canvas: HTMLCanvasElement): Promise<HTMLCanvasElement> {
-  const blobId = getCompressedBlobId(canvas)
-  if (!blobId) return canvas
-  const blob = _compressedCanvasStore.get(blobId)
-  if (!blob) return canvas
-  const w = canvas.__origW ?? 1
-  const h = canvas.__origH ?? 1
-  const restored = await decompressBlob(blob, w, h)
-  // Clean up the compressed blob to avoid leaking
-  _compressedCanvasStore.delete(blobId)
-  return restored
+export async function prepareEntryForRestore(entry: HistoryEntry): Promise<void> {
+  if (!entry?.layers?.length) return
+  await Promise.all(
+    entry.layers.map(async (layerSnap) => {
+      if (!layerSnap.canvas || !isCompressedCanvas(layerSnap.canvas)) return
+      const blobId = getCompressedBlobId(layerSnap.canvas)
+      if (!blobId) return
+      const blob = _compressedCanvasStore.get(blobId)
+      if (!blob) {
+        // Blob is gone (e.g. cleared by a different code path). Nothing
+        // we can do — leave the placeholder; the restore path will
+        // detect a 1×1 canvas and skip the layer paint, preserving the
+        // current live pixels rather than destroying them.
+        return
+      }
+      const w = layerSnap.canvas.__origW ?? 1
+      const h = layerSnap.canvas.__origH ?? 1
+      try {
+        const restored = await decompressBlob(blob, w, h)
+        layerSnap.canvas = restored
+        _compressedCanvasStore.delete(blobId)
+      } catch {
+        // Decoding failed; keep the placeholder so the restore path
+        // can detect it and decline to overwrite live pixels.
+      }
+    }),
+  )
 }
 
 function cloneCanvas(src: HTMLCanvasElement | null | undefined): HTMLCanvasElement | null {
@@ -260,29 +311,6 @@ function cloneCanvas(src: HTMLCanvasElement | null | undefined): HTMLCanvasEleme
   c.height = src.height
   c.getContext("2d")!.drawImage(src, 0, 0)
   return c
-}
-
-/**
- * Async canvas clone using createImageBitmap — moves the expensive GPU→CPU
- * pixel readback off the main thread so the UI stays responsive.
- */
-async function cloneCanvasAsync(src: HTMLCanvasElement | null | undefined): Promise<HTMLCanvasElement | null> {
-  if (typeof document === "undefined") return null
-  if (!src || typeof src.getContext !== "function") return null
-  if (typeof createImageBitmap === "function") {
-    try {
-      const bitmap = await createImageBitmap(src)
-      const c = document.createElement("canvas")
-      c.width = src.width
-      c.height = src.height
-      c.getContext("2d")!.drawImage(bitmap, 0, 0)
-      bitmap.close()
-      return c
-    } catch {
-      // Fallback to sync
-    }
-  }
-  return cloneCanvas(src)
 }
 
 function makeCanvas(w: number, h: number, fill?: string): HTMLCanvasElement {
@@ -339,6 +367,23 @@ function cloneCanvasPatch(src: HTMLCanvasElement, rect: DirtyRect): CanvasPatch 
   return { ...rect, canvas: patchCanvas }
 }
 
+/**
+ * Pre-captured layer source canvases at the moment of commit().
+ *
+ * Currently unused — `commit()` builds history entries synchronously and
+ * `snapshotLayers` reads from the live layer canvases directly. The type and
+ * the `preCaptured` parameter on `snapshotLayers` / `makeHistoryEntry` are
+ * retained as an optional override so a future async snapshot path (e.g.
+ * worker-backed clones) can reintroduce stable per-commit captures without
+ * changing the call sites.
+ */
+type LayerSourceCapture = {
+  canvas?: HTMLCanvasElement
+  mask?: HTMLCanvasElement | null
+  frameImage?: HTMLCanvasElement | null
+  smartSourceCanvas?: HTMLCanvasElement | null
+}
+
 function canPatchSnapshot(
   previous: LayerSnapshot | undefined,
   live: HTMLCanvasElement,
@@ -354,7 +399,7 @@ function canPatchSnapshot(
   return patchArea / canvasArea <= MAX_HISTORY_PATCH_AREA_RATIO
 }
 
-function materializeLayerSnapshotCanvas(
+function _materializeLayerSnapshotCanvas(
   snap: LayerSnapshot,
   width: number,
   height: number,
@@ -1065,6 +1110,7 @@ export type Action =
   | { type: "ungroup"; groupId: string }
   | { type: "toggle-group-expanded"; id: string }
   | { type: "push-history"; entry: HistoryEntry }
+  | { type: "reset-history"; docId: string; entry: HistoryEntry }
   | {
       type: "restore-history"
       index: number
@@ -1084,8 +1130,8 @@ export type Action =
   | { type: "append-action-step"; actionId: string; step: MacroStep }
   | { type: "clear-action-steps"; id: string }
   | { type: "set-playing-action"; playing: boolean }
-  | { type: "resize-document"; width: number; height: number }
-  | { type: "resize-canvas"; width: number; height: number; offsetX: number; offsetY: number; fill: string }
+  | { type: "resize-document"; width: number; height: number; layerCanvases?: Array<{ id: string; canvas?: HTMLCanvasElement; mask?: HTMLCanvasElement | null }> }
+  | { type: "resize-canvas"; width: number; height: number; offsetX: number; offsetY: number; fill: string; layerCanvases?: Array<{ id: string; canvas?: HTMLCanvasElement; mask?: HTMLCanvasElement | null }>; selectionMask?: HTMLCanvasElement | null; quickMaskCanvas?: HTMLCanvasElement | null; channelCanvases?: Record<string, HTMLCanvasElement | null> }
   | { type: "set-clipboard"; canvas: HTMLCanvasElement }
   | { type: "clear-clipboard" }
   | { type: "set-style-clipboard"; style: LayerStyle | null }
@@ -1196,6 +1242,16 @@ const DEFAULT_BRUSH_PRESETS: BrushPreset[] = [
     settings: { tipShape: "erodible", noise: true, texture: { enabled: true, pattern: "paper", mode: "subtract", depth: 46, depthJitter: 28, minDepth: 8, scale: 120 } },
   },
 ]
+
+// Actions whose React render can be deferred via startTransition without
+// hurting interactivity. Currently only "push-history" qualifies — paint
+// strokes generate them rapidly and the cascade of context-consumer
+// re-renders that follows is the dominant source of "lag/freeze after
+// stroke" perception. The reducer itself still runs synchronously (see the
+// dispatch wrapper) so undo/redo correctness is unaffected.
+const HIGH_FREQUENCY_ACTION_TYPES = new Set<Action["type"]>([
+  "push-history",
+])
 
 const DOCUMENT_DIRTY_ACTIONS = new Set<Action["type"]>([
   "add-layer",
@@ -1708,12 +1764,16 @@ export function reducer(state: EditorState, action: Action): EditorState {
         layers: d.layers.map((l) => {
           if (l.id !== action.id) return l
           if (isLayerLocked(l) || l.lockDraw) return l
-          if (typeof l.canvas.getContext === "function") {
-            const ctx = l.canvas.getContext("2d")!
-            ctx.clearRect(0, 0, l.canvas.width, l.canvas.height)
-            if (action.text) rasterizeText(l.canvas, action.text)
+          if (typeof l.canvas.getContext !== "function") {
+            return { ...l, text: action.text }
           }
-          return { ...l, text: action.text }
+          // Allocate a fresh canvas for the rasterized text so any
+          // history snapshots that reference the previous l.canvas
+          // remain pixel-stable. Mutating l.canvas in place would
+          // silently corrupt those snapshots.
+          const next = makeCanvas(l.canvas.width, l.canvas.height)
+          if (action.text) rasterizeText(next, action.text)
+          return { ...l, canvas: next, text: action.text }
         }),
       }))
     case "set-layer-shape":
@@ -1722,12 +1782,14 @@ export function reducer(state: EditorState, action: Action): EditorState {
         layers: d.layers.map((l) => {
           if (l.id !== action.id) return l
           if (isLayerLocked(l) || l.lockDraw) return l
-          if (typeof l.canvas.getContext === "function") {
-            const ctx = l.canvas.getContext("2d")!
-            ctx.clearRect(0, 0, l.canvas.width, l.canvas.height)
-            rasterizeShape(l.canvas, action.shape)
+          if (typeof l.canvas.getContext !== "function") {
+            return { ...l, shape: action.shape }
           }
-          return { ...l, shape: action.shape }
+          // Same rationale as set-layer-text: rasterize onto a new
+          // canvas to avoid mutating canvases referenced by history.
+          const next = makeCanvas(l.canvas.width, l.canvas.height)
+          rasterizeShape(next, action.shape)
+          return { ...l, canvas: next, shape: action.shape }
         }),
       }))
     case "set-layer-path":
@@ -1857,11 +1919,20 @@ export function reducer(state: EditorState, action: Action): EditorState {
         const top = d.layers[idx]
         const below = d.layers[idx - 1]
         if (isLayerLocked(top) || isLayerLocked(below)) return d
-        const ctx = below.canvas.getContext?.("2d")
+        // Composite onto a fresh clone of `below.canvas` so any history
+        // snapshot still pointing at the old `below.canvas` reference
+        // keeps its original pixels. Writing to `below.canvas` in place
+        // would silently corrupt those snapshots and the next undo to
+        // a snapshot taken before the merge would show the merged
+        // result instead of the original layers.
+        const mergedCanvas = cloneCanvas(below.canvas) ?? makeCanvas(d.width, d.height)
+        const ctx = mergedCanvas.getContext?.("2d")
         if (ctx) {
           compositeLayer(ctx, top.canvas, top.blendMode, top.opacity, top.fillOpacity ?? 1)
         }
-        const layers = d.layers.filter((_, i) => i !== idx)
+        const layers = d.layers
+          .filter((_, i) => i !== idx)
+          .map((l) => (l.id === below.id ? { ...l, canvas: mergedCanvas } : l))
         return { ...d, layers, activeLayerId: below.id, selectedLayerIds: [below.id] }
       })
     case "merge-selected":
@@ -2019,8 +2090,19 @@ export function reducer(state: EditorState, action: Action): EditorState {
     case "push-history": {
       if (!state.activeDocId) return state
       const cur = state.histories[state.activeDocId]
+      // 1. Discard any redo tail beyond the current index — those
+      //    entries become unreachable when we push a new branch.
       const trimmed = cur ? cur.entries.slice(0, cur.index + 1) : []
-      const next = [...trimmed, action.entry].slice(-getUndoLimit())
+      if (cur && cur.index + 1 < cur.entries.length) {
+        releaseEntriesBlobs(cur.entries.slice(cur.index + 1))
+      }
+      const limit = getUndoLimit()
+      const combined = [...trimmed, action.entry]
+      // 2. Honor the undo-limit by dropping the oldest entries — also
+      //    free their blobs (this is the long-session leak path).
+      const next = combined.length > limit
+        ? (releaseEntriesBlobs(combined.slice(0, combined.length - limit)), combined.slice(-limit))
+        : combined
       // Schedule background compression of older entries to free canvas memory
       if (next.length > COMPRESS_AFTER_N) {
         scheduleHistoryCompression(next, next.length - 1)
@@ -2037,6 +2119,24 @@ export function reducer(state: EditorState, action: Action): EditorState {
             ...documentLifecycleFor(state, state.documents.find((doc) => doc.id === state.activeDocId)!),
             dirty: true,
           },
+        },
+      }
+    }
+    case "reset-history": {
+      // Replace the document's entire history with a single floor entry. This
+      // is used after canvas initialization to ensure undo can never reach a
+      // pre-init state with stale (e.g. SSR placeholder) canvas references.
+      // The floor entry represents the canvas state at the moment the
+      // document was joined/opened — undoing past it is meaningless and was
+      // previously visually destructive (it could clear the default
+      // background paint).
+      const prior = state.histories[action.docId]?.entries
+      if (prior?.length) releaseEntriesBlobs(prior)
+      return {
+        ...state,
+        histories: {
+          ...state.histories,
+          [action.docId]: { entries: [action.entry], index: 0 },
         },
       }
     }
@@ -2156,35 +2256,72 @@ export function reducer(state: EditorState, action: Action): EditorState {
     case "set-playing-action":
       return { ...state, isPlayingAction: action.playing }
     case "resize-document":
-      return mutateActiveDoc(state, (d) => ({
-        ...d,
-        width: action.width,
-        height: action.height,
-      }))
+      return mutateActiveDoc(state, (d) => {
+        // Build a lookup so we can swap canvases immutably without
+        // mutating the source layer objects (which may still be
+        // referenced by history snapshots).
+        const swap = action.layerCanvases ? new Map(action.layerCanvases.map((entry) => [entry.id, entry])) : null
+        return {
+          ...d,
+          width: action.width,
+          height: action.height,
+          layers: swap
+            ? d.layers.map((l) => {
+                const next = swap.get(l.id)
+                if (!next) return l
+                return {
+                  ...l,
+                  canvas: next.canvas ?? l.canvas,
+                  mask: next.mask !== undefined ? next.mask : l.mask,
+                }
+              })
+            : d.layers,
+        }
+      })
     case "resize-canvas":
-      return mutateActiveDoc(state, (d) => ({
-        ...d,
-        width: action.width,
-        height: action.height,
-        selection: {
-          ...d.selection,
-          bounds: d.selection.bounds ? { ...d.selection.bounds, x: d.selection.bounds.x + action.offsetX, y: d.selection.bounds.y + action.offsetY } : null,
-        },
-        guides: d.guides ? d.guides.map(g => ({ ...g, position: g.position + (g.orientation === "horizontal" ? action.offsetY : action.offsetX) })) : undefined,
-        slices: d.slices ? d.slices.map(s => ({ ...s, x: s.x + action.offsetX, y: s.y + action.offsetY })) : undefined,
-        notes: d.notes ? d.notes.map(n => ({ ...n, x: n.x + action.offsetX, y: n.y + action.offsetY })) : undefined,
-        counts: d.counts ? d.counts.map(c => ({ ...c, x: c.x + action.offsetX, y: c.y + action.offsetY })) : undefined,
-        colorSamplers: d.colorSamplers ? d.colorSamplers.map(s => ({ ...s, x: s.x + action.offsetX, y: s.y + action.offsetY })) : undefined,
-        layers: d.layers.map(l => {
-          const updated = { ...l }
-          if (updated.shape) updated.shape = { ...updated.shape, x: updated.shape.x + action.offsetX, y: updated.shape.y + action.offsetY }
-          if (updated.text) updated.text = { ...updated.text, x: updated.text.x + action.offsetX, y: updated.text.y + action.offsetY }
-          if (updated.frame) updated.frame = { ...updated.frame, x: updated.frame.x + action.offsetX, y: updated.frame.y + action.offsetY }
-          if (updated.path) updated.path = { ...updated.path, points: updated.path.points.map(p => ({ x: p.x + action.offsetX, y: p.y + action.offsetY, cp1: p.cp1 ? { x: p.cp1.x + action.offsetX, y: p.cp1.y + action.offsetY } : undefined, cp2: p.cp2 ? { x: p.cp2.x + action.offsetX, y: p.cp2.y + action.offsetY } : undefined })) }
-          if (updated.vectorMask) updated.vectorMask = { ...updated.vectorMask, points: updated.vectorMask.points.map(p => ({ x: p.x + action.offsetX, y: p.y + action.offsetY, cp1: p.cp1 ? { x: p.cp1.x + action.offsetX, y: p.cp1.y + action.offsetY } : undefined, cp2: p.cp2 ? { x: p.cp2.x + action.offsetX, y: p.cp2.y + action.offsetY } : undefined })) }
-          return updated
-        })
-      }))
+      return mutateActiveDoc(state, (d) => {
+        const swap = action.layerCanvases ? new Map(action.layerCanvases.map((entry) => [entry.id, entry])) : null
+        const channelSwap = action.channelCanvases ?? null
+        return {
+          ...d,
+          width: action.width,
+          height: action.height,
+          selection: {
+            ...d.selection,
+            bounds: d.selection.bounds ? { ...d.selection.bounds, x: d.selection.bounds.x + action.offsetX, y: d.selection.bounds.y + action.offsetY } : null,
+            mask: action.selectionMask !== undefined ? action.selectionMask : d.selection.mask,
+          },
+          quickMaskCanvas: action.quickMaskCanvas !== undefined ? action.quickMaskCanvas : d.quickMaskCanvas,
+          guides: d.guides ? d.guides.map(g => ({ ...g, position: g.position + (g.orientation === "horizontal" ? action.offsetY : action.offsetX) })) : undefined,
+          slices: d.slices ? d.slices.map(s => ({ ...s, x: s.x + action.offsetX, y: s.y + action.offsetY })) : undefined,
+          notes: d.notes ? d.notes.map(n => ({ ...n, x: n.x + action.offsetX, y: n.y + action.offsetY })) : undefined,
+          counts: d.counts ? d.counts.map(c => ({ ...c, x: c.x + action.offsetX, y: c.y + action.offsetY })) : undefined,
+          colorSamplers: d.colorSamplers ? d.colorSamplers.map(s => ({ ...s, x: s.x + action.offsetX, y: s.y + action.offsetY })) : undefined,
+          channels: d.channels?.map((ch) => {
+            if (!channelSwap) return ch
+            const replacement = channelSwap[ch.id]
+            // AlphaChannel.canvas cannot be null. If a caller wants to
+            // delete a channel they should dispatch a separate action.
+            return replacement ? { ...ch, canvas: replacement } : ch
+          }),
+          layers: d.layers.map(l => {
+            const updated = { ...l }
+            if (swap) {
+              const repl = swap.get(l.id)
+              if (repl) {
+                if (repl.canvas) updated.canvas = repl.canvas
+                if (repl.mask !== undefined) updated.mask = repl.mask
+              }
+            }
+            if (updated.shape) updated.shape = { ...updated.shape, x: updated.shape.x + action.offsetX, y: updated.shape.y + action.offsetY }
+            if (updated.text) updated.text = { ...updated.text, x: updated.text.x + action.offsetX, y: updated.text.y + action.offsetY }
+            if (updated.frame) updated.frame = { ...updated.frame, x: updated.frame.x + action.offsetX, y: updated.frame.y + action.offsetY }
+            if (updated.path) updated.path = { ...updated.path, points: updated.path.points.map(p => ({ x: p.x + action.offsetX, y: p.y + action.offsetY, cp1: p.cp1 ? { x: p.cp1.x + action.offsetX, y: p.cp1.y + action.offsetY } : undefined, cp2: p.cp2 ? { x: p.cp2.x + action.offsetX, y: p.cp2.y + action.offsetY } : undefined })) }
+            if (updated.vectorMask) updated.vectorMask = { ...updated.vectorMask, points: updated.vectorMask.points.map(p => ({ x: p.x + action.offsetX, y: p.y + action.offsetY, cp1: p.cp1 ? { x: p.cp1.x + action.offsetX, y: p.cp1.y + action.offsetY } : undefined, cp2: p.cp2 ? { x: p.cp2.x + action.offsetX, y: p.cp2.y + action.offsetY } : undefined })) }
+            return updated
+          })
+        }
+      })
     case "set-clipboard":
       return {
         ...state,
@@ -2682,6 +2819,12 @@ function mutateActiveDoc(state: EditorState, fn: (d: PsDocument) => PsDocument):
 
 /* --------------------------- render bus -------------------------------- */
 
+// Frozen empty fallbacks used when there is no active document. Reusing the
+// same object identity prevents EditorContext consumers from re-rendering
+// every tick.
+const EMPTY_HISTORY = Object.freeze({ entries: [] as HistoryEntry[], index: -1 }) as { entries: HistoryEntry[]; index: number }
+const EMPTY_SNAPSHOTS: HistorySnapshot[] = Object.freeze([]) as unknown as HistorySnapshot[]
+
 class RenderBus {
   private listeners = new Set<() => void>()
   private rafId: number | null = null
@@ -2713,6 +2856,7 @@ function snapshotLayers(
   doc: PsDocument,
   previousEntry?: HistoryEntry,
   changedLayerIds?: ChangedLayerIds,
+  preCaptured?: Map<string, LayerSourceCapture>,
 ): LayerSnapshot[] {
   const previousById = new Map(previousEntry?.layers.map((l) => [l.id, l]) ?? [])
   const changeHints = isLayerChangeHints(changedLayerIds) ? changedLayerIds : undefined
@@ -2734,28 +2878,43 @@ function snapshotLayers(
     const previous = previousById.get(l.id)
     const layerIsChanged =
       changedLayerIds === "all" || !previous || (changedSet ? changedSet.has(l.id) : true)
-    const dirtyRect = normalizeDirtyRect(changeHints?.bounds?.[l.id], l.canvas.width, l.canvas.height)
+    // When we have a synchronously pre-captured snapshot of the live layer
+    // canvas (taken at commit-time before any subsequent strokes can mutate
+    // it), use it for both the dirty-rect/patch computation and the eventual
+    // adopted canvas reference. This ensures rapid back-to-back commits each
+    // record a stable, distinct snapshot rather than all reading from the
+    // same final mutated canvas.
+    const captured = preCaptured?.get(l.id)
+    const sourceCanvas = captured?.canvas ?? l.canvas
+    const sourceMask = captured && "mask" in captured ? captured.mask : l.mask
+    const sourceFrameImage =
+      captured && "frameImage" in captured ? captured.frameImage : l.frame?.imageCanvas ?? null
+    const sourceSmartSource =
+      captured && "smartSourceCanvas" in captured
+        ? captured.smartSourceCanvas
+        : l.smartSource?.canvas ?? null
+    const dirtyRect = normalizeDirtyRect(changeHints?.bounds?.[l.id], sourceCanvas.width, sourceCanvas.height)
     const patch =
-      layerIsChanged && canPatchSnapshot(previous, l.canvas, dirtyRect)
-        ? cloneCanvasPatch(l.canvas, dirtyRect!)
+      layerIsChanged && canPatchSnapshot(previous, sourceCanvas, dirtyRect)
+        ? cloneCanvasPatch(sourceCanvas, dirtyRect!)
         : null
     const reuseCanvas =
-      !!patch || (!layerIsChanged && canReuseCanvasSnapshot(previous?.canvas, l.canvas))
+      !!patch || (!layerIsChanged && canReuseCanvasSnapshot(previous?.canvas, sourceCanvas))
     const reuseMask =
       !layerIsChanged &&
-      l.mask &&
+      sourceMask &&
       previous?.mask &&
-      canReuseCanvasSnapshot(previous.mask, l.mask)
+      canReuseCanvasSnapshot(previous.mask, sourceMask)
     const reuseFrameImage =
       !layerIsChanged &&
-      l.frame?.imageCanvas &&
+      sourceFrameImage &&
       previous?.frame?.imageCanvas &&
-      canReuseCanvasSnapshot(previous.frame.imageCanvas, l.frame.imageCanvas)
+      canReuseCanvasSnapshot(previous.frame.imageCanvas, sourceFrameImage)
     const reuseSmartSource =
       !layerIsChanged &&
-      l.smartSource?.canvas &&
+      sourceSmartSource &&
       previous?.smartSource?.canvas &&
-      canReuseCanvasSnapshot(previous.smartSource.canvas, l.smartSource.canvas)
+      canReuseCanvasSnapshot(previous.smartSource.canvas, sourceSmartSource)
 
     const canvasPatches = patch
       ? [...(previous?.canvasPatches ?? []), patch]
@@ -2779,9 +2938,17 @@ function snapshotLayers(
       advancedBlending: l.advancedBlending ? deepClonePlain(l.advancedBlending) : undefined,
       blendMode: l.blendMode,
       linkGroupId: l.linkGroupId,
-      canvas: reuseCanvas ? previous!.canvas : cloneCanvas(l.canvas),
+      canvas: reuseCanvas
+        ? previous!.canvas
+        : captured?.canvas ?? cloneCanvas(l.canvas),
       canvasPatches,
-      mask: l.mask ? (reuseMask ? previous!.mask : cloneCanvas(l.mask)) : null,
+      mask: sourceMask
+        ? reuseMask
+          ? previous!.mask
+          : captured && "mask" in captured && captured.mask
+            ? captured.mask
+            : cloneCanvas(sourceMask)
+        : null,
       maskEnabled: l.maskEnabled,
       vectorMask: l.vectorMask ? deepClonePlain(l.vectorMask) : null,
       clipped: l.clipped,
@@ -2796,10 +2963,12 @@ function snapshotLayers(
       frame: l.frame
         ? {
             ...l.frame,
-            imageCanvas: l.frame.imageCanvas
+            imageCanvas: sourceFrameImage
               ? reuseFrameImage
                 ? previous!.frame!.imageCanvas
-                : cloneCanvas(l.frame.imageCanvas)
+                : captured && "frameImage" in captured && captured.frameImage
+                  ? captured.frameImage
+                  : cloneCanvas(sourceFrameImage)
               : null,
           }
         : undefined,
@@ -2812,10 +2981,12 @@ function snapshotLayers(
         ? {
             width: l.smartSource.width,
             height: l.smartSource.height,
-            canvas: l.smartSource.canvas
+            canvas: sourceSmartSource
               ? reuseSmartSource
                 ? previous!.smartSource!.canvas
-                : cloneCanvas(l.smartSource.canvas)
+                : captured && "smartSourceCanvas" in captured && captured.smartSourceCanvas
+                  ? captured.smartSourceCanvas
+                  : cloneCanvas(sourceSmartSource)
               : null,
           }
         : undefined,
@@ -2872,6 +3043,7 @@ function makeHistoryEntry(
   label: string,
   previousEntry?: HistoryEntry,
   changedLayerIds?: ChangedLayerIds,
+  preCaptured?: Map<string, LayerSourceCapture>,
 ): HistoryEntry {
   // Reuse previous auxiliary canvas clones if they haven't changed
   const reuseSelectionMask = previousEntry?.selection?.mask != null
@@ -2884,194 +3056,10 @@ function makeHistoryEntry(
   return {
     id: uid("h"),
     label,
-    layers: snapshotLayers(doc, previousEntry, changedLayerIds),
+    layers: snapshotLayers(doc, previousEntry, changedLayerIds, preCaptured),
     activeLayerId: doc.activeLayerId,
     selectedLayerIds: [...doc.selectedLayerIds],
     thumb: SKIP_HISTORY_THUMB_LABELS.has(label) ? previousEntry?.thumb : buildHistoryThumb(doc),
-    width: doc.width,
-    height: doc.height,
-    selection: {
-      ...doc.selection,
-      mask: reuseSelectionMask
-        ? previousEntry!.selection!.mask
-        : doc.selection.mask ? cloneCanvas(doc.selection.mask) : null,
-    },
-    guides: doc.guides ? deepClonePlain(doc.guides) : undefined,
-    comps: doc.comps ? deepClonePlain(doc.comps) : undefined,
-    channels: reuseChannels
-      ? previousEntry!.channels
-      : doc.channels ? doc.channels.map(c => ({ ...c, canvas: cloneCanvas(c.canvas)! })) : undefined,
-    notes: doc.notes ? deepClonePlain(doc.notes) : undefined,
-    slices: doc.slices ? deepClonePlain(doc.slices) : undefined,
-    counts: doc.counts ? deepClonePlain(doc.counts) : undefined,
-    colorSamplers: doc.colorSamplers ? deepClonePlain(doc.colorSamplers) : undefined,
-    quickMask: doc.quickMask,
-    quickMaskCanvas: reuseQuickMask
-      ? previousEntry!.quickMaskCanvas
-      : doc.quickMaskCanvas ? cloneCanvas(doc.quickMaskCanvas) : null,
-    colorMode: doc.colorMode,
-    modeSettings: doc.modeSettings ? deepClonePlain(doc.modeSettings) : undefined,
-    variableDataSets: doc.variableDataSets ? deepClonePlain(doc.variableDataSets) : undefined,
-    assetLibrary: doc.assetLibrary ? deepClonePlain(doc.assetLibrary) : undefined,
-  }
-}
-
-/**
- * Async version of snapshotLayers — uses createImageBitmap for non-blocking
- * canvas cloning. Only changed layers need cloning; unchanged layers reuse
- * previous snapshot references.
- */
-async function snapshotLayersAsync(
-  doc: PsDocument,
-  previousEntry?: HistoryEntry,
-  changedLayerIds?: ChangedLayerIds,
-): Promise<LayerSnapshot[]> {
-  const previousById = new Map(previousEntry?.layers.map((l) => [l.id, l]) ?? [])
-  const changeHints = isLayerChangeHints(changedLayerIds) ? changedLayerIds : undefined
-  const inferredChangedLayerIds =
-    changedLayerIds === undefined
-      ? new Set([doc.activeLayerId, ...doc.selectedLayerIds].filter(Boolean))
-      : null
-  const hintedChangedLayerIds = changeHints
-    ? new Set(changeHints.ids ?? Object.keys(changeHints.bounds ?? {}))
-    : null
-  const changedSet =
-    changedLayerIds === "all"
-      ? null
-      : Array.isArray(changedLayerIds)
-        ? new Set(changedLayerIds)
-        : hintedChangedLayerIds ?? inferredChangedLayerIds
-
-  // Build per-layer info synchronously (cheap), collect async clone promises
-  const layerInfos = doc.layers.map((l) => {
-    const previous = previousById.get(l.id)
-    const layerIsChanged =
-      changedLayerIds === "all" || !previous || (changedSet ? changedSet.has(l.id) : true)
-    const dirtyRect = normalizeDirtyRect(changeHints?.bounds?.[l.id], l.canvas.width, l.canvas.height)
-    const patch =
-      layerIsChanged && canPatchSnapshot(previous, l.canvas, dirtyRect)
-        ? cloneCanvasPatch(l.canvas, dirtyRect!)
-        : null
-    const reuseCanvas =
-      !!patch || (!layerIsChanged && canReuseCanvasSnapshot(previous?.canvas, l.canvas))
-    const reuseMask =
-      !layerIsChanged &&
-      l.mask &&
-      previous?.mask &&
-      canReuseCanvasSnapshot(previous.mask, l.mask)
-    const reuseFrameImage =
-      !layerIsChanged &&
-      l.frame?.imageCanvas &&
-      previous?.frame?.imageCanvas &&
-      canReuseCanvasSnapshot(previous.frame.imageCanvas, l.frame.imageCanvas)
-    const reuseSmartSource =
-      !layerIsChanged &&
-      l.smartSource?.canvas &&
-      previous?.smartSource?.canvas &&
-      canReuseCanvasSnapshot(previous.smartSource.canvas, l.smartSource.canvas)
-    return { l, previous, layerIsChanged, patch, reuseCanvas, reuseMask, reuseFrameImage, reuseSmartSource }
-  })
-
-  // Fire off all async canvas clones in parallel
-  const clonePromises = layerInfos.map(async (info) => {
-    const { l, previous, reuseCanvas, reuseMask, reuseFrameImage, reuseSmartSource } = info
-    const canvas = reuseCanvas ? previous!.canvas : await cloneCanvasAsync(l.canvas)
-    const mask = l.mask ? (reuseMask ? previous!.mask : await cloneCanvasAsync(l.mask)) : null
-    const frameImage = l.frame?.imageCanvas
-      ? reuseFrameImage
-        ? previous!.frame!.imageCanvas
-        : await cloneCanvasAsync(l.frame.imageCanvas)
-      : null
-    const smartSourceCanvas = l.smartSource?.canvas
-      ? reuseSmartSource
-        ? previous!.smartSource!.canvas ?? null
-        : await cloneCanvasAsync(l.smartSource.canvas)
-      : null
-    return { canvas, mask, frameImage, smartSourceCanvas }
-  })
-
-  const clonedCanvases = await Promise.all(clonePromises)
-
-  // Build snapshots synchronously using the pre-cloned canvases
-  return layerInfos.map((info, i) => {
-    const { l, previous, patch, reuseCanvas } = info
-    const { canvas, mask, frameImage, smartSourceCanvas } = clonedCanvases[i]
-    const canvasPatches = patch
-      ? [...(previous?.canvasPatches ?? []), patch]
-      : reuseCanvas
-        ? previous?.canvasPatches
-        : undefined
-
-    return {
-      id: l.id,
-      name: l.name,
-      kind: l.kind,
-      visible: l.visible,
-      locked: l.locked,
-      lockTransparency: l.lockTransparency,
-      lockDraw: l.lockDraw,
-      lockMove: l.lockMove,
-      lockAll: l.lockAll,
-      smartObject: l.smartObject,
-      opacity: l.opacity,
-      fillOpacity: l.fillOpacity,
-      advancedBlending: l.advancedBlending ? deepClonePlain(l.advancedBlending) : undefined,
-      blendMode: l.blendMode,
-      linkGroupId: l.linkGroupId,
-      canvas,
-      canvasPatches,
-      mask,
-      maskEnabled: l.maskEnabled,
-      vectorMask: l.vectorMask ? deepClonePlain(l.vectorMask) : null,
-      clipped: l.clipped,
-      style: l.style ? deepClonePlain(l.style) : undefined,
-      childIds: l.childIds ? [...l.childIds] : undefined,
-      parentId: l.parentId,
-      expanded: l.expanded,
-      text: l.text ? deepClonePlain(l.text) : undefined,
-      shape: l.shape ? { ...l.shape } : undefined,
-      path: l.path ? deepClonePlain(l.path) : undefined,
-      adjustment: l.adjustment ? deepClonePlain(l.adjustment) : undefined,
-      frame: l.frame
-        ? { ...l.frame, imageCanvas: frameImage }
-        : undefined,
-      artboard: l.artboard ? { ...l.artboard } : undefined,
-      threeD: l.threeD ? deepClonePlain(l.threeD) : undefined,
-      video: l.video ? deepClonePlain(l.video) : undefined,
-      colorLabel: l.colorLabel,
-      smartFilters: l.smartFilters ? deepClonePlain(l.smartFilters) : undefined,
-      smartSource: l.smartSource
-        ? {
-            width: l.smartSource.width,
-            height: l.smartSource.height,
-            canvas: smartSourceCanvas,
-          }
-        : undefined,
-    }
-  })
-}
-
-async function makeHistoryEntryAsync(
-  doc: PsDocument,
-  label: string,
-  previousEntry?: HistoryEntry,
-  changedLayerIds?: ChangedLayerIds,
-): Promise<HistoryEntry> {
-  // Reuse previous auxiliary canvas clones if they haven't changed
-  const reuseSelectionMask = previousEntry?.selection?.mask != null
-    && doc.selection.mask === previousEntry.selection.mask
-  const reuseQuickMask = previousEntry?.quickMaskCanvas != null
-    && doc.quickMaskCanvas === previousEntry.quickMaskCanvas
-  const reuseChannels = previousEntry?.channels != null
-    && doc.channels === previousEntry.channels
-
-  return {
-    id: uid("h"),
-    label,
-    layers: await snapshotLayersAsync(doc, previousEntry, changedLayerIds),
-    activeLayerId: doc.activeLayerId,
-    selectedLayerIds: [...doc.selectedLayerIds],
-    thumb: previousEntry?.thumb,
     width: doc.width,
     height: doc.height,
     selection: {
@@ -3114,7 +3102,15 @@ function restoreFromEntry(
         ? existing.canvas
         : makeCanvas(doc.width, doc.height)
     const ctx = canvas.getContext?.("2d")
-    if (ctx) {
+    // If the snapshot's canvas is still a compressed placeholder (i.e. the
+    // caller failed to decompress or the blob was evicted), DON'T draw it
+    // onto the layer — that would replace the live pixels with a 1×1
+    // garbage canvas. Skipping the draw preserves whatever the layer
+    // currently shows, which is the safest behaviour when history pixel
+    // data is unrecoverable. The rest of the snapshot's metadata
+    // (visibility, blend mode, transform, etc.) is still applied below.
+    const snapPixelsAvailable = !!snap.canvas && !isCompressedCanvas(snap.canvas)
+    if (ctx && snapPixelsAvailable) {
       // When there is no existing layer (e.g. redo after creating a new layer),
       // always draw the full snapshot to ensure the layer's pixels are restored.
       if (!existing) {
@@ -3236,6 +3232,14 @@ interface EditorContextValue {
   newLayer: (kind?: LayerKind) => void
   newGroup: () => void
   jumpHistory: (index: number) => void
+  /**
+   * Step the active document's history by a relative delta (e.g. -1 for
+   * undo, +1 for redo). Returns true if the step was issued, false if
+   * already at the bound. Reads bounds from the latest reducer state via
+   * stateRef so it stays correct even when push-history renders are
+   * deferred via React.startTransition.
+   */
+  stepHistoryBy: (delta: number) => boolean
   createHistorySnapshot: (name?: string) => void
   restoreHistorySnapshot: (snapshotId: string) => void
   deleteHistorySnapshot: (snapshotId: string) => void
@@ -3401,11 +3405,45 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
   const [state, rawDispatch] = React.useReducer(reducer, initialState)
   const stateRef = React.useRef(state)
   stateRef.current = state
+  // Tracks whether the current dispatch should be flushed urgently (sync
+  // render) or deferred via React.startTransition (non-blocking render).
+  // High-frequency dispatches like "push-history" set this to true so the
+  // pointer-up handler can return immediately while the render happens
+  // off the critical path. The reducer state itself is computed
+  // synchronously and stored in stateRef regardless, so any subsequent
+  // dispatch that reads stateRef sees the latest value.
   const dispatch = React.useCallback((action: Action) => {
     const before = stateRef.current
-    rawDispatch(action)
-    for (const docId of dirtyDocIdsForAction(action, before)) {
-      rawDispatch({ type: "mark-document-dirty", id: docId })
+    // Mirror the reducer manually so stateRef is always current immediately
+    // after dispatch returns. This is critical for correctness of code that
+    // reads `stateRef.current` between renders (e.g. the next commit() in a
+    // rapid stroke sequence, or keyboard handlers that consult history
+    // bounds via the context's stepHistoryBy callback). Without this, a
+    // deferred React render would leave stateRef stale and re-introduce the
+    // race where Ctrl+Z jumps further than expected.
+    let next = reducer(before, action)
+    const dirtyDocs = dirtyDocIdsForAction(action, before)
+    for (const docId of dirtyDocs) {
+      next = reducer(next, { type: "mark-document-dirty", id: docId })
+    }
+    stateRef.current = next
+
+    // Schedule the React render. For high-frequency, non-urgent updates
+    // (history pushes during painting), use startTransition so React doesn't
+    // block the pointer-up handler with the cascading re-render of the 60+
+    // context consumers. Urgent UI changes (tool selection, dialog open
+    // etc.) still render synchronously.
+    const isHighFrequency = HIGH_FREQUENCY_ACTION_TYPES.has(action.type)
+    const flush = () => {
+      rawDispatch(action)
+      for (const docId of dirtyDocs) {
+        rawDispatch({ type: "mark-document-dirty", id: docId })
+      }
+    }
+    if (isHighFrequency) {
+      React.startTransition(flush)
+    } else {
+      flush()
     }
   }, [])
 
@@ -3444,9 +3482,13 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
 
   const closeIdsNow = React.useCallback((ids: string[]) => {
     const unique = Array.from(new Set(ids)).filter((id) => stateRef.current.documents.some((doc) => doc.id === id))
-    for (const id of unique) rawDispatch({ type: "close-document", id })
+    // Use the wrapped `dispatch` (not raw) so each close-document
+    // synchronously updates `stateRef.current`. Otherwise callers that
+    // immediately read `stateRef.current.documents` after closeIdsNow
+    // (e.g. requestCloseDocuments below) see stale state.
+    for (const id of unique) dispatch({ type: "close-document", id })
     if (unique.length) requestRender()
-  }, [requestRender])
+  }, [dispatch, requestRender])
 
   const requestCloseDocuments = React.useCallback((ids: string[]) => {
     const unique = Array.from(new Set(ids)).filter((id) => stateRef.current.documents.some((doc) => doc.id === id))
@@ -3462,17 +3504,17 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
   const finishPendingClose = React.useCallback((docId: string, closeDocument: boolean) => {
     const request = closeRequestRef.current
     if (!request) return
-    if (closeDocument) rawDispatch({ type: "close-document", id: docId })
+    if (closeDocument) dispatch({ type: "close-document", id: docId })
     const remaining = request.ids.filter((id) => id !== docId && stateRef.current.documents.some((doc) => doc.id === id))
     const dirtyId = remaining.find((id) => isDocumentDirtyInState(stateRef.current, id))
     if (dirtyId) {
       setCloseRequest({ ids: remaining, currentId: dirtyId })
     } else {
-      for (const id of remaining) rawDispatch({ type: "close-document", id })
+      for (const id of remaining) dispatch({ type: "close-document", id })
       setCloseRequest(null)
     }
     requestRender()
-  }, [requestRender])
+  }, [dispatch, requestRender])
 
   React.useEffect(() => {
     const handler = (event: Event) => {
@@ -3512,10 +3554,15 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     return activeDoc.layers.filter((l) => activeDoc.selectedLayerIds.includes(l.id))
   }, [activeDoc])
 
+  // Stable fallbacks: avoid allocating a fresh empty history/snapshot on
+  // every render, which would otherwise invalidate the context value's
+  // useMemo identity and force ~100 panels/dialogs to re-render.
   const docHistory = activeDoc
-    ? state.histories[activeDoc.id] ?? { entries: [], index: -1 }
-    : { entries: [], index: -1 }
-  const docSnapshots = activeDoc ? state.snapshots[activeDoc.id] ?? [] : []
+    ? state.histories[activeDoc.id] ?? EMPTY_HISTORY
+    : EMPTY_HISTORY
+  const docSnapshots = activeDoc
+    ? state.snapshots[activeDoc.id] ?? EMPTY_SNAPSHOTS
+    : EMPTY_SNAPSHOTS
   const documentStatuses = React.useMemo(() => {
     const result: Record<string, DocumentLifecycleState> = {}
     for (const doc of state.documents) {
@@ -3528,49 +3575,64 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     return result
   }, [state.documents, state.documentLifecycle, state.histories])
 
-  // Initialize SSR-safe canvases on the client
+  // Initialize SSR-safe canvases on the client.
+  //
+  // The reducer's initialState was constructed at module load — possibly
+  // during SSR with placeholder canvases that have no real 2d context. The
+  // initial history entry built from that state references those
+  // placeholders and, if used to restore, would erase pixels (e.g. the
+  // document's default white background) because nothing real can be drawn
+  // from a stub canvas.
+  //
+  // To guarantee that undo can never go past the moment the canvas was
+  // joined/opened, we replace any stub canvases on the active document with
+  // real ones, then reset the floor history entry IF AND ONLY IF the existing
+  // floor entry references stale canvases. This makes the effect idempotent
+  // on re-mount (e.g. React Strict Mode in dev, or HMR), so it never clobbers
+  // legitimate history that the user has built up.
   React.useEffect(() => {
-    let needsInit = false
-    state.documents.forEach((d) => {
-      d.layers.forEach((l) => {
+    let canvasesReplaced = false
+    state.documents.forEach((d, di) => {
+      d.layers.forEach((l, li) => {
         if (!l.canvas || typeof (l.canvas as HTMLCanvasElement).getContext !== "function") {
-          needsInit = true
+          const c = document.createElement("canvas")
+          c.width = d.width
+          c.height = d.height
+          if (di === 0 && li === 0) {
+            const ctx = c.getContext("2d")!
+            ctx.fillStyle = d.background
+            ctx.fillRect(0, 0, d.width, d.height)
+          }
+          l.canvas = c
+          canvasesReplaced = true
         }
       })
     })
-    if (needsInit) {
-      state.documents.forEach((d, di) => {
-        d.layers.forEach((l, li) => {
-          if (!l.canvas || typeof (l.canvas as HTMLCanvasElement).getContext !== "function") {
-            const c = document.createElement("canvas")
-            c.width = d.width
-            c.height = d.height
-            if (di === 0 && li === 0) {
-              const ctx = c.getContext("2d")!
-              ctx.fillStyle = d.background
-              ctx.fillRect(0, 0, d.width, d.height)
-            }
-            l.canvas = c
-          }
+
+    const did = state.activeDocId
+    if (did) {
+      const doc = state.documents.find((x) => x.id === did)
+      const docHistory = state.histories[did]
+      const floorEntry = docHistory?.entries[0]
+      const floorIsStale =
+        !floorEntry ||
+        floorEntry.layers.some(
+          (snap) =>
+            !snap.canvas || typeof (snap.canvas as HTMLCanvasElement).getContext !== "function",
+        )
+      if (doc && (canvasesReplaced || floorIsStale)) {
+        dispatch({
+          type: "reset-history",
+          docId: did,
+          entry: makeHistoryEntry(doc, "New Document"),
         })
-      })
-      const did = state.activeDocId
-      if (did) {
-        const doc = state.documents.find((x) => x.id === did)
-        if (doc) {
-          dispatch({
-            type: "push-history",
-            entry: makeHistoryEntry(doc, "New Document"),
-          })
-        }
       }
-      requestRender()
     }
+    if (canvasesReplaced) requestRender()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const filterPreviewsRef = React.useRef<Record<string, HTMLCanvasElement>>({})
-  const snapshotQueueRef = React.useRef<Promise<void>>(Promise.resolve())
   const setFilterPreview = React.useCallback((layerId: string, canvas: HTMLCanvasElement | null) => {
     if (canvas) {
       filterPreviewsRef.current[layerId] = canvas
@@ -3588,47 +3650,53 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
       const docHistory = current.histories[doc.id]
       const previousEntry = docHistory?.entries[docHistory.index]
 
-      // ALL commits use async canvas cloning (createImageBitmap) to avoid
-      // blocking the main thread with GPU→CPU pixel readbacks.
-      const skipThumb = SKIP_HISTORY_THUMB_LABELS.has(label)
-      snapshotQueueRef.current = snapshotQueueRef.current.then(async () => {
-        // Re-fetch latest document and prev entry inside the queue to prevent stale references
-        const latestDoc = stateRef.current.documents.find((d) => d.id === doc.id) ?? doc
-        const latestHist = stateRef.current.histories[doc.id]
-        const latestPrevEntry = latestHist?.entries[latestHist.index]
+      // Build the history entry synchronously off the live canvases. For the
+      // common brush-stroke case (a small dirty rect on a layer that already
+      // shares a canvas reference with the previous entry), snapshotLayers
+      // takes the patch path and only clones the small dirty region — full
+      // canvas clones happen only when patching is impossible (rare; e.g. the
+      // very first commit on a layer or a large/unbounded change).
+      //
+      // Since this all runs inside the same synchronous turn as the caller
+      // (typically the pointer-up handler), the live canvas pixels cannot be
+      // mutated between snapshotting them and dispatching, so we don't need
+      // the previous async pre-capture indirection.
+      const entry = makeHistoryEntry(doc, label, previousEntry, changedLayerIds)
 
-        const entry = await makeHistoryEntryAsync(latestDoc, label, latestPrevEntry, changedLayerIds)
-        const logState = stateRef.current
+      // Push the entry synchronously so undo correctness is immediate: every
+      // stroke results in its own entry before any subsequent input can run.
+      // We deliberately do NOT wrap this in React.startTransition — doing so
+      // would defer the state update past the next keyboard event, leaving
+      // stateRef.current stale and reintroducing the "Ctrl+Z removes multiple
+      // strokes" race the sync push is meant to fix.
+      dispatch({ type: "push-history", entry })
+      const finalState = stateRef.current
+      if (finalState.recordingActionId && !finalState.isPlayingAction) {
+        dispatch({
+          type: "append-action-step",
+          actionId: finalState.recordingActionId,
+          step: { id: uid("step"), label, createdAt: Date.now(), entry },
+        })
+      }
+
+      // Defer the localStorage write — it touches synchronous storage I/O and
+      // is purely observational (history log panel). Doing it on idle keeps
+      // the pointer-up handler snappy.
+      const writeLog = () => {
         try {
           recordHistoryLogEntryFromStorage(label, {
-            documentName: latestDoc.name,
-            tool: logState.tool,
+            documentName: doc.name,
+            tool: current.tool,
             changedLayerIds: changedLayerIdsForHistoryLog(changedLayerIds),
-            toolSettings: toolSettingsForHistoryLog(logState),
+            toolSettings: toolSettingsForHistoryLog(current),
           })
         } catch {}
-
-        // Generate thumbnail asynchronously if not a paint tool
-        if (!skipThumb) {
-          const thumbDoc = stateRef.current.documents.find((d) => d.id === doc.id) ?? latestDoc
-          const scheduleThumb = typeof requestIdleCallback === "function" ? requestIdleCallback : (cb: () => void) => setTimeout(cb, 0)
-          scheduleThumb(() => {
-            entry.thumb = buildHistoryThumb(thumbDoc)
-          })
-        }
-
-        React.startTransition(() => {
-          dispatch({ type: "push-history", entry })
-          const finalState = stateRef.current
-          if (finalState.recordingActionId && !finalState.isPlayingAction) {
-            dispatch({
-              type: "append-action-step",
-              actionId: finalState.recordingActionId,
-              step: { id: uid("step"), label, createdAt: Date.now(), entry },
-            })
-          }
-        })
-      }).catch(console.error)
+      }
+      if (typeof requestIdleCallback === "function") {
+        requestIdleCallback(writeLog)
+      } else {
+        setTimeout(writeLog, 0)
+      }
 
       if (commitAffectsComposite(doc, changedLayerIds)) requestRender()
     },
@@ -3646,16 +3714,34 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
       const entry = docHist.entries[safeIdx]
       const currentEntry = docHist.entries[docHist.index]
       const direction = safeIdx < docHist.index ? "undo" : safeIdx > docHist.index ? "redo" : null
-      const restoredLayers = restoreFromEntry(doc, entry, { currentEntry, direction })
-      dispatch({
-        type: "restore-history",
-        index: safeIdx,
-        entry,
-        restoredLayers,
-        activeLayerId: entry.activeLayerId,
-        selectedLayerIds: entry.selectedLayerIds,
-      })
-      requestRender()
+
+      const apply = () => {
+        const restoredLayers = restoreFromEntry(doc, entry, { currentEntry, direction })
+        dispatch({
+          type: "restore-history",
+          index: safeIdx,
+          entry,
+          restoredLayers,
+          activeLayerId: entry.activeLayerId,
+          selectedLayerIds: entry.selectedLayerIds,
+        })
+        requestRender()
+      }
+
+      // If this entry has any compressed-placeholder layer canvases (because
+      // it scrolled past `COMPRESS_AFTER_N` while sitting in history),
+      // decode them back to real pixels before applying. Without this,
+      // restoreFromEntry would either draw a 1×1 garbage canvas onto the
+      // layer (silent data loss) or hit the placeholder guard and skip the
+      // paint entirely (visual no-op for that step's pixel changes).
+      const needsDecompress = entry.layers.some(
+        (layerSnap) => layerSnap.canvas && isCompressedCanvas(layerSnap.canvas),
+      )
+      if (needsDecompress) {
+        prepareEntryForRestore(entry).then(apply, apply)
+      } else {
+        apply()
+      }
     },
     [requestRender],
   )
@@ -3682,6 +3768,25 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
       scheduler.request(safeIdx)
     }
   }, [performHistoryJump])
+
+  // stepHistoryBy reads the current document's history bounds from stateRef
+  // rather than from context-closure values. This guarantees the keyboard
+  // handler sees the LATEST history index even when the most recent
+  // push-history dispatch was deferred via startTransition (so the React
+  // re-render hasn't committed yet and `useEditor().historyIndex` still
+  // shows the older value). Critical for "Ctrl+Z right after a stroke"
+  // never-jumps-too-far correctness.
+  const stepHistoryBy = React.useCallback((delta: number): boolean => {
+    if (!delta) return false
+    const current = stateRef.current
+    const doc = current.documents.find((d) => d.id === current.activeDocId)
+    const docHist = doc ? current.histories[doc.id] : null
+    if (!docHist) return false
+    const target = docHist.index + delta
+    if (target < 0 || target > docHist.entries.length - 1) return false
+    jumpHistory(target)
+    return true
+  }, [jumpHistory])
 
   const createHistorySnapshot = React.useCallback(
     (name?: string) => {
@@ -4002,35 +4107,37 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
       const smoothing = resample !== "nearest"
       const quality: ImageSmoothingQuality =
         resample === "nearest" ? "low" : resample === "bilinear" ? "medium" : "high"
+      // Allocate fresh canvases for each layer instead of mutating
+      // `layer.canvas.width`/`.height` in place. In-place mutation
+      // would silently corrupt history snapshots that share the same
+      // canvas reference (the snapshot's pixel data would now show the
+      // resized result, breaking undo back to the pre-resize state).
+      const layerCanvases: Array<{ id: string; canvas?: HTMLCanvasElement; mask?: HTMLCanvasElement | null }> = []
       for (const layer of activeDoc.layers) {
         if (typeof layer.canvas.getContext !== "function") continue
-        const tmp = makeCanvas(newW, newH)
-        const tctx = tmp.getContext("2d")!
-        tctx.imageSmoothingEnabled = smoothing
-        tctx.imageSmoothingQuality = quality
-        tctx.drawImage(layer.canvas, 0, 0, newW, newH)
-        layer.canvas.width = newW
-        layer.canvas.height = newH
-        const ctx = layer.canvas.getContext("2d")!
-        ctx.clearRect(0, 0, newW, newH)
-        ctx.drawImage(tmp, 0, 0)
-        if (layer.mask) {
-          const tmp2 = makeCanvas(newW, newH)
-          const mtmp = tmp2.getContext("2d")!
-          mtmp.imageSmoothingEnabled = smoothing
-          mtmp.imageSmoothingQuality = quality
-          mtmp.drawImage(layer.mask, 0, 0, newW, newH)
-          layer.mask.width = newW
-          layer.mask.height = newH
-          const mctx = layer.mask.getContext("2d")!
-          mctx.clearRect(0, 0, newW, newH)
-          mctx.drawImage(tmp2, 0, 0)
+        const next = makeCanvas(newW, newH)
+        const nctx = next.getContext("2d")!
+        nctx.imageSmoothingEnabled = smoothing
+        nctx.imageSmoothingQuality = quality
+        nctx.drawImage(layer.canvas, 0, 0, newW, newH)
+        const entry: { id: string; canvas?: HTMLCanvasElement; mask?: HTMLCanvasElement | null } = {
+          id: layer.id,
+          canvas: next,
         }
+        if (layer.mask) {
+          const nextMask = makeCanvas(newW, newH)
+          const mctx = nextMask.getContext("2d")!
+          mctx.imageSmoothingEnabled = smoothing
+          mctx.imageSmoothingQuality = quality
+          mctx.drawImage(layer.mask, 0, 0, newW, newH)
+          entry.mask = nextMask
+        }
+        layerCanvases.push(entry)
       }
-      dispatch({ type: "resize-document", width: newW, height: newH })
+      dispatch({ type: "resize-document", width: newW, height: newH, layerCanvases })
       setTimeout(() => commit(`Image Size ${newW}x${newH} (${resample})`, "all"), 0)
     },
-    [activeDoc, commit],
+    [activeDoc, commit, dispatch],
   )
 
   const resizeCanvas = React.useCallback(
@@ -4041,33 +4148,38 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
       // anchorX/Y: 0=left/top, 0.5=center, 1=right/bottom
       const dx = (newW - activeDoc.width) * anchorX
       const dy = (newH - activeDoc.height) * anchorY
-      const resizeCanvasInPlace = (canvas: HTMLCanvasElement, dx: number, dy: number, fill?: string) => {
-        const tmp = makeCanvas(newW, newH)
-        const tctx = tmp.getContext("2d")!
+      // Allocate-and-paint helper that produces a brand-new canvas
+      // rather than mutating an existing one (see resizeDocument
+      // rationale).
+      const allocResized = (src: HTMLCanvasElement, fill?: string) => {
+        const next = makeCanvas(newW, newH)
+        const nctx = next.getContext("2d")!
         if (fill && fill !== "transparent") {
-          tctx.fillStyle = fill
-          tctx.fillRect(0, 0, newW, newH)
+          nctx.fillStyle = fill
+          nctx.fillRect(0, 0, newW, newH)
         }
-        tctx.drawImage(canvas, dx, dy)
-        canvas.width = newW
-        canvas.height = newH
-        const ctx = canvas.getContext("2d")!
-        ctx.clearRect(0, 0, newW, newH)
-        ctx.drawImage(tmp, 0, 0)
+        nctx.drawImage(src, dx, dy)
+        return next
       }
 
+      const layerCanvases: Array<{ id: string; canvas?: HTMLCanvasElement; mask?: HTMLCanvasElement | null }> = []
       activeDoc.layers.forEach((layer, idx) => {
-        if (layer.canvas && typeof layer.canvas.getContext === "function") {
-          resizeCanvasInPlace(layer.canvas, dx, dy, idx === 0 ? fill : undefined)
+        if (!layer.canvas || typeof layer.canvas.getContext !== "function") return
+        const entry: { id: string; canvas?: HTMLCanvasElement; mask?: HTMLCanvasElement | null } = {
+          id: layer.id,
+          canvas: allocResized(layer.canvas, idx === 0 ? fill : undefined),
         }
-        if (layer.mask) resizeCanvasInPlace(layer.mask, dx, dy)
+        if (layer.mask) entry.mask = allocResized(layer.mask)
+        layerCanvases.push(entry)
       })
 
-      if (activeDoc.selection.mask) resizeCanvasInPlace(activeDoc.selection.mask, dx, dy)
-      if (activeDoc.quickMaskCanvas) resizeCanvasInPlace(activeDoc.quickMaskCanvas, dx, dy)
-      activeDoc.channels?.forEach(ch => {
-        if (ch.canvas) resizeCanvasInPlace(ch.canvas, dx, dy)
+      const selectionMask = activeDoc.selection.mask ? allocResized(activeDoc.selection.mask) : undefined
+      const quickMaskCanvas = activeDoc.quickMaskCanvas ? allocResized(activeDoc.quickMaskCanvas) : undefined
+      const channelCanvases: Record<string, HTMLCanvasElement | null> = {}
+      activeDoc.channels?.forEach((ch) => {
+        if (ch.canvas) channelCanvases[ch.id] = allocResized(ch.canvas)
       })
+
       dispatch({
         type: "resize-canvas",
         width: newW,
@@ -4075,10 +4187,14 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
         offsetX: dx,
         offsetY: dy,
         fill,
+        layerCanvases,
+        selectionMask,
+        quickMaskCanvas,
+        channelCanvases: Object.keys(channelCanvases).length ? channelCanvases : undefined,
       })
       setTimeout(() => commit(`Canvas Size ${newW}×${newH}`, "all"), 0)
     },
-    [activeDoc, commit],
+    [activeDoc, commit, dispatch],
   )
 
   const toggleQuickMask = React.useCallback(() => {
@@ -4173,6 +4289,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     newLayer,
     newGroup,
     jumpHistory,
+    stepHistoryBy,
     createHistorySnapshot,
     restoreHistorySnapshot,
     deleteHistorySnapshot,
@@ -4305,7 +4422,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     docHistory.entries, docHistory.index, docSnapshots,
     activeDoc, activeLayer, selectedLayers,
     dispatch, commit, requestRender, subscribeRender,
-    newLayer, newGroup, jumpHistory, createHistorySnapshot, restoreHistorySnapshot,
+    newLayer, newGroup, jumpHistory, stepHistoryBy, createHistorySnapshot, restoreHistorySnapshot,
     deleteHistorySnapshot, createAction, startRecordingAction, stopRecordingAction,
     playAction, deleteAction, clearAction, createDocument, duplicateDocument, requestCloseDocument, closeOtherDocuments,
     reopenClosedDocument, markDocumentSaved, setDocumentLifecycle, moveLayersToDocument, copySelection, pasteAsLayer,

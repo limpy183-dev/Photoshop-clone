@@ -15,7 +15,9 @@ type ToasterToast = ToastProps & {
   action?: ToastActionElement
 }
 
-const actionTypes = {
+// `actionTypes` is referenced as a type (`typeof actionTypes`) — keep the
+// runtime value but prefix to silence the unused-vars rule.
+const _actionTypes = {
   ADD_TOAST: 'ADD_TOAST',
   UPDATE_TOAST: 'UPDATE_TOAST',
   DISMISS_TOAST: 'DISMISS_TOAST',
@@ -29,7 +31,7 @@ function genId() {
   return count.toString()
 }
 
-type ActionType = typeof actionTypes
+type ActionType = typeof _actionTypes
 
 type Action =
   | {
@@ -179,7 +181,11 @@ function useToast() {
         listeners.splice(index, 1)
       }
     }
-  }, [state])
+    // setState is stable across renders, so the listener only needs to be
+    // registered once on mount. Depending on `state` here would tear down
+    // and re-register the listener on every toast update, which is
+    // unnecessary churn and can briefly drop the in-flight subscription.
+  }, [])
 
   return {
     ...state,

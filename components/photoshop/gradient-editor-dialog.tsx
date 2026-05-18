@@ -12,7 +12,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { Label } from "@/components/ui/label"
-import { Trash2, Plus } from "lucide-react"
+import { Trash2 } from "lucide-react"
 import type { GradientStop, MultiGradient } from "./types"
 
 interface GradientEditorProps {

@@ -763,7 +763,10 @@ function histogram(images: ImageData[], channel: string) {
         channel === "red" ? img.data[i] :
         channel === "green" ? img.data[i + 1] :
         channel === "blue" ? img.data[i + 2] :
-        Math.round(0.299 * img.data[i] + 0.587 * img.data[i + 1] + 0.114 * img.data[i + 2])
+        // Math.round can produce 256 from a value of 255.5 (or float
+        // accumulation), which would write past `hist[255]` and corrupt
+        // the next typed-array slot. Clamp to a valid bin index.
+        Math.min(255, Math.max(0, Math.round(0.299 * img.data[i] + 0.587 * img.data[i + 1] + 0.114 * img.data[i + 2])))
       hist[value]++
     }
   }

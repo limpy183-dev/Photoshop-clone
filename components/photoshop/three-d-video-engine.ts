@@ -134,7 +134,7 @@ function hexToRgb(hex: string) {
   return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 }
 }
 
-function rgbToHex(r: number, g: number, b: number) {
+function _rgbToHex(r: number, g: number, b: number) {
   return `#${[r, g, b].map((value) => clamp(Math.round(value), 0, 255).toString(16).padStart(2, "0")).join("")}`
 }
 

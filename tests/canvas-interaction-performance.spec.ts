@@ -160,6 +160,53 @@ test("right clicking the canvas with a paint tool opens the custom menu without 
   await expect(canvasPixel(page, target.x, target.y)).resolves.toEqual(before)
 })
 
+test("alt right drag with the brush resizes the brush instead of opening the context menu", async ({ page }) => {
+  await page.goto("/")
+  await selectBrushTool(page)
+
+  const target = { x: 220, y: 170 }
+  const beforePixel = await canvasPixel(page, target.x, target.y)
+  const beforeSize = await page.evaluate(() => {
+    const sizeLabel = Array.from(document.querySelectorAll("span")).find((el) => el.textContent === "Size:")
+    const input = sizeLabel?.parentElement?.querySelector("input") as HTMLInputElement | null
+    return Number(input?.value ?? 0)
+  })
+  expect(beforeSize).toBeGreaterThan(0)
+
+  const start = await canvasScreenPoint(page, target.x, target.y)
+  await page.keyboard.down("Alt")
+  await page.mouse.move(start.x, start.y)
+  await page.mouse.down({ button: "right" })
+  await page.mouse.move(start.x + 70, start.y, { steps: 8 })
+  await page.mouse.up({ button: "right" })
+  await page.keyboard.up("Alt")
+
+  await expect(page.getByRole("menu", { name: "Canvas context menu" })).toBeHidden()
+  await expect(page.getByRole("menu", { name: "App context menu" })).toBeHidden()
+  await expect(canvasPixel(page, target.x, target.y)).resolves.toEqual(beforePixel)
+
+  const afterSize = await page.evaluate(() => {
+    const sizeLabel = Array.from(document.querySelectorAll("span")).find((el) => el.textContent === "Size:")
+    const input = sizeLabel?.parentElement?.querySelector("input") as HTMLInputElement | null
+    return Number(input?.value ?? 0)
+  })
+  expect(afterSize).toBeGreaterThan(beforeSize + 20)
+})
+
+test("right button drag does not open the canvas context menu", async ({ page }) => {
+  await page.goto("/")
+  await selectBrushTool(page)
+
+  const start = await canvasScreenPoint(page, 260, 190)
+  await page.mouse.move(start.x, start.y)
+  await page.mouse.down({ button: "right" })
+  await page.mouse.move(start.x + 50, start.y + 20, { steps: 8 })
+  await page.mouse.up({ button: "right" })
+
+  await expect(page.getByRole("menu", { name: "Canvas context menu" })).toBeHidden()
+  await expect(page.getByRole("menu", { name: "App context menu" })).toBeHidden()
+})
+
 test("rapid keyboard undo and redo step through multiple queued paint history entries", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
   await page.goto("/")

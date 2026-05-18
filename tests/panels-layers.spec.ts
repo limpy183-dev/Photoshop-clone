@@ -4,7 +4,7 @@ async function openLowerPanel(page: import("@playwright/test").Page, id: string)
   await page.getByLabel("Lower panel picker").selectOption(id)
 }
 
-async function openUpperPanel(page: import("@playwright/test").Page, id: string) {
+async function _openUpperPanel(page: import("@playwright/test").Page, id: string) {
   await page.getByLabel("Upper panel picker").selectOption(id)
 }
 

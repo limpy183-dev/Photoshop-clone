@@ -1,3 +1,6 @@
+import { assertCanvasSize } from "./canvas-limits"
+
+
 export interface DecodedRaster {
   format: "TGA" | "PNM" | "TIFF"
   width: number
@@ -103,6 +106,11 @@ export function decodeTgaBuffer(buffer: ArrayBuffer): DecodedRaster {
   const pixelDepth = bytes[16]
   const descriptor = bytes[17]
   if (!width || !height) throw new Error("TGA dimensions are missing")
+  // Reject decoders that would allocate gigabytes of pixel buffer for an
+  // attacker-controlled or malformed header before any actual pixels are
+  // read. assertCanvasSize throws a friendly error with the configured
+  // limits, matching the document import path's behaviour.
+  assertCanvasSize(width, height, "TGA image")
 
   const isRle = imageType === 9 || imageType === 10 || imageType === 11
   const isColorMapped = imageType === 1 || imageType === 9
@@ -223,6 +231,7 @@ export function decodePnmBuffer(buffer: ArrayBuffer): DecodedRaster {
   const width = Number(widthToken.value)
   const height = Number(heightToken.value)
   if (!width || !height) throw new Error("PNM dimensions are missing")
+  assertCanvasSize(width, height, "PNM image")
   const bitmap = magic.value === "P1" || magic.value === "P4"
   const maxToken = bitmap ? { value: "1", next: heightToken.next } : nextPnmToken(bytes, heightToken.next)
   const maxValue = Number(maxToken.value)
@@ -351,6 +360,7 @@ export function decodeTiffBuffer(buffer: ArrayBuffer): DecodedRaster {
   const stripByteCounts = tags.get(279) ?? []
   const planar = tags.get(284)?.[0] ?? 1
   if (!width || !height) throw new Error("TIFF dimensions are missing")
+  assertCanvasSize(width, height, "TIFF image")
   if (compression !== 1) throw new Error(`Unsupported TIFF compression: ${compression}`)
   if (planar !== 1) throw new Error("Planar TIFF data is not supported")
   if (![0, 1, 2].includes(photometric)) throw new Error(`Unsupported TIFF photometric interpretation: ${photometric}`)

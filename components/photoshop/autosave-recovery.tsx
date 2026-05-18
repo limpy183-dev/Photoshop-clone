@@ -24,6 +24,14 @@ export function AutosaveRecovery() {
   const [candidate, setCandidate] = React.useState<AutosaveDocument | null>(null)
   const [enabled, setEnabled] = React.useState<boolean | null>(null)
 
+  // Keep a live ref to documents so the autosave interval can read the
+  // latest snapshot without re-running its effect (and resetting its
+  // timer) on every reducer action that touches documents.
+  const documentsRef = React.useRef(documents)
+  React.useEffect(() => {
+    documentsRef.current = documents
+  }, [documents])
+
   React.useEffect(() => {
     const refresh = () => setEnabled(autoSaveEnabled())
     refresh()
@@ -60,15 +68,21 @@ export function AutosaveRecovery() {
   }, [enabled])
 
   React.useEffect(() => {
-    if (!documents.length) return
     if (enabled === null) return
     if (!enabled) {
       clearAutosave()
       return
     }
-    const timer = window.setTimeout(() => {
+    // Run the autosave on a steady 4-second interval so it actually
+    // fires during active editing. The previous implementation depended
+    // on `documents` (a fresh array reference on every reducer action),
+    // which kept resetting the timer before it could fire — making
+    // autosave effectively dead during typical workflows.
+    const interval = window.setInterval(() => {
+      const docs = documentsRef.current
+      if (!docs.length) return
       try {
-        writeAutosaves(documents.map((doc) => ({
+        writeAutosaves(docs.map((doc) => ({
           documentId: doc.id,
           name: doc.name,
           serialized: serializeProject(doc),
@@ -77,8 +91,8 @@ export function AutosaveRecovery() {
         clearAutosave()
       }
     }, 4000)
-    return () => window.clearTimeout(timer)
-  }, [documents, enabled])
+    return () => window.clearInterval(interval)
+  }, [enabled])
 
   const restore = async () => {
     if (!candidate) return

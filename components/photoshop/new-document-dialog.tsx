@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
 import { useEditor, makeDocument, makeCanvas } from "./editor-context"
-import { MAX_CANVAS_DIMENSION, canvasSizeError, clampCanvasSize } from "./canvas-limits"
+import { canvasSizeError, clampCanvasSize } from "./canvas-limits"
 import type { DocumentModeSettings, Layer } from "./types"
 
 type Unit = "px" | "in" | "cm" | "mm"

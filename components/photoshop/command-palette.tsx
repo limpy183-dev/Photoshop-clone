@@ -796,7 +796,11 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
             className="h-9"
           />
         </div>
-        <div className="max-h-[420px] overflow-y-auto border-t border-[var(--ps-divider)] py-1">
+        <div
+          role="listbox"
+          aria-label="Command palette results"
+          className="max-h-[420px] overflow-y-auto border-t border-[var(--ps-divider)] py-1"
+        >
           {filtered.length === 0 ? (
             <div className="px-3 py-8 text-center text-[12px] text-[var(--ps-text-dim)]">No commands found.</div>
           ) : (
@@ -806,6 +810,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
               <button
                 key={command.id}
                 type="button"
+                role="option"
                 disabled={command.disabled}
                 aria-selected={active}
                 onMouseEnter={() => setActiveIndex(index)}

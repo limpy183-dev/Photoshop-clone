@@ -290,7 +290,7 @@ export function ColorPanel() {
   )
 }
 
-const SWATCHES = [
+const _SWATCHES = [
   "#000000", "#404040", "#7f7f7f", "#bfbfbf", "#ffffff",
   "#ff0000", "#ff7f00", "#ffff00", "#7fff00", "#00ff00",
   "#00ff7f", "#00ffff", "#007fff", "#0000ff", "#7f00ff",

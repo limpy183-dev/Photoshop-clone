@@ -55,25 +55,35 @@ function DialogContent({
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
 }) {
-  const descriptionProps =
-    ariaDescribedBy !== undefined
-      ? { "aria-describedby": ariaDescribedBy }
-      : hasDialogDescription(children)
-        ? {}
-        : { "aria-describedby": undefined }
+  // Radix-Dialog warns whenever DialogContent is rendered without an
+  // associated DialogDescription. If the caller already provided one
+  // (somewhere in the children tree), or explicitly passed
+  // `aria-describedby` to opt out, do nothing. Otherwise, inject an
+  // invisible DialogDescription so Radix's internal context registration
+  // wires up `aria-describedby` automatically and screen readers get a
+  // meaningful (if generic) description. The visible UI is unchanged.
+  const callerProvidedDescribedBy = ariaDescribedBy !== undefined
+  const hasDescription = !callerProvidedDescribedBy && hasDialogDescription(children)
+  const passthroughProps = callerProvidedDescribedBy
+    ? { "aria-describedby": ariaDescribedBy, ...props }
+    : props
 
   return (
     <DialogPortal data-slot="dialog-portal">
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"
-        {...descriptionProps}
         className={cn(
           'pointer-events-none bg-background data-[state=open]:pointer-events-auto data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-6 shadow-lg duration-200 sm:max-w-lg',
           className,
         )}
-        {...props}
+        {...passthroughProps}
       >
+        {!callerProvidedDescribedBy && !hasDescription ? (
+          <DialogPrimitive.Description data-slot="dialog-description" className="sr-only">
+            Dialog
+          </DialogPrimitive.Description>
+        ) : null}
         {children}
         {showCloseButton && (
           <DialogPrimitive.Close

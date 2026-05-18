@@ -48,6 +48,8 @@ export function StatusBar({ onHide }: { onHide?: () => void }) {
     >
       <input
         value={zoomInput}
+        aria-label="Zoom level"
+        title="Zoom level (percent)"
         onChange={(e) => setZoomInput(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
@@ -93,7 +95,12 @@ export function StatusBar({ onHide }: { onHide?: () => void }) {
 
       <span className="capitalize">{tool}</span>
       <span>|</span>
-      <span>Brush {brush.size}px</span>
+      {/* brush.size comes from persisted state and may differ between SSR
+          (defaults) and the client (localStorage). suppressHydrationWarning
+          accepts the client value without warning — visually correct,
+          accessibility-safe (the value is read by the user, not assistive
+          tech). */}
+      <span suppressHydrationWarning>Brush {brush.size}px</span>
       <span>|</span>
       <span className="flex items-center gap-1">
         FG

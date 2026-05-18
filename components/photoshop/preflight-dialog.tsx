@@ -71,7 +71,7 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, Math.round(value)))
 }
 
-function normalizeSlice(slice: Slice, width: number, height: number) {
+function _normalizeSlice(slice: Slice, width: number, height: number) {
   const x = clamp(slice.x, 0, Math.max(0, width - 1))
   const y = clamp(slice.y, 0, Math.max(0, height - 1))
   const w = clamp(slice.w, 1, Math.max(1, width - x))
@@ -100,7 +100,7 @@ function contentTouchesCanvasEdge(layer: Layer) {
   return bounds.x <= 0 || bounds.y <= 0 || bounds.x + bounds.w >= layer.canvas.width || bounds.y + bounds.h >= layer.canvas.height
 }
 
-function getPreflightFixes(doc: PsDocument) {
+function _getPreflightFixes(doc: PsDocument) {
   const layers = doc.layers
   const rasterish = layers.filter((layer) => layer.kind !== "group" && layer.kind !== "adjustment")
   return {
@@ -112,7 +112,7 @@ function getPreflightFixes(doc: PsDocument) {
   }
 }
 
-function analyzePreflight(doc: PsDocument): LegacyPreflightItem[] {
+function _analyzePreflight(doc: PsDocument): LegacyPreflightItem[] {
   const items: LegacyPreflightItem[] = []
   const layers = doc.layers
   const rasterish = layers.filter((layer) => layer.kind !== "group" && layer.kind !== "adjustment")

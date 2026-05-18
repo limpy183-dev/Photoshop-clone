@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useEditor, useRenderSubscription, makeCanvas } from "../editor-context"
-import { PenTool, Plus, Trash2, MousePointer2, CircleDot } from "lucide-react"
+import { PenTool, Trash2, MousePointer2, CircleDot } from "lucide-react"
 import { rasterizeShape } from "../tool-helpers"
 
 export function PathsPanel() {
@@ -150,7 +150,7 @@ export function PathsPanel() {
   const fillPath = () => {
     if (!activeDoc || !activeLayer) return
     const ctx = activeLayer.canvas.getContext("2d")!
-    const pathData = activeLayer.path ?? (activeLayer.kind === "shape" && activeLayer.shape ? null : null)
+    const _pathData = activeLayer.path ?? (activeLayer.kind === "shape" && activeLayer.shape ? null : null)
     if (activeLayer.kind === "shape" && activeLayer.shape) {
       const s = activeLayer.shape
       ctx.fillStyle = foreground

@@ -181,7 +181,24 @@ function canvasAtDocumentSize(
 ) {
   const canvas = makeIoCanvas(docW, docH)
   if (source && typeof source.getContext === "function") {
-    canvas.getContext("2d")!.drawImage(source, left, top)
+    const ctx = canvas.getContext("2d")!
+    // Negative offsets indicate the source extends beyond the canvas's
+    // top/left edge (common for PSD layer masks anchored above 0,0).
+    // Plain `drawImage(source, left, top)` would silently clip those
+    // pixels because Canvas 2D treats negative dx/dy as off-canvas;
+    // explicitly clip the source region instead so we draw the
+    // correct intersected rectangle into [0, docW) × [0, docH).
+    if (left < 0 || top < 0) {
+      const srcX = left < 0 ? -left : 0
+      const srcY = top < 0 ? -top : 0
+      const dstX = left < 0 ? 0 : left
+      const dstY = top < 0 ? 0 : top
+      const w = Math.max(0, Math.min(source.width - srcX, docW - dstX))
+      const h = Math.max(0, Math.min(source.height - srcY, docH - dstY))
+      if (w > 0 && h > 0) ctx.drawImage(source, srcX, srcY, w, h, dstX, dstY, w, h)
+    } else {
+      ctx.drawImage(source, left, top)
+    }
   }
   return canvas
 }
@@ -899,7 +916,7 @@ function buildExifSegment(doc: PsDocument): Uint8Array | null {
     if (v.length > 4) dataAreaSize += v.length
   }
 
-  const tiffHeaderOffset = 0
+  const _tiffHeaderOffset = 0
   const ifdOffset = 8 // IFD starts right after TIFF header
   const dataAreaOffset = ifdOffset + ifdSize
   const totalTiffSize = dataAreaOffset + dataAreaSize
@@ -987,14 +1004,41 @@ export function exportSvgDataUrl(doc: PsDocument, options: SvgExportOptions) {
   const href = raster.toDataURL("image/png")
   const w = Number((doc.width * options.scale).toFixed(options.precision))
   const h = Number((doc.height * options.scale).toFixed(options.precision))
+  // Validate matte is a real CSS color before injecting into markup.
+  // Without this an attacker-controlled matte string like
+  // `red"><script>...</script><rect fill="` would break out of the
+  // attribute and inject arbitrary nodes once the SVG is rendered.
+  const safeMatte = isSafeSvgColor(options.matte) ? options.matte : "#ffffff"
   const background = options.transparent
     ? ""
-    : `<rect width="100%" height="100%" fill="${options.matte.replace(/"/g, "")}"/>`
+    : `<rect width="100%" height="100%" fill="${safeMatte}"/>`
+  // Escape XML-significant characters in the document name; the JSON
+  // payload itself is safe inside a CDATA section.
   const metadata = options.includeMetadata
-    ? `<metadata>{"name":${JSON.stringify(doc.name)},"width":${doc.width},"height":${doc.height}}</metadata>`
+    ? `<metadata><![CDATA[{"name":${JSON.stringify(escapeForCData(doc.name))},"width":${doc.width},"height":${doc.height}}]]></metadata>`
     : ""
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${metadata}${background}<image width="${w}" height="${h}" href="${href}"/></svg>`
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+}
+
+/**
+ * Accept only obviously-safe CSS color tokens that cannot break out of an
+ * SVG attribute context. Hex, rgb()/rgba()/hsl()/hsla() with numeric args,
+ * and a small allowlist of named colors.
+ */
+function isSafeSvgColor(value: string | undefined): value is string {
+  if (typeof value !== "string") return false
+  const v = value.trim()
+  if (!v) return false
+  if (/^#[0-9a-fA-F]{3,8}$/.test(v)) return true
+  if (/^(rgb|rgba|hsl|hsla)\(\s*[0-9.,%\s/]+\)$/i.test(v)) return true
+  if (/^[a-zA-Z]{3,32}$/.test(v)) return true // named colors like "red", "transparent"
+  return false
+}
+
+/** Escape characters that could prematurely close a CDATA section. */
+function escapeForCData(value: string): string {
+  return value.replace(/]]>/g, "]]]]><![CDATA[>")
 }
 
 function canvasDataUrl(canvas?: HTMLCanvasElement | null) {

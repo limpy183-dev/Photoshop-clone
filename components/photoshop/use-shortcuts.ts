@@ -75,8 +75,6 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
     dispatch,
     activeDoc,
     activeLayer,
-    history,
-    historyIndex,
     brush,
     tool,
     newLayer,
@@ -86,6 +84,7 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
     foreground,
     background,
     jumpHistory,
+    stepHistoryBy,
     copySelection,
     pasteAsLayer,
     requestCloseDocument,
@@ -172,17 +171,19 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
 
       if (isShortcut("edit-redo")) {
         e.preventDefault()
-        if (historyIndex < history.length - 1) {
-          jumpHistory(historyIndex + 1)
-        }
+        // stepHistoryBy reads bounds from stateRef so it stays correct even
+        // when the most recent push-history's React render is still queued
+        // (deferred via startTransition). Using `historyIndex` from the
+        // hook closure here would risk a stale read where the user just
+        // painted a stroke that's already in the reducer state but not yet
+        // visible in the rendered context value.
+        if (!e.repeat) stepHistoryBy(1)
         return
       }
 
       if (isShortcut("edit-undo") || isShortcut("edit-stepback")) {
         e.preventDefault()
-        if (historyIndex > 0) {
-          jumpHistory(historyIndex - 1)
-        }
+        if (!e.repeat) stepHistoryBy(-1)
         return
       }
 
@@ -443,8 +444,6 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
     dispatch,
     activeDoc,
     activeLayer,
-    history,
-    historyIndex,
     brush,
     tool,
     newLayer,
@@ -456,9 +455,16 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
     foreground,
     background,
     jumpHistory,
+    stepHistoryBy,
     copySelection,
     pasteAsLayer,
     requestCloseDocument,
     requestRender,
   ])
+  // Note: `history` and `historyIndex` are intentionally NOT in this
+  // dependency array. The Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z handlers call
+  // `stepHistoryBy`, which reads bounds from a stable internal ref. If
+  // we depended on `history`/`historyIndex` here the listener would be
+  // torn down and re-registered on every undo/redo, dropping rapid
+  // keystrokes during repeated undo bursts.
 }

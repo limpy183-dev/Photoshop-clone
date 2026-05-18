@@ -159,7 +159,7 @@ function applyAdjustmentForPanel(ctx: CanvasRenderingContext2D, layer: Layer, wi
 }
 
 export function NavigatorPanel() {
-  const { activeDoc, dispatch } = useEditor()
+  const { activeDoc, dispatch: _dispatch } = useEditor()
   const canvasRef = React.useRef<HTMLCanvasElement>(null)
 
   const draw = React.useCallback(() => {

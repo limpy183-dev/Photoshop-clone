@@ -1,4 +1,4 @@
-import type { CustomShapeId, Layer, PathProps, Selection, ShapeProps, TextProps, WarpStyle } from "./types"
+import type { CustomShapeId, PathProps, Selection, ShapeProps, TextProps, WarpStyle } from "./types"
 import { assertCanvasSize } from "./canvas-limits"
 import { buildCanvasFont, buildTypographyRenderPlan } from "./typography-engine"
 
@@ -84,7 +84,7 @@ export function floodFillMask(
   const stack: number[] = [x, y]
   while (stack.length) {
     const py = stack.pop()!
-    let px = stack.pop()!
+    const px = stack.pop()!
     if (py < 0 || py >= h) continue
     // walk left
     let lx = px
@@ -1673,7 +1673,9 @@ export function patchSelectionFromSource(
   ctx.putImageData(new ImageData(out, width, height), 0, 0)
 }
 
-/** Apply a localised blur stamp at (x,y). */
+/** Apply a localised blur stamp at (x,y). Pixels outside the circular
+ *  brush radius are restored to the original so the blur stays inside
+ *  the visible round brush footprint. */
 export function blurStamp(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -1710,12 +1712,42 @@ export function blurStamp(
       out[i + 2] = b0 / 9
     }
   }
-  // Apply only within circle
+  // Apply only within the circular brush footprint. Without this the
+  // blur leaks into the rectangular bounding box of the stamp and
+  // produces visible square artefacts on every brush dab.
+  const cx = x - sx
+  const cy = y - sy
+  const r2 = r * r
+  const feather2 = Math.max(1, (r - 1) * (r - 1))
+  for (let py = 0; py < sh; py++) {
+    for (let px = 0; px < sw; px++) {
+      const ddx = px + 0.5 - cx
+      const ddy = py + 0.5 - cy
+      const d2 = ddx * ddx + ddy * ddy
+      if (d2 > r2) {
+        // Fully outside the brush — keep original pixel.
+        const i = (py * sw + px) * 4
+        out[i] = img.data[i]
+        out[i + 1] = img.data[i + 1]
+        out[i + 2] = img.data[i + 2]
+        out[i + 3] = img.data[i + 3]
+      } else if (d2 > feather2) {
+        // Soft edge — linearly blend between blurred and original.
+        const t = (Math.sqrt(d2) - Math.sqrt(feather2)) / Math.max(1e-6, r - Math.sqrt(feather2))
+        const k = 1 - Math.max(0, Math.min(1, t))
+        const i = (py * sw + px) * 4
+        out[i] = out[i] * k + img.data[i] * (1 - k)
+        out[i + 1] = out[i + 1] * k + img.data[i + 1] * (1 - k)
+        out[i + 2] = out[i + 2] * k + img.data[i + 2] * (1 - k)
+      }
+    }
+  }
   const imgOut = new ImageData(out, sw, sh)
   ctx.putImageData(imgOut, sx, sy, 0, 0, sw, sh)
 }
 
-/** Sharpen stamp via 3x3 unsharp. */
+/** Sharpen stamp via 3x3 unsharp. Restricted to the circular brush
+ *  radius so straight-edge artefacts don't show outside the brush. */
 export function sharpenStamp(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -1751,6 +1783,23 @@ export function sharpenStamp(
       out[i] = Math.max(0, Math.min(255, r0))
       out[i + 1] = Math.max(0, Math.min(255, g0))
       out[i + 2] = Math.max(0, Math.min(255, b0))
+    }
+  }
+  // Mask outside the circular brush. Same rationale as blurStamp.
+  const cx = x - sx
+  const cy = y - sy
+  const r2 = r * r
+  for (let py = 0; py < sh; py++) {
+    for (let px = 0; px < sw; px++) {
+      const ddx = px + 0.5 - cx
+      const ddy = py + 0.5 - cy
+      if (ddx * ddx + ddy * ddy > r2) {
+        const i = (py * sw + px) * 4
+        out[i] = img.data[i]
+        out[i + 1] = img.data[i + 1]
+        out[i + 2] = img.data[i + 2]
+        out[i + 3] = img.data[i + 3]
+      }
     }
   }
   ctx.putImageData(new ImageData(out, sw, sh), sx, sy)
@@ -2913,7 +2962,7 @@ export function liquifyWarp(
       const sxp = Math.round(ax - dx * t)
       const syp = Math.round(ay - dy * t)
       if (sxp < 0 || sxp >= w || syp < 0 || syp >= h) continue
-      const sIdx = (syp * w + sxp) * 4
+      const _sIdx = (syp * w + sxp) * 4
       const dIdx = (py * ww + px) * 4
       // We need to read from the full canvas, not just the slice
       // Quick approach: draw at end via transformed canvas

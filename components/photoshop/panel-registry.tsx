@@ -32,42 +32,125 @@ import {
   StickyNote,
   Type,
 } from "lucide-react"
-import { ActionsPanel } from "./panels/actions-panel"
-import { AdjustmentsPanel } from "./panels/adjustments-panel"
-import { AnnotationsPanel } from "./panels/annotations-panel"
-import { AssetsPanel } from "./panels/assets-panel"
-import { BrushPanel } from "./panels/brush-panel"
-import { ChannelsPanel } from "./panels/channels-panel"
-import { CharacterPanel, ParagraphPanel } from "./panels/character-paragraph-panels"
-import { CloneSourcePanel } from "./panels/clone-source-panel"
-import { ColorPanel } from "./panels/color-panel"
-import {
-  AnimationPanel,
-  CommentsPanel,
-  DiscoverPanel,
-  GlyphsPanel,
-  LearnPanel,
-  LibrariesPanel,
-  MeasurementLogPanel,
-  NotesPanel,
-  ShapesPanel,
-  StylesPanel,
-} from "./panels/gap-panels"
-import { GradientsPanel } from "./panels/gradients-panel"
-import { GuidesPanel } from "./panels/guides-panel"
-import { HistoryPanel } from "./panels/history-panel"
-import { HistogramPanel, InfoPanel, NavigatorPanel } from "./panels/inspection-panels"
-import { LayerCompsPanel } from "./panels/layer-comps-panel"
-import { LayersPanel } from "./panels/layers-panel"
-import { PathsPanel } from "./panels/paths-panel"
-import { PatternsPanel } from "./panels/patterns-panel"
-import { PropertiesPanel } from "./panels/properties-panel"
-import { ScriptingPanel } from "./panels/scripting-panel"
-import { SelectionStudioPanel } from "./panels/selection-studio-panel"
-import { SlicesPanel } from "./panels/slices-panel"
-import { SwatchesPanel } from "./panels/swatches-panel"
-import { TimelinePanel } from "./panels/timeline-panel"
-import { ToolPresetsPanel } from "./panels/tool-presets-panel"
+import { lazyPanel } from "./lazy-dialog"
+
+// All panels are lazy-mounted. The right dock typically displays only a
+// handful at a time (4-8 in the default workspace), but the registry has
+// 38 panels — eagerly importing them all would pull every panel's
+// JS, hooks, and state into the workspace's first paint chunk. Switching
+// to lazy means each panel's code is fetched only when it actually
+// becomes visible in the dock or is referenced by the command palette.
+const ActionsPanel = lazyPanel(
+  () => import("./panels/actions-panel").then((m) => ({ default: m.ActionsPanel })),
+)
+const AdjustmentsPanel = lazyPanel(
+  () => import("./panels/adjustments-panel").then((m) => ({ default: m.AdjustmentsPanel })),
+)
+const AnnotationsPanel = lazyPanel(
+  () => import("./panels/annotations-panel").then((m) => ({ default: m.AnnotationsPanel })),
+)
+const AssetsPanel = lazyPanel(
+  () => import("./panels/assets-panel").then((m) => ({ default: m.AssetsPanel })),
+)
+const BrushPanel = lazyPanel(
+  () => import("./panels/brush-panel").then((m) => ({ default: m.BrushPanel })),
+)
+const ChannelsPanel = lazyPanel(
+  () => import("./panels/channels-panel").then((m) => ({ default: m.ChannelsPanel })),
+)
+const CharacterPanel = lazyPanel(
+  () => import("./panels/character-paragraph-panels").then((m) => ({ default: m.CharacterPanel })),
+)
+const ParagraphPanel = lazyPanel(
+  () => import("./panels/character-paragraph-panels").then((m) => ({ default: m.ParagraphPanel })),
+)
+const CloneSourcePanel = lazyPanel(
+  () => import("./panels/clone-source-panel").then((m) => ({ default: m.CloneSourcePanel })),
+)
+const ColorPanel = lazyPanel(
+  () => import("./panels/color-panel").then((m) => ({ default: m.ColorPanel })),
+)
+const AnimationPanel = lazyPanel(
+  () => import("./panels/gap-panels").then((m) => ({ default: m.AnimationPanel })),
+)
+const CommentsPanel = lazyPanel(
+  () => import("./panels/gap-panels").then((m) => ({ default: m.CommentsPanel })),
+)
+const DiscoverPanel = lazyPanel(
+  () => import("./panels/gap-panels").then((m) => ({ default: m.DiscoverPanel })),
+)
+const GlyphsPanel = lazyPanel(
+  () => import("./panels/gap-panels").then((m) => ({ default: m.GlyphsPanel })),
+)
+const LearnPanel = lazyPanel(
+  () => import("./panels/gap-panels").then((m) => ({ default: m.LearnPanel })),
+)
+const LibrariesPanel = lazyPanel(
+  () => import("./panels/gap-panels").then((m) => ({ default: m.LibrariesPanel })),
+)
+const MeasurementLogPanel = lazyPanel(
+  () => import("./panels/gap-panels").then((m) => ({ default: m.MeasurementLogPanel })),
+)
+const NotesPanel = lazyPanel(
+  () => import("./panels/gap-panels").then((m) => ({ default: m.NotesPanel })),
+)
+const ShapesPanel = lazyPanel(
+  () => import("./panels/gap-panels").then((m) => ({ default: m.ShapesPanel })),
+)
+const StylesPanel = lazyPanel(
+  () => import("./panels/gap-panels").then((m) => ({ default: m.StylesPanel })),
+)
+const GradientsPanel = lazyPanel(
+  () => import("./panels/gradients-panel").then((m) => ({ default: m.GradientsPanel })),
+)
+const GuidesPanel = lazyPanel(
+  () => import("./panels/guides-panel").then((m) => ({ default: m.GuidesPanel })),
+)
+const HistoryPanel = lazyPanel(
+  () => import("./panels/history-panel").then((m) => ({ default: m.HistoryPanel })),
+)
+const HistogramPanel = lazyPanel(
+  () => import("./panels/inspection-panels").then((m) => ({ default: m.HistogramPanel })),
+)
+const InfoPanel = lazyPanel(
+  () => import("./panels/inspection-panels").then((m) => ({ default: m.InfoPanel })),
+)
+const NavigatorPanel = lazyPanel(
+  () => import("./panels/inspection-panels").then((m) => ({ default: m.NavigatorPanel })),
+)
+const LayerCompsPanel = lazyPanel(
+  () => import("./panels/layer-comps-panel").then((m) => ({ default: m.LayerCompsPanel })),
+)
+const LayersPanel = lazyPanel(
+  () => import("./panels/layers-panel").then((m) => ({ default: m.LayersPanel })),
+)
+const PathsPanel = lazyPanel(
+  () => import("./panels/paths-panel").then((m) => ({ default: m.PathsPanel })),
+)
+const PatternsPanel = lazyPanel(
+  () => import("./panels/patterns-panel").then((m) => ({ default: m.PatternsPanel })),
+)
+const PropertiesPanel = lazyPanel(
+  () => import("./panels/properties-panel").then((m) => ({ default: m.PropertiesPanel })),
+)
+const ScriptingPanel = lazyPanel(
+  () => import("./panels/scripting-panel").then((m) => ({ default: m.ScriptingPanel })),
+)
+const SelectionStudioPanel = lazyPanel(
+  () => import("./panels/selection-studio-panel").then((m) => ({ default: m.SelectionStudioPanel })),
+)
+const SlicesPanel = lazyPanel(
+  () => import("./panels/slices-panel").then((m) => ({ default: m.SlicesPanel })),
+)
+const SwatchesPanel = lazyPanel(
+  () => import("./panels/swatches-panel").then((m) => ({ default: m.SwatchesPanel })),
+)
+const TimelinePanel = lazyPanel(
+  () => import("./panels/timeline-panel").then((m) => ({ default: m.TimelinePanel })),
+)
+const ToolPresetsPanel = lazyPanel(
+  () => import("./panels/tool-presets-panel").then((m) => ({ default: m.ToolPresetsPanel })),
+)
 
 export type PanelStack = "upper" | "lower"
 export type PanelDockMode = "expanded" | "compact" | "hidden"

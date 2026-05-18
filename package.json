@@ -71,6 +71,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^10.3.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "postcss": "^8.5",
     "tailwindcss": "^4.2.0",
     "tw-animate-css": "1.3.3",

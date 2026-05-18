@@ -192,7 +192,7 @@ export function rgbToCmyk(rgb: RgbColor, options: CmykConversionOptions = {}): C
       : options.blackGeneration === "heavy"
         ? 1
         : 0.92
-  let k = maxBlack * blackFactor
+  const k = maxBlack * blackFactor
   let c = maxBlack >= 1 ? 0 : (c0 - k) / Math.max(0.0001, 1 - k)
   let m = maxBlack >= 1 ? 0 : (m0 - k) / Math.max(0.0001, 1 - k)
   let y = maxBlack >= 1 ? 0 : (y0 - k) / Math.max(0.0001, 1 - k)

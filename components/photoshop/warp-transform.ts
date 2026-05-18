@@ -276,13 +276,20 @@ export function warpPixels(
             const dy = oy - p.y
             if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) break
 
-            // Jacobian
-            const pdu = bilinearSample(tl, tr, bl, br, Math.min(1, u + 0.01), v)
-            const pdv = bilinearSample(tl, tr, bl, br, u, Math.min(1, v + 0.01))
-            const dxdu = (pdu.x - p.x) / 0.01
-            const dydu = (pdu.y - p.y) / 0.01
-            const dxdv = (pdv.x - p.x) / 0.01
-            const dydv = (pdv.y - p.y) / 0.01
+            // Jacobian via finite differences. When the parameter is
+            // already at the [0,1] boundary, stepping forward (u + 0.01)
+            // clamps back to u and produces a zero Jacobian. Flip the
+            // step direction at the boundary so the determinant stays
+            // non-zero and Newton iteration can converge there.
+            const eps = 0.01
+            const uForward = u + eps <= 1 ? eps : -eps
+            const vForward = v + eps <= 1 ? eps : -eps
+            const pdu = bilinearSample(tl, tr, bl, br, u + uForward, v)
+            const pdv = bilinearSample(tl, tr, bl, br, u, v + vForward)
+            const dxdu = (pdu.x - p.x) / uForward
+            const dydu = (pdu.y - p.y) / uForward
+            const dxdv = (pdv.x - p.x) / vForward
+            const dydv = (pdv.y - p.y) / vForward
             const det = dxdu * dydv - dxdv * dydu
             if (Math.abs(det) < 1e-6) break
             u += (dydv * dx - dxdv * dy) / det
