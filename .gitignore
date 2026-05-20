@@ -40,3 +40,7 @@ playwright-report/
 # GSAP external resources
 gsap-public/
 gsap-skills-main/
+
+# Agent guidelines and temp local images
+SKILL.md
+images/
