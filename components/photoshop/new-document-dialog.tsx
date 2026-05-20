@@ -78,6 +78,17 @@ function modeSettings(mode: DocumentModeSettings["mode"]): DocumentModeSettings 
   return { mode }
 }
 
+function readDefaultBackgroundPreference() {
+  try {
+    const raw = typeof window !== "undefined" ? localStorage.getItem("ps-preferences") : null
+    if (raw) {
+      const p = JSON.parse(raw)
+      if (typeof p?.defaultBackground === "string" && p.defaultBackground !== "#ffffff") return p.defaultBackground as string
+    }
+  } catch {}
+  return null
+}
+
 export function NewDocumentDialog({
   open,
   onOpenChange,
@@ -92,22 +103,16 @@ export function NewDocumentDialog({
   const [unit, setUnit] = React.useState<Unit>("px")
   const [dpi, setDpi] = React.useState(72)
 
-  // Read defaultBackground preference to initialize background choice
-  const prefBg = React.useMemo(() => {
-    try {
-      const raw = typeof window !== "undefined" ? localStorage.getItem("ps-preferences") : null
-      if (raw) {
-        const p = JSON.parse(raw)
-        if (typeof p?.defaultBackground === "string" && p.defaultBackground !== "#ffffff") return p.defaultBackground as string
-      }
-    } catch {}
-    return null
-  }, [open])
+  const [prefBg, setPrefBg] = React.useState<string | null>(() => readDefaultBackgroundPreference())
 
   const [bg, setBg] = React.useState<BackgroundChoice>(prefBg ? "custom" : "white")
   const [customBg, setCustomBg] = React.useState(prefBg ?? "#ffffff")
 
   // Reset when dialog opens with new pref
+  React.useEffect(() => {
+    if (open) setPrefBg(readDefaultBackgroundPreference())
+  }, [open])
+
   React.useEffect(() => {
     if (open && prefBg) {
       setBg("custom")

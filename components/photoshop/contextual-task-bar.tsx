@@ -3,6 +3,7 @@
 import * as React from "react"
 import { Brush, GripVertical, ImageDown, Layers, MousePointer2, SlidersHorizontal, Sparkles, Type } from "lucide-react"
 import { useEditor } from "./editor-context"
+import { dispatchPhotoshopEvent } from "./events"
 
 const POSITION_KEY = "ps-contextual-task-bar-position"
 const DEFAULT_POSITION = { x: 28, y: 36 }
@@ -73,16 +74,16 @@ export function ContextualTaskBar() {
 
   const items = [
     tool === "brush" || tool === "mixer-brush" || tool === "pattern-stamp"
-      ? { label: "Brush", icon: Brush, run: () => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "brush" })) }
+      ? { label: "Brush", icon: Brush, run: () => dispatchPhotoshopEvent("ps-open-panel", "brush") }
       : null,
     activeLayer?.kind === "text"
-      ? { label: "Type", icon: Type, run: () => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "character" })) }
+      ? { label: "Type", icon: Type, run: () => dispatchPhotoshopEvent("ps-open-panel", "character") }
       : null,
     activeLayer
-      ? { label: "Properties", icon: SlidersHorizontal, run: () => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "properties" })) }
+      ? { label: "Properties", icon: SlidersHorizontal, run: () => dispatchPhotoshopEvent("ps-open-panel", "properties") }
       : null,
     activeLayer
-      ? { label: "Layer FX", icon: Sparkles, run: () => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "styles" })) }
+      ? { label: "Layer FX", icon: Sparkles, run: () => dispatchPhotoshopEvent("ps-open-panel", "styles") }
       : null,
     activeLayer
       ? {
@@ -94,7 +95,7 @@ export function ContextualTaskBar() {
           },
         }
       : null,
-    { label: "Export", icon: ImageDown, run: () => window.dispatchEvent(new CustomEvent("ps-open-export-as")) },
+    { label: "Export", icon: ImageDown, run: () => dispatchPhotoshopEvent("ps-open-export-as") },
     { label: "Move", icon: MousePointer2, run: () => dispatch({ type: "set-tool", tool: "move" }) },
   ].filter(Boolean) as { label: string; icon: React.ComponentType<{ className?: string }>; run: () => void }[]
 

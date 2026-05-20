@@ -17,6 +17,9 @@ node_modules
 # Editor / agent local config
 .claude/
 
+# Marketing site file-backed storage (subscribers / feedback)
+.data/
+
 # TypeScript incremental build info
 tsconfig.tsbuildinfo
 
@@ -33,3 +36,7 @@ artifacts/dev-server-*.err.log
 # Playwright test artifacts
 test-results/
 playwright-report/
+
+# GSAP external resources
+gsap-public/
+gsap-skills-main/

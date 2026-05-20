@@ -17,6 +17,7 @@ import { Slider } from "@/components/ui/slider"
 import { downloadText } from "./document-io"
 import {
   DEFAULT_PREFERENCES,
+  MAX_PREFERENCES_IMPORT_BYTES,
   PREFERENCES_STORAGE_KEY,
   type FileHandlingPreferences,
   type GpuPreferences,
@@ -303,6 +304,9 @@ export function PreferencesDialog({
     const file = event.target.files?.[0]
     if (!file) return
     try {
+      if (file.size > MAX_PREFERENCES_IMPORT_BYTES) {
+        throw new Error(`Preference imports are limited to ${Math.round(MAX_PREFERENCES_IMPORT_BYTES / 1024)} KB.`)
+      }
       const text = await file.text()
       setPrefs(parsePreferencesSet(text))
       setImportError("")

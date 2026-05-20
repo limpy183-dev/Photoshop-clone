@@ -343,9 +343,9 @@ function _analyzePreflight(doc: PsDocument): LegacyPreflightItem[] {
 
 export function PreflightDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { activeDoc, dispatch, commit, requestRender } = useEditor()
-  const report = React.useMemo(() => (activeDoc ? analyzePreflightDocument(activeDoc) : null), [activeDoc, open])
+  const report = React.useMemo(() => (activeDoc ? analyzePreflightDocument(activeDoc) : null), [activeDoc])
   const items = React.useMemo<PreflightFinding[]>(() => report?.findings ?? [], [report])
-  const fixes = React.useMemo(() => (activeDoc ? getStructuredPreflightFixes(activeDoc) : null), [activeDoc, open])
+  const fixes = React.useMemo(() => (activeDoc ? getStructuredPreflightFixes(activeDoc) : null), [activeDoc])
   if (!activeDoc) return null
   const fixCandidates = fixes ?? getStructuredPreflightFixes(activeDoc)
   const counts = report?.counts ?? { pass: 0, warn: 0, error: 0, info: 0 }

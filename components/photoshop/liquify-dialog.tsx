@@ -98,20 +98,6 @@ export function LiquifyDialog({
   const originalRef = React.useRef<HTMLCanvasElement | null>(null)
   const draggingRef = React.useRef<{ x: number; y: number } | null>(null)
 
-  React.useEffect(() => {
-    if (!open || !activeLayer) return
-    if (typeof activeLayer.canvas.getContext !== "function") return
-    const w = activeLayer.canvas.width
-    const h = activeLayer.canvas.height
-    const orig = makeCanvas(w, h)
-    orig.getContext("2d")!.drawImage(activeLayer.canvas, 0, 0)
-    originalRef.current = orig
-    const work = makeCanvas(w, h)
-    work.getContext("2d")!.drawImage(activeLayer.canvas, 0, 0)
-    workingRef.current = work
-    drawPreview()
-  }, [open, activeLayer])
-
   const drawPreview = React.useCallback(() => {
     const cv = previewRef.current
     const work = workingRef.current
@@ -144,6 +130,20 @@ export function LiquifyDialog({
       ctx.restore()
     }
   }, [showMesh])
+
+  React.useEffect(() => {
+    if (!open || !activeLayer) return
+    if (typeof activeLayer.canvas.getContext !== "function") return
+    const w = activeLayer.canvas.width
+    const h = activeLayer.canvas.height
+    const orig = makeCanvas(w, h)
+    orig.getContext("2d")!.drawImage(activeLayer.canvas, 0, 0)
+    originalRef.current = orig
+    const work = makeCanvas(w, h)
+    work.getContext("2d")!.drawImage(activeLayer.canvas, 0, 0)
+    workingRef.current = work
+    drawPreview()
+  }, [open, activeLayer, drawPreview])
 
   const reset = () => {
     if (!originalRef.current || !workingRef.current) return

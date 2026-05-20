@@ -106,6 +106,12 @@ test("coalesced zoom changes do not redraw unchanged layer pixels", async ({ pag
   await page.keyboard.up("Control")
   await page.waitForTimeout(520)
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  await page.evaluate(() => {
+    const win = window as typeof window & { __psDrawImageCount?: number }
+    win.__psDrawImageCount = 0
+  })
+  await page.waitForTimeout(120)
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
 
   const drawImageCount = await page.evaluate(() => {
     const win = window as typeof window & {

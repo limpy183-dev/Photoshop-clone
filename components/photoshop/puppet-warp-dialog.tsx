@@ -38,20 +38,8 @@ export function PuppetWarpDialog({
   const workingRef = React.useRef<HTMLCanvasElement | null>(null)
   const originalRef = React.useRef<HTMLCanvasElement | null>(null)
 
-  React.useEffect(() => {
-    if (!open || !activeLayer) return
-    if (typeof activeLayer.canvas.getContext !== "function") return
-    const w = activeLayer.canvas.width
-    const h = activeLayer.canvas.height
-    const orig = makeCanvas(w, h)
-    orig.getContext("2d")!.drawImage(activeLayer.canvas, 0, 0)
-    originalRef.current = orig
-    const work = makeCanvas(w, h)
-    work.getContext("2d")!.drawImage(activeLayer.canvas, 0, 0)
-    workingRef.current = work
-    setPins([])
-    drawPreview([])
-  }, [open, activeLayer])
+  const applyWarpToCanvasRef = React.useRef(applyWarpToCanvas)
+  applyWarpToCanvasRef.current = applyWarpToCanvas
 
   const drawPreview = React.useCallback((currentPins: Pin[]) => {
     const cv = previewRef.current
@@ -67,7 +55,7 @@ export function PuppetWarpDialog({
 
     // If we have moved pins, apply warp and draw result
     if (currentPins.length > 0) {
-      const warped = applyWarpToCanvas(orig, currentPins)
+      const warped = applyWarpToCanvasRef.current(orig, currentPins)
       ctx.drawImage(warped, 0, 0, cv.width, cv.height)
     } else {
       ctx.drawImage(orig, 0, 0, cv.width, cv.height)
@@ -121,6 +109,21 @@ export function PuppetWarpDialog({
       }
     }
   }, [showMesh, meshDensity])
+
+  React.useEffect(() => {
+    if (!open || !activeLayer) return
+    if (typeof activeLayer.canvas.getContext !== "function") return
+    const w = activeLayer.canvas.width
+    const h = activeLayer.canvas.height
+    const orig = makeCanvas(w, h)
+    orig.getContext("2d")!.drawImage(activeLayer.canvas, 0, 0)
+    originalRef.current = orig
+    const work = makeCanvas(w, h)
+    work.getContext("2d")!.drawImage(activeLayer.canvas, 0, 0)
+    workingRef.current = work
+    setPins([])
+    drawPreview([])
+  }, [open, activeLayer, drawPreview])
 
   function applyWarpToCanvas(src: HTMLCanvasElement, warpPins: Pin[]): HTMLCanvasElement {
     const w = src.width, h = src.height

@@ -173,3 +173,410 @@
   background-position: 0 0, 0 100%, 0 0, 100% 0;
   animation: ps-marching-ants 0.5s linear infinite;
 }
+
+
+
+/* =====================================================================
+   Marketing site theme.
+   Scoped to `.marketing` so it never bleeds into the editor surface.
+   ===================================================================== */
+.marketing {
+  /* Palette: deep warm black, cream paper, Photoshop blue, rust accent. */
+  --mk-ink: #0b0907;
+  --mk-ink-2: #110d0a;
+  --mk-ink-3: #1a1410;
+  /* Translucent variants for section panels — let the animated background
+     show through while keeping copy readable. */
+  --mk-ink-veil: rgba(11, 9, 7, 0.72);
+  --mk-ink-2-veil: rgba(17, 13, 10, 0.82);
+  --mk-ink-3-veil: rgba(26, 20, 16, 0.82);
+  --mk-paper: #f4ece0;
+  --mk-paper-dim: #cbbfae;
+  --mk-rule: rgba(244, 236, 224, 0.14);
+  --mk-rule-strong: rgba(244, 236, 224, 0.28);
+  --mk-blue: #1a68da;
+  --mk-blue-soft: #5e93e8;
+  --mk-rust: #e2772a;
+  --mk-amber: #f5c451;
+  --mk-grid: rgba(244, 236, 224, 0.05);
+
+  background-color: var(--mk-ink);
+  color: var(--mk-paper);
+  font-family: var(--font-body), ui-sans-serif, system-ui, sans-serif;
+  font-feature-settings: 'ss01', 'ss02', 'cv11';
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.marketing ::selection {
+  background-color: var(--mk-blue);
+  color: var(--mk-paper);
+}
+
+.marketing .font-display {
+  font-family: var(--font-display), 'Times New Roman', serif;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+}
+
+.marketing .font-mono {
+  font-family: var(--font-mono-marketing), ui-monospace, monospace;
+  font-feature-settings: 'ss02', 'cv01', 'cv11';
+}
+
+/* Decorative grain overlay used over hero / dark surfaces. */
+.marketing .mk-grain {
+  position: relative;
+  isolation: isolate;
+}
+.marketing .mk-grain::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: radial-gradient(
+      rgba(255, 255, 255, 0.04) 1px,
+      transparent 1px
+    ),
+    radial-gradient(rgba(0, 0, 0, 0.18) 1px, transparent 1px);
+  background-size: 3px 3px, 5px 5px;
+  background-position: 0 0, 1px 2px;
+  mix-blend-mode: overlay;
+  opacity: 0.45;
+  z-index: 1;
+}
+
+/* Soft hairline grid pattern that sits behind hero / structural sections. */
+.marketing .mk-grid-bg {
+  background-image: linear-gradient(var(--mk-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--mk-grid) 1px, transparent 1px);
+  background-size: 80px 80px;
+  background-position: -1px -1px;
+}
+
+/* Reveal mask — element wraps a child whose y is animated by GSAP. */
+.marketing .mk-reveal {
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: bottom;
+}
+.marketing .mk-reveal > span {
+  display: inline-block;
+  will-change: transform;
+}
+
+/* Marquee track that GSAP drives. */
+.marketing .mk-marquee {
+  display: flex;
+  width: max-content;
+  will-change: transform;
+}
+
+/* Floating callout pin used on the editor showcase. */
+.marketing .mk-pin {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  pointer-events: none;
+  font-family: var(--font-mono-marketing), ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mk-paper);
+}
+.marketing .mk-pin-dot {
+  position: relative;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--mk-blue);
+  box-shadow: 0 0 0 4px rgba(26, 104, 218, 0.18),
+    0 0 0 10px rgba(26, 104, 218, 0.08);
+}
+.marketing .mk-pin-dot::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 999px;
+  background: var(--mk-paper);
+}
+.marketing .mk-pin-line {
+  height: 1px;
+  width: 56px;
+  background: linear-gradient(
+    90deg,
+    var(--mk-blue) 0%,
+    rgba(26, 104, 218, 0) 100%
+  );
+}
+.marketing .mk-pin-label {
+  background: rgba(11, 9, 7, 0.7);
+  border: 1px solid var(--mk-rule-strong);
+  padding: 0.4rem 0.7rem;
+  border-radius: 999px;
+  backdrop-filter: blur(6px);
+  white-space: nowrap;
+}
+
+/* Custom marketing cursor — replaces the OS cursor on big interactive surfaces. */
+.marketing .mk-cursor {
+  position: fixed;
+  pointer-events: none;
+  z-index: 90;
+  top: 0;
+  left: 0;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--mk-paper);
+  border-radius: 999px;
+  mix-blend-mode: difference;
+  transform: translate(-50%, -50%) scale(1);
+  transition: width 200ms ease, height 200ms ease,
+    background-color 200ms ease;
+}
+.marketing .mk-cursor[data-state='hover'] {
+  width: 64px;
+  height: 64px;
+  background-color: var(--mk-paper);
+}
+
+@media (max-width: 900px) {
+  .marketing .mk-cursor {
+    display: none;
+  }
+}
+
+/* Big stat numbers shown in tabular figures. */
+.marketing .mk-num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+}
+
+/* Tools grid card hover treatment. */
+.marketing .mk-tool {
+  border: 1px solid var(--mk-rule);
+  background: linear-gradient(
+    180deg,
+    rgba(244, 236, 224, 0.02) 0%,
+    rgba(244, 236, 224, 0.005) 100%
+  );
+  transition: border-color 220ms ease, transform 220ms ease,
+    background-color 220ms ease;
+}
+.marketing .mk-tool:hover {
+  border-color: var(--mk-rule-strong);
+  background: linear-gradient(
+    180deg,
+    rgba(26, 104, 218, 0.08) 0%,
+    rgba(244, 236, 224, 0.01) 100%
+  );
+}
+
+/* Newsletter form input. */
+.marketing .mk-input {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--mk-rule-strong);
+  color: var(--mk-paper);
+  padding: 1rem 0;
+  font-size: 1.125rem;
+  font-family: inherit;
+  width: 100%;
+  outline: none;
+  transition: border-color 200ms ease;
+}
+.marketing .mk-input:focus {
+  border-color: var(--mk-blue);
+}
+.marketing .mk-input::placeholder {
+  color: var(--mk-paper-dim);
+}
+
+/* Link underline animation used in nav. */
+.marketing .mk-link {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.marketing .mk-link::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -4px;
+  height: 1px;
+  background: currentColor;
+  transform-origin: right;
+  transform: scaleX(0);
+  transition: transform 320ms cubic-bezier(0.6, 0.01, 0.05, 1);
+}
+.marketing .mk-link:hover::after {
+  transform-origin: left;
+  transform: scaleX(1);
+}
+
+/* Respect reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  .marketing .mk-cursor {
+    display: none;
+  }
+}
+
+
+
+/* =====================================================================
+   Marketing background FX — multi-layer animated backdrop.
+   ===================================================================== */
+
+.marketing .mk-bg-fx {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+
+/* Gradient mesh blobs are large soft shapes that drift across the canvas. */
+.marketing .mk-blob {
+  position: absolute;
+  width: 60vmax;
+  height: 60vmax;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.55;
+  mix-blend-mode: screen;
+  will-change: transform;
+}
+.marketing .mk-blob[data-tone='blue'] {
+  background: radial-gradient(
+    closest-side,
+    rgba(26, 104, 218, 0.65) 0%,
+    rgba(26, 104, 218, 0) 70%
+  );
+}
+.marketing .mk-blob[data-tone='rust'] {
+  background: radial-gradient(
+    closest-side,
+    rgba(226, 119, 42, 0.55) 0%,
+    rgba(226, 119, 42, 0) 70%
+  );
+}
+.marketing .mk-blob[data-tone='amber'] {
+  background: radial-gradient(
+    closest-side,
+    rgba(245, 196, 81, 0.4) 0%,
+    rgba(245, 196, 81, 0) 70%
+  );
+  opacity: 0.4;
+}
+.marketing .mk-blob[data-tone='violet'] {
+  background: radial-gradient(
+    closest-side,
+    rgba(140, 90, 220, 0.45) 0%,
+    rgba(140, 90, 220, 0) 70%
+  );
+  opacity: 0.45;
+}
+
+/* Particle dots floating up the screen. */
+.marketing .mk-particle {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(244, 236, 224, 0.6);
+  will-change: transform, opacity;
+}
+.marketing .mk-particle[data-size='lg'] {
+  width: 4px;
+  height: 4px;
+  background: rgba(244, 236, 224, 0.35);
+  box-shadow: 0 0 8px rgba(244, 236, 224, 0.25);
+}
+.marketing .mk-particle[data-tone='blue'] {
+  background: rgba(94, 147, 232, 0.7);
+  box-shadow: 0 0 10px rgba(26, 104, 218, 0.4);
+}
+.marketing .mk-particle[data-tone='rust'] {
+  background: rgba(226, 119, 42, 0.7);
+  box-shadow: 0 0 10px rgba(226, 119, 42, 0.4);
+}
+
+/* Cursor spotlight: a soft radial that follows the pointer slowly. */
+.marketing .mk-spotlight {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 800px;
+  height: 800px;
+  border-radius: 50%;
+  background: radial-gradient(
+    closest-side,
+    rgba(244, 236, 224, 0.06) 0%,
+    rgba(244, 236, 224, 0) 65%
+  );
+  transform: translate(-50%, -50%);
+  mix-blend-mode: plus-lighter;
+  will-change: transform;
+}
+
+/* Slow horizontal scanline running top-to-bottom. */
+.marketing .mk-scanline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    rgba(244, 236, 224, 0) 0%,
+    rgba(244, 236, 224, 0.32) 25%,
+    rgba(26, 104, 218, 0.55) 50%,
+    rgba(244, 236, 224, 0.32) 75%,
+    rgba(244, 236, 224, 0) 100%
+  );
+  filter: blur(0.6px);
+  will-change: transform;
+  opacity: 0.5;
+}
+
+/* Brush-stroke SVG path — drawn and erased on a long loop. */
+.marketing .mk-brush-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.marketing .mk-brush-path {
+  fill: none;
+  stroke: rgba(244, 236, 224, 0.08);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+.marketing .mk-brush-path[data-tone='blue'] {
+  stroke: rgba(26, 104, 218, 0.28);
+  stroke-width: 1.8;
+}
+
+/* Ensure marketing content sits above the fixed background.
+   Nav (a <header>) sets its own higher z-index via Tailwind, so we deliberately
+   only elevate <main> / <footer> here to avoid out-specifying it. */
+.marketing > main,
+.marketing > footer {
+  position: relative;
+  z-index: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marketing .mk-bg-fx {
+    /* Keep only the static mesh, hide moving layers. */
+    --mk-fx-static: 1;
+  }
+  .marketing .mk-particle,
+  .marketing .mk-scanline,
+  .marketing .mk-brush-svg {
+    display: none;
+  }
+}

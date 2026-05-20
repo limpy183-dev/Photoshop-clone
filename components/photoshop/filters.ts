@@ -668,22 +668,13 @@ function _blackWhite(src: ImageData, reds: number, yellows: number, greens: numb
   // Parameters are in range -100 to 100, representing percentage shift from default mix
   const out = new Uint8ClampedArray(src.data)
 
-  // Default luminance weights for grayscale conversion
-  // These values are adjusted by the slider values
-  const defaultR = 0.407 // Red contributes 40.7% to luminance
-  const defaultY = 0.299 // Yellow contributes 29.9%
-  const defaultG = 0.299 // Green contributes 29.9%
-  const defaultC = 0.187 // Cyan contributes 18.7%
-  const defaultB = 0.114 // Blue contributes 11.4%
-  const defaultM = 0.299 // Magenta contributes 29.9% (similar to red+blue)
-
   for (let i = 0; i < out.length; i += 4) {
     const r = out[i] / 255
     const g = out[i + 1] / 255
     const b = out[i + 2] / 255
 
     // Convert to HSL to work with hue
-    const { h, s, l } = rgbToHsl(r, g, b)
+    const { h, l } = rgbToHsl(r, g, b)
 
     // Start with base luminance
     let lightness = l
@@ -989,24 +980,17 @@ function replaceColor(src: ImageData, hue: number, tolerance: number, lightness:
 }
 
 function _matchColor(src: ImageData): ImageData {
-  // Simple implementation: match to average color
+  // Simple implementation: normalize visible pixels to luminance.
   const out = new Uint8ClampedArray(src.data)
-  let rSum = 0, gSum = 0, bSum = 0, count = 0
+  let count = 0
 
   for (let i = 0; i < out.length; i += 4) {
     if (out[i + 3] > 0) { // Non-transparent pixels
-      rSum += out[i]
-      gSum += out[i + 1]
-      bSum += out[i + 2]
       count++
     }
   }
 
   if (count === 0) return new ImageData(out, src.width, src.height)
-
-  const rAvg = Math.round(rSum / count)
-  const gAvg = Math.round(gSum / count)
-  const bAvg = Math.round(bSum / count)
 
   // Convert to grayscale based on luminance
   for (let i = 0; i < out.length; i += 4) {
@@ -1096,9 +1080,6 @@ function shadowsHighlights(src: ImageData, shadows: number, highlights: number, 
 function hdrTonning(src: ImageData, radius: number, strength: number): ImageData {
   // Simplified HDR toning using local contrast enhancement
   const out = new Uint8ClampedArray(src.data)
-  const w = src.width
-  const h = src.height
-
   // Create a blurred version for local average
   const blurred = gaussianBlur(src, radius)
 
@@ -2586,7 +2567,6 @@ function reduceNoise(src: ImageData, strength: number, colorNoise: number, detai
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const ci = (y * w + x) * 4
-        const lum = 0.299 * out[ci] + 0.587 * out[ci + 1] + 0.114 * out[ci + 2]
         let rAvg = 0, gAvg = 0, bAvg = 0, cnt = 0
         for (let dy = -cr; dy <= cr; dy++) {
           for (let dx = -cr; dx <= cr; dx++) {

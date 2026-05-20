@@ -23,6 +23,7 @@ import type { AdvancedSubsystemTab } from "./advanced-subsystems-dialog"
 import type { GapWorkflowKind } from "./gap-workflow-dialog"
 import type { SelectionOperation } from "./management-dialogs"
 import { lazyDialog } from "./lazy-dialog"
+import { dispatchPhotoshopEvent } from "./events"
 
 // All dialogs below are lazy-mounted: the JS chunk is fetched only the first
 // time the user opens the dialog, and the component returns null until then.
@@ -1220,11 +1221,11 @@ export function MenuBar({
     void saveProjectDocument(activeDoc?.id, "save-as")
   }
 
-  const savePsd = () => {
+  const savePsd = async () => {
     if (!activeDoc) return
     try {
       const report = createDocumentReport(activeDoc, "PSD Export")
-      downloadBlob(serializePsd(activeDoc), `${safeDocName()}.psd`)
+      downloadBlob(await serializePsd(activeDoc), `${safeDocName()}.psd`)
       dispatch({ type: "add-document-report", report })
       rememberDoc(activeDoc, "psd")
       toast.success("PSD exported. Save Project keeps the editable app document clean.")
@@ -1298,7 +1299,7 @@ export function MenuBar({
   }
 
   const openPanel = (id: string) => {
-    window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: id }))
+    dispatchPhotoshopEvent("ps-open-panel", id)
   }
 
   const saveCurrentWorkspace = () => {

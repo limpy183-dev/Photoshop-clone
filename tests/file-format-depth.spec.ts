@@ -2,6 +2,10 @@ import { expect, test } from "@playwright/test"
 
 import {
   capabilityForAdvancedFormat,
+  decodeDicomPreview,
+  decodeRadianceHdrPreview,
+  extractEmbeddedJpegDataUrl,
+  extractMetadataFromFile,
   inspectAdvancedFormatFile,
 } from "../components/photoshop/advanced-subsystems"
 import { getCapability } from "../components/photoshop/capabilities"
@@ -12,6 +16,7 @@ import {
   decodeTiffBuffer,
   inspectExrHeader,
 } from "../components/photoshop/raster-codecs"
+import { installFixtureDom } from "./photoshop-fixtures"
 
 type AdvancedFormatCapabilityWithExport = ReturnType<typeof capabilityForAdvancedFormat> & { exportPath?: string }
 
@@ -81,6 +86,37 @@ function photoshopHeader(version: 1 | 2, width: number, height: number, depth = 
     ...be16(depth),
     ...be16(3),
   ])
+}
+
+function dicomElement(group: number, element: number, vr: string, data: number[]) {
+  if (["OB", "OW", "SQ", "UN", "UT"].includes(vr)) {
+    return [
+      ...le16(group),
+      ...le16(element),
+      ...ascii(vr),
+      0, 0,
+      ...le32(data.length),
+      ...data,
+    ]
+  }
+  return [
+    ...le16(group),
+    ...le16(element),
+    ...ascii(vr),
+    ...le16(data.length),
+    ...data,
+  ]
+}
+
+function dicomPreviewFixture(rows: number, cols: number) {
+  return new Uint8Array([
+    ...new Uint8Array(128),
+    ...ascii("DICM"),
+    ...dicomElement(0x0028, 0x0010, "US", le16(rows)),
+    ...dicomElement(0x0028, 0x0011, "US", le16(cols)),
+    ...dicomElement(0x0028, 0x0100, "US", le16(8)),
+    ...dicomElement(0x7fe0, 0x0010, "OB", [0]),
+  ]).buffer
 }
 
 test("TGA decoder imports RLE true-color pixels with alpha and top-left origin", () => {
@@ -164,6 +200,32 @@ test("PSB strategy reports Photoshop header version, large-document limits, and 
   expect(report.technical.join("\n")).toContain("PSB Large Document Format header: version 2")
   expect(report.technical.join("\n")).toContain("120000x90000")
   expect(report.technical.join("\n")).toContain("layer/resource payload is not decoded")
+})
+
+test("advanced subsystem file readers reject oversized files before loading bytes", async () => {
+  const file = {
+    name: "oversized.psb",
+    type: "image/vnd.adobe.photoshop",
+    size: Number.MAX_SAFE_INTEGER,
+    arrayBuffer: async () => {
+      throw new Error("arrayBuffer should not be called")
+    },
+  } as unknown as File
+
+  await expect(inspectAdvancedFormatFile(file)).rejects.toThrow(/too large/i)
+  await expect(extractMetadataFromFile(file)).rejects.toThrow(/too large/i)
+  await expect(extractEmbeddedJpegDataUrl(file)).rejects.toThrow(/too large/i)
+  await expect(decodeDicomPreview(file)).rejects.toThrow(/too large/i)
+  await expect(decodeRadianceHdrPreview(file)).rejects.toThrow(/too large/i)
+})
+
+test("DICOM and HDR previews reject oversized canvas dimensions before allocation", async () => {
+  installFixtureDom()
+  const dicom = new File([dicomPreviewFixture(1, 8193)], "wide.dcm")
+  const hdr = new File([new TextEncoder().encode("#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 8193\n")], "wide.hdr")
+
+  await expect(decodeDicomPreview(dicom)).rejects.toThrow(/DICOM preview is too large/i)
+  await expect(decodeRadianceHdrPreview(hdr)).rejects.toThrow(/Radiance HDR preview is too large/i)
 })
 
 test("advanced capability matrix models TIFF, PDF, EPS, HEIF, and JPEG 2000 without claiming native parity", () => {

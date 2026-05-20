@@ -7,9 +7,12 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useEditor, makeCanvas } from "./editor-context"
 import { downloadDataUrl, downloadText, loadImageFromFile, renderDocumentComposite } from "./document-io"
+import { assertCanvasSize } from "./canvas-limits"
 import {
+  ADVANCED_FILE_LIMITS,
   ADVANCED_FORMAT_CAPABILITIES,
   applyPluginFilterToCanvas,
+  assertAdvancedFileSize,
   buildPrintPreviewCanvas,
   buildPrintPreviewReport,
   capabilityForAdvancedFormat,
@@ -191,7 +194,7 @@ function ThreeDWorkspace() {
 
   React.useEffect(() => {
     if (activeLayer?.threeD) setScene(activeLayer.threeD)
-  }, [activeLayer?.id])
+  }, [activeLayer?.id, activeLayer?.threeD])
 
   React.useEffect(() => {
     const preview = previewRef.current
@@ -236,14 +239,25 @@ function ThreeDWorkspace() {
   }
 
   const importMesh = async (file: File) => {
-    const lower = file.name.toLowerCase()
-    const next = lower.endsWith(".3ds") || lower.endsWith(".kmz") || lower.endsWith(".u3d")
-      ? importAdvancedThreeDScene(await file.arrayBuffer(), file.name).scene
-      : lower.endsWith(".dae")
-        ? parseDaeToScene(await file.text())
-        : parseObjToScene(await file.text())
-    setScene(next)
-    toast.success(`Imported ${file.name}`)
+    try {
+      const lower = file.name.toLowerCase()
+      const isBinaryModel = lower.endsWith(".3ds") || lower.endsWith(".kmz") || lower.endsWith(".u3d")
+      let next: ThreeDScene
+      if (isBinaryModel) {
+        assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.modelBinaryBytes, "3D model file")
+        next = importAdvancedThreeDScene(await file.arrayBuffer(), file.name).scene
+      } else if (lower.endsWith(".dae")) {
+        assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.modelTextBytes, "DAE model file")
+        next = parseDaeToScene(await file.text())
+      } else {
+        assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.modelTextBytes, "OBJ model file")
+        next = parseObjToScene(await file.text())
+      }
+      setScene(next)
+      toast.success(`Imported ${file.name}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not import 3D model")
+    }
   }
 
   const exportAdvanced = (format: "3ds" | "kmz" | "u3d") => {
@@ -619,7 +633,7 @@ function PrintWorkspace() {
       pagePosition: "center",
       ...(activeDoc.printSettings ?? {}),
     })
-  }, [activeDoc?.id])
+  }, [activeDoc])
 
   React.useEffect(() => {
     if (!activeDoc || !settings || !previewRef.current) return
@@ -828,6 +842,7 @@ function AutomationWorkspace() {
     downloadText(JSON.stringify({ app: "Photoshop Web", format: "psdroplet", version: 1, asset }, null, 2), `${asset.name}.psdroplet.json`, "application/json")
   }
   const importDroplet = async (file: File) => {
+    assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.jsonBytes, "Droplet file")
     const parsed = JSON.parse(await file.text()) as { asset?: AssetLibraryItem }
     if (!parsed.asset) throw new Error("Droplet file does not contain an asset.")
     setAssets([{ ...parsed.asset, id: uid("auto"), createdAt: Date.now() }, ...assets])
@@ -943,6 +958,7 @@ function ProvenanceWorkspace() {
     downloadText(JSON.stringify({ app: "Photoshop Web", format: "content-credentials", version: 1, credentials }, null, 2), `${activeDoc.name}-content-credentials.json`, "application/json")
   }
   const importCredentials = async (file: File) => {
+    assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.jsonBytes, "Content credentials file")
     const parsed = JSON.parse(await file.text()) as { credentials?: ContentCredential[] } | ContentCredential
     const imported = Array.isArray((parsed as { credentials?: ContentCredential[] }).credentials)
       ? (parsed as { credentials: ContentCredential[] }).credentials
@@ -1006,6 +1022,7 @@ function PluginWorkspace() {
     })
   }
   const importPlugin = async (file: File) => {
+    assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.jsonBytes, "Plugin descriptor file")
     const parsed = JSON.parse(await file.text()) as PluginDescriptor | { plugins: PluginDescriptor[] }
     const imported = Array.isArray((parsed as { plugins?: PluginDescriptor[] }).plugins) ? (parsed as { plugins: PluginDescriptor[] }).plugins : [parsed as PluginDescriptor]
     setPlugins([...imported.map((plugin) => ({ ...plugin, id: uid("plugin"), createdAt: Date.now(), enabled: plugin.enabled !== false })), ...plugins])
@@ -1076,6 +1093,7 @@ function LibrariesWorkspace() {
   }
   const importFont = async (file: File) => {
     const family = fontName || file.name.replace(/\.[^.]+$/, "")
+    assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.fontBytes, "Font file")
     const data = await file.arrayBuffer()
     const face = new FontFace(family, data)
     await face.load()
@@ -1122,7 +1140,7 @@ function ColorWorkspace() {
   const [allowDestructiveApply, setAllowDestructiveApply] = React.useState(false)
   React.useEffect(() => {
     if (activeDoc) setSettings(activeDoc.modeSettings ?? { mode: activeDoc.colorMode })
-  }, [activeDoc?.id, activeDoc?.colorMode])
+  }, [activeDoc])
   if (!activeDoc) return <EmptyState text="Open a document before changing color management." />
   const color = activeDoc.colorManagement ?? {
     assignedProfile: "sRGB IEC61966-2.1" as const,
@@ -1240,6 +1258,7 @@ function FormatsWorkspace() {
     const notes = [`Opened ${file.name}`]
     let canvas: HTMLCanvasElement | null = null
     try {
+      assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.rasterBytes, "Advanced import file")
       const inspection = await inspectAdvancedFormatFile(file)
       const capability = capabilityForAdvancedFormat(file.name, file.type)
       notes.push(`Detected ${capability.label}: ${capability.supportLabel}`)
@@ -1267,7 +1286,8 @@ function FormatsWorkspace() {
         const dataUrl = await extractEmbeddedJpegDataUrl(file)
         if (dataUrl) {
           const img = await imageFromDataUrl(dataUrl)
-          canvas = createSubsystemCanvas(img.naturalWidth, img.naturalHeight)
+          const size = assertCanvasSize(img.naturalWidth, img.naturalHeight, "RAW embedded JPEG preview")
+          canvas = createSubsystemCanvas(size.width, size.height)
           canvas.getContext("2d")!.drawImage(img, 0, 0)
           notes.push("Imported embedded RAW/DNG JPEG preview")
         } else {
@@ -1346,6 +1366,7 @@ function VariablesWorkspace() {
   const selected = dataSets.find((set) => set.id === selectedId) ?? dataSets[0]
   const setDataSets = (next: VariableDataSet[]) => dispatch({ type: "set-variable-data-sets", dataSets: next })
   const importCsv = async (file: File) => {
+    assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.csvBytes, "CSV file")
     const rows = parseCsv(await file.text())
     const headers = Object.keys(rows[0] ?? {})
     const bindings: VariableBinding[] = []

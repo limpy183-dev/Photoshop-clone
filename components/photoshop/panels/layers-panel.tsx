@@ -55,6 +55,8 @@ import {
 } from "@/components/ui/popover"
 import type { AdjustmentType, BlendMode, Layer, LayerKind } from "../types"
 import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop } from "../adjustment-layers"
+import { dispatchPhotoshopEvent } from "../events"
+import type { MergedRenderChange } from "../render-bus"
 
 const BLENDS: BlendMode[] = [
   "normal",
@@ -337,7 +339,7 @@ export function LayersPanel() {
   const openAdjustmentSettings = (layer: Layer) => {
     if (layer.kind !== "adjustment") return
     dispatch({ type: "set-active-layer", id: layer.id })
-    window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "adjustments" }))
+    dispatchPhotoshopEvent("ps-open-panel", "adjustments")
   }
 
   return (
@@ -613,11 +615,11 @@ export function LayersPanel() {
               }}
               onClick={(e) => onLayerClick(e, l)}
               onDoubleClick={() => openAdjustmentSettings(l)}
-              onMouseEnter={(e) => {
-                if (canAltClip && (altDown || e.altKey)) setAltClipLayerId(l.id)
+              onMouseEnter={() => {
+                if (canAltClip) setAltClipLayerId(l.id)
               }}
-              onMouseMove={(e) => {
-                if (canAltClip && (altDown || e.altKey)) setAltClipLayerId(l.id)
+              onMouseMove={() => {
+                if (canAltClip) setAltClipLayerId(l.id)
                 else if (altClipLayerId === l.id) setAltClipLayerId(null)
               }}
               onMouseLeave={() => {
@@ -1195,7 +1197,8 @@ function AdjustmentMaskThumb({ layer, maskState }: { layer: Layer; maskState: st
 function LayerThumb({ layer }: { layer: Layer }) {
   const ref = React.useRef<HTMLCanvasElement>(null)
 
-  const draw = React.useCallback(() => {
+  const draw = React.useCallback((change?: MergedRenderChange) => {
+    if (change?.layerIds !== "all" && change?.layerIds && !change.layerIds.includes(layer.id)) return
     const dst = ref.current
     if (!dst) return
     if (typeof layer.canvas.getContext !== "function") return

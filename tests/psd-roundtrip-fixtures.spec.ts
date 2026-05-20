@@ -22,7 +22,7 @@ test("PSD report classifies rich app-only fixture metadata without overclaiming"
 })
 
 test("PSD serialization produces a Photoshop blob for fixture documents", async () => {
-  const blob = serializePsd(richFixtureDocument())
+  const blob = await serializePsd(richFixtureDocument())
 
   expect(blob.type).toBe("image/vnd.adobe.photoshop")
   expect(blob.size).toBeGreaterThan(0)

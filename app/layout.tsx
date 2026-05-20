@@ -2,6 +2,10 @@ import type { Metadata } from 'next'
 import Script from 'next/script'
 import { Analytics } from '@vercel/analytics/next'
 import { Toaster } from '@/components/ui/sonner'
+import {
+  marketingFontVariables,
+  marketingFontVariableClasses,
+} from '@/components/marketing/fonts'
 import './globals.css'
 
 const stripExtensionHydrationAttributes = `
@@ -37,14 +41,17 @@ const stripExtensionHydrationAttributes = `
 `
 
 export const metadata: Metadata = {
-  title: 'Photoshop Web — Image Editor',
-  description: 'A browser-based Photoshop-style image editor with layers, tools, and panels.',
-  generator: 'v0.app',
+  title: 'Photoshop Web — A Real Image Editor In A Tab',
+  description:
+    'Photoshop Web is a browser-native, layer-honest image editor with the panels, tools, and workflows you already know — built on Canvas, workers, and a stubborn refusal to lie about what a browser can do.',
+  generator: 'Photoshop Web',
   icons: {
     icon: '/icon.svg',
     apple: '/icon.svg',
   },
 }
+
+void marketingFontVariables
 
 export default function RootLayout({
   children,
@@ -52,8 +59,12 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" className="dark bg-background" suppressHydrationWarning>
-      <body className="font-sans antialiased overflow-hidden" suppressHydrationWarning>
+    <html
+      lang="en"
+      className={`dark bg-background ${marketingFontVariableClasses}`}
+      suppressHydrationWarning
+    >
+      <body className="font-sans antialiased min-h-screen" suppressHydrationWarning>
         <Script
           id="strip-extension-hydration-attributes"
           strategy="beforeInteractive"

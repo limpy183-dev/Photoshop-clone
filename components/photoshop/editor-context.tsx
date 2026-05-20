@@ -62,6 +62,7 @@ import { compositeLayer, getNativeComposite } from "./blend-modes"
 import { loadPreferencesFromStorage, recordHistoryLogEntryFromStorage } from "./preferences-engine"
 import { createHistoryJumpScheduler, type HistoryJumpScheduler } from "./history-jump-scheduler"
 import { isAdjustmentNoop } from "./adjustment-layers"
+import { RenderBus, type MergedRenderChange, type RenderChange } from "./render-bus"
 import {
   borderSelectionMask,
   contractSelectionMask,
@@ -348,6 +349,13 @@ function commitAffectsComposite(doc: PsDocument, changedLayerIds: ChangedLayerId
     if (!layer) return true
     return !(layer.kind === "adjustment" && isAdjustmentNoop(layer.adjustment))
   })
+}
+
+function renderChangeForChangedLayerIds(changedLayerIds: ChangedLayerIds | undefined): RenderChange {
+  const ids = changedLayerIdsList(changedLayerIds)
+  return ids && ids.length
+    ? { layerIds: ids, reason: "history" }
+    : { layerIds: "all", reason: "history" }
 }
 
 function normalizeDirtyRect(rect: DirtyRect | undefined, width: number, height: number): DirtyRect | null {
@@ -1251,6 +1259,19 @@ const DEFAULT_BRUSH_PRESETS: BrushPreset[] = [
 // dispatch wrapper) so undo/redo correctness is unaffected.
 const HIGH_FREQUENCY_ACTION_TYPES = new Set<Action["type"]>([
   "push-history",
+])
+
+const HISTORY_CONTEXT_INVALIDATING_ACTION_TYPES = new Set<Action["type"]>([
+  "push-history",
+  "reset-history",
+  "restore-history-entry",
+  "new-document",
+  "close-document",
+  "close-other-documents",
+  "reopen-closed-document",
+  "move-layers-to-document",
+  "activate-document",
+  "update-smart-object-parent",
 ])
 
 const DOCUMENT_DIRTY_ACTIONS = new Set<Action["type"]>([
@@ -2825,24 +2846,6 @@ function mutateActiveDoc(state: EditorState, fn: (d: PsDocument) => PsDocument):
 const EMPTY_HISTORY = Object.freeze({ entries: [] as HistoryEntry[], index: -1 }) as { entries: HistoryEntry[]; index: number }
 const EMPTY_SNAPSHOTS: HistorySnapshot[] = Object.freeze([]) as unknown as HistorySnapshot[]
 
-class RenderBus {
-  private listeners = new Set<() => void>()
-  private rafId: number | null = null
-
-  subscribe(cb: () => void) {
-    this.listeners.add(cb)
-    return () => this.listeners.delete(cb)
-  }
-
-  requestRender() {
-    if (this.rafId !== null) return
-    this.rafId = requestAnimationFrame(() => {
-      this.rafId = null
-      this.listeners.forEach((cb) => cb())
-    })
-  }
-}
-
 /* --------------------------- snapshot api ------------------------------ */
 
 function canReuseCanvasSnapshot(
@@ -3217,6 +3220,7 @@ interface EditorContextValue {
   snapshots: HistorySnapshot[]
   closedDocuments: Array<{ id: string; name: string; width: number; height: number; closedAt: number }>
   documentStatuses: Record<string, DocumentLifecycleState>
+  documentHistoryVersions: Record<string, number>
   actions: MacroAction[]
   recordingActionId: string | null
   isPlayingAction: boolean
@@ -3227,8 +3231,8 @@ interface EditorContextValue {
   styleClipboard: LayerStyle | null
   dispatch: React.Dispatch<Action>
   commit: (label: string, changedLayerIds?: ChangedLayerIds) => void
-  requestRender: () => void
-  subscribeRender: (cb: () => void) => () => void
+  requestRender: (change?: RenderChange) => void
+  subscribeRender: (cb: (change: MergedRenderChange) => void) => () => void
   newLayer: (kind?: LayerKind) => void
   newGroup: () => void
   jumpHistory: (index: number) => void
@@ -3273,7 +3277,13 @@ interface EditorContextValue {
   setFilterPreview: (layerId: string, canvas: HTMLCanvasElement | null) => void
 }
 
+interface EditorRenderContextValue {
+  requestRender: (change?: RenderChange) => void
+  subscribeRender: (cb: (change: MergedRenderChange) => void) => () => void
+}
+
 const EditorContext = React.createContext<EditorContextValue | null>(null)
+const EditorRenderContext = React.createContext<EditorRenderContextValue | null>(null)
 
 const initialDoc = makeDocument("Untitled-1", 1200, 800, "#ffffff", {
   doc: "doc_initial",
@@ -3405,6 +3415,8 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
   const [state, rawDispatch] = React.useReducer(reducer, initialState)
   const stateRef = React.useRef(state)
   stateRef.current = state
+  const historyJumpSchedulerRef = React.useRef<HistoryJumpScheduler | null>(null)
+  const performHistoryJumpRef = React.useRef<(index: number) => void>(() => {})
   // Tracks whether the current dispatch should be flushed urgently (sync
   // render) or deferred via React.startTransition (non-blocking render).
   // High-frequency dispatches like "push-history" set this to true so the
@@ -3427,6 +3439,11 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
       next = reducer(next, { type: "mark-document-dirty", id: docId })
     }
     stateRef.current = next
+    if (HISTORY_CONTEXT_INVALIDATING_ACTION_TYPES.has(action.type)) {
+      // A new branch, floor, snapshot restore, or active timeline invalidates
+      // any pending undo/redo target left by an earlier step.
+      historyJumpSchedulerRef.current?.cancel()
+    }
 
     // Schedule the React render. For high-frequency, non-urgent updates
     // (history pushes during painting), use startTransition so React doesn't
@@ -3450,23 +3467,25 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     const persisted = loadPersistedSettings()
     if (Object.keys(persisted).length) dispatch({ type: "hydrate-settings", settings: persisted })
-  }, [])
+  }, [dispatch])
 
   // Auto-save settings to localStorage (debounced)
   React.useEffect(() => {
-    const t = window.setTimeout(() => savePersistedSettings(state), 300)
+    const t = window.setTimeout(() => savePersistedSettings(stateRef.current), 300)
     return () => window.clearTimeout(t)
   }, [state.tool, state.foreground, state.background, state.brush, state.gradient, state.symmetry])
 
   const renderBusRef = React.useRef<RenderBus | null>(null)
   if (renderBusRef.current === null) renderBusRef.current = new RenderBus()
-  const requestRender = React.useCallback(() => renderBusRef.current!.requestRender(), [])
+  const requestRender = React.useCallback((change?: RenderChange) => renderBusRef.current!.requestRender(change), [])
   const subscribeRender = React.useCallback(
-    (cb: () => void) => renderBusRef.current!.subscribe(cb),
+    (cb: (change: MergedRenderChange) => void) => renderBusRef.current!.subscribe(cb),
     [],
   )
-  const historyJumpSchedulerRef = React.useRef<HistoryJumpScheduler | null>(null)
-  const performHistoryJumpRef = React.useRef<(index: number) => void>(() => {})
+  const renderContextValue = React.useMemo(
+    () => ({ requestRender, subscribeRender }),
+    [requestRender, subscribeRender],
+  )
 
   React.useEffect(() => {
     const scheduler = createHistoryJumpScheduler((index) => performHistoryJumpRef.current(index))
@@ -3573,7 +3592,12 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
       }
     }
     return result
-  }, [state.documents, state.documentLifecycle, state.histories])
+  }, [state])
+  const documentHistoryVersions = React.useMemo(() => {
+    const result: Record<string, number> = {}
+    for (const doc of state.documents) result[doc.id] = currentHistoryIndex(state, doc.id)
+    return result
+  }, [state])
 
   // Initialize SSR-safe canvases on the client.
   //
@@ -3639,7 +3663,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     } else {
       delete filterPreviewsRef.current[layerId]
     }
-    requestRender()
+    requestRender({ layerIds: [layerId], reason: "filter-preview" })
   }, [requestRender])
 
   const commit = React.useCallback(
@@ -3698,9 +3722,9 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
         setTimeout(writeLog, 0)
       }
 
-      if (commitAffectsComposite(doc, changedLayerIds)) requestRender()
+      if (commitAffectsComposite(doc, changedLayerIds)) requestRender(renderChangeForChangedLayerIds(changedLayerIds))
     },
-    [requestRender],
+    [dispatch, requestRender],
   )
 
   const performHistoryJump = React.useCallback(
@@ -3743,7 +3767,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
         apply()
       }
     },
-    [requestRender],
+    [dispatch, requestRender],
   )
   performHistoryJumpRef.current = performHistoryJump
 
@@ -3807,7 +3831,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
         },
       })
     },
-    [],
+    [dispatch],
   )
 
   const restoreHistorySnapshot = React.useCallback(
@@ -3820,7 +3844,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "restore-history-entry", entry: snapshot.entry })
       requestRender()
     },
-    [requestRender],
+    [dispatch, requestRender],
   )
 
   const deleteHistorySnapshot = React.useCallback((snapshotId: string) => {
@@ -3828,7 +3852,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     const docId = current.activeDocId
     if (!docId) return
     dispatch({ type: "delete-history-snapshot", docId, snapshotId })
-  }, [])
+  }, [dispatch])
 
   const createAction = React.useCallback((name?: string) => {
     const createdAt = Date.now()
@@ -3842,15 +3866,15 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
         steps: [],
       },
     })
-  }, [])
+  }, [dispatch])
 
   const startRecordingAction = React.useCallback((id: string) => {
     dispatch({ type: "start-recording-action", id })
-  }, [])
+  }, [dispatch])
 
   const stopRecordingAction = React.useCallback(() => {
     dispatch({ type: "stop-recording-action" })
-  }, [])
+  }, [dispatch])
 
   const playAction = React.useCallback(
     async (id: string) => {
@@ -3879,16 +3903,16 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
         requestRender()
       }
     },
-    [requestRender],
+    [dispatch, requestRender],
   )
 
   const deleteAction = React.useCallback((id: string) => {
     dispatch({ type: "delete-action", id })
-  }, [])
+  }, [dispatch])
 
   const clearAction = React.useCallback((id: string) => {
     dispatch({ type: "clear-action-steps", id })
-  }, [])
+  }, [dispatch])
 
   const newLayer = React.useCallback(
     (kind: LayerKind = "raster") => {
@@ -3907,7 +3931,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "add-layer", layer })
       setTimeout(() => commit("New Layer", [layer.id]), 0)
     },
-    [activeDoc, commit],
+    [activeDoc, commit, dispatch],
   )
 
   const newGroup = React.useCallback(() => {
@@ -3915,7 +3939,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     const groupId = uid("group")
     dispatch({ type: "group-selected", groupId })
     setTimeout(() => commit("New Group", [groupId, ...activeDoc.selectedLayerIds]), 0)
-  }, [activeDoc, commit])
+  }, [activeDoc, commit, dispatch])
 
   const createDocument = React.useCallback(
     (doc: PsDocument, label = "New Document", lifecycle?: Partial<DocumentLifecycleState>) => {
@@ -3923,7 +3947,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "new-document", doc, entry, lifecycle })
       requestRender()
     },
-    [requestRender],
+    [dispatch, requestRender],
   )
 
   const duplicateDocument = React.useCallback(
@@ -3936,7 +3960,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "new-document", doc: duplicated, entry })
       requestRender()
     },
-    [requestRender],
+    [dispatch, requestRender],
   )
 
   const requestCloseDocument = React.useCallback((id?: string) => {
@@ -3961,7 +3985,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
   const reopenClosedDocument = React.useCallback((id?: string) => {
     dispatch({ type: "reopen-closed-document", id })
     requestRender()
-  }, [requestRender])
+  }, [dispatch, requestRender])
 
   const markDocumentSaved = React.useCallback((id: string, lifecycle?: Partial<DocumentLifecycleState>) => {
     dispatch({ type: "mark-document-saved", id, lifecycle })
@@ -3986,7 +4010,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
         }
       }, 0)
     },
-    [requestRender],
+    [dispatch, requestRender],
   )
 
   const editSmartObject = React.useCallback(
@@ -4020,7 +4044,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "new-document", doc, entry })
       requestRender()
     },
-    [requestRender],
+    [dispatch, requestRender],
   )
 
   const updateSmartObjectParent = React.useCallback(() => {
@@ -4036,7 +4060,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     })
     window.setTimeout(() => commit("Update Smart Object", [doc.smartObjectParent!.layerId]), 0)
     requestRender()
-  }, [commit, requestRender])
+  }, [commit, dispatch, requestRender])
 
   const copySelection = React.useCallback(
     (cut = false) => {
@@ -4074,7 +4098,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
         commit("Cut", [activeLayer.id])
       }
     },
-    [activeDoc, activeLayer, commit],
+    [activeDoc, activeLayer, commit, dispatch],
   )
 
   const pasteAsLayer = React.useCallback(() => {
@@ -4097,7 +4121,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     }
     dispatch({ type: "add-layer", layer })
     setTimeout(() => commit("Paste", [layer.id]), 0)
-  }, [activeDoc, state.clipboard, commit])
+  }, [activeDoc, state.clipboard, commit, dispatch])
 
   const resizeDocument = React.useCallback(
     (w: number, h: number, resample: "nearest" | "bilinear" | "bicubic" | "bicubic-smoother" | "bicubic-sharper" = "bicubic") => {
@@ -4220,7 +4244,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
         makeCanvas(activeDoc.width, activeDoc.height)
       dispatch({ type: "set-quick-mask", on: true, canvas })
     }
-  }, [activeDoc])
+  }, [activeDoc, dispatch])
 
   const addLayerMask = React.useCallback(() => {
     if (!activeDoc || !activeLayer) return
@@ -4246,7 +4270,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     }
     dispatch({ type: "set-layer-mask", id: activeLayer.id, mask })
     setTimeout(() => commit("Add Layer Mask", [activeLayer.id]), 0)
-  }, [activeDoc, activeLayer, commit])
+  }, [activeDoc, activeLayer, commit, dispatch])
 
   const value: EditorContextValue = React.useMemo(() => ({
     documents: state.documents,
@@ -4274,6 +4298,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
       closedAt: record.closedAt,
     })),
     documentStatuses,
+    documentHistoryVersions,
     actions: state.actions,
     recordingActionId: state.recordingActionId,
     isPlayingAction: state.isPlayingAction,
@@ -4418,7 +4443,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     state.documents, state.activeDocId, state.tool, state.foreground, state.background,
     state.brush, state.gradient, state.paintBucket, state.eraser, state.cloneSource, state.symmetry, state.selectionOptions,
     state.transform, state.brushPresets, state.clipboard, state.styleClipboard, state.closedDocuments,
-    state.actions, state.recordingActionId, state.isPlayingAction, documentStatuses,
+    state.actions, state.recordingActionId, state.isPlayingAction, documentStatuses, documentHistoryVersions,
     docHistory.entries, docHistory.index, docSnapshots,
     activeDoc, activeLayer, selectedLayers,
     dispatch, commit, requestRender, subscribeRender,
@@ -4444,6 +4469,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
+    <EditorRenderContext.Provider value={renderContextValue}>
     <EditorContext.Provider value={value}>
       {children}
       <Dialog open={!!closeTarget} onOpenChange={(open) => {
@@ -4470,6 +4496,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
         </DialogContent>
       </Dialog>
     </EditorContext.Provider>
+    </EditorRenderContext.Provider>
   )
 }
 
@@ -4479,8 +4506,10 @@ export function useEditor() {
   return ctx
 }
 
-export function useRenderSubscription(cb: () => void) {
-  const { subscribeRender } = useEditor()
+export function useRenderSubscription(cb: (change: MergedRenderChange) => void) {
+  const ctx = React.useContext(EditorRenderContext)
+  if (!ctx) throw new Error("useRenderSubscription must be used within EditorProvider")
+  const { subscribeRender } = ctx
   React.useEffect(() => subscribeRender(cb), [cb, subscribeRender])
 }
 

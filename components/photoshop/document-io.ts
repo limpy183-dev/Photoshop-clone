@@ -10,7 +10,6 @@ declare global {
   }
 }
 
-import { readPsd, writePsd } from "ag-psd"
 import { compositeLayer } from "./blend-modes"
 import { getFilter } from "./filters"
 import { applyLayerStyle } from "./layer-styles"
@@ -42,6 +41,10 @@ import type {
   LayerColor,
   Psd,
 } from "ag-psd"
+
+function loadPsdCodec() {
+  return import("ag-psd")
+}
 
 export type ExportFormat = "png" | "jpeg" | "webp" | "avif" | "gif" | "svg"
 
@@ -142,6 +145,212 @@ const APP_LAYER_KINDS = new Set<Layer["kind"]>([
 ])
 
 const SAFE_CANVAS_DATA_URL = /^data:image\/(?:png|jpeg|jpg|webp|avif);base64,/i
+const PSD_HEADER_BYTES = 26
+const RASTER_HEADER_BYTES = 1024 * 1024
+
+interface ImageHeaderDimensions {
+  width: number
+  height: number
+  format: string
+}
+
+function hasAscii(bytes: Uint8Array, offset: number, text: string) {
+  if (offset + text.length > bytes.length) return false
+  for (let i = 0; i < text.length; i++) {
+    if (bytes[offset + i] !== text.charCodeAt(i)) return false
+  }
+  return true
+}
+
+function readUint16BE(bytes: Uint8Array, offset: number) {
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint16(offset, false)
+}
+
+function readUint16LE(bytes: Uint8Array, offset: number) {
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint16(offset, true)
+}
+
+function readUint24LE(bytes: Uint8Array, offset: number) {
+  return bytes[offset] + (bytes[offset + 1] << 8) + (bytes[offset + 2] << 16)
+}
+
+function readUint32BE(bytes: Uint8Array, offset: number) {
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(offset, false)
+}
+
+function readUint32LE(bytes: Uint8Array, offset: number) {
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(offset, true)
+}
+
+function readInt32LE(bytes: Uint8Array, offset: number) {
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getInt32(offset, true)
+}
+
+function validatePsdHeaderDimensions(buffer: ArrayBuffer) {
+  if (buffer.byteLength < PSD_HEADER_BYTES) return
+  const bytes = new Uint8Array(buffer, 0, PSD_HEADER_BYTES)
+  if (!hasAscii(bytes, 0, "8BPS")) return
+  const version = readUint16BE(bytes, 4)
+  if (version !== 1 && version !== 2) return
+  const height = readUint32BE(bytes, 14)
+  const width = readUint32BE(bytes, 18)
+  assertCanvasSize(width || 1, height || 1, "PSD canvas")
+}
+
+function sniffPngDimensions(bytes: Uint8Array): ImageHeaderDimensions | null {
+  if (
+    bytes.length < 24 ||
+    bytes[0] !== 0x89 ||
+    !hasAscii(bytes, 1, "PNG\r\n\u001a\n") ||
+    !hasAscii(bytes, 12, "IHDR")
+  ) {
+    return null
+  }
+  return { width: readUint32BE(bytes, 16), height: readUint32BE(bytes, 20), format: "PNG" }
+}
+
+function sniffGifDimensions(bytes: Uint8Array): ImageHeaderDimensions | null {
+  if (bytes.length < 10 || (!hasAscii(bytes, 0, "GIF87a") && !hasAscii(bytes, 0, "GIF89a"))) return null
+  return { width: readUint16LE(bytes, 6), height: readUint16LE(bytes, 8), format: "GIF" }
+}
+
+function isJpegStartOfFrame(marker: number) {
+  return (
+    marker === 0xc0 ||
+    marker === 0xc1 ||
+    marker === 0xc2 ||
+    marker === 0xc3 ||
+    marker === 0xc5 ||
+    marker === 0xc6 ||
+    marker === 0xc7 ||
+    marker === 0xc9 ||
+    marker === 0xca ||
+    marker === 0xcb ||
+    marker === 0xcd ||
+    marker === 0xce ||
+    marker === 0xcf
+  )
+}
+
+function sniffJpegDimensions(bytes: Uint8Array): ImageHeaderDimensions | null {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null
+  let offset = 2
+  while (offset + 3 < bytes.length) {
+    if (bytes[offset] !== 0xff) {
+      offset++
+      continue
+    }
+    while (offset < bytes.length && bytes[offset] === 0xff) offset++
+    const marker = bytes[offset++]
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd9)) continue
+    if (offset + 2 > bytes.length) return null
+    const length = readUint16BE(bytes, offset)
+    if (length < 2 || offset + length > bytes.length) return null
+    if (isJpegStartOfFrame(marker) && length >= 7) {
+      return { width: readUint16BE(bytes, offset + 5), height: readUint16BE(bytes, offset + 3), format: "JPEG" }
+    }
+    if (marker === 0xda) return null
+    offset += length
+  }
+  return null
+}
+
+function sniffWebpDimensions(bytes: Uint8Array): ImageHeaderDimensions | null {
+  if (bytes.length < 30 || !hasAscii(bytes, 0, "RIFF") || !hasAscii(bytes, 8, "WEBP")) return null
+  let offset = 12
+  while (offset + 8 <= bytes.length) {
+    const chunkTypeOffset = offset
+    const chunkSize = readUint32LE(bytes, offset + 4)
+    const payload = offset + 8
+    if (payload + chunkSize > bytes.length) return null
+    if (hasAscii(bytes, chunkTypeOffset, "VP8X") && chunkSize >= 10) {
+      return {
+        width: readUint24LE(bytes, payload + 4) + 1,
+        height: readUint24LE(bytes, payload + 7) + 1,
+        format: "WEBP",
+      }
+    }
+    if (hasAscii(bytes, chunkTypeOffset, "VP8 ") && chunkSize >= 10 && hasAscii(bytes, payload + 3, "\u009d\u0001*")) {
+      return {
+        width: readUint16LE(bytes, payload + 6) & 0x3fff,
+        height: readUint16LE(bytes, payload + 8) & 0x3fff,
+        format: "WEBP",
+      }
+    }
+    if (hasAscii(bytes, chunkTypeOffset, "VP8L") && chunkSize >= 5 && bytes[payload] === 0x2f) {
+      const bits =
+        bytes[payload + 1] |
+        (bytes[payload + 2] << 8) |
+        (bytes[payload + 3] << 16) |
+        (bytes[payload + 4] << 24)
+      return {
+        width: (bits & 0x3fff) + 1,
+        height: ((bits >>> 14) & 0x3fff) + 1,
+        format: "WEBP",
+      }
+    }
+    offset = payload + chunkSize + (chunkSize % 2)
+  }
+  return null
+}
+
+function sniffBmpDimensions(bytes: Uint8Array): ImageHeaderDimensions | null {
+  if (bytes.length < 26 || !hasAscii(bytes, 0, "BM")) return null
+  const dibSize = readUint32LE(bytes, 14)
+  if (dibSize === 12) {
+    return { width: readUint16LE(bytes, 18), height: readUint16LE(bytes, 20), format: "BMP" }
+  }
+  if (dibSize >= 40 && bytes.length >= 26) {
+    return {
+      width: Math.abs(readInt32LE(bytes, 18)),
+      height: Math.abs(readInt32LE(bytes, 22)),
+      format: "BMP",
+    }
+  }
+  return null
+}
+
+function isIsoBaseMediaFile(bytes: Uint8Array) {
+  if (bytes.length < 16 || !hasAscii(bytes, 4, "ftyp")) return false
+  const majorBrand = String.fromCharCode(...bytes.slice(8, 12))
+  if (/^(avif|avis|heic|heix|hevc|hevx|mif1|msf1)$/.test(majorBrand)) return true
+  const brandsEnd = Math.min(bytes.length, readUint32BE(bytes, 0))
+  for (let offset = 16; offset + 4 <= brandsEnd; offset += 4) {
+    const brand = String.fromCharCode(...bytes.slice(offset, offset + 4))
+    if (/^(avif|avis|heic|heix|hevc|hevx|mif1|msf1)$/.test(brand)) return true
+  }
+  return false
+}
+
+function sniffIsoImageDimensions(bytes: Uint8Array): ImageHeaderDimensions | null {
+  if (!isIsoBaseMediaFile(bytes)) return null
+  for (let offset = 4; offset + 16 <= bytes.length; offset++) {
+    if (!hasAscii(bytes, offset, "ispe")) continue
+    const boxStart = offset - 4
+    const boxSize = readUint32BE(bytes, boxStart)
+    if (boxSize >= 20 && offset + 16 <= bytes.length) {
+      return { width: readUint32BE(bytes, offset + 8), height: readUint32BE(bytes, offset + 12), format: "ISO-BMFF" }
+    }
+  }
+  return null
+}
+
+function sniffRasterDimensions(bytes: Uint8Array): ImageHeaderDimensions | null {
+  return (
+    sniffPngDimensions(bytes) ??
+    sniffGifDimensions(bytes) ??
+    sniffJpegDimensions(bytes) ??
+    sniffWebpDimensions(bytes) ??
+    sniffBmpDimensions(bytes) ??
+    sniffIsoImageDimensions(bytes)
+  )
+}
+
+async function assertRasterHeaderCanvasSize(file: File) {
+  const headerBytes = await file.slice(0, Math.min(file.size, RASTER_HEADER_BYTES)).arrayBuffer()
+  const dimensions = sniffRasterDimensions(new Uint8Array(headerBytes))
+  if (dimensions) assertCanvasSize(dimensions.width, dimensions.height, "Image canvas")
+}
 
 function cleanText(value: unknown, fallback: string, maxLength = 120) {
   if (typeof value !== "string") return fallback
@@ -1742,16 +1951,24 @@ function flattenPsdChildren(children: PsdLayer[] | undefined, docW: number, docH
 export async function deserializePsdFile(file: File): Promise<PsDocument> {
   assertFileSize(file, MAX_PSD_FILE_BYTES, "PSD file")
   const buffer = await file.arrayBuffer()
+  validatePsdHeaderDimensions(buffer)
+  const { readPsd } = await loadPsdCodec()
+  const metadata = readPsd(buffer, {
+    skipLayerImageData: true,
+    skipCompositeImageData: true,
+    skipThumbnail: true,
+    useImageData: false,
+  })
+  const { width, height } = assertCanvasSize(Math.round(metadata.width || 1), Math.round(metadata.height || 1), "PSD canvas")
+  if (countPsdLayers(metadata.children) > MAX_PROJECT_LAYERS) {
+    throw new Error(`PSD contains too many layers. Maximum supported layers: ${MAX_PROJECT_LAYERS}.`)
+  }
   const psd = readPsd(buffer, {
     skipLayerImageData: false,
     skipCompositeImageData: false,
     skipThumbnail: true,
     useImageData: false,
   })
-  const { width, height } = assertCanvasSize(Math.round(psd.width || 1), Math.round(psd.height || 1), "PSD canvas")
-  if (countPsdLayers(psd.children) > MAX_PROJECT_LAYERS) {
-    throw new Error(`PSD contains too many layers. Maximum supported layers: ${MAX_PROJECT_LAYERS}.`)
-  }
   const flattened = flattenPsdChildren(psd.children, width, height)
   const layers = flattened.layers.length
     ? flattened.layers
@@ -1865,7 +2082,7 @@ function psdChildrenFromLayers(doc: PsDocument, parentId?: string): PsdLayer[] {
   })
 }
 
-export function serializePsd(doc: PsDocument): Blob {
+export async function serializePsd(doc: PsDocument): Promise<Blob> {
   const psd: Psd = {
     width: doc.width,
     height: doc.height,
@@ -1875,6 +2092,7 @@ export function serializePsd(doc: PsDocument): Blob {
     canvas: renderDocumentComposite(doc, { transparent: true }),
     children: psdChildrenFromLayers(doc),
   }
+  const { writePsd } = await loadPsdCodec()
   const buffer = writePsd(psd, {
     generateThumbnail: false,
     noBackground: true,
@@ -1883,14 +2101,10 @@ export function serializePsd(doc: PsDocument): Blob {
   return new Blob([buffer], { type: "image/vnd.adobe.photoshop" })
 }
 
-export function loadImageFromFile(file: File) {
+export async function loadImageFromFile(file: File): Promise<HTMLImageElement> {
+  assertFileSize(file, MAX_RASTER_FILE_BYTES, "Image file")
+  await assertRasterHeaderCanvasSize(file)
   return new Promise<HTMLImageElement>((resolve, reject) => {
-    try {
-      assertFileSize(file, MAX_RASTER_FILE_BYTES, "Image file")
-    } catch (error) {
-      reject(error)
-      return
-    }
     const url = URL.createObjectURL(file)
     const img = new Image()
     img.onload = () => {

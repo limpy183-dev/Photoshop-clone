@@ -72,7 +72,7 @@ test("command palette supports active keyboard navigation, escape, and disabled 
   await page.keyboard.press(`${commandShortcut}+K`)
   await expect(search).toBeVisible()
   await search.fill("Reopen Closed Document")
-  await expect(page.getByRole("button", { name: /Reopen Closed Document/ })).toBeDisabled()
+  await expect(page.getByRole("option", { name: /Reopen Closed Document/ })).toBeDisabled()
   await expect(page.getByText("No closed documents")).toBeVisible()
   await page.keyboard.press("Enter")
   await expect(page.getByRole("dialog", { name: "Command Palette" })).toBeVisible()

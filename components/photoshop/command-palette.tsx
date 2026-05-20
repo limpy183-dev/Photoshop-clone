@@ -10,6 +10,7 @@ import type { ToolId } from "./types"
 import { toast } from "sonner"
 import { PANEL_DEFINITIONS } from "./panel-registry"
 import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop, isAdjustmentType } from "./adjustment-layers"
+import { dispatchPhotoshopEvent } from "./events"
 
 interface CommandPaletteProps {
   open: boolean
@@ -141,7 +142,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Layer",
         title: "Find Layers",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "layers" }))
+          dispatchPhotoshopEvent("ps-open-panel", "layers")
           window.setTimeout(() => window.dispatchEvent(new CustomEvent("ps-focus-layer-search")), 0)
           close()
         },
@@ -213,7 +214,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         disabled: !!needsDocument,
         disabledReason: needsDocument,
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-export-as"))
+          dispatchPhotoshopEvent("ps-open-export-as")
           close()
         },
       },
@@ -631,7 +632,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         disabled: !activeDoc?.channels?.length,
         disabledReason: activeDoc?.channels?.length ? undefined : "No saved alpha channels",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "channels" }))
+          dispatchPhotoshopEvent("ps-open-panel", "channels")
           close()
         },
       },
@@ -661,7 +662,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         hint: panel.complexity,
         searchText: `${panel.label} Panel ${panel.category} ${panel.keywords.join(" ")}`,
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: panel.id }))
+          dispatchPhotoshopEvent("ps-open-panel", panel.id)
           close()
         },
       })

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
 
-import { createPrimitiveThreeDScene } from "../components/photoshop/advanced-subsystems"
+import { createPrimitiveThreeDScene, parseDaeToScene, parseObjToScene } from "../components/photoshop/advanced-subsystems"
 import {
   VIDEO_EXPORT_PRESETS,
   analyzeThreeDPrintReadiness,
@@ -130,6 +130,22 @@ test("advanced 3D import/export handles 3DS, KMZ, and U3D scene metadata", () =>
   expect(u3d.scene.objects[0].vertices).toHaveLength(3)
   expect(exportedU3d.mime).toContain("u3d")
   expect(exportedKmz.fileName).toMatch(/\.kmz$/)
+})
+
+test("OBJ and DAE parsers reject excessive scene complexity before materializing render data", () => {
+  const oversizedObj = `${Array.from({ length: 50_001 }, (_, index) => `v ${index} 0 0`).join("\n")}\nf 1 2 3`
+  const oversizedDaePositions = Array.from({ length: 150_003 }, (_, index) => String(index % 3)).join(" ")
+
+  expect(() => parseObjToScene(oversizedObj)).toThrow(/OBJ model is too complex.*vertices/i)
+  expect(() => parseDaeToScene(`<float_array>${oversizedDaePositions}</float_array><p>0 1 2</p>`)).toThrow(/DAE model is too complex.*vertices/i)
+})
+
+test("OBJ and DAE parsers cap numeric token floods before array conversion", () => {
+  const floodedObjFace = Array.from({ length: 500_001 }, (_, index) => String((index % 3) + 1)).join(" ")
+  const floodedDaeIndices = Array.from({ length: 500_001 }, (_, index) => String(index % 3)).join(" ")
+
+  expect(() => parseObjToScene(`v 0 0 0\nv 1 0 0\nv 0 1 0\nf ${floodedObjFace}`)).toThrow(/OBJ model is too complex.*numeric tokens/i)
+  expect(() => parseDaeToScene("<float_array>0 0 0 1 0 0 0 1 0</float_array><p>" + floodedDaeIndices + "</p>")).toThrow(/DAE model is too complex.*numeric tokens/i)
 })
 
 test("UV/material editing and direct 3D surface painting update editable scene metadata", () => {

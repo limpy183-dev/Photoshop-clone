@@ -31,6 +31,7 @@ import {
   type WorkspacePanelPreset,
   type WorkspacePresetId,
 } from "./panel-registry"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
 
 const DOCK_STATE_KEY = "ps-panel-dock-state-v2"
 const WORKSPACES_KEY = "ps-workspaces-v2"
@@ -304,7 +305,7 @@ export function PanelDock({ width }: { width?: number }) {
     setUpperHidden(!!layout.upperHidden)
     setSolo(null)
     if (Number.isFinite(layout.dockWidth)) {
-      window.dispatchEvent(new CustomEvent("ps-set-dock-width", { detail: layout.dockWidth }))
+      dispatchPhotoshopEvent("ps-set-dock-width", layout.dockWidth)
     }
   }, [clampTopHeight])
 
@@ -348,9 +349,11 @@ export function PanelDock({ width }: { width?: number }) {
   }, [topHeight, topActive, bottomActive, upperPinned, lowerPinned, mode, upperHidden, recentPanels])
 
   React.useEffect(() => {
-    const openPanel = (event: Event) => {
-      const id = String((event as CustomEvent).detail ?? "")
+    const openPanel = (id: string) => {
       activatePanel(id, true)
+    }
+    const switchPanel = (event: Event) => {
+      openPanel(String((event as CustomEvent).detail ?? ""))
     }
     const saveWorkspace = (event: Event) => {
       const name = String((event as CustomEvent).detail?.name ?? "").trim()
@@ -385,15 +388,15 @@ export function PanelDock({ width }: { width?: number }) {
       applyLayout(presetToLayout(preset))
       setCurrentWorkspacePreset(preset.id)
     }
-    window.addEventListener("ps-open-panel", openPanel)
-    window.addEventListener("ps-switch-panel", openPanel)
+    const removeOpenPanelListener = addPhotoshopEventListener("ps-open-panel", openPanel)
+    window.addEventListener("ps-switch-panel", switchPanel)
     window.addEventListener("ps-save-workspace", saveWorkspace)
     window.addEventListener("ps-apply-workspace", applyWorkspace)
     window.addEventListener("ps-delete-workspace", deleteWorkspace)
     window.addEventListener("ps-apply-workspace-preset", applyPreset)
     return () => {
-      window.removeEventListener("ps-open-panel", openPanel)
-      window.removeEventListener("ps-switch-panel", openPanel)
+      removeOpenPanelListener()
+      window.removeEventListener("ps-switch-panel", switchPanel)
       window.removeEventListener("ps-save-workspace", saveWorkspace)
       window.removeEventListener("ps-apply-workspace", applyWorkspace)
       window.removeEventListener("ps-delete-workspace", deleteWorkspace)

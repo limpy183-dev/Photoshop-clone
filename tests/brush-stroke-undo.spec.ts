@@ -582,3 +582,73 @@ test("overlapping brush strokes each get their own undo step", async ({ page }) 
     "stroke 2 sample must clear after second undo",
   ).toBe(0)
 })
+
+test("undo after painting a new branch only removes the new brush stroke", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await page.goto("/")
+  await expect(page.locator("[data-canvas-stage]")).toBeVisible()
+  await expect.poll(async () => canvasPixelAlpha(page, 600, 400)).toBeGreaterThan(0)
+
+  await selectBrushTool(page)
+
+  const strokes = [
+    { from: { x: 120, y: 120 }, to: { x: 280, y: 190 }, region: { x: 80, y: 80, w: 260, h: 160 } },
+    { from: { x: 140, y: 320 }, to: { x: 300, y: 390 }, region: { x: 100, y: 280, w: 260, h: 160 } },
+    { from: { x: 460, y: 200 }, to: { x: 620, y: 270 }, region: { x: 420, y: 160, w: 260, h: 160 } },
+  ]
+  const branchStroke = {
+    from: { x: 760, y: 320 },
+    to: { x: 920, y: 390 },
+    region: { x: 720, y: 280, w: 260, h: 160 },
+  }
+
+  for (const stroke of strokes) {
+    await performStroke(page, stroke.from, stroke.to)
+    await page.waitForTimeout(100)
+  }
+  await page.waitForTimeout(500)
+
+  const undoKey = process.platform === "darwin" ? "Meta+z" : "Control+z"
+  await page.keyboard.press(undoKey)
+  await page.waitForTimeout(250)
+
+  expect(
+    await darkPixelCount(page, strokes[0].region.x, strokes[0].region.y, strokes[0].region.w, strokes[0].region.h),
+    "stroke 1 must remain after the first undo",
+  ).toBeGreaterThan(20)
+  expect(
+    await darkPixelCount(page, strokes[1].region.x, strokes[1].region.y, strokes[1].region.w, strokes[1].region.h),
+    "stroke 2 must remain after the first undo",
+  ).toBeGreaterThan(20)
+  expect(
+    await darkPixelCount(page, strokes[2].region.x, strokes[2].region.y, strokes[2].region.w, strokes[2].region.h),
+    "stroke 3 must be undone before creating the new branch",
+  ).toBe(0)
+
+  await performStroke(page, branchStroke.from, branchStroke.to)
+  await page.waitForTimeout(500)
+  expect(
+    await darkPixelCount(page, branchStroke.region.x, branchStroke.region.y, branchStroke.region.w, branchStroke.region.h),
+    "branch stroke must be visible before undoing it",
+  ).toBeGreaterThan(20)
+
+  await page.keyboard.press(undoKey)
+  await page.waitForTimeout(250)
+
+  expect(
+    await darkPixelCount(page, branchStroke.region.x, branchStroke.region.y, branchStroke.region.w, branchStroke.region.h),
+    "the new branch stroke must be cleared by one undo",
+  ).toBe(0)
+  expect(
+    await darkPixelCount(page, strokes[0].region.x, strokes[0].region.y, strokes[0].region.w, strokes[0].region.h),
+    "stroke 1 must remain after undoing the branch stroke",
+  ).toBeGreaterThan(20)
+  expect(
+    await darkPixelCount(page, strokes[1].region.x, strokes[1].region.y, strokes[1].region.w, strokes[1].region.h),
+    "stroke 2 must remain after undoing the branch stroke",
+  ).toBeGreaterThan(20)
+  expect(
+    await darkPixelCount(page, strokes[2].region.x, strokes[2].region.y, strokes[2].region.w, strokes[2].region.h),
+    "stroke 3 must stay undone after the branch undo",
+  ).toBe(0)
+})

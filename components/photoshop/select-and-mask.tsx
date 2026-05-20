@@ -71,41 +71,6 @@ export function SelectAndMaskDialog({
   const previewRef = React.useRef<HTMLCanvasElement>(null)
   const maskRef = React.useRef<HTMLCanvasElement | null>(null)
 
-  // Initialize mask from current selection
-  React.useEffect(() => {
-    if (!open || !activeDoc) return
-    const w = activeDoc.width
-    const h = activeDoc.height
-    const mask = document.createElement("canvas")
-    mask.width = w
-    mask.height = h
-    const mctx = mask.getContext("2d")!
-
-    // Initialize from selection
-    const sel = activeDoc.selection
-    if (sel.mask) {
-      mctx.drawImage(sel.mask, 0, 0)
-    } else if (sel.bounds) {
-      mctx.fillStyle = "#fff"
-      if (sel.shape === "ellipse") {
-        mctx.beginPath()
-        mctx.ellipse(
-          sel.bounds.x + sel.bounds.w / 2,
-          sel.bounds.y + sel.bounds.h / 2,
-          sel.bounds.w / 2,
-          sel.bounds.h / 2,
-          0, 0, Math.PI * 2,
-        )
-        mctx.fill()
-      } else {
-        mctx.fillRect(sel.bounds.x, sel.bounds.y, sel.bounds.w, sel.bounds.h)
-      }
-    }
-
-    maskRef.current = mask
-    renderPreview()
-  }, [open, activeDoc])
-
   const renderPreview = React.useCallback(() => {
     const cv = previewRef.current
     const mask = maskRef.current
@@ -203,6 +168,41 @@ export function SelectAndMaskDialog({
       ctx.restore()
     }
   }, [activeDoc, activeLayer, viewMode, opacity])
+
+  // Initialize mask from current selection
+  React.useEffect(() => {
+    if (!open || !activeDoc) return
+    const w = activeDoc.width
+    const h = activeDoc.height
+    const mask = document.createElement("canvas")
+    mask.width = w
+    mask.height = h
+    const mctx = mask.getContext("2d")!
+
+    // Initialize from selection
+    const sel = activeDoc.selection
+    if (sel.mask) {
+      mctx.drawImage(sel.mask, 0, 0)
+    } else if (sel.bounds) {
+      mctx.fillStyle = "#fff"
+      if (sel.shape === "ellipse") {
+        mctx.beginPath()
+        mctx.ellipse(
+          sel.bounds.x + sel.bounds.w / 2,
+          sel.bounds.y + sel.bounds.h / 2,
+          sel.bounds.w / 2,
+          sel.bounds.h / 2,
+          0, 0, Math.PI * 2,
+        )
+        mctx.fill()
+      } else {
+        mctx.fillRect(sel.bounds.x, sel.bounds.y, sel.bounds.w, sel.bounds.h)
+      }
+    }
+
+    maskRef.current = mask
+    renderPreview()
+  }, [open, activeDoc, renderPreview])
 
   React.useEffect(() => {
     renderPreview()

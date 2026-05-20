@@ -6,6 +6,7 @@ import { Slider } from "@/components/ui/slider"
 import { Button } from "@/components/ui/button"
 import { compositeLayer } from "./blend-modes"
 import { useEditor } from "./editor-context"
+import { applyPlannedFilterFinal, applyPlannedFilterPreview } from "./filter-preview"
 import { getFilter, type FilterContext, type FilterDef } from "./filters"
 import type { Layer, PsDocument } from "./types"
 
@@ -37,7 +38,10 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
   const previewRef = React.useRef<HTMLCanvasElement>(null)
 
   const originalsRef = React.useRef<{ id: string; data: ImageData }[]>([])
+  const previewCanvasesRef = React.useRef<Record<string, HTMLCanvasElement>>({})
+  const previewSequenceRef = React.useRef(0)
   const [params, setParams] = React.useState<ParamMap>({})
+  const [applying, setApplying] = React.useState(false)
   const isAdvancedAdjustment = !!filter && ADVANCED_ADJUSTMENTS.has(filter.id)
   const smartTarget =
     selectedLayers.length === 1 &&
@@ -64,27 +68,35 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
     if (!filter || !activeDoc) return
     if (originalsRef.current.length === 0) return
     if (smartTarget) return
-    let cancelled = false
-    const run = () => {
-      if (cancelled) return
+    const controller = new AbortController()
+    const sequence = ++previewSequenceRef.current
+    const run = async () => {
       for (const o of originalsRef.current) {
+        if (controller.signal.aborted || sequence !== previewSequenceRef.current) return
         const layer = activeDoc.layers.find((l) => l.id === o.id)
         if (!layer || typeof layer.canvas.getContext !== "function") continue
-        const result = filter.apply(o.data, params, context)
-        const tmp = document.createElement("canvas")
-        tmp.width = layer.canvas.width
-        tmp.height = layer.canvas.height
+        let result: ImageData
+        try {
+          result = await applyPlannedFilterPreview(filter, o.data, params, context, controller.signal)
+        } catch (error) {
+          if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return
+          result = filter.apply(o.data, params, context)
+        }
+        if (controller.signal.aborted || sequence !== previewSequenceRef.current) return
+        const tmp = previewCanvasesRef.current[layer.id] ?? document.createElement("canvas")
+        if (tmp.width !== layer.canvas.width) tmp.width = layer.canvas.width
+        if (tmp.height !== layer.canvas.height) tmp.height = layer.canvas.height
+        previewCanvasesRef.current[layer.id] = tmp
         tmp.getContext("2d")!.putImageData(result, 0, 0)
         setFilterPreview(layer.id, tmp)
       }
-      requestRender()
     }
-    const id = window.setTimeout(run, 0)
+    const id = window.setTimeout(() => void run(), 80)
     return () => {
-      cancelled = true
+      controller.abort()
       window.clearTimeout(id)
     }
-  }, [filter, params, context, activeDoc, requestRender, smartTarget])
+  }, [filter, params, context, activeDoc, setFilterPreview, smartTarget])
 
   React.useEffect(() => {
     if (!filter || !activeDoc) return
@@ -111,17 +123,20 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
     for (const o of originalsRef.current) {
       setFilterPreview(o.id, null)
     }
+    previewCanvasesRef.current = {}
     requestRender()
   }, [activeDoc, requestRender, setFilterPreview])
 
   const handleCancel = () => {
     restoreOriginals()
     originalsRef.current = []
+    setApplying(false)
     onClose()
   }
 
-  const handleApply = () => {
+  const handleApply = async () => {
     if (!filter) return onClose()
+    setApplying(true)
     for (const o of originalsRef.current) setFilterPreview(o.id, null)
 
     if (smartTarget) {
@@ -137,27 +152,33 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
         },
       ]
       dispatch({ type: "set-layer-smart-filters", id: layer.id, smartFilters })
-      requestRender()
+      requestRender({ layerIds: [layer.id], reason: "smart-filter" })
       setTimeout(() => commit(`Smart Filter: ${filter.name}`, [layer.id]), 0)
       originalsRef.current = []
+      setApplying(false)
       onClose()
       return
     }
 
-    for (const o of originalsRef.current) {
-      const layer = activeDoc!.layers.find((l) => l.id === o.id)
-      if (!layer || typeof layer.canvas.getContext !== "function") continue
-      const result = filter.apply(o.data, params, context)
-      layer.canvas.getContext("2d")!.putImageData(result, 0, 0)
-    }
+    try {
+      for (const o of originalsRef.current) {
+        const layer = activeDoc!.layers.find((l) => l.id === o.id)
+        if (!layer || typeof layer.canvas.getContext !== "function") continue
+        const result = await applyPlannedFilterFinal(filter, o.data, params, context)
+        layer.canvas.getContext("2d")!.putImageData(result, 0, 0)
+      }
 
-    const layerCount = originalsRef.current.length
-    commit(
-      `${filter.name}${layerCount > 1 ? ` (${layerCount} layers)` : ""}`,
-      originalsRef.current.map((o) => o.id),
-    )
-    originalsRef.current = []
-    onClose()
+      const layerCount = originalsRef.current.length
+      commit(
+        `${filter.name}${layerCount > 1 ? ` (${layerCount} layers)` : ""}`,
+        originalsRef.current.map((o) => o.id),
+      )
+      originalsRef.current = []
+      previewCanvasesRef.current = {}
+      onClose()
+    } finally {
+      setApplying(false)
+    }
   }
 
   const reset = () => {
@@ -217,13 +238,15 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={handleCancel}>
+          <Button variant="outline" onClick={handleCancel} disabled={applying}>
             Cancel
           </Button>
-          <Button variant="outline" onClick={reset}>
+          <Button variant="outline" onClick={reset} disabled={applying}>
             Reset
           </Button>
-          <Button onClick={handleApply}>Apply</Button>
+          <Button onClick={() => void handleApply()} disabled={applying}>
+            {applying ? "Applying..." : "Apply"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -131,8 +131,8 @@ export function CurvesEditor({
   const [dragIdx, setDragIdx] = React.useState(-1)
   const pad = 8
 
-  const toCanvasX = (v: number) => pad + (v / 255) * (width - 2 * pad)
-  const toCanvasY = (v: number) => height - pad - (v / 255) * (height - 2 * pad)
+  const toCanvasX = React.useCallback((v: number) => pad + (v / 255) * (width - 2 * pad), [pad, width])
+  const toCanvasY = React.useCallback((v: number) => height - pad - (v / 255) * (height - 2 * pad), [height, pad])
   const fromCanvasX = (cx: number) => Math.round(Math.max(0, Math.min(255, ((cx - pad) / (width - 2 * pad)) * 255)))
   const fromCanvasY = (cy: number) => Math.round(Math.max(0, Math.min(255, ((height - pad - cy) / (height - 2 * pad)) * 255)))
 
@@ -204,7 +204,7 @@ export function CurvesEditor({
       ctx.fill()
       ctx.stroke()
     }
-  }, [points, channel, histogram, width, height, dragIdx, pad])
+  }, [points, channel, histogram, width, height, dragIdx, pad, toCanvasX, toCanvasY])
 
   const getPointAt = (e: React.MouseEvent) => {
     const rect = canvasRef.current!.getBoundingClientRect()

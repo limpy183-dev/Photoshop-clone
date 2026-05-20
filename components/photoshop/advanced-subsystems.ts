@@ -14,6 +14,29 @@ import type {
 } from "./types"
 import { cmykToRgb, rgbToCmyk } from "./color-pipeline"
 import { decodeAdvancedRasterBuffer, inspectExrHeader } from "./raster-codecs"
+import { assertCanvasSize, assertFileSize, MAX_RASTER_FILE_BYTES } from "./canvas-limits"
+
+const MB = 1024 * 1024
+
+export const ADVANCED_FILE_LIMITS = {
+  rasterBytes: MAX_RASTER_FILE_BYTES,
+  modelTextBytes: 16 * MB,
+  modelBinaryBytes: 32 * MB,
+  jsonBytes: 2 * MB,
+  csvBytes: 5 * MB,
+  fontBytes: 20 * MB,
+} as const
+
+export const ADVANCED_3D_IMPORT_LIMITS = {
+  textBytes: ADVANCED_FILE_LIMITS.modelTextBytes,
+  vertices: 50_000,
+  faces: 100_000,
+  numericTokens: 500_000,
+} as const
+
+export function assertAdvancedFileSize(file: File, maxBytes = ADVANCED_FILE_LIMITS.rasterBytes, label = "Advanced file") {
+  assertFileSize(file, maxBytes, label)
+}
 
 function clamp(value: number, min = 0, max = 255) {
   return Math.max(min, Math.min(max, value))
@@ -248,6 +271,7 @@ function inspectPhotoshopFamilyHeader(buffer: ArrayBuffer, fileName: string) {
 }
 
 export async function inspectAdvancedFormatFile(file: File) {
+  assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.rasterBytes, "Advanced format file")
   const capability = capabilityForAdvancedFormat(file.name, file.type)
   const buffer = await file.arrayBuffer()
   const bytes = new Uint8Array(buffer)
@@ -581,22 +605,84 @@ function normalizeMesh(vertices: Vec3[]) {
   return vertices.map((p) => mul(sub(p, center), scale))
 }
 
+function advancedLimitLabel(bytes: number) {
+  return `${(bytes / MB).toFixed(0)} MB`
+}
+
+function assertAdvancedTextSize(text: string, maxBytes: number, label: string) {
+  if (text.length > maxBytes) {
+    throw new Error(`${label} is too large. Maximum file size is ${advancedLimitLabel(maxBytes)}.`)
+  }
+}
+
+function isDigitCode(code: number) {
+  return code >= 48 && code <= 57
+}
+
+function isNumericBoundary(code: number) {
+  return code <= 32 || code === 44 || code === 47 || code === 60 || code === 62
+}
+
+function startsNumericToken(text: string, index: number) {
+  const code = text.charCodeAt(index)
+  const previousIsBoundary = index === 0 || isNumericBoundary(text.charCodeAt(index - 1))
+  if (!previousIsBoundary) return false
+  if (isDigitCode(code)) return true
+  if (code !== 43 && code !== 45 && code !== 46) return false
+  return index + 1 < text.length && isDigitCode(text.charCodeAt(index + 1))
+}
+
+function countNumericTokens(text: string, format: "OBJ" | "DAE", max = ADVANCED_3D_IMPORT_LIMITS.numericTokens) {
+  let count = 0
+  for (let i = 0; i < text.length; i++) {
+    if (!startsNumericToken(text, i)) continue
+    count += 1
+    if (count > max) throw new Error(`${format} model is too complex: numeric tokens exceed ${max.toLocaleString()}.`)
+  }
+  return count
+}
+
+function assertModelCount(format: "OBJ" | "DAE", kind: "vertices" | "faces", count: number, max: number) {
+  if (count > max) throw new Error(`${format} model is too complex: ${kind} exceed ${max.toLocaleString()}.`)
+}
+
+function assertModelTextComplexity(text: string, format: "OBJ" | "DAE") {
+  assertAdvancedTextSize(text, ADVANCED_3D_IMPORT_LIMITS.textBytes, `${format} model`)
+  countNumericTokens(text, format)
+}
+
+function forEachLine(text: string, callback: (line: string) => void) {
+  let start = 0
+  for (let i = 0; i <= text.length; i++) {
+    const code = i < text.length ? text.charCodeAt(i) : 10
+    if (i < text.length && code !== 10 && code !== 13) continue
+    callback(text.slice(start, i))
+    if (code === 13 && text.charCodeAt(i + 1) === 10) i += 1
+    start = i + 1
+  }
+}
+
 export function parseObjToScene(text: string): ThreeDScene {
+  assertModelTextComplexity(text, "OBJ")
   const vertices: Vec3[] = []
   const faces: number[][] = []
-  for (const line of text.split(/\r?\n/)) {
+  forEachLine(text, (line) => {
     const trimmed = line.trim()
     if (trimmed.startsWith("v ")) {
       const [, x, y, z] = trimmed.split(/\s+/)
+      assertModelCount("OBJ", "vertices", vertices.length + 1, ADVANCED_3D_IMPORT_LIMITS.vertices)
       vertices.push(vec(Number(x) || 0, Number(y) || 0, Number(z) || 0))
     } else if (trimmed.startsWith("f ")) {
       const indices = trimmed.slice(2).trim().split(/\s+/).map((part) => {
         const raw = Number(part.split("/")[0])
         return raw < 0 ? vertices.length + raw : raw - 1
       }).filter((index) => index >= 0 && index < vertices.length)
-      if (indices.length >= 3) faces.push(indices)
+      if (indices.length >= 3) {
+        assertModelCount("OBJ", "faces", faces.length + 1, ADVANCED_3D_IMPORT_LIMITS.faces)
+        faces.push(indices)
+      }
     }
-  }
+  })
   if (!vertices.length || !faces.length) return createPrimitiveThreeDScene("cube")
   const scene = createPrimitiveThreeDScene("cube")
   const material = scene.materials[0]
@@ -622,16 +708,23 @@ export function exportSceneToObj(scene: ThreeDScene) {
 }
 
 export function parseDaeToScene(text: string): ThreeDScene {
+  assertModelTextComplexity(text, "DAE")
   const floatMatch = text.match(/<float_array[^>]*>([\s\S]*?)<\/float_array>/i)
   const pMatch = text.match(/<p>([\s\S]*?)<\/p>/i)
-  const floats = floatMatch?.[1].trim().split(/\s+/).map(Number).filter(Number.isFinite) ?? []
+  const floatText = floatMatch?.[1] ?? ""
+  const pText = pMatch?.[1] ?? ""
+  assertModelCount("DAE", "vertices", Math.floor(countNumericTokens(floatText, "DAE") / 3), ADVANCED_3D_IMPORT_LIMITS.vertices)
+  const floats = floatText.trim() ? floatText.trim().split(/\s+/).map(Number).filter(Number.isFinite) : []
   const vertices: Vec3[] = []
   for (let i = 0; i + 2 < floats.length; i += 3) vertices.push(vec(floats[i], floats[i + 1], floats[i + 2]))
-  const rawIndices = pMatch?.[1].trim().split(/\s+/).map(Number).filter(Number.isFinite) ?? []
+  const rawIndices = pText.trim() ? pText.trim().split(/\s+/).map(Number).filter(Number.isFinite) : []
   const stride = rawIndices.length >= 6 && vertices.length ? Math.max(1, Math.floor(rawIndices.length / Math.max(1, Math.floor(rawIndices.length / 3)))) : 1
   const indices = rawIndices.filter((_, index) => index % stride === 0).map((value) => value % Math.max(1, vertices.length))
   const faces: number[][] = []
-  for (let i = 0; i + 2 < indices.length; i += 3) faces.push([indices[i], indices[i + 1], indices[i + 2]])
+  for (let i = 0; i + 2 < indices.length; i += 3) {
+    assertModelCount("DAE", "faces", faces.length + 1, ADVANCED_3D_IMPORT_LIMITS.faces)
+    faces.push([indices[i], indices[i + 1], indices[i + 2]])
+  }
   if (!vertices.length || !faces.length) return createPrimitiveThreeDScene("cube")
   const scene = createPrimitiveThreeDScene("cube")
   const material = scene.materials[0]
@@ -1217,6 +1310,7 @@ function parseExifTags(buffer: ArrayBuffer, offset: number): Partial<DocumentMet
 }
 
 export async function extractMetadataFromFile(file: File) {
+  assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.rasterBytes, "Metadata file")
   const buffer = await file.arrayBuffer()
   const view = new DataView(buffer)
   const metadata: Partial<DocumentMetadata> = { title: file.name, source: file.type || file.name.split(".").pop()?.toUpperCase() }
@@ -1248,6 +1342,7 @@ export async function extractMetadataFromFile(file: File) {
 }
 
 export async function extractEmbeddedJpegDataUrl(file: File) {
+  assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.rasterBytes, "RAW/DNG file")
   const bytes = new Uint8Array(await file.arrayBuffer())
   let start = -1
   let end = -1
@@ -1267,6 +1362,7 @@ export async function extractEmbeddedJpegDataUrl(file: File) {
 }
 
 export async function decodeDicomPreview(file: File) {
+  assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.rasterBytes, "DICOM file")
   const buffer = await file.arrayBuffer()
   if (buffer.byteLength < 132 || readAscii(buffer, 128, 4) !== "DICM") return null
   const view = new DataView(buffer)
@@ -1297,10 +1393,11 @@ export async function decodeDicomPreview(file: File) {
     offset = dataOffset + length
   }
   if (!rows || !cols || pixelOffset < 0) return null
-  const canvas = createSubsystemCanvas(cols, rows, "#000000")
+  const size = assertCanvasSize(cols, rows, "DICOM preview")
+  const canvas = createSubsystemCanvas(size.width, size.height, "#000000")
   const ctx = canvas.getContext("2d")!
-  const image = ctx.getImageData(0, 0, cols, rows)
-  const count = Math.min(cols * rows, pixelLength / (bits > 8 ? 2 : 1))
+  const image = ctx.getImageData(0, 0, size.width, size.height)
+  const count = Math.min(size.width * size.height, pixelLength / (bits > 8 ? 2 : 1))
   for (let i = 0; i < count; i++) {
     const value = bits > 8 ? view.getUint16(pixelOffset + i * 2, true) / 257 : view.getUint8(pixelOffset + i)
     image.data[i * 4] = value
@@ -1313,6 +1410,7 @@ export async function decodeDicomPreview(file: File) {
 }
 
 export async function decodeRadianceHdrPreview(file: File) {
+  assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.rasterBytes, "Radiance HDR file")
   const buffer = await file.arrayBuffer()
   const textHead = new TextDecoder("ascii").decode(buffer.slice(0, Math.min(buffer.byteLength, 4096)))
   if (!textHead.startsWith("#?RADIANCE") && !textHead.startsWith("#?RGBE")) return null
@@ -1320,13 +1418,14 @@ export async function decodeRadianceHdrPreview(file: File) {
   if (!dimMatch) return null
   const height = Number(dimMatch[1])
   const width = Number(dimMatch[2])
+  const size = assertCanvasSize(width, height, "Radiance HDR preview")
   const headerLength = textHead.indexOf(dimMatch[0]) + dimMatch[0].length + 1
   const bytes = new Uint8Array(buffer, headerLength)
-  const canvas = createSubsystemCanvas(width, height)
+  const canvas = createSubsystemCanvas(size.width, size.height)
   const ctx = canvas.getContext("2d")!
-  const image = ctx.getImageData(0, 0, width, height)
+  const image = ctx.getImageData(0, 0, size.width, size.height)
   let p = 0
-  for (let i = 0; i < width * height && p + 3 < bytes.length; i++, p += 4) {
+  for (let i = 0; i < size.width * size.height && p + 3 < bytes.length; i++, p += 4) {
     const e = bytes[p + 3]
     const scale = e ? Math.pow(2, e - 136) : 0
     image.data[i * 4] = clamp(bytes[p] * scale)

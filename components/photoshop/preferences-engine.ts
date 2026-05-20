@@ -2,6 +2,11 @@ import type { PsDocument } from "./types"
 
 export const PREFERENCES_STORAGE_KEY = "ps-preferences"
 export const PREFERENCES_SCHEMA_VERSION = 2
+export const MAX_PREFERENCES_IMPORT_BYTES = 1024 * 1024
+export const MAX_IMPORTED_SCRATCH_DISKS = 32
+export const MAX_IMPORTED_HISTORY_ENTRIES = 10000
+export const MAX_IMPORTED_HISTORY_LAYER_IDS = 500
+export const MAX_IMPORTED_HISTORY_TOOL_SETTINGS_BYTES = 64 * 1024
 
 export type CursorStylePreference = "standard" | "precise" | "brush-size"
 export type LegacyUnitPreference = "pixels" | "inches" | "cm" | "mm" | "pt" | "pc"
@@ -293,6 +298,39 @@ function boolValue(value: unknown, fallback: boolean) {
   return typeof value === "boolean" ? value : fallback
 }
 
+function assertBoundedArray(value: unknown, max: number, label: string) {
+  if (Array.isArray(value) && value.length > max) {
+    throw new Error(`Preference imports are limited to ${max} ${label}.`)
+  }
+}
+
+function jsonByteLength(value: unknown) {
+  try {
+    return JSON.stringify(value).length
+  } catch {
+    return MAX_IMPORTED_HISTORY_TOOL_SETTINGS_BYTES + 1
+  }
+}
+
+function assertPreferenceImportBounds(value: unknown) {
+  const root = isRecord(value) && isRecord(value.preferences) ? value.preferences : value
+  if (!isRecord(root)) throw new Error("Preference set must be a JSON object.")
+
+  assertBoundedArray(root.scratchDisks, MAX_IMPORTED_SCRATCH_DISKS, "scratch disks.")
+
+  const historyLog = asRecord(root.historyLog)
+  assertBoundedArray(historyLog.entries, MAX_IMPORTED_HISTORY_ENTRIES, "history log entries.")
+  if (!Array.isArray(historyLog.entries)) return
+
+  historyLog.entries.forEach((entry, index) => {
+    const record = asRecord(entry)
+    assertBoundedArray(record.changedLayerIds, MAX_IMPORTED_HISTORY_LAYER_IDS, `changed layer IDs in history entry ${index + 1}.`)
+    if (isRecord(record.toolSettings) && jsonByteLength(record.toolSettings) > MAX_IMPORTED_HISTORY_TOOL_SETTINGS_BYTES) {
+      throw new Error(`Preference imports are limited to ${MAX_IMPORTED_HISTORY_TOOL_SETTINGS_BYTES} bytes per history tool settings payload.`)
+    }
+  })
+}
+
 function clampNumber(value: unknown, fallback: number, min: number, max: number, round = true) {
   const numeric = numberValue(value, fallback)
   const clamped = Math.max(min, Math.min(max, numeric))
@@ -346,7 +384,7 @@ function normalizeMemory(input: Record<string, unknown>, legacyUndoLimit: unknow
 function normalizeScratchDisks(value: unknown): ScratchDiskPreference[] {
   const source = Array.isArray(value) && value.length ? value : DEFAULT_PREFERENCES.scratchDisks
   const seen = new Set<string>()
-  return source.map((item, index) => {
+  return source.slice(0, MAX_IMPORTED_SCRATCH_DISKS).map((item, index) => {
     const record = asRecord(item)
     const fallback = DEFAULT_PREFERENCES.scratchDisks[index] ?? DEFAULT_PREFERENCES.scratchDisks[0]
     const baseId = stringValue(record.id, fallback.id || `scratch-${index + 1}`).trim() || `scratch-${index + 1}`
@@ -395,12 +433,13 @@ function normalizeFileHandling(input: Record<string, unknown>, legacyAutoSave: u
 function normalizeHistoryEntries(value: unknown): PreferenceHistoryLogEntry[] {
   if (!Array.isArray(value)) return []
   return value
+    .slice(-MAX_IMPORTED_HISTORY_ENTRIES)
     .map((item) => {
       const record = asRecord(item)
       const label = stringValue(record.label, "").trim()
       if (!label) return null
       const changedLayerIds = Array.isArray(record.changedLayerIds)
-        ? record.changedLayerIds.filter((id): id is string => typeof id === "string")
+        ? record.changedLayerIds.slice(0, MAX_IMPORTED_HISTORY_LAYER_IDS).filter((id): id is string => typeof id === "string")
         : undefined
       const toolSettings = isRecord(record.toolSettings) ? clone(record.toolSettings) : undefined
       return {
@@ -525,9 +564,14 @@ export function serializePreferences(prefs: unknown): string {
 
 export function parsePreferencesSet(value: string | unknown): PhotoshopPreferences {
   if (typeof value === "string") {
+    if (value.length > MAX_PREFERENCES_IMPORT_BYTES) {
+      throw new Error(`Preference imports are limited to ${Math.round(MAX_PREFERENCES_IMPORT_BYTES / 1024)} KB.`)
+    }
     const parsed = JSON.parse(value)
+    assertPreferenceImportBounds(parsed)
     return normalizePreferences(isRecord(parsed) && isRecord(parsed.preferences) ? parsed.preferences : parsed)
   }
+  assertPreferenceImportBounds(value)
   return normalizePreferences(isRecord(value) && isRecord(value.preferences) ? value.preferences : value)
 }
 

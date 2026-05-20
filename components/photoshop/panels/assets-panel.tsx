@@ -9,6 +9,9 @@ import type { AssetLibraryItem, BrushSettings, GradientSettings, LayerStyle } fr
 
 type AssetKind = AssetLibraryItem["kind"] | "all"
 
+export const MAX_ASSET_IMPORT_BYTES = 1_000_000
+export const MAX_ASSET_IMPORT_COUNT = 250
+
 const KIND_LABEL: Record<AssetLibraryItem["kind"], string> = {
   brush: "Brush",
   gradient: "Gradient",
@@ -25,6 +28,51 @@ const KIND_LABEL: Record<AssetLibraryItem["kind"], string> = {
   "icc-profile": "ICC Profile",
   "variable-data": "Variable Data",
   prepress: "Prepress",
+}
+
+const ASSET_KINDS = new Set<AssetLibraryItem["kind"]>(Object.keys(KIND_LABEL) as AssetLibraryItem["kind"][])
+const RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype"])
+const HEX_COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i
+const IMAGE_DATA_URL = /^data:image\/(?:png|jpe?g|webp|gif);base64,[a-z0-9+/=]+$/i
+const GRADIENT_TYPES = new Set(["linear", "radial", "angular", "reflected", "diamond"])
+const BRUSH_TIP_SHAPES = new Set(["round", "square", "bristle", "erodible"])
+const BRUSH_CONTROLS = new Set(["off", "pressure", "tilt", "velocity", "fade", "random"])
+const EXPORT_FORMATS = new Set(["png", "jpeg", "jpg", "webp", "gif", "avif", "svg"])
+
+type AssetImportOptions = {
+  fileSizeBytes?: number
+  now?: number
+  makeId?: (prefix: string, index: number) => string
+}
+
+export function normalizeImportedAssetLibrary(parsed: unknown, options: AssetImportOptions = {}): AssetLibraryItem[] {
+  if (typeof options.fileSizeBytes === "number" && options.fileSizeBytes > MAX_ASSET_IMPORT_BYTES) {
+    throw new Error(`Asset imports are limited to ${formatImportBytes(MAX_ASSET_IMPORT_BYTES)}.`)
+  }
+  const imported = Array.isArray(parsed) ? parsed : isRecord(parsed) ? parsed.assets : undefined
+  if (!Array.isArray(imported)) throw new Error("Asset file does not contain an asset array")
+  if (imported.length > MAX_ASSET_IMPORT_COUNT) {
+    throw new Error(`Asset imports are limited to ${MAX_ASSET_IMPORT_COUNT} items.`)
+  }
+
+  const now = Number.isFinite(options.now) ? Number(options.now) : Date.now()
+  return imported.map((raw, index) => {
+    if (!isRecord(raw)) throw new Error(`Asset ${index + 1} must be an object.`)
+    const kind = raw.kind
+    if (typeof kind !== "string" || !ASSET_KINDS.has(kind as AssetLibraryItem["kind"])) {
+      throw new Error(`Unsupported asset kind: ${typeof kind === "string" ? kind : "unknown"}.`)
+    }
+    const assetKind = kind as AssetLibraryItem["kind"]
+    const payload = normalizeAssetPayload(assetKind, raw.payload)
+    return {
+      id: cleanId(raw.id, "asset", index, options.makeId),
+      name: cleanText(raw.name, KIND_LABEL[assetKind], 80),
+      kind: assetKind,
+      group: cleanOptionalText(raw.group, 80),
+      payload,
+      createdAt: cleanTimestamp(raw.createdAt, now),
+    }
+  })
 }
 
 export function AssetsPanel() {
@@ -91,16 +139,11 @@ export function AssetsPanel() {
       const file = input.files?.[0]
       if (!file) return
       try {
+        if (file.size > MAX_ASSET_IMPORT_BYTES) {
+          throw new Error(`Asset imports are limited to ${formatImportBytes(MAX_ASSET_IMPORT_BYTES)}.`)
+        }
         const parsed = JSON.parse(await file.text())
-        const imported = (Array.isArray(parsed) ? parsed : parsed.assets) as AssetLibraryItem[]
-        if (!Array.isArray(imported)) throw new Error("Asset file does not contain an asset array")
-        const cleaned = imported
-          .filter((asset) => asset && typeof asset.name === "string" && typeof asset.kind === "string")
-          .map((asset) => ({
-            ...asset,
-            id: asset.id ?? `asset_${Math.random().toString(36).slice(2, 9)}`,
-            createdAt: Number(asset.createdAt) || Date.now(),
-          }))
+        const cleaned = normalizeImportedAssetLibrary(parsed, { fileSizeBytes: file.size })
         setAssets([...cleaned, ...assets])
         toast.success(`Imported ${cleaned.length} asset${cleaned.length === 1 ? "" : "s"}`)
       } catch (err) {
@@ -236,4 +279,304 @@ function AssetButton({
 
 function PanelEmpty({ text }: { text: string }) {
   return <div className="px-4 py-8 text-center text-[11px] text-[var(--ps-text-dim)]">{text}</div>
+}
+
+function normalizeAssetPayload(kind: AssetLibraryItem["kind"], payload: unknown): unknown {
+  switch (kind) {
+    case "swatch":
+      return normalizeSwatchPayload(payload)
+    case "brush":
+      return normalizeBrushAssetPayload(payload)
+    case "gradient":
+      return normalizeGradientPayload(payload)
+    case "style":
+      return normalizeStylePayload(payload)
+    case "export":
+      return normalizeExportPayload(payload)
+    case "pattern":
+      return normalizePatternPayload(payload)
+    case "shape":
+      return normalizeGenericRecordPayload(payload, ["type", "customId", "x", "y", "w", "h", "fill", "stroke", "radius", "sides", "booleanOperation"])
+    case "tool-preset":
+      return normalizeGenericRecordPayload(payload, ["tool", "brush", "eraser", "cloneSource", "selectionOptions", "foreground", "background"])
+    case "plugin":
+      return normalizeGenericRecordPayload(payload, ["id", "name", "kind", "enabled", "version", "author", "permissions", "filterKernel", "filterBias", "filterDivisor"])
+    case "cloud-library":
+      return normalizeGenericRecordPayload(payload, ["colors", "source", "name", "items"])
+    case "stock":
+      return normalizeGenericRecordPayload(payload, ["license", "tags", "source", "url", "description"])
+    case "font":
+      return normalizeGenericRecordPayload(payload, ["family", "source", "style", "weight"])
+    case "icc-profile":
+      return normalizeGenericRecordPayload(payload, ["size", "preferredCmm", "version", "deviceClass", "colorSpace", "pcs", "createdAt", "signature", "platform", "renderingIntent"])
+    case "variable-data":
+      return normalizeGenericRecordPayload(payload, ["rows", "bindings", "activeRow", "columns", "name"])
+    case "prepress":
+      return normalizeGenericRecordPayload(payload, ["misses", "x1", "y1", "x2", "y2", "length", "distancePx", "angle", "scale", "notes", "items"])
+    default:
+      throw new Error(`Unsupported asset kind: ${kind}.`)
+  }
+}
+
+function normalizeSwatchPayload(payload: unknown) {
+  const record = requireRecord(payload, "Swatch payload")
+  return { color: cleanColor(record.color, "Swatch color") }
+}
+
+function normalizeBrushAssetPayload(payload: unknown): Partial<BrushSettings> {
+  const record = requireRecord(payload, "Brush payload")
+  const out: Record<string, unknown> = {}
+  copyNumber(record, out, "size", 1, 500, { round: true })
+  copyNumber(record, out, "hardness", 0, 100, { round: true })
+  copyNumber(record, out, "opacity", 0, 100, { round: true })
+  copyNumber(record, out, "flow", 0, 100, { round: true })
+  copyNumber(record, out, "smoothing", 0, 100, { round: true })
+  copyNumber(record, out, "spacing", 1, 400, { round: true })
+  copyEnum(record, out, "tipShape", BRUSH_TIP_SHAPES)
+  copyEnum(record, out, "sizeControl", BRUSH_CONTROLS)
+  copyEnum(record, out, "angleControl", BRUSH_CONTROLS)
+  copyEnum(record, out, "roundnessControl", BRUSH_CONTROLS)
+  copyNumber(record, out, "sizeJitter", 0, 100, { round: true })
+  copyNumber(record, out, "angleJitter", 0, 360, { round: true })
+  copyNumber(record, out, "roundnessJitter", 0, 100, { round: true })
+  copyBoolean(record, out, "flipX")
+  copyBoolean(record, out, "flipY")
+  copyNumber(record, out, "minDiameter", 0, 100, { round: true })
+  copyNumber(record, out, "scatter", 0, 1000, { round: true })
+  copyNumber(record, out, "scatterCount", 1, 16, { round: true })
+  copyNumber(record, out, "scatterCountJitter", 0, 100, { round: true })
+  copyNumber(record, out, "fgBgJitter", 0, 100, { round: true })
+  copyNumber(record, out, "hueJitter", 0, 100, { round: true })
+  copyNumber(record, out, "satJitter", 0, 100, { round: true })
+  copyNumber(record, out, "brightJitter", 0, 100, { round: true })
+  copyNumber(record, out, "purity", -100, 100, { round: true })
+  copyNumber(record, out, "opacityJitter", 0, 100, { round: true })
+  copyNumber(record, out, "flowJitter", 0, 100, { round: true })
+  copyEnum(record, out, "opacityControl", BRUSH_CONTROLS)
+  copyEnum(record, out, "flowControl", BRUSH_CONTROLS)
+  copyBoolean(record, out, "wetEdges")
+  copyBoolean(record, out, "buildUp")
+  copyBoolean(record, out, "noise")
+  copyBoolean(record, out, "protectTexture")
+  if (isRecord(record.texture)) out.texture = normalizeBrushTexture(record.texture)
+  if (isRecord(record.dualBrush)) out.dualBrush = normalizeDualBrush(record.dualBrush)
+  if (isRecord(record.pose)) out.pose = normalizeBrushPose(record.pose)
+  if (!Object.keys(out).length) throw new Error("Brush payload does not contain supported settings.")
+  return out as Partial<BrushSettings>
+}
+
+function normalizeBrushTexture(record: Record<string, unknown>): NonNullable<BrushSettings["texture"]> {
+  return {
+    enabled: record.enabled === true,
+    pattern: enumValue(record.pattern, new Set(["noise", "canvas", "paper", "linen"]), "canvas"),
+    mode: enumValue(record.mode, new Set(["multiply", "subtract", "burn"]), "multiply"),
+    depth: cleanNumber(record.depth, 0, 100, 45, true),
+    depthJitter: cleanNumber(record.depthJitter, 0, 100, 0, true),
+    minDepth: cleanNumber(record.minDepth, 0, 100, 0, true),
+    scale: cleanNumber(record.scale, 20, 400, 100, true),
+  }
+}
+
+function normalizeDualBrush(record: Record<string, unknown>): NonNullable<BrushSettings["dualBrush"]> {
+  return {
+    enabled: record.enabled === true,
+    size: cleanNumber(record.size, 1, 300, 18, true),
+    spacing: cleanNumber(record.spacing, 1, 200, 25, true),
+    scatter: cleanNumber(record.scatter, 0, 500, 0, true),
+    count: cleanNumber(record.count, 1, 8, 1, true),
+    mode: enumValue(record.mode, new Set(["multiply", "screen", "subtract"]), "multiply"),
+  }
+}
+
+function normalizeBrushPose(record: Record<string, unknown>): NonNullable<BrushSettings["pose"]> {
+  return {
+    tiltX: cleanNumber(record.tiltX, -90, 90, 0, true),
+    tiltY: cleanNumber(record.tiltY, -90, 90, 0, true),
+    rotation: cleanNumber(record.rotation, -180, 180, 0, true),
+    pressure: cleanNumber(record.pressure, 0, 100, 50, true),
+    stylusAngle: cleanNumber(record.stylusAngle, -180, 180, 0, true),
+  }
+}
+
+function normalizeGradientPayload(payload: unknown): GradientSettings {
+  const record = requireRecord(payload, "Gradient payload")
+  const type = enumValue<GradientSettings["type"]>(record.type, GRADIENT_TYPES, undefined)
+  if (!type) throw new Error("Gradient payload must include a supported type.")
+  const gradient: GradientSettings = {
+    type,
+    reverse: record.reverse === true,
+  }
+  if (typeof record.dither === "boolean") gradient.dither = record.dither
+  if (typeof record.cycle === "boolean") gradient.cycle = record.cycle
+  if (Array.isArray(record.stops)) {
+    gradient.stops = record.stops.slice(0, 16).map((stop, index) => {
+      const item = requireRecord(stop, `Gradient stop ${index + 1}`)
+      return {
+        offset: cleanNumber(item.offset, 0, 1, 0),
+        color: cleanColor(item.color, `Gradient stop ${index + 1} color`),
+        opacity: cleanNumber(item.opacity, 0, 1, 1),
+      }
+    })
+  }
+  return gradient
+}
+
+function normalizeStylePayload(payload: unknown): LayerStyle {
+  const record = requireRecord(payload, "Style payload")
+  const out: Record<string, unknown> = {}
+  for (const key of ["stroke", "outerGlow", "innerGlow", "innerShadow", "bevel", "satin", "colorOverlay", "gradientOverlay", "patternOverlay", "dropShadow"]) {
+    if (isRecord(record[key])) out[key] = normalizeSafeJson(record[key], 0, 4)
+  }
+  return out as LayerStyle
+}
+
+function normalizeExportPayload(payload: unknown) {
+  const record = requireRecord(payload, "Export payload")
+  const format = enumValue<"png" | "jpeg" | "jpg" | "webp" | "gif" | "avif" | "svg">(record.format, EXPORT_FORMATS, "png")
+  const out: Record<string, unknown> = {
+    dialog: record.dialog === "batch-export" ? "batch-export" : "export-as",
+    format: format === "jpg" ? "jpeg" : format,
+    scale: cleanNumber(record.scale, 1, 800, 100, true),
+    quality: cleanNumber(record.quality, 1, 100, 92, true),
+    transparent: record.transparent === true,
+  }
+  if ("matte" in record) out.matte = cleanColor(record.matte, "Export matte")
+  if (typeof record.dither === "boolean") out.dither = record.dither
+  if (typeof record.losslessWebp === "boolean") out.losslessWebp = record.losslessWebp
+  if (typeof record.includeMetadata === "boolean") out.includeMetadata = record.includeMetadata
+  if ("precision" in record) out.precision = cleanNumber(record.precision, 0, 6, 2, true)
+  if (typeof record.scope === "string") out.scope = cleanText(record.scope, "document", 40)
+  return out
+}
+
+function normalizePatternPayload(payload: unknown) {
+  const record = requireRecord(payload, "Pattern payload")
+  const dataURL = typeof record.dataURL === "string" ? record.dataURL.trim() : ""
+  if (!IMAGE_DATA_URL.test(dataURL) || dataURL.length > 750_000) {
+    throw new Error("Pattern payload must contain a safe image data URL.")
+  }
+  return {
+    dataURL,
+    width: cleanNumber(record.width, 1, 4096, 1, true),
+    height: cleanNumber(record.height, 1, 4096, 1, true),
+  }
+}
+
+function normalizeGenericRecordPayload(payload: unknown, allowedKeys: string[]) {
+  const record = requireRecord(payload, "Asset payload")
+  const out: Record<string, unknown> = {}
+  for (const key of allowedKeys) {
+    if (!(key in record)) continue
+    const value = normalizeSafeJson(record[key], 0, 4)
+    if (value !== undefined) out[key] = value
+  }
+  return out
+}
+
+function normalizeSafeJson(value: unknown, depth: number, maxDepth: number): unknown {
+  if (value == null) return value
+  if (typeof value === "boolean") return value
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined
+  if (typeof value === "string") return value.trim().slice(0, 1_000)
+  if (Array.isArray(value)) {
+    if (depth >= maxDepth) return []
+    return value.slice(0, 64).map((item) => normalizeSafeJson(item, depth + 1, maxDepth)).filter((item) => item !== undefined)
+  }
+  if (isRecord(value)) {
+    if (depth >= maxDepth) return {}
+    const out: Record<string, unknown> = {}
+    for (const [key, nested] of Object.entries(value).slice(0, 64)) {
+      if (!isSafeRecordKey(key)) continue
+      const next = normalizeSafeJson(nested, depth + 1, maxDepth)
+      if (next !== undefined) out[key] = next
+    }
+    return out
+  }
+  return undefined
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`)
+  return value
+}
+
+function cleanId(value: unknown, prefix: string, index: number, makeId?: (prefix: string, index: number) => string) {
+  const candidate = typeof value === "string" ? value.trim() : ""
+  if (/^[A-Za-z0-9_-]{1,80}$/.test(candidate) && !RESERVED_KEYS.has(candidate)) return candidate
+  return makeId ? makeId(prefix, index) : `${prefix}_${Math.random().toString(36).slice(2, 9)}`
+}
+
+function cleanTimestamp(value: unknown, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+function cleanText(value: unknown, fallback: string, maxLength: number) {
+  const trimmed = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : ""
+  return trimmed ? trimmed.slice(0, maxLength) : fallback
+}
+
+function cleanOptionalText(value: unknown, maxLength: number) {
+  const trimmed = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : ""
+  return trimmed ? trimmed.slice(0, maxLength) : undefined
+}
+
+function cleanColor(value: unknown, label: string) {
+  if (typeof value !== "string" || !HEX_COLOR.test(value.trim())) {
+    throw new Error(`${label} must use #RGB or #RRGGBB format.`)
+  }
+  const clean = value.trim().toLowerCase()
+  if (clean.length === 4) {
+    const [, r, g, b] = clean
+    return `#${r}${r}${g}${g}${b}${b}`
+  }
+  return clean
+}
+
+function cleanNumber(value: unknown, min: number, max: number, fallback: number, round = false) {
+  const next = typeof value === "number" && Number.isFinite(value) ? value : fallback
+  const clamped = Math.max(min, Math.min(max, next))
+  return round ? Math.round(clamped) : clamped
+}
+
+function copyNumber(
+  record: Record<string, unknown>,
+  out: Record<string, unknown>,
+  key: keyof BrushSettings,
+  min: number,
+  max: number,
+  options: { round?: boolean } = {},
+) {
+  if (key in record) out[key] = cleanNumber(record[key], min, max, min, options.round)
+}
+
+function copyBoolean(record: Record<string, unknown>, out: Record<string, unknown>, key: keyof BrushSettings) {
+  if (typeof record[key] === "boolean") out[key] = record[key]
+}
+
+function copyEnum(
+  record: Record<string, unknown>,
+  out: Record<string, unknown>,
+  key: keyof BrushSettings,
+  allowed: Set<string>,
+) {
+  const value = record[key]
+  if (typeof value === "string" && allowed.has(value)) out[key] = value
+}
+
+function enumValue<T extends string>(value: unknown, allowed: Set<string>, fallback: T): T
+function enumValue<T extends string>(value: unknown, allowed: Set<string>, fallback: T | undefined): T | undefined
+function enumValue<T extends string>(value: unknown, allowed: Set<string>, fallback: T | undefined) {
+  return typeof value === "string" && allowed.has(value) ? (value as T) : fallback
+}
+
+function isSafeRecordKey(key: string) {
+  return /^[A-Za-z0-9_-]{1,64}$/.test(key) && !RESERVED_KEYS.has(key)
+}
+
+function formatImportBytes(bytes: number) {
+  return `${Math.round(bytes / 1000)} KB`
 }

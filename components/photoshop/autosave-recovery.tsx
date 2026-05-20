@@ -4,25 +4,28 @@ import * as React from "react"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { toast } from "sonner"
+import { planAutosaveDocuments } from "./autosave-planner"
 import { deserializeProject, serializeProject } from "./document-io"
 import { useEditor } from "./editor-context"
+import { loadPreferencesFromStorage } from "./preferences-engine"
 import { clearAutosave, readAutosaves, readAutosavesAsync, writeAutosaves, type AutosaveDocument } from "./recent-documents"
 
-const PREFERENCES_KEY = "ps-preferences"
-
-function autoSaveEnabled() {
+function autosavePreferences() {
   try {
-    const parsed = JSON.parse(localStorage.getItem(PREFERENCES_KEY) ?? "{}")
-    return parsed?.autoSave === true
+    const prefs = loadPreferencesFromStorage()
+    return {
+      enabled: prefs.fileHandling.autoSave,
+      intervalMs: Math.max(15, prefs.fileHandling.autosaveIntervalSec) * 1000,
+    }
   } catch {
-    return false
+    return { enabled: false, intervalMs: 120_000 }
   }
 }
 
 export function AutosaveRecovery() {
-  const { documents, createDocument } = useEditor()
+  const { documents, createDocument, documentStatuses, documentHistoryVersions } = useEditor()
   const [candidate, setCandidate] = React.useState<AutosaveDocument | null>(null)
-  const [enabled, setEnabled] = React.useState<boolean | null>(null)
+  const [prefs, setPrefs] = React.useState<{ enabled: boolean; intervalMs: number } | null>(null)
 
   // Keep a live ref to documents so the autosave interval can read the
   // latest snapshot without re-running its effect (and resetting its
@@ -31,9 +34,78 @@ export function AutosaveRecovery() {
   React.useEffect(() => {
     documentsRef.current = documents
   }, [documents])
+  const documentStatusesRef = React.useRef(documentStatuses)
+  React.useEffect(() => {
+    documentStatusesRef.current = documentStatuses
+  }, [documentStatuses])
+  const documentHistoryVersionsRef = React.useRef(documentHistoryVersions)
+  React.useEffect(() => {
+    documentHistoryVersionsRef.current = documentHistoryVersions
+  }, [documentHistoryVersions])
+  const lastSavedVersionsRef = React.useRef<Record<string, number>>({})
+  const serializedAutosavesRef = React.useRef<Record<string, Omit<AutosaveDocument, "id" | "kind" | "updatedAt">>>({})
+  const writingRef = React.useRef(false)
+
+  const runAutosave = React.useCallback(() => {
+    if (writingRef.current) return
+    writingRef.current = true
+    try {
+      const docs = documentsRef.current
+      const openIds = new Set(docs.map((doc) => doc.id))
+      let pruned = false
+      for (const id of Object.keys(serializedAutosavesRef.current)) {
+        if (!openIds.has(id)) {
+          delete serializedAutosavesRef.current[id]
+          pruned = true
+        }
+      }
+
+      const plan = planAutosaveDocuments({
+        documents: docs.map((doc) => ({
+          id: doc.id,
+          name: doc.name,
+          version: documentHistoryVersionsRef.current[doc.id] ?? 0,
+          dirty: documentStatusesRef.current[doc.id]?.dirty === true,
+        })),
+        lastSavedVersions: lastSavedVersionsRef.current,
+      })
+
+      if (!plan.documentsToSerialize.length && !pruned) return
+
+      for (const planDoc of plan.documentsToSerialize) {
+        const doc = docs.find((candidateDoc) => candidateDoc.id === planDoc.id)
+        if (!doc) continue
+        serializedAutosavesRef.current[doc.id] = {
+          documentId: doc.id,
+          name: doc.name,
+          serialized: serializeProject(doc),
+        }
+      }
+      lastSavedVersionsRef.current = plan.nextSavedVersions
+
+      const payload = Object.values(serializedAutosavesRef.current)
+      if (payload.length) {
+        writeAutosaves(payload)
+      } else {
+        clearAutosave()
+      }
+    } catch {
+      clearAutosave()
+    } finally {
+      writingRef.current = false
+    }
+  }, [])
+
+  const scheduleAutosave = React.useCallback(() => {
+    if (typeof requestIdleCallback === "function") {
+      requestIdleCallback(runAutosave, { timeout: 3000 })
+    } else {
+      window.setTimeout(runAutosave, 0)
+    }
+  }, [runAutosave])
 
   React.useEffect(() => {
-    const refresh = () => setEnabled(autoSaveEnabled())
+    const refresh = () => setPrefs(autosavePreferences())
     refresh()
     window.addEventListener("ps-preferences-changed", refresh)
     window.addEventListener("storage", refresh)
@@ -44,8 +116,8 @@ export function AutosaveRecovery() {
   }, [])
 
   React.useEffect(() => {
-    if (enabled === null) return
-    if (!enabled) {
+    if (prefs === null) return
+    if (!prefs.enabled) {
       clearAutosave()
       setCandidate(null)
       return
@@ -65,34 +137,26 @@ export function AutosaveRecovery() {
       if (saved) setCandidate(saved)
     })
     return () => { cancelled = true }
-  }, [enabled])
+  }, [prefs])
 
   React.useEffect(() => {
-    if (enabled === null) return
-    if (!enabled) {
+    if (prefs === null) return
+    if (!prefs.enabled) {
       clearAutosave()
       return
     }
-    // Run the autosave on a steady 4-second interval so it actually
-    // fires during active editing. The previous implementation depended
-    // on `documents` (a fresh array reference on every reducer action),
-    // which kept resetting the timer before it could fire — making
-    // autosave effectively dead during typical workflows.
     const interval = window.setInterval(() => {
-      const docs = documentsRef.current
-      if (!docs.length) return
-      try {
-        writeAutosaves(docs.map((doc) => ({
-          documentId: doc.id,
-          name: doc.name,
-          serialized: serializeProject(doc),
-        })))
-      } catch {
-        clearAutosave()
-      }
-    }, 4000)
+      if (!documentsRef.current.length) return
+      scheduleAutosave()
+    }, prefs.intervalMs)
     return () => window.clearInterval(interval)
-  }, [enabled])
+  }, [prefs, scheduleAutosave])
+
+  React.useEffect(() => {
+    if (!prefs?.enabled) return
+    if (!documents.length) return
+    scheduleAutosave()
+  }, [prefs?.enabled, documents, documentStatuses, documentHistoryVersions, scheduleAutosave])
 
   const restore = async () => {
     if (!candidate) return

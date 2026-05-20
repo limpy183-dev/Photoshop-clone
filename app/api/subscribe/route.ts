@@ -1,0 +1,122 @@
+import { NextResponse } from "next/server"
+import { createHash } from "node:crypto"
+import { z } from "zod"
+import {
+  appendRecord,
+  checkRateLimit,
+  getClientIp,
+  MARKETING_LIMITS,
+  MarketingStoreQuotaError,
+  readAll,
+  RequestBodyTooLargeError,
+  readJsonWithLimit,
+} from "@/lib/marketing-store"
+
+export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
+
+const SubscribeSchema = z.object({
+  email: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .email("Please enter a valid email address.")
+    .max(254, "That email is suspiciously long."),
+  source: z.string().max(64).optional(),
+})
+
+type SubscribeRecord = {
+  id: string
+  email: string
+  source?: string
+  createdAt?: string
+}
+
+function hashEmail(email: string): string {
+  return createHash("sha256").update(email).digest("hex").slice(0, 16)
+}
+
+export async function POST(request: Request) {
+  const rateLimit = checkRateLimit(
+    `subscribe:${getClientIp(request)}`,
+    MARKETING_LIMITS.subscribers.rateLimit,
+  )
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { ok: false, error: "Too many requests. Try again later." },
+      {
+        headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 60) },
+        status: 429,
+      },
+    )
+  }
+
+  let body: unknown
+  try {
+    body = await readJsonWithLimit(request, MARKETING_LIMITS.subscribers.bodyBytes)
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return NextResponse.json(
+        { ok: false, error: "Request body is too large." },
+        { status: 413 },
+      )
+    }
+    return NextResponse.json(
+      { ok: false, error: "Body must be valid JSON." },
+      { status: 400 },
+    )
+  }
+
+  const parsed = SubscribeSchema.safeParse(body)
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0]
+    return NextResponse.json(
+      { ok: false, error: issue?.message ?? "Invalid request." },
+      { status: 400 },
+    )
+  }
+
+  const { email, source } = parsed.data
+  const record: SubscribeRecord = {
+    id: hashEmail(email),
+    email,
+    source: source ?? "marketing-site",
+  }
+
+  try {
+    const result = await appendRecord<SubscribeRecord>("subscribers", record, {
+      ...MARKETING_LIMITS.subscribers.store,
+      dedupeById: true,
+    })
+    return NextResponse.json({
+      ok: true,
+      added: result.added,
+      total: result.total,
+    })
+  } catch (error) {
+    if (error instanceof MarketingStoreQuotaError) {
+      return NextResponse.json(
+        { ok: false, error: "Could not record subscription. Try again later." },
+        { status: 503 },
+      )
+    }
+    console.error("subscribe failed", error)
+    return NextResponse.json(
+      { ok: false, error: "Could not record subscription. Try again later." },
+      { status: 500 },
+    )
+  }
+}
+
+export async function GET() {
+  try {
+    const all = await readAll<SubscribeRecord>("subscribers")
+    return NextResponse.json({ ok: true, total: all.length })
+  } catch (error) {
+    console.error("subscribe count failed", error)
+    return NextResponse.json(
+      { ok: false, error: "Could not read subscribers." },
+      { status: 500 },
+    )
+  }
+}

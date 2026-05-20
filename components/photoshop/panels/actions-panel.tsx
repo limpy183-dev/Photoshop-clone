@@ -5,6 +5,7 @@ import { Circle, Copy, Download, Play, Plus, Square, Trash2, Upload, X } from "l
 import { toast } from "sonner"
 import { useEditor } from "../editor-context"
 import { canvasFromDataUrl, downloadText } from "../document-io"
+import { MAX_CANVAS_DIMENSION, MAX_PROJECT_LAYERS } from "../canvas-limits"
 import { cn } from "@/lib/utils"
 import type { CanvasPatch, HistoryEntry, LayerSnapshot, MacroAction, SmartFilter } from "../types"
 
@@ -27,6 +28,97 @@ const MAX_ACTION_IMPORT_BYTES = 12 * 1024 * 1024
 const MAX_IMPORTED_ACTIONS = 50
 const MAX_ACTION_STEPS = 200
 const MAX_ACTION_DATA_URL_LENGTH = 4_000_000
+const MAX_ACTION_CANVAS_PATCHES = 200
+const MAX_ACTION_SMART_FILTERS = 50
+const MAX_ACTION_ID_REFERENCES = MAX_PROJECT_LAYERS
+const MAX_ACTION_FILTER_PARAMS = 100
+const MAX_ACTION_GENERIC_ARRAY_ITEMS = 1000
+const MAX_ACTION_GENERIC_OBJECT_KEYS = 200
+const MAX_ACTION_GENERIC_DEPTH = 12
+const MAX_ACTION_STRING_LENGTH = 100_000
+
+const ACTION_IMPORT_KEYS = new Set(["app", "format", "version", "exportedAt", "actions"])
+const ACTION_KEYS = new Set(["id", "name", "createdAt", "updatedAt", "steps"])
+const STEP_KEYS = new Set(["id", "label", "createdAt", "entry"])
+const HISTORY_ENTRY_KEYS = new Set([
+  "id",
+  "label",
+  "layers",
+  "activeLayerId",
+  "selectedLayerIds",
+  "thumb",
+  "width",
+  "height",
+  "selection",
+  "guides",
+  "notes",
+  "slices",
+  "counts",
+  "colorSamplers",
+  "comps",
+  "channels",
+  "quickMask",
+  "quickMaskCanvas",
+  "colorMode",
+  "modeSettings",
+  "variableDataSets",
+  "assetLibrary",
+])
+const LAYER_KEYS = new Set([
+  "id",
+  "name",
+  "kind",
+  "visible",
+  "locked",
+  "lockTransparency",
+  "lockDraw",
+  "lockMove",
+  "lockAll",
+  "smartObject",
+  "opacity",
+  "fillOpacity",
+  "advancedBlending",
+  "blendMode",
+  "linkGroupId",
+  "canvasDataUrl",
+  "maskDataUrl",
+  "canvasPatches",
+  "maskEnabled",
+  "vectorMask",
+  "clipped",
+  "style",
+  "childIds",
+  "parentId",
+  "expanded",
+  "text",
+  "shape",
+  "path",
+  "adjustment",
+  "frame",
+  "artboard",
+  "threeD",
+  "video",
+  "colorLabel",
+  "smartFilters",
+  "smartSource",
+])
+const CANVAS_PATCH_KEYS = new Set(["x", "y", "w", "h", "canvasDataUrl"])
+const SMART_FILTER_KEYS = new Set(["id", "filterId", "name", "enabled", "opacity", "blendMode", "params", "maskDataUrl", "maskEnabled"])
+const FRAME_KEYS = new Set(["shape", "x", "y", "w", "h", "imageDataUrl", "imageCanvas"])
+const SMART_SOURCE_KEYS = new Set([
+  "width",
+  "height",
+  "canvasDataUrl",
+  "canvas",
+  "id",
+  "name",
+  "linkType",
+  "fileName",
+  "relativePath",
+  "status",
+  "embedded",
+  "updatedAt",
+])
 
 function uid(prefix: string) {
   return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
@@ -47,40 +139,213 @@ function isSafeImageDataUrl(value: string) {
   )
 }
 
-function assertSafeActionDataUrls(value: unknown) {
-  if (Array.isArray(value)) {
-    value.forEach(assertSafeActionDataUrls)
-    return
-  }
-  if (!isRecord(value)) return
-  for (const [key, child] of Object.entries(value)) {
-    if (typeof child === "string" && key.toLowerCase().includes("dataurl") && child && !isSafeImageDataUrl(child)) {
-      throw new Error("Action file contains an unsafe or oversized image payload.")
-    }
-    assertSafeActionDataUrls(child)
+function assertKnownKeys(record: Record<string, unknown>, allowed: Set<string>, context: string) {
+  const unknown = Object.keys(record).find((key) => !allowed.has(key))
+  if (unknown) throw new Error(`${context} contains unknown field "${unknown}".`)
+}
+
+function assertImageDataUrl(value: unknown, context: string) {
+  if (value === undefined || value === null || value === "") return
+  if (typeof value !== "string" || !isSafeImageDataUrl(value)) {
+    throw new Error(`Action file contains an unsafe or oversized image payload at ${context}.`)
   }
 }
 
-function parseActionImportPayload(parsed: unknown): SerializedMacroAction[] {
+function assertBoundedArray(value: unknown, max: number, context: string) {
+  if (!Array.isArray(value)) throw new Error(`${context} must be an array.`)
+  if (value.length > max) throw new Error(`${context} is limited to ${max} items.`)
+  return value
+}
+
+function optionalBoundedArray(value: unknown, max: number, context: string) {
+  if (value === undefined) return undefined
+  return assertBoundedArray(value, max, context)
+}
+
+function assertFiniteNumber(value: unknown, context: string) {
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${context} must be a finite number.`)
+  return value
+}
+
+function assertCanvasDimension(value: unknown, context: string) {
+  const dimension = assertFiniteNumber(value, context)
+  if (dimension < 1 || dimension > MAX_CANVAS_DIMENSION) {
+    throw new Error(`${context} is limited to ${MAX_CANVAS_DIMENSION}px.`)
+  }
+  return dimension
+}
+
+function assertStringArray(value: unknown, max: number, context: string) {
+  const items = optionalBoundedArray(value, max, context)
+  if (!items) return
+  items.forEach((item, index) => {
+    if (typeof item !== "string" || item.length > MAX_ACTION_STRING_LENGTH) {
+      throw new Error(`${context}[${index}] must be a bounded string.`)
+    }
+  })
+}
+
+function assertBoundedJsonValue(value: unknown, context: string, depth = 0) {
+  if (depth > MAX_ACTION_GENERIC_DEPTH) throw new Error(`${context} is nested too deeply.`)
+  if (value === null || value === undefined) return
+  if (typeof value === "boolean") return
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error(`${context} must contain finite numbers.`)
+    return
+  }
+  if (typeof value === "string") {
+    const lowerContext = context.toLowerCase()
+    if (lowerContext.includes("dataurl") || lowerContext.endsWith(".thumb") || lowerContext.endsWith(".posterdataurl")) {
+      assertImageDataUrl(value, context)
+      return
+    }
+    if (value.length > MAX_ACTION_STRING_LENGTH) throw new Error(`${context} string is too large.`)
+    return
+  }
+  if (Array.isArray(value)) {
+    if (value.length > MAX_ACTION_GENERIC_ARRAY_ITEMS) {
+      throw new Error(`${context} is limited to ${MAX_ACTION_GENERIC_ARRAY_ITEMS} nested items.`)
+    }
+    value.forEach((item, index) => assertBoundedJsonValue(item, `${context}[${index}]`, depth + 1))
+    return
+  }
+  if (!isRecord(value)) throw new Error(`${context} contains an unsupported payload.`)
+  const entries = Object.entries(value)
+  if (entries.length > MAX_ACTION_GENERIC_OBJECT_KEYS) {
+    throw new Error(`${context} is limited to ${MAX_ACTION_GENERIC_OBJECT_KEYS} fields.`)
+  }
+  entries.forEach(([key, child]) => assertBoundedJsonValue(child, `${context}.${key}`, depth + 1))
+}
+
+function validateCanvasPatch(value: unknown, context: string): SerializedCanvasPatch {
+  if (!isRecord(value)) throw new Error(`${context} must be an object.`)
+  assertKnownKeys(value, CANVAS_PATCH_KEYS, context)
+  assertImageDataUrl(value.canvasDataUrl, `${context}.canvasDataUrl`)
+  return {
+    x: assertFiniteNumber(value.x, `${context}.x`),
+    y: assertFiniteNumber(value.y, `${context}.y`),
+    w: assertCanvasDimension(value.w, `${context}.w`),
+    h: assertCanvasDimension(value.h, `${context}.h`),
+    canvasDataUrl: (value.canvasDataUrl as string | null | undefined) ?? null,
+  }
+}
+
+function validateSmartFilter(value: unknown, context: string): SerializedSmartFilter {
+  if (!isRecord(value)) throw new Error(`${context} must be an object.`)
+  assertKnownKeys(value, SMART_FILTER_KEYS, context)
+  assertImageDataUrl(value.maskDataUrl, `${context}.maskDataUrl`)
+  if (value.params !== undefined) {
+    if (!isRecord(value.params)) throw new Error(`${context}.params must be an object.`)
+    const params = Object.entries(value.params)
+    if (params.length > MAX_ACTION_FILTER_PARAMS) throw new Error(`${context}.params is limited to ${MAX_ACTION_FILTER_PARAMS} fields.`)
+    params.forEach(([key, child]) => assertBoundedJsonValue(child, `${context}.params.${key}`, 1))
+  }
+  return value as SerializedSmartFilter
+}
+
+function validateFrame(value: unknown, context: string): SerializedLayerSnapshot["frame"] {
+  if (value === undefined) return undefined
+  if (!isRecord(value)) throw new Error(`${context} must be an object.`)
+  assertKnownKeys(value, FRAME_KEYS, context)
+  if (value.imageCanvas !== undefined && value.imageCanvas !== null) throw new Error(`${context}.imageCanvas is not importable.`)
+  assertImageDataUrl(value.imageDataUrl, `${context}.imageDataUrl`)
+  Object.entries(value).forEach(([key, child]) => {
+    if (key !== "imageDataUrl" && key !== "imageCanvas") assertBoundedJsonValue(child, `${context}.${key}`, 1)
+  })
+  return value as unknown as SerializedLayerSnapshot["frame"]
+}
+
+function validateSmartSource(value: unknown, context: string): SerializedLayerSnapshot["smartSource"] {
+  if (value === undefined) return undefined
+  if (!isRecord(value)) throw new Error(`${context} must be an object.`)
+  assertKnownKeys(value, SMART_SOURCE_KEYS, context)
+  if (value.canvas !== undefined && value.canvas !== null) throw new Error(`${context}.canvas is not importable.`)
+  assertImageDataUrl(value.canvasDataUrl, `${context}.canvasDataUrl`)
+  return {
+    ...value,
+    width: assertCanvasDimension(value.width, `${context}.width`),
+    height: assertCanvasDimension(value.height, `${context}.height`),
+  } as SerializedLayerSnapshot["smartSource"]
+}
+
+function validateLayer(value: unknown, context: string): SerializedLayerSnapshot {
+  if (!isRecord(value)) throw new Error(`${context} must be an object.`)
+  assertKnownKeys(value, LAYER_KEYS, context)
+  assertImageDataUrl(value.canvasDataUrl, `${context}.canvasDataUrl`)
+  assertImageDataUrl(value.maskDataUrl, `${context}.maskDataUrl`)
+  assertStringArray(value.childIds, MAX_ACTION_ID_REFERENCES, `${context}.childIds`)
+
+  const canvasPatches = optionalBoundedArray(value.canvasPatches, MAX_ACTION_CANVAS_PATCHES, `${context}.canvas patches`)
+    ?.map((patch, index) => validateCanvasPatch(patch, `${context}.canvasPatches[${index}]`))
+  const smartFilters = optionalBoundedArray(value.smartFilters, MAX_ACTION_SMART_FILTERS, `${context}.smart filters`)
+    ?.map((filter, index) => validateSmartFilter(filter, `${context}.smartFilters[${index}]`))
+  const frame = validateFrame(value.frame, `${context}.frame`)
+  const smartSource = validateSmartSource(value.smartSource, `${context}.smartSource`)
+
+  ;([
+    "advancedBlending",
+    "vectorMask",
+    "style",
+    "text",
+    "shape",
+    "path",
+    "adjustment",
+    "artboard",
+    "threeD",
+    "video",
+  ] as const).forEach((key) => {
+    if (value[key] !== undefined) assertBoundedJsonValue(value[key], `${context}.${key}`)
+  })
+
+  return {
+    ...value,
+    ...(canvasPatches ? { canvasPatches } : {}),
+    ...(smartFilters ? { smartFilters } : {}),
+    ...(frame ? { frame } : {}),
+    ...(smartSource ? { smartSource } : {}),
+  } as SerializedLayerSnapshot
+}
+
+function validateEntry(value: unknown, context: string): SerializedHistoryEntry {
+  if (!isRecord(value)) throw new Error(`${context} must be an object.`)
+  assertKnownKeys(value, HISTORY_ENTRY_KEYS, context)
+  assertImageDataUrl(value.thumb, `${context}.thumb`)
+  assertStringArray(value.selectedLayerIds, MAX_ACTION_ID_REFERENCES, `${context}.selectedLayerIds`)
+  const layers = assertBoundedArray(value.layers, MAX_PROJECT_LAYERS, `${context}.layers`)
+    .map((layer, index) => validateLayer(layer, `${context}.layers[${index}]`))
+
+  Object.entries(value).forEach(([key, child]) => {
+    if (!["layers", "thumb", "selectedLayerIds"].includes(key)) assertBoundedJsonValue(child, `${context}.${key}`)
+  })
+
+  return {
+    ...value,
+    layers,
+  } as SerializedHistoryEntry
+}
+
+export function parseActionImportPayload(parsed: unknown): SerializedMacroAction[] {
+  if (isRecord(parsed)) assertKnownKeys(parsed, ACTION_IMPORT_KEYS, "Action import payload")
   const serialized = Array.isArray(parsed) ? parsed : isRecord(parsed) ? parsed.actions : null
   if (!Array.isArray(serialized)) throw new Error("Action file does not contain an actions array.")
   if (serialized.length > MAX_IMPORTED_ACTIONS) throw new Error(`Action files are limited to ${MAX_IMPORTED_ACTIONS} actions.`)
-  assertSafeActionDataUrls(serialized)
 
   return serialized.map((action, actionIndex) => {
     if (!isRecord(action)) throw new Error(`Action ${actionIndex + 1} is not valid.`)
+    assertKnownKeys(action, ACTION_KEYS, `Action ${actionIndex + 1}`)
     const rawSteps = Array.isArray(action.steps) ? action.steps : []
     if (rawSteps.length > MAX_ACTION_STEPS) throw new Error(`Actions are limited to ${MAX_ACTION_STEPS} steps.`)
     const steps = rawSteps.map((step, stepIndex) => {
       if (!isRecord(step) || !isRecord(step.entry) || !Array.isArray(step.entry.layers)) {
         throw new Error(`Step ${stepIndex + 1} in action ${actionIndex + 1} is not valid.`)
       }
+      assertKnownKeys(step, STEP_KEYS, `Step ${stepIndex + 1} in action ${actionIndex + 1}`)
       return {
         ...step,
         id: uid("step"),
         label: cleanName(step.label, `Step ${stepIndex + 1}`),
         createdAt: typeof step.createdAt === "number" && Number.isFinite(step.createdAt) ? step.createdAt : Date.now(),
-        entry: step.entry,
+        entry: validateEntry(step.entry, `Step ${stepIndex + 1} entry`),
       }
     })
 

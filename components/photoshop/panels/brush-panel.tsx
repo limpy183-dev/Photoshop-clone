@@ -150,6 +150,34 @@ const CONTROL_OPTIONS: { value: NonNullable<BrushSettings["sizeControl"]>; label
   { value: "random", label: "Random" },
 ]
 
+export const MAX_BRUSH_IMPORT_BYTES = 8 * 1024 * 1024
+export const MAX_BRUSH_PRESET_IMPORT_COUNT = 64
+export const ABR_SCAN_LIMIT_BYTES = 1 * 1024 * 1024
+const MAX_BRUSH_THUMBNAIL_LENGTH = 160_000
+const BRUSH_THUMBNAIL_DATA_URL = /^data:image\/(?:png|jpe?g|webp|gif);base64,[a-z0-9+/=]+$/i
+const BRUSH_ID_PATTERN = /^[A-Za-z0-9_-]{1,80}$/
+const RESERVED_IMPORT_KEYS = new Set(["__proto__", "constructor", "prototype"])
+const TIP_SHAPES = new Set(["round", "square", "bristle", "erodible"])
+const CONTROL_VALUES = new Set(["off", "pressure", "tilt", "velocity", "fade", "random"])
+const TEXTURE_PATTERNS = new Set(["noise", "canvas", "paper", "linen"])
+const TEXTURE_MODES = new Set(["multiply", "subtract", "burn"])
+const DUAL_BRUSH_MODES = new Set(["multiply", "screen", "subtract"])
+
+type BrushImportOptions = {
+  fileSizeBytes?: number
+  now?: number
+  makeId?: (prefix: string, index: number) => string
+  makeThumbnail?: (settings: Partial<BrushSettings>) => string | undefined
+}
+
+type AbrParseOptions = BrushImportOptions & {
+  maxScanBytes?: number
+}
+
+export type NormalizedBrushImport =
+  | { kind: "library"; presets: BrushPreset[] }
+  | { kind: "single"; brush: Partial<BrushSettings>; preset: BrushPreset }
+
 export function BrushPanel() {
   const { brush, brushPresets, dispatch, foreground, background, symmetry } = useEditor()
   const [presetName, setPresetName] = React.useState("Custom Brush")
@@ -236,6 +264,10 @@ export function BrushPanel() {
     input.onchange = () => {
       const file = input.files?.[0]
       if (!file) return
+      if (file.size > MAX_BRUSH_IMPORT_BYTES) {
+        toast.error(`Brush imports are limited to ${formatImportBytes(MAX_BRUSH_IMPORT_BYTES)}.`)
+        return
+      }
       const reader = new FileReader()
       reader.onload = () => {
         try {
@@ -247,32 +279,15 @@ export function BrushPanel() {
             return
           }
           const parsed = JSON.parse(String(reader.result))
-          if (Array.isArray(parsed)) {
-            const imported = parsed
-              .filter((p) => p && typeof p.name === "string")
-              .map((p) => ({
-                ...p,
-                id: p.id ?? `brush_${Math.random().toString(36).slice(2, 9)}`,
-                thumbnail: p.thumbnail ?? makeBrushThumbnail(p.settings ?? p, foreground, background),
-              })) as BrushPreset[]
-            dispatch({ type: "set-brush-presets", presets: [...brushPresets, ...imported] })
-            return
-          }
-          const settings = parsed.settings ?? parsed
-          if (typeof settings.size === "number" && typeof settings.hardness === "number") {
-            dispatch({ type: "set-brush", brush: settings })
-            dispatch({
-              type: "add-brush-preset",
-              preset: {
-                id: parsed.id ?? `brush_${Math.random().toString(36).slice(2, 9)}`,
-                name: parsed.name ?? "Imported Brush",
-                size: settings.size,
-                hardness: settings.hardness,
-                spacing: settings.spacing ?? 25,
-                settings,
-                thumbnail: parsed.thumbnail ?? makeBrushThumbnail(settings, foreground, background),
-              },
-            })
+          const imported = normalizeImportedBrushPayload(parsed, {
+            fileSizeBytes: file.size,
+            makeThumbnail: (settings) => makeBrushThumbnail(settings, foreground, background),
+          })
+          if (imported.kind === "library") {
+            dispatch({ type: "set-brush-presets", presets: [...brushPresets, ...imported.presets] })
+          } else {
+            dispatch({ type: "set-brush", brush: imported.brush })
+            dispatch({ type: "add-brush-preset", preset: imported.preset })
           }
         } catch (error) {
           toast.error(error instanceof Error ? error.message : "Could not import that brush file.")
@@ -514,23 +529,169 @@ export function BrushPanel() {
   )
 }
 
-function parseAbrPresets(buffer: ArrayBuffer | string | null, filename: string, foreground: string, background: string): BrushPreset[] {
+export function normalizeImportedBrushPayload(parsed: unknown, options: BrushImportOptions = {}): NormalizedBrushImport {
+  if (typeof options.fileSizeBytes === "number" && options.fileSizeBytes > MAX_BRUSH_IMPORT_BYTES) {
+    throw new Error(`Brush imports are limited to ${formatImportBytes(MAX_BRUSH_IMPORT_BYTES)}.`)
+  }
+
+  if (Array.isArray(parsed)) {
+    if (parsed.length > MAX_BRUSH_PRESET_IMPORT_COUNT) {
+      throw new Error(`Brush preset imports are limited to ${MAX_BRUSH_PRESET_IMPORT_COUNT} items.`)
+    }
+    return {
+      kind: "library",
+      presets: parsed.map((raw, index) => normalizeBrushPreset(raw, index, options)),
+    }
+  }
+
+  const record = requireImportRecord(parsed, "Brush file")
+  const rawSettings = isImportRecord(record.settings) ? record.settings : record
+  const settings = normalizeImportedBrushSettings(rawSettings, true)
+  const thumbnail = normalizeImportedThumbnail(record.thumbnail, settings, options)
+  const preset: BrushPreset = {
+    id: cleanBrushImportId(record.id, "brush", 0, options.makeId),
+    name: cleanImportText(record.name, "Imported Brush", 80),
+    size: settings.size ?? 30,
+    hardness: settings.hardness ?? 80,
+    spacing: settings.spacing ?? 25,
+    settings,
+    ...(thumbnail ? { thumbnail } : {}),
+  }
+  return { kind: "single", brush: settings, preset }
+}
+
+function normalizeBrushPreset(raw: unknown, index: number, options: BrushImportOptions): BrushPreset {
+  const record = requireImportRecord(raw, `Brush preset ${index + 1}`)
+  const rawSettings = isImportRecord(record.settings) ? record.settings : record
+  const settings = normalizeImportedBrushSettings(rawSettings, true)
+  const thumbnail = normalizeImportedThumbnail(record.thumbnail, settings, options)
+  return {
+    id: cleanBrushImportId(record.id, "brush", index, options.makeId),
+    name: cleanImportText(record.name, `Imported Brush ${index + 1}`, 80),
+    ...(cleanOptionalImportText(record.folder, 80) ? { folder: cleanOptionalImportText(record.folder, 80) } : {}),
+    size: settings.size ?? 30,
+    hardness: settings.hardness ?? 80,
+    spacing: settings.spacing ?? 25,
+    settings,
+    ...(thumbnail ? { thumbnail } : {}),
+  }
+}
+
+function normalizeImportedBrushSettings(raw: Record<string, unknown>, requireCore: boolean): Partial<BrushSettings> {
+  if (requireCore && (!isFiniteImportNumber(raw.size) || !isFiniteImportNumber(raw.hardness))) {
+    throw new Error("Brush settings must include numeric size and hardness.")
+  }
+
+  const out: Record<string, unknown> = {
+    size: cleanImportNumber(raw.size, 1, 500, 30, true),
+    hardness: cleanImportNumber(raw.hardness, 0, 100, 80, true),
+    opacity: cleanImportNumber(raw.opacity, 0, 100, 100, true),
+    flow: cleanImportNumber(raw.flow, 0, 100, 100, true),
+    smoothing: cleanImportNumber(raw.smoothing, 0, 100, 10, true),
+  }
+
+  copyImportNumber(raw, out, "spacing", 1, 200, 25)
+  copyImportNumber(raw, out, "sizeJitter", 0, 100, 0)
+  copyImportNumber(raw, out, "angleJitter", 0, 360, 0)
+  copyImportNumber(raw, out, "roundnessJitter", 0, 100, 0)
+  copyImportNumber(raw, out, "minDiameter", 0, 100, 0)
+  copyImportNumber(raw, out, "scatter", 0, 1000, 0)
+  copyImportNumber(raw, out, "scatterCount", 1, 16, 1)
+  copyImportNumber(raw, out, "scatterCountJitter", 0, 100, 0)
+  copyImportNumber(raw, out, "fgBgJitter", 0, 100, 0)
+  copyImportNumber(raw, out, "hueJitter", 0, 100, 0)
+  copyImportNumber(raw, out, "satJitter", 0, 100, 0)
+  copyImportNumber(raw, out, "brightJitter", 0, 100, 0)
+  copyImportNumber(raw, out, "purity", -100, 100, 0)
+  copyImportNumber(raw, out, "opacityJitter", 0, 100, 0)
+  copyImportNumber(raw, out, "flowJitter", 0, 100, 0)
+  copyImportEnum(raw, out, "tipShape", TIP_SHAPES)
+  copyImportEnum(raw, out, "sizeControl", CONTROL_VALUES)
+  copyImportEnum(raw, out, "angleControl", CONTROL_VALUES)
+  copyImportEnum(raw, out, "roundnessControl", CONTROL_VALUES)
+  copyImportEnum(raw, out, "opacityControl", CONTROL_VALUES)
+  copyImportEnum(raw, out, "flowControl", CONTROL_VALUES)
+  copyImportBoolean(raw, out, "flipX")
+  copyImportBoolean(raw, out, "flipY")
+  copyImportBoolean(raw, out, "wetEdges")
+  copyImportBoolean(raw, out, "buildUp")
+  copyImportBoolean(raw, out, "noise")
+  copyImportBoolean(raw, out, "protectTexture")
+
+  if ("texture" in raw) {
+    if (!isImportRecord(raw.texture)) throw new Error("Brush texture settings must be an object.")
+    out.texture = {
+      enabled: raw.texture.enabled === true,
+      pattern: cleanImportEnum(raw.texture.pattern, TEXTURE_PATTERNS, "canvas"),
+      mode: cleanImportEnum(raw.texture.mode, TEXTURE_MODES, "multiply"),
+      depth: cleanImportNumber(raw.texture.depth, 0, 100, 45, true),
+      depthJitter: cleanImportNumber(raw.texture.depthJitter, 0, 100, 0, true),
+      minDepth: cleanImportNumber(raw.texture.minDepth, 0, 100, 0, true),
+      scale: cleanImportNumber(raw.texture.scale, 20, 400, 100, true),
+    } satisfies NonNullable<BrushSettings["texture"]>
+  }
+  if ("dualBrush" in raw) {
+    if (!isImportRecord(raw.dualBrush)) throw new Error("Dual brush settings must be an object.")
+    out.dualBrush = {
+      enabled: raw.dualBrush.enabled === true,
+      size: cleanImportNumber(raw.dualBrush.size, 1, 300, 18, true),
+      spacing: cleanImportNumber(raw.dualBrush.spacing, 1, 200, 25, true),
+      scatter: cleanImportNumber(raw.dualBrush.scatter, 0, 500, 0, true),
+      count: cleanImportNumber(raw.dualBrush.count, 1, 8, 1, true),
+      mode: cleanImportEnum(raw.dualBrush.mode, DUAL_BRUSH_MODES, "multiply"),
+    } satisfies NonNullable<BrushSettings["dualBrush"]>
+  }
+  if ("pose" in raw) {
+    if (!isImportRecord(raw.pose)) throw new Error("Brush pose settings must be an object.")
+    out.pose = {
+      tiltX: cleanImportNumber(raw.pose.tiltX, -90, 90, 0, true),
+      tiltY: cleanImportNumber(raw.pose.tiltY, -90, 90, 0, true),
+      rotation: cleanImportNumber(raw.pose.rotation, -180, 180, 0, true),
+      pressure: cleanImportNumber(raw.pose.pressure, 0, 100, 50, true),
+      stylusAngle: cleanImportNumber(raw.pose.stylusAngle, -180, 180, 0, true),
+    } satisfies NonNullable<BrushSettings["pose"]>
+  }
+
+  return out as Partial<BrushSettings>
+}
+
+function normalizeImportedThumbnail(raw: unknown, settings: Partial<BrushSettings>, options: BrushImportOptions) {
+  if (raw == null || raw === "") return safeGeneratedThumbnail(options.makeThumbnail?.(settings))
+  if (typeof raw !== "string") throw new Error("Brush thumbnail must be an image data URL.")
+  const trimmed = raw.trim()
+  if (trimmed.length > MAX_BRUSH_THUMBNAIL_LENGTH || !BRUSH_THUMBNAIL_DATA_URL.test(trimmed)) {
+    throw new Error("Brush thumbnail must be a png, jpeg, webp, or gif data URL under the import limit.")
+  }
+  return trimmed
+}
+
+function safeGeneratedThumbnail(thumbnail: string | undefined) {
+  if (!thumbnail) return undefined
+  return thumbnail.length <= MAX_BRUSH_THUMBNAIL_LENGTH && BRUSH_THUMBNAIL_DATA_URL.test(thumbnail) ? thumbnail : undefined
+}
+
+export function parseAbrPresets(
+  buffer: ArrayBuffer | string | null,
+  filename: string,
+  foreground: string,
+  background: string,
+  options: AbrParseOptions = {},
+): BrushPreset[] {
   if (!(buffer instanceof ArrayBuffer)) return []
   const bytes = new Uint8Array(buffer)
-  const text = new TextDecoder("latin1", { fatal: false }).decode(bytes)
-  const names = new Set<string>()
-  const asciiPattern = /[A-Za-z0-9][A-Za-z0-9 _.,()#+-]{3,63}/g
-  for (const match of text.matchAll(asciiPattern)) {
-    const name = match[0].trim()
-    if (!isUsefulAbrName(name)) continue
-    names.add(name)
-    if (names.size >= 48) break
+  if (bytes.byteLength > MAX_BRUSH_IMPORT_BYTES) {
+    throw new Error(`Brush imports are limited to ${formatImportBytes(MAX_BRUSH_IMPORT_BYTES)}.`)
   }
+  const scanLimit = Math.max(0, Math.min(bytes.length, options.maxScanBytes ?? ABR_SCAN_LIMIT_BYTES, ABR_SCAN_LIMIT_BYTES))
+  const names = new Set<string>()
+  collectAbrResourceNames(bytes, scanLimit, names)
+  collectAbrTextNames(bytes, 0, scanLimit, names)
   if (!names.size) {
     const base = filename.replace(/\.[^.]+$/, "")
     names.add(base || "Imported ABR Brush")
   }
-  return [...names].slice(0, 48).map((name, index) => {
+  const now = Number.isFinite(options.now) ? Number(options.now) : Date.now()
+  return [...names].slice(0, MAX_BRUSH_PRESET_IMPORT_COUNT).map((name, index) => {
     const size = 12 + ((bytes[(index * 97) % Math.max(1, bytes.length)] ?? index * 17) % 96)
     const hardness = 35 + ((bytes[(index * 131 + 7) % Math.max(1, bytes.length)] ?? 64) % 66)
     const settings: Partial<BrushSettings> = {
@@ -544,25 +705,139 @@ function parseAbrPresets(buffer: ArrayBuffer | string | null, filename: string, 
       sizeJitter: index % 4 === 0 ? 18 : 0,
       angleJitter: index % 5 === 0 ? 28 : 0,
     }
+    const thumbnail = safeGeneratedThumbnail(options.makeThumbnail?.(settings)) ?? makeBrushThumbnail(settings, foreground, background)
     return {
-      id: `abr_${Date.now()}_${index}`,
+      id: `abr_${now}_${index}`,
       name,
       folder: filename.replace(/\.[^.]+$/, "") || "Imported ABR",
       size,
       hardness,
       spacing: settings.spacing ?? 25,
       settings,
-      thumbnail: makeBrushThumbnail(settings, foreground, background),
+      ...(thumbnail ? { thumbnail } : {}),
     }
   })
 }
 
 function isUsefulAbrName(name: string) {
   if (name.length < 4) return false
+  if (/^8B(IM|64)/i.test(name)) return false
   if (/^(8BIM|8B64|samp|desc|VlLs|Objc|UntF|TEXT|long|tdta|brush)$/i.test(name)) return false
+  if (/(.)\1{7,}/.test(name)) return false
   if (/^[\d .,-]+$/.test(name)) return false
   if ((name.match(/[A-Za-z]/g) ?? []).length < 3) return false
   return true
+}
+
+function collectAbrResourceNames(bytes: Uint8Array, scanLimit: number, names: Set<string>) {
+  for (let offset = 0; offset + 12 <= scanLimit && names.size < MAX_BRUSH_PRESET_IMPORT_COUNT; offset++) {
+    if (!hasAbrSignature(bytes, offset)) continue
+    let cursor = offset + 4
+    cursor += 2
+    if (cursor >= scanLimit) continue
+    const pascalLength = bytes[cursor] ?? 0
+    cursor += 1
+    if (cursor + pascalLength > scanLimit) continue
+    const pascalName = decodeAbrText(bytes, cursor, cursor + pascalLength).trim()
+    addAbrNameCandidate(pascalName, names)
+    cursor += pascalLength
+    if ((1 + pascalLength) % 2 !== 0) cursor += 1
+    if (cursor + 4 > scanLimit) continue
+    const dataLength = readAbrUint32(bytes, cursor)
+    cursor += 4
+    if (dataLength < 0 || cursor + dataLength > bytes.length) continue
+    const dataEnd = Math.min(cursor + dataLength, scanLimit)
+    collectAbrTextNames(bytes, cursor, dataEnd, names)
+    offset = Math.max(offset, dataEnd - 1)
+  }
+}
+
+function collectAbrTextNames(bytes: Uint8Array, start: number, end: number, names: Set<string>) {
+  if (end <= start || names.size >= MAX_BRUSH_PRESET_IMPORT_COUNT) return
+  const text = decodeAbrText(bytes, start, end)
+  const asciiPattern = /[A-Za-z0-9][A-Za-z0-9 _.,()#+-]{3,63}/g
+  for (const match of text.matchAll(asciiPattern)) {
+    addAbrNameCandidate(match[0].trim(), names)
+    if (names.size >= MAX_BRUSH_PRESET_IMPORT_COUNT) break
+  }
+}
+
+function addAbrNameCandidate(name: string, names: Set<string>) {
+  const clean = cleanImportText(name, "", 64)
+  if (!clean || !isUsefulAbrName(clean)) return
+  names.add(clean)
+}
+
+function hasAbrSignature(bytes: Uint8Array, offset: number) {
+  return (
+    bytes[offset] === 0x38 &&
+    bytes[offset + 1] === 0x42 &&
+    (bytes[offset + 2] === 0x49 || bytes[offset + 2] === 0x36) &&
+    (bytes[offset + 3] === 0x4d || bytes[offset + 3] === 0x34)
+  )
+}
+
+function readAbrUint32(bytes: Uint8Array, offset: number) {
+  return ((bytes[offset] ?? 0) * 0x1000000) + ((bytes[offset + 1] ?? 0) << 16) + ((bytes[offset + 2] ?? 0) << 8) + (bytes[offset + 3] ?? 0)
+}
+
+function decodeAbrText(bytes: Uint8Array, start: number, end: number) {
+  return new TextDecoder("latin1", { fatal: false }).decode(bytes.slice(start, end))
+}
+
+function requireImportRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!isImportRecord(value)) throw new Error(`${label} must be an object.`)
+  return value
+}
+
+function isImportRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+function cleanBrushImportId(value: unknown, prefix: string, index: number, makeId?: (prefix: string, index: number) => string) {
+  const candidate = typeof value === "string" ? value.trim() : ""
+  if (BRUSH_ID_PATTERN.test(candidate) && !RESERVED_IMPORT_KEYS.has(candidate)) return candidate
+  return makeId ? makeId(prefix, index) : `${prefix}_${Math.random().toString(36).slice(2, 9)}`
+}
+
+function cleanImportText(value: unknown, fallback: string, maxLength: number) {
+  const trimmed = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : ""
+  return trimmed ? trimmed.slice(0, maxLength) : fallback
+}
+
+function cleanOptionalImportText(value: unknown, maxLength: number) {
+  const trimmed = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : ""
+  return trimmed ? trimmed.slice(0, maxLength) : undefined
+}
+
+function isFiniteImportNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value)
+}
+
+function cleanImportNumber(value: unknown, min: number, max: number, fallback: number, round = true) {
+  const next = isFiniteImportNumber(value) ? value : fallback
+  const clamped = Math.max(min, Math.min(max, next))
+  return round ? Math.round(clamped) : clamped
+}
+
+function cleanImportEnum<T extends string>(value: unknown, allowed: Set<string>, fallback: T) {
+  return typeof value === "string" && allowed.has(value) ? (value as T) : fallback
+}
+
+function copyImportNumber(record: Record<string, unknown>, out: Record<string, unknown>, key: keyof BrushSettings, min: number, max: number, fallback: number) {
+  if (key in record) out[key] = cleanImportNumber(record[key], min, max, fallback, true)
+}
+
+function copyImportBoolean(record: Record<string, unknown>, out: Record<string, unknown>, key: keyof BrushSettings) {
+  if (typeof record[key] === "boolean") out[key] = record[key]
+}
+
+function copyImportEnum(record: Record<string, unknown>, out: Record<string, unknown>, key: keyof BrushSettings, allowed: Set<string>) {
+  if (typeof record[key] === "string" && allowed.has(record[key])) out[key] = record[key]
+}
+
+function formatImportBytes(bytes: number) {
+  return `${Math.round(bytes / 1024 / 1024)} MB`
 }
 
 function downloadJson(filename: string, payload: unknown) {

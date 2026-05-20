@@ -23,8 +23,27 @@ export function TimelinePanel() {
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [playing, setPlaying] = React.useState(false)
 
-  const frames = activeDoc?.timelineFrames ?? []
-  const selected = frames.find((frame) => frame.id === selectedId) ?? frames[0] ?? null
+  const frames = React.useMemo(() => activeDoc?.timelineFrames ?? [], [activeDoc?.timelineFrames])
+  const selected = React.useMemo(
+    () => frames.find((frame) => frame.id === selectedId) ?? frames[0] ?? null,
+    [frames, selectedId],
+  )
+
+  const applyFrame = React.useCallback((frame: TimelineFrame, record = true) => {
+    if (!activeDoc) return
+    for (const layer of activeDoc.layers) {
+      const next = frame.layerVisibility[layer.id]
+      if (typeof next === "boolean" && next !== layer.visible) {
+        dispatch({ type: "set-layer-visibility", id: layer.id, visible: next })
+      }
+      const opacity = frame.layerOpacity?.[layer.id]
+      if (typeof opacity === "number" && opacity !== layer.opacity) {
+        dispatch({ type: "set-layer-opacity", id: layer.id, opacity })
+      }
+    }
+    requestRender()
+    if (record) window.setTimeout(() => commit("Apply Timeline Frame", "all"), 0)
+  }, [activeDoc, commit, dispatch, requestRender])
 
   React.useEffect(() => {
     if (!playing || !activeDoc || frames.length === 0) return
@@ -42,7 +61,7 @@ export function TimelinePanel() {
     return () => {
       cancelled = true
     }
-  }, [playing, activeDoc, frames, selected?.id])
+  }, [playing, activeDoc, frames, selected?.id, applyFrame])
 
   if (!activeDoc) return <PanelEmpty text="No document open" />
   const doc = activeDoc
@@ -61,21 +80,6 @@ export function TimelinePanel() {
     setFrames([...frames, frame])
     setSelectedId(frame.id)
     window.setTimeout(() => commit("Capture Timeline Frame", "all"), 0)
-  }
-
-  function applyFrame(frame: TimelineFrame, record = true) {
-    for (const layer of doc.layers) {
-      const next = frame.layerVisibility[layer.id]
-      if (typeof next === "boolean" && next !== layer.visible) {
-        dispatch({ type: "set-layer-visibility", id: layer.id, visible: next })
-      }
-      const opacity = frame.layerOpacity?.[layer.id]
-      if (typeof opacity === "number" && opacity !== layer.opacity) {
-        dispatch({ type: "set-layer-opacity", id: layer.id, opacity })
-      }
-    }
-    requestRender()
-    if (record) window.setTimeout(() => commit("Apply Timeline Frame", "all"), 0)
   }
 
   const updateFrame = (id: string, patch: Partial<TimelineFrame>) => {

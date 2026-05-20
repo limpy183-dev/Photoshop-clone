@@ -11,6 +11,7 @@ import { planCompositeCache } from "./performance-engine"
 import { createRafCoalescer, type RafCoalescer } from "./raf-coalescer"
 import { containsSelectionPoint, createSelectionHitTester, type SelectionHitTester } from "./selection-hit-testing"
 import { isAdjustmentNoop } from "./adjustment-layers"
+import { addPhotoshopEventListener } from "./events"
 
 // Canvas identity cache for composite fingerprinting — gives each canvas a stable numeric ID
 const _canvasIdMap = new WeakMap<HTMLCanvasElement, number>()
@@ -336,7 +337,7 @@ export function CanvasView() {
     pendingZoomRef.current = null
     setViewZoom(next)
     window.requestAnimationFrame(() => applyZoomStyles(next, false))
-  }, [activeDoc?.id, activeDoc?.zoom, applyZoomStyles])
+  }, [activeDoc, applyZoomStyles])
 
   React.useLayoutEffect(() => {
     layoutZoomRef.current = viewZoom
@@ -344,17 +345,14 @@ export function CanvasView() {
   }, [viewZoom, applyZoomStyles])
 
   React.useEffect(() => {
-    const zoomRequestHandler = (event: Event) => {
-      const detail = (event as CustomEvent<{ zoom?: number; factor?: number }>).detail
+    return addPhotoshopEventListener("ps-request-zoom", (detail) => {
       if (!detail) return
       if (typeof detail.zoom === "number") {
         applyViewZoom(detail.zoom)
       } else if (typeof detail.factor === "number") {
         applyViewZoom(visualZoomRef.current * detail.factor)
       }
-    }
-    window.addEventListener("ps-request-zoom", zoomRequestHandler)
-    return () => window.removeEventListener("ps-request-zoom", zoomRequestHandler)
+    })
   }, [applyViewZoom])
 
   const schedulePaintCommit = React.useCallback(
@@ -364,7 +362,7 @@ export function CanvasView() {
       // deferral. This keeps the pointer-up handler fast.
       commit(label, changedLayerIds)
     },
-    [activeDoc, commit],
+    [commit],
   )
 
   /* ---- composite render ---- */
@@ -3875,13 +3873,20 @@ export function CanvasView() {
 
   /* ---- key handlers (escape, enter for transform, delete pen point) ---- */
 
+  const cancelBufferedStrokeRef = React.useRef(cancelBufferedStroke)
+  const beginTransformRef = React.useRef(beginTransform)
+  const commitTransformRef = React.useRef(commitTransform)
+  cancelBufferedStrokeRef.current = cancelBufferedStroke
+  beginTransformRef.current = beginTransform
+  commitTransformRef.current = commitTransform
+
   React.useEffect(() => {
     function handler(e: KeyboardEvent) {
       const target = e.target as HTMLElement
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return
       if (e.key === "Escape") {
         if (drawingRef.current.type === "stroke") {
-          cancelBufferedStroke()
+          cancelBufferedStrokeRef.current()
           drawingRef.current = { type: null }
           smudgeBufferRef.current.reset()
           transparencyLockMaskRef.current = null
@@ -3911,7 +3916,7 @@ export function CanvasView() {
         }
       }
       if (e.key === "Enter" && transformRef.current) {
-        commitTransform()
+        commitTransformRef.current()
       }
       if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key.toLowerCase() === "q") {
         e.preventDefault()
@@ -3921,7 +3926,7 @@ export function CanvasView() {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "t" && !e.shiftKey) {
         if (layerAllowsMoving(activeLayer)) {
           e.preventDefault()
-          beginTransform(activeLayer)
+          beginTransformRef.current(activeLayer)
         }
       }
     }
@@ -4966,7 +4971,7 @@ function GridOverlay({
       ctx.lineTo(docW, y + 0.5)
       ctx.stroke()
     }
-  }, [docW, docH, size, color, subdivisions])
+  }, [docW, docH, size, color, subdivisions, opacity])
   return <canvas ref={ref} className="absolute inset-0 w-full h-full pointer-events-none" />
 }
 
@@ -5067,7 +5072,7 @@ function SmartGuidesOverlay({
   if (!activeLayer || !activeLayer.visible || activeLayer.kind === "group") return null
 
   // Get bounding box of active layer from alpha
-  const aBounds = React.useMemo(() => alphaBoundsForLayer(activeLayer), [activeLayer, activeLayer.canvas])
+  const aBounds = React.useMemo(() => alphaBoundsForLayer(activeLayer), [activeLayer])
   if (!aBounds) return null
 
   const aLeft = aBounds.x
