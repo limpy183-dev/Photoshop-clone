@@ -75,14 +75,45 @@ class FixtureImageData {
   }
 }
 
+function fixtureStyleElement() {
+  return {
+    setAttribute: () => {},
+    appendChild: () => {},
+    style: {},
+  } as unknown as HTMLElement
+}
+
 export function installFixtureDom() {
+  const head = {
+    appendChild: () => {},
+    insertBefore: () => {},
+  } as unknown as HTMLHeadElement
+
   if (typeof globalThis.document === "undefined") {
     ;(globalThis as typeof globalThis & { document: Document }).document = {
       createElement: (tag: string) => {
+        if (tag === "style") return fixtureStyleElement()
         if (tag !== "canvas") throw new Error(`Unsupported fixture element: ${tag}`)
         return new FixtureCanvas() as unknown as HTMLCanvasElement
       },
-    } as Document
+      createTextNode: () => ({}) as Text,
+      getElementsByTagName: (tag: string) => (tag === "head" ? [head] : []) as unknown as HTMLCollectionOf<Element>,
+      head,
+    } as unknown as Document
+  } else {
+    const fixtureDocument = globalThis.document as Document & {
+      createTextNode?: (data: string) => Text
+      getElementsByTagName?: (tag: string) => HTMLCollectionOf<Element>
+      head?: HTMLHeadElement
+    }
+    if (typeof fixtureDocument.createTextNode !== "function") {
+      fixtureDocument.createTextNode = () => ({}) as Text
+    }
+    if (typeof fixtureDocument.getElementsByTagName !== "function") {
+      fixtureDocument.getElementsByTagName = (tag: string) =>
+        (tag === "head" ? [head] : []) as unknown as HTMLCollectionOf<Element>
+    }
+    if (!fixtureDocument.head) fixtureDocument.head = head
   }
   if (typeof globalThis.Image === "undefined") {
     ;(globalThis as typeof globalThis & { Image: typeof Image }).Image = FixtureImage as unknown as typeof Image

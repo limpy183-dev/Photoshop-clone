@@ -1513,8 +1513,13 @@ export function MenuBar({
                   if (!l.visible || typeof l.canvas.getContext !== "function") continue
                   compositeLayer(fctx, l.canvas, l.blendMode, l.opacity, l.fillOpacity ?? 1)
                 }
-                const win = window.open("", "_blank")!
+                const win = window.open("", "_blank", "noopener=no,noreferrer")
                 if (!win) return
+                // Even though the popup inherits about:blank as its origin,
+                // we still null out the opener to defend against future
+                // browsers that allow same-origin opener access from a
+                // sandboxed about:blank document.
+                try { (win as Window & { opener: Window | null }).opener = null } catch {}
                 win.document.title = `Print — ${activeDoc.name}`
                 const img = win.document.createElement("img")
                 img.src = flat.toDataURL("image/png")

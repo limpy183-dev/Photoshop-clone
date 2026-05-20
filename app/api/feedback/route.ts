@@ -5,6 +5,7 @@ import {
   appendRecord,
   checkRateLimit,
   getClientIp,
+  isAllowedOrigin,
   MARKETING_LIMITS,
   MarketingStoreQuotaError,
   RequestBodyTooLargeError,
@@ -32,6 +33,13 @@ type FeedbackRecord = {
 }
 
 export async function POST(request: Request) {
+  if (!isAllowedOrigin(request)) {
+    return NextResponse.json(
+      { ok: false, error: "Forbidden" },
+      { status: 403 },
+    )
+  }
+
   const rateLimit = checkRateLimit(
     `feedback:${getClientIp(request)}`,
     MARKETING_LIMITS.feedback.rateLimit,

@@ -139,7 +139,7 @@ export function rememberRecentDocument(entry: Omit<RecentDocument, "id" | "updat
       updatedAt: entry.updatedAt ?? Date.now(),
       fileName: entry.fileName,
       storage: entry.storage,
-      thumbnail: entry.thumbnail,
+      thumbnail: safeThumbnail(entry.thumbnail),
     }
     const recents = readRecentDocuments().filter((item) => item.id !== id && item.name !== next.name)
     localStorage.setItem(RECENTS_KEY, JSON.stringify([next, ...recents].slice(0, MAX_RECENTS)))
@@ -283,6 +283,26 @@ function hashString(value: string) {
   return (hash >>> 0).toString(36)
 }
 
+/**
+ * Recent-document thumbnails are rendered as `<img src={recent.thumbnail}>`
+ * in the recent-documents dialog. localStorage / IndexedDB content is
+ * untrusted (a malicious imported project can autosave a recent entry, an
+ * extension can mutate storage, etc.), so we accept only base64-encoded
+ * data URLs of known image MIME types and below a sane size. Anything
+ * that fails the check is dropped — the dialog renders a folder icon
+ * placeholder instead.
+ */
+const SAFE_THUMBNAIL_DATA_URL =
+  /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/i
+const MAX_THUMBNAIL_CHARS = 200_000
+
+function safeThumbnail(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined
+  if (value.length === 0 || value.length > MAX_THUMBNAIL_CHARS) return undefined
+  if (!SAFE_THUMBNAIL_DATA_URL.test(value)) return undefined
+  return value
+}
+
 function normalizeRecentDocument(value: unknown): RecentDocument | null {
   if (!value || typeof value !== "object") return null
   const item = value as Partial<RecentDocument> & { snapshot?: unknown }
@@ -305,7 +325,7 @@ function normalizeRecentDocument(value: unknown): RecentDocument | null {
     updatedAt: item.updatedAt,
     fileName: typeof item.fileName === "string" ? item.fileName.slice(0, 180) : undefined,
     storage: typeof item.storage === "string" ? item.storage as RecentDocument["storage"] : undefined,
-    thumbnail: typeof (item as RecentDocument).thumbnail === "string" ? (item as RecentDocument).thumbnail : undefined,
+    thumbnail: safeThumbnail((item as RecentDocument).thumbnail),
   }
 }
 

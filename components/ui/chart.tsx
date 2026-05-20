@@ -78,20 +78,46 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
     return null
   }
 
+  // Color values land inside a stylesheet rendered via
+  // dangerouslySetInnerHTML, so we accept only obviously-safe CSS color
+  // tokens (hex, rgb()/rgba()/hsl()/hsla() with numeric args, named
+  // colors). Anything else (a string with `;`, `{`, `}`, `<`, etc.) is
+  // dropped before it can break out of the rule body.
+  const isSafeChartColor = (value: unknown): value is string => {
+    if (typeof value !== 'string') return false
+    const v = value.trim()
+    if (!v) return false
+    if (/^#[0-9a-fA-F]{3,8}$/.test(v)) return true
+    if (/^(rgb|rgba|hsl|hsla)\(\s*[0-9.,%\s/]+\)$/i.test(v)) return true
+    if (/^[a-zA-Z]{3,32}$/.test(v)) return true
+    return false
+  }
+
+  // The id comes from React.useId() and a chart-key allow-listed regex.
+  // Defensive: assert it is a CSS-safe identifier shape too, in case a
+  // future caller forwards an attacker-controlled id.
+  const safeId = /^[A-Za-z0-9_\-:]+$/.test(id) ? id : null
+  if (!safeId) return null
+  const safeKeyPattern = /^[A-Za-z0-9_\-]+$/
+
   return (
     <style
       dangerouslySetInnerHTML={{
         __html: Object.entries(THEMES)
           .map(
             ([theme, prefix]) => `
-${prefix} [data-chart=${id}] {
+${prefix} [data-chart=${safeId}] {
 ${colorConfig
   .map(([key, itemConfig]) => {
-    const color =
+    if (!safeKeyPattern.test(key)) return null
+    const candidate =
       itemConfig.theme?.[theme as keyof typeof itemConfig.theme] ||
       itemConfig.color
-    return color ? `  --color-${key}: ${color};` : null
+    return isSafeChartColor(candidate)
+      ? `  --color-${key}: ${candidate};`
+      : null
   })
+  .filter(Boolean)
   .join('\n')}
 }
 `,

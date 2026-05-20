@@ -8,38 +8,6 @@ import {
 } from '@/components/marketing/fonts'
 import './globals.css'
 
-const stripExtensionHydrationAttributes = `
-(() => {
-  const ATTRIBUTES = ["bis_skin_checked"];
-  const strip = (root) => {
-    if (!root || root.nodeType !== 1) return;
-    for (const attr of ATTRIBUTES) {
-      if (root.hasAttribute?.(attr)) root.removeAttribute(attr);
-    }
-    root.querySelectorAll?.(ATTRIBUTES.map((attr) => "[" + attr + "]").join(",")).forEach((node) => {
-      for (const attr of ATTRIBUTES) node.removeAttribute(attr);
-    });
-  };
-  strip(document.documentElement);
-  const observer = new MutationObserver((mutations) => {
-    for (const mutation of mutations) {
-      if (mutation.type === "attributes") {
-        strip(mutation.target);
-      } else {
-        mutation.addedNodes.forEach(strip);
-      }
-    }
-  });
-  observer.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ATTRIBUTES,
-    childList: true,
-    subtree: true,
-  });
-  window.addEventListener("load", () => window.setTimeout(() => observer.disconnect(), 5000), { once: true });
-})();
-`
-
 export const metadata: Metadata = {
   title: 'Photoshop Web — A Real Image Editor In A Tab',
   description:
@@ -65,10 +33,17 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body className="font-sans antialiased min-h-screen" suppressHydrationWarning>
+        {/*
+          Static beforeInteractive script. Lives at
+          public/strip-extension-hydration-attributes.js so the CSP can drop
+          'unsafe-inline' from script-src and we still ship the
+          extension-attribute strip that prevents hydration warnings from
+          things like Bitdefender's bis_skin_checked.
+        */}
         <Script
           id="strip-extension-hydration-attributes"
           strategy="beforeInteractive"
-          dangerouslySetInnerHTML={{ __html: stripExtensionHydrationAttributes }}
+          src="/strip-extension-hydration-attributes.js"
         />
         {children}
         <Toaster position="bottom-right" richColors closeButton />

@@ -5,9 +5,9 @@ import {
   appendRecord,
   checkRateLimit,
   getClientIp,
+  isAllowedOrigin,
   MARKETING_LIMITS,
   MarketingStoreQuotaError,
-  readAll,
   RequestBodyTooLargeError,
   readJsonWithLimit,
 } from "@/lib/marketing-store"
@@ -37,6 +37,13 @@ function hashEmail(email: string): string {
 }
 
 export async function POST(request: Request) {
+  if (!isAllowedOrigin(request)) {
+    return NextResponse.json(
+      { ok: false, error: "Forbidden" },
+      { status: 403 },
+    )
+  }
+
   const rateLimit = checkRateLimit(
     `subscribe:${getClientIp(request)}`,
     MARKETING_LIMITS.subscribers.rateLimit,
@@ -103,19 +110,6 @@ export async function POST(request: Request) {
     console.error("subscribe failed", error)
     return NextResponse.json(
       { ok: false, error: "Could not record subscription. Try again later." },
-      { status: 500 },
-    )
-  }
-}
-
-export async function GET() {
-  try {
-    const all = await readAll<SubscribeRecord>("subscribers")
-    return NextResponse.json({ ok: true, total: all.length })
-  } catch (error) {
-    console.error("subscribe count failed", error)
-    return NextResponse.json(
-      { ok: false, error: "Could not read subscribers." },
       { status: 500 },
     )
   }

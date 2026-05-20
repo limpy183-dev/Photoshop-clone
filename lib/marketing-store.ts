@@ -77,15 +77,87 @@ export type RateLimitOptions = {
   windowMs: number
 }
 
+/**
+ * Resolve the client IP from a request.
+ *
+ * Untrusted-proxy mode (default): we read no proxy headers because any
+ * upstream client could spoof X-Forwarded-For and bypass per-IP rate
+ * limits. Behind a trusted reverse proxy (Vercel, Cloudflare, an internal
+ * NGINX/Envoy that strips and rewrites the header) set
+ * `MARKETING_TRUSTED_PROXY=true` so we honour the platform-provided
+ * forwarded-for chain.
+ *
+ * When trusted-proxy mode is on we prefer the platform-specific single-
+ * IP headers (`cf-connecting-ip`, `x-vercel-forwarded-for`, `x-real-ip`)
+ * before falling back to the leftmost entry of `x-forwarded-for`, which
+ * is the conventional "client closest to the proxy chain" address.
+ */
 export function getClientIp(request: Request): string {
+  const trustProxy =
+    process.env.MARKETING_TRUSTED_PROXY === "true" ||
+    process.env.MARKETING_TRUSTED_PROXY === "1"
+  if (!trustProxy) {
+    return "unknown"
+  }
+  const cfIp = request.headers.get("cf-connecting-ip")?.trim()
+  if (cfIp) return cfIp
+  const vercelIp = request.headers.get("x-vercel-forwarded-for")?.split(",")[0]?.trim()
+  if (vercelIp) return vercelIp
+  const realIp = request.headers.get("x-real-ip")?.trim()
+  if (realIp) return realIp
   const forwarded = request.headers.get("x-forwarded-for")
   const forwardedIp = forwarded?.split(",")[0]?.trim()
-  return (
-    forwardedIp ||
-    request.headers.get("x-real-ip")?.trim() ||
-    request.headers.get("cf-connecting-ip")?.trim() ||
-    "unknown"
-  )
+  return forwardedIp || "unknown"
+}
+
+/**
+ * Reject cross-origin POSTs.
+ *
+ * Browsers send `Origin` for all POSTs and `Sec-Fetch-Site` on every
+ * request from any browser issued in the last few years. We accept the
+ * request only when:
+ *   - both headers are absent (likely a legitimate non-browser client
+ *     such as curl/playwright; Origin can be absent for same-origin
+ *     POSTs in some legacy browsers), OR
+ *   - the Origin matches PUBLIC_ORIGIN exactly, OR
+ *   - Sec-Fetch-Site is "same-origin" or "none".
+ *
+ * PUBLIC_ORIGIN should be set to the deployed origin (e.g.
+ * "https://photoshop.example"). When unset, we fall back to verifying
+ * Sec-Fetch-Site only — Origin will already match same-origin in that
+ * case.
+ */
+export function isAllowedOrigin(request: Request): boolean {
+  const origin = request.headers.get("origin")
+  const fetchSite = request.headers.get("sec-fetch-site")
+  const publicOrigin = process.env.PUBLIC_ORIGIN?.trim()
+
+  // Sec-Fetch-Site is the strongest signal when present.
+  if (fetchSite) {
+    if (fetchSite === "same-origin" || fetchSite === "none") return true
+    if (fetchSite === "same-site") {
+      // Allow same-site only when Origin matches the configured PUBLIC_ORIGIN
+      // (a sibling subdomain on the same registrable domain is still
+      // attacker-controlled in many setups).
+      if (publicOrigin && origin === publicOrigin) return true
+      return false
+    }
+    // cross-site -> reject
+    return false
+  }
+
+  // No Sec-Fetch-Site (very old browser or non-browser client). Fall back
+  // to Origin comparison.
+  if (origin) {
+    if (publicOrigin) return origin === publicOrigin
+    // Without PUBLIC_ORIGIN we cannot prove the request is same-origin.
+    // Accept it only if the request also lacks Origin (handled below).
+    return false
+  }
+
+  // No Origin and no Sec-Fetch-Site. Most legitimate non-browser clients
+  // (server-to-server, tests) fall here.
+  return true
 }
 
 export function checkRateLimit(

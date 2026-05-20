@@ -3374,18 +3374,89 @@ const initialState: EditorState = {
 /* ---- localStorage persistence for user settings ---- */
 const SETTINGS_KEY = "ps-editor-settings"
 
+// localStorage is untrusted relative to the editor's runtime: anything with
+// same-origin scripting (a malicious extension, an earlier XSS, or another
+// tab on the same origin) can mutate ps-editor-settings before we read it
+// back. We strip prototype-pollution keys and reject any key that does not
+// look like a sensible identifier before letting the value land in editor
+// state.
+const PERSISTED_RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype"])
+const PERSISTED_KEY_PATTERN = /^[A-Za-z0-9_\-]{1,64}$/
+const PERSISTED_MAX_DEPTH = 6
+const PERSISTED_MAX_STRING = 1024
+const PERSISTED_MAX_ARRAY = 256
+const PERSISTED_MAX_KEYS = 128
+
+function sanitizePersistedSetting(value: unknown, depth = 0): unknown {
+  if (value === null) return null
+  const type = typeof value
+  if (type === "string") return (value as string).slice(0, PERSISTED_MAX_STRING)
+  if (type === "boolean") return value
+  if (type === "number") return Number.isFinite(value as number) ? value : undefined
+  if (type === "function" || type === "symbol" || type === "bigint" || type === "undefined") return undefined
+  if (depth >= PERSISTED_MAX_DEPTH) return undefined
+  if (Array.isArray(value)) {
+    const out: unknown[] = []
+    for (const item of value.slice(0, PERSISTED_MAX_ARRAY)) {
+      const next = sanitizePersistedSetting(item, depth + 1)
+      if (next !== undefined) out.push(next)
+    }
+    return out
+  }
+  if (type === "object") {
+    const out: Record<string, unknown> = {}
+    let copied = 0
+    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+      if (copied >= PERSISTED_MAX_KEYS) break
+      if (PERSISTED_RESERVED_KEYS.has(key)) continue
+      if (!PERSISTED_KEY_PATTERN.test(key)) continue
+      const next = sanitizePersistedSetting(nested, depth + 1)
+      if (next === undefined) continue
+      out[key] = next
+      copied += 1
+    }
+    return out
+  }
+  return undefined
+}
+
+function sanitizeColorString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined
+  const v = value.trim()
+  // Match the conservative SVG-color allow-list used by document-io.ts so
+  // the persisted foreground/background cannot smuggle a CSS url() into a
+  // style sink.
+  if (/^#[0-9a-fA-F]{3,8}$/.test(v)) return v
+  if (/^(rgb|rgba|hsl|hsla)\(\s*[0-9.,%\s/]+\)$/i.test(v)) return v
+  if (/^[a-zA-Z]{3,32}$/.test(v)) return v
+  return undefined
+}
+
 function loadPersistedSettings(): Partial<EditorState> {
   if (typeof window === "undefined") return {}
   try {
     const raw = localStorage.getItem(SETTINGS_KEY)
     if (!raw) return {}
-    const s = JSON.parse(raw)
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {}
+    const s = sanitizePersistedSetting(parsed) as Record<string, unknown> | undefined
+    if (!s) return {}
     const out: Partial<EditorState> = {}
-    if (s.foreground) out.foreground = s.foreground
-    if (s.background) out.background = s.background
-    if (s.brush && typeof s.brush === "object") out.brush = { ...initialState.brush, ...s.brush }
-    if (s.gradient && typeof s.gradient === "object") out.gradient = { ...initialState.gradient, ...s.gradient }
-    if (s.symmetry && typeof s.symmetry === "object") out.symmetry = { ...initialState.symmetry, ...s.symmetry }
+
+    const foreground = sanitizeColorString(s.foreground)
+    if (foreground) out.foreground = foreground
+    const background = sanitizeColorString(s.background)
+    if (background) out.background = background
+
+    if (s.brush && typeof s.brush === "object" && !Array.isArray(s.brush)) {
+      out.brush = { ...initialState.brush, ...(s.brush as object) } as EditorState["brush"]
+    }
+    if (s.gradient && typeof s.gradient === "object" && !Array.isArray(s.gradient)) {
+      out.gradient = { ...initialState.gradient, ...(s.gradient as object) } as EditorState["gradient"]
+    }
+    if (s.symmetry && typeof s.symmetry === "object" && !Array.isArray(s.symmetry)) {
+      out.symmetry = { ...initialState.symmetry, ...(s.symmetry as object) } as EditorState["symmetry"]
+    }
     return out
   } catch { return {} }
 }

