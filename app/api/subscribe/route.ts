@@ -13,7 +13,6 @@ import {
 } from "@/lib/marketing-store"
 
 export const runtime = "nodejs"
-export const dynamic = "force-dynamic"
 
 const SubscribeSchema = z.object({
   email: z

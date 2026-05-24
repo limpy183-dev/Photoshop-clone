@@ -68,8 +68,13 @@ const securityHeaders = [
 ]
 
 const emptyNodeFs = fileURLToPath(new URL("./components/photoshop/empty-node-fs.ts", import.meta.url))
+const isGithubPages = process.env.GITHUB_PAGES === "true"
 
 const nextConfig = {
+  output: isGithubPages ? "export" : undefined,
+  basePath: isGithubPages ? "/Photoshop-clone" : "",
+  assetPrefix: isGithubPages ? "/Photoshop-clone/" : "",
+  trailingSlash: isGithubPages,
   images: {
     unoptimized: true,
   },

@@ -13,7 +13,6 @@ import {
 } from "@/lib/marketing-store"
 
 export const runtime = "nodejs"
-export const dynamic = "force-dynamic"
 
 const FeedbackSchema = z.object({
   message: z

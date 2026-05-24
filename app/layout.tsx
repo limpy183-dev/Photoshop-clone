@@ -1,5 +1,4 @@
 import type { Metadata } from 'next'
-import { headers } from 'next/headers'
 import { Analytics } from '@vercel/analytics/next'
 import { Toaster } from '@/components/ui/sonner'
 import {
@@ -20,13 +19,18 @@ export const metadata: Metadata = {
 }
 
 void marketingFontVariables
+const isGithubPages = process.env.GITHUB_PAGES === 'true'
+const publicBasePath = isGithubPages ? '/Photoshop-clone' : ''
 
 export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode
 }>) {
-  const nonce = (await headers()).get('x-nonce') ?? undefined
+  let nonce: string | undefined
+  if (!isGithubPages) {
+    nonce = (await (await import('next/headers')).headers()).get('x-nonce') ?? undefined
+  }
 
   return (
     <html
@@ -45,7 +49,7 @@ export default async function RootLayout({
         <script
           id="strip-extension-hydration-attributes"
           nonce={nonce}
-          src="/strip-extension-hydration-attributes.js"
+          src={`${publicBasePath}/strip-extension-hydration-attributes.js`}
           suppressHydrationWarning
         />
         {children}
