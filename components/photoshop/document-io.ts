@@ -15,6 +15,7 @@ import { getFilter } from "./filters"
 import { applyLayerStyle } from "./layer-styles"
 import { applyModeAndColorManagement } from "./advanced-subsystems"
 import { isAdjustmentNoop } from "./adjustment-layers"
+import { smartFilterMaskAmountAt, smartFilterMaskToImageData } from "./smart-filter-masks"
 import { capabilityWarningsForDocument } from "./capabilities"
 import {
   MAX_PROJECT_CHANNELS,
@@ -24,6 +25,7 @@ import {
   MAX_RASTER_FILE_BYTES,
   assertCanvasSize,
   assertFileSize,
+  canvasSizeError,
 } from "./canvas-limits"
 import type {
   AlphaChannel,
@@ -43,6 +45,7 @@ import type {
   Layer as PsdLayer,
   LayerEffectsInfo,
   LayerColor,
+  PixelData,
   Psd,
 } from "ag-psd"
 import {
@@ -113,6 +116,19 @@ import {
 } from "./psd-resources-metadata"
 import { uid } from "./uid"
 import { exportRasterImageDataToBlob } from "./export-worker"
+import { TiledBackingStore } from "./tiled-backing-store"
+import { PSB_TILE_VIEW_LAYER_ID, PSB_TILE_VIEW_SOURCE_VERSION, registerPsbTileViewStore } from "./psb-tile-view"
+import {
+  encodeJpegImageData,
+  encodePngImageData,
+  encodePnmImageData,
+  encodeTgaImageData,
+  encodeTiffImageData,
+  encodeTiffImageDataAsync,
+  planPsbLargeDocumentOpen,
+  type RasterExportMetadata,
+  type TiffCompression,
+} from "./raster-codecs"
 
 function loadPsdCodec() {
   return import("ag-psd")
@@ -127,7 +143,7 @@ export const PSD_ROUND_TRIP_CAPABILITIES = {
 } as const
 
 export type BrowserRasterExportFormat = "png" | "jpeg" | "webp" | "avif" | "gif"
-export type AppRasterExportFormat = BrowserRasterExportFormat | "tga" | "ppm" | "pgm" | "pbm"
+export type AppRasterExportFormat = BrowserRasterExportFormat | "tiff" | "tga" | "ppm" | "pgm" | "pbm"
 export type AnimationExportFormat = "gif" | "apng" | "animated-webp"
 export type ExportFormat = AppRasterExportFormat | "svg" | "apng" | "animated-webp" | "metadata-json"
 
@@ -138,6 +154,12 @@ export interface RasterExportOptions {
   transparent: boolean
   matte: string
   dither?: boolean
+  interlaced?: boolean
+  progressive?: boolean
+  tiffCompression?: TiffCompression
+  tgaRle?: boolean
+  includeMetadata?: boolean
+  metadata?: RasterExportMetadata
 }
 
 export interface SvgExportOptions {
@@ -170,6 +192,8 @@ export interface ExportLimitationOptions {
   includeMetadata?: boolean
   interlaced?: boolean
   progressive?: boolean
+  tiffCompression?: TiffCompression
+  tgaRle?: boolean
   transparent?: boolean
   quality?: number
 }
@@ -289,15 +313,36 @@ function readInt32LE(bytes: Uint8Array, offset: number) {
   return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getInt32(offset, true)
 }
 
-function validatePsdHeaderDimensions(buffer: ArrayBuffer) {
-  if (buffer.byteLength < PSD_HEADER_BYTES) return
+function readPsdHeaderDimensions(buffer: ArrayBuffer): (ImageHeaderDimensions & { version: 1 | 2 }) | null {
+  if (buffer.byteLength < PSD_HEADER_BYTES) return null
   const bytes = new Uint8Array(buffer, 0, PSD_HEADER_BYTES)
-  if (!hasAscii(bytes, 0, "8BPS")) return
+  if (!hasAscii(bytes, 0, "8BPS")) return null
   const version = readUint16BE(bytes, 4)
-  if (version !== 1 && version !== 2) return
+  if (version !== 1 && version !== 2) return null
   const height = readUint32BE(bytes, 14)
   const width = readUint32BE(bytes, 18)
-  assertCanvasSize(width || 1, height || 1, "PSD canvas")
+  return { width, height, format: version === 2 ? "PSB" : "PSD", version }
+}
+
+function validatePsdHeaderDimensions(buffer: ArrayBuffer, fileName = "PSD canvas") {
+  const dimensions = readPsdHeaderDimensions(buffer)
+  if (!dimensions) return
+  const error = canvasSizeError(dimensions.width || 1, dimensions.height || 1, "PSD canvas")
+  if (!error) return
+  if (dimensions.version === 2) {
+    throw new Error(planPsbLargeDocumentOpen({
+      width: dimensions.width || 1,
+      height: dimensions.height || 1,
+      fileName,
+    }).defaultError ?? error)
+  }
+  throw new Error(error)
+}
+
+export type PsbLargeDocumentMode = "full" | "downscale-50" | "tile-view"
+
+export interface PsdDeserializeOptions {
+  psbLargeDocumentMode?: PsbLargeDocumentMode
 }
 
 function sniffPngDimensions(bytes: Uint8Array): ImageHeaderDimensions | null {
@@ -611,13 +656,6 @@ function imageDataToCanvas(data: ImageData) {
   return c
 }
 
-function maskAmountAt(mask: ImageData | null, x: number, y: number) {
-  if (!mask || x >= mask.width || y >= mask.height) return 1
-  const i = (y * mask.width + x) * 4
-  const luminance = (mask.data[i] + mask.data[i + 1] + mask.data[i + 2]) / 765
-  return luminance * (mask.data[i + 3] / 255)
-}
-
 function applySmartFiltersForIo(source: HTMLCanvasElement, smartFilters: Layer["smartFilters"]) {
   const enabled = smartFilters?.filter((sf) => sf.enabled) ?? []
   if (!enabled.length) return source
@@ -635,10 +673,9 @@ function applySmartFiltersForIo(source: HTMLCanvasElement, smartFilters: Layer["
       current = before
       continue
     }
-    const maskCtx = smartFilter.maskEnabled === false ? null : smartFilter.mask?.getContext("2d") ?? null
-    const mask = maskCtx
-      ? maskCtx.getImageData(0, 0, Math.min(smartFilter.mask!.width, c.width), Math.min(smartFilter.mask!.height, c.height))
-      : null
+    const mask = smartFilter.maskEnabled === false || !smartFilter.mask
+      ? null
+      : smartFilterMaskToImageData(smartFilter.mask, c.width, c.height, smartFilter.maskFeather ?? 0)
     if (!mask && opacity >= 1 && (smartFilter.blendMode ?? "normal") === "normal") {
       current = after
       continue
@@ -648,7 +685,7 @@ function applySmartFiltersForIo(source: HTMLCanvasElement, smartFilters: Layer["
       for (let y = 0; y < c.height; y++) {
         for (let x = 0; x < c.width; x++) {
           const i = (y * c.width + x) * 4
-          overlay.data[i + 3] = Math.round(overlay.data[i + 3] * maskAmountAt(mask, x, y))
+          overlay.data[i + 3] = Math.round(overlay.data[i + 3] * smartFilterMaskAmountAt(mask, x, y, smartFilter.maskDensity ?? 1))
         }
       }
     }
@@ -658,6 +695,13 @@ function applySmartFiltersForIo(source: HTMLCanvasElement, smartFilters: Layer["
   }
   ctx.putImageData(current, 0, 0)
   return c
+}
+
+function maskAmountAt(mask: ImageData | null, x: number, y: number) {
+  if (!mask || x >= mask.width || y >= mask.height) return 1
+  const i = (y * mask.width + x) * 4
+  const luminance = (mask.data[i] + mask.data[i + 1] + mask.data[i + 2]) / 765
+  return luminance * (mask.data[i + 3] / 255)
 }
 
 function applyAdjustmentForIo(ctx: CanvasRenderingContext2D, layer: Layer, width: number, height: number, clipMask?: HTMLCanvasElement | null) {
@@ -818,70 +862,22 @@ function textDataUrl(mime: string, text: string) {
   return dataUrlFromBytes(mime, new TextEncoder().encode(text))
 }
 
-function canvasToTgaDataUrl(canvas: HTMLCanvasElement) {
+function canvasImageData(canvas: HTMLCanvasElement) {
   const ctx = canvas.getContext("2d")!
-  const img = ctx.getImageData(0, 0, canvas.width, canvas.height)
-  const bytes = new Uint8Array(18 + canvas.width * canvas.height * 4)
-  bytes[2] = 2
-  bytes[12] = canvas.width & 0xff
-  bytes[13] = (canvas.width >> 8) & 0xff
-  bytes[14] = canvas.height & 0xff
-  bytes[15] = (canvas.height >> 8) & 0xff
-  bytes[16] = 32
-  bytes[17] = 0x28
-  let out = 18
-  for (let i = 0; i < img.data.length; i += 4) {
-    bytes[out++] = img.data[i + 2]
-    bytes[out++] = img.data[i + 1]
-    bytes[out++] = img.data[i]
-    bytes[out++] = img.data[i + 3]
-  }
-  return dataUrlFromBytes("image/x-tga", bytes)
+  return ctx.getImageData(0, 0, canvas.width, canvas.height)
+}
+
+function canvasToTgaDataUrl(canvas: HTMLCanvasElement, rle = false) {
+  return dataUrlFromBytes("image/x-tga", new Uint8Array(encodeTgaImageData(canvasImageData(canvas), { rle })))
 }
 
 function canvasToPnmDataUrl(canvas: HTMLCanvasElement, format: "ppm" | "pgm" | "pbm") {
-  const ctx = canvas.getContext("2d")!
-  const img = ctx.getImageData(0, 0, canvas.width, canvas.height)
-  const header =
-    format === "ppm"
-      ? `P6\n${canvas.width} ${canvas.height}\n255\n`
-      : format === "pgm"
-        ? `P5\n${canvas.width} ${canvas.height}\n255\n`
-        : `P4\n${canvas.width} ${canvas.height}\n`
-  const headerBytes = new TextEncoder().encode(header)
-  const body =
-    format === "ppm"
-      ? new Uint8Array(canvas.width * canvas.height * 3)
-      : format === "pgm"
-        ? new Uint8Array(canvas.width * canvas.height)
-        : new Uint8Array(Math.ceil(canvas.width / 8) * canvas.height)
-
-  if (format === "ppm") {
-    for (let p = 0, i = 0, o = 0; p < canvas.width * canvas.height; p++, i += 4) {
-      body[o++] = img.data[i]
-      body[o++] = img.data[i + 1]
-      body[o++] = img.data[i + 2]
-    }
-  } else if (format === "pgm") {
-    for (let p = 0, i = 0; p < canvas.width * canvas.height; p++, i += 4) {
-      body[p] = Math.round(0.299 * img.data[i] + 0.587 * img.data[i + 1] + 0.114 * img.data[i + 2])
-    }
-  } else {
-    const stride = Math.ceil(canvas.width / 8)
-    for (let y = 0; y < canvas.height; y++) {
-      for (let x = 0; x < canvas.width; x++) {
-        const i = (y * canvas.width + x) * 4
-        const gray = 0.299 * img.data[i] + 0.587 * img.data[i + 1] + 0.114 * img.data[i + 2]
-        if (gray < 128) body[y * stride + (x >> 3)] |= 0x80 >> (x & 7)
-      }
-    }
-  }
-
-  const bytes = new Uint8Array(headerBytes.length + body.length)
-  bytes.set(headerBytes, 0)
-  bytes.set(body, headerBytes.length)
   const mime = format === "ppm" ? "image/x-portable-pixmap" : format === "pgm" ? "image/x-portable-graymap" : "image/x-portable-bitmap"
-  return dataUrlFromBytes(mime, bytes)
+  return dataUrlFromBytes(mime, new Uint8Array(encodePnmImageData(canvasImageData(canvas), format)))
+}
+
+function canvasToTiffDataUrl(canvas: HTMLCanvasElement, compression: Exclude<TiffCompression, "deflate"> = "none") {
+  return dataUrlFromBytes("image/tiff", new Uint8Array(encodeTiffImageData(canvasImageData(canvas), { compression })))
 }
 
 function gifPaletteColor(index: number) {
@@ -974,13 +970,20 @@ export function canvasToGifDataUrl(canvas: HTMLCanvasElement, transparent: boole
 export function exportRasterDataUrl(doc: PsDocument, options: RasterExportOptions) {
   const canvas = buildRasterExportCanvas(doc, options)
   if (options.format === "gif") return canvasToGifDataUrl(canvas, options.transparent)
-  if (options.format === "tga") return canvasToTgaDataUrl(canvas)
+  if (options.format === "tiff") return canvasToTiffDataUrl(canvas, options.tiffCompression === "lzw" ? "lzw" : "none")
+  if (options.format === "tga") return canvasToTgaDataUrl(canvas, !!options.tgaRle)
   if (options.format === "ppm" || options.format === "pgm" || options.format === "pbm") {
     return canvasToPnmDataUrl(canvas, options.format)
   }
+  if (options.format === "png" && (options.interlaced || options.includeMetadata)) {
+    return canvas.toDataURL(rasterMime(options.format), options.quality)
+  }
+  if (options.format === "jpeg" && (options.progressive || options.includeMetadata)) {
+    return canvas.toDataURL(rasterMime(options.format), options.quality)
+  }
   const dataUrl = canvas.toDataURL(rasterMime(options.format), options.quality)
   // Inject EXIF metadata into JPEG exports
-  if (options.format === "jpeg" && doc.metadata) {
+  if (options.format === "jpeg" && options.includeMetadata && doc.metadata) {
     return injectJpegExif(dataUrl, doc)
   }
   return dataUrl
@@ -1004,14 +1007,57 @@ function canvasToBlobAsync(canvas: HTMLCanvasElement, format: BrowserRasterExpor
   })
 }
 
+function rasterExportMetadata(doc: PsDocument, options: RasterExportOptions): RasterExportMetadata | undefined {
+  if (!options.includeMetadata) return undefined
+  const metadata = options.metadata ?? {}
+  const docMetadata = doc.metadata ?? {}
+  return {
+    author: metadata.author ?? docMetadata.author,
+    copyright: metadata.copyright ?? docMetadata.copyright,
+    description: metadata.description ?? docMetadata.description,
+    creationDate: metadata.creationDate ?? docMetadata.createdAt ?? new Date().toISOString(),
+    xmp: metadata.xmp,
+  }
+}
+
 export async function exportRasterBlob(doc: PsDocument, options: RasterExportOptions): Promise<Blob> {
+  const specialCanvasFormats = new Set<AppRasterExportFormat>(["tiff", "tga", "ppm", "pgm", "pbm"])
+  if (
+    specialCanvasFormats.has(options.format) ||
+    (options.format === "png" && (options.interlaced || options.includeMetadata)) ||
+    (options.format === "jpeg" && (options.progressive || options.includeMetadata))
+  ) {
+    const canvas = buildRasterExportCanvas(doc, options)
+    const image = canvasImageData(canvas)
+    const metadata = rasterExportMetadata(doc, options)
+    if (options.format === "tiff") {
+      const buffer = await encodeTiffImageDataAsync(image, { compression: options.tiffCompression ?? "none" })
+      return new Blob([buffer], { type: "image/tiff" })
+    }
+    if (options.format === "tga") {
+      return new Blob([encodeTgaImageData(image, { rle: !!options.tgaRle })], { type: "image/x-tga" })
+    }
+    if (options.format === "ppm" || options.format === "pgm" || options.format === "pbm") {
+      const mime = options.format === "ppm" ? "image/x-portable-pixmap" : options.format === "pgm" ? "image/x-portable-graymap" : "image/x-portable-bitmap"
+      return new Blob([encodePnmImageData(image, options.format)], { type: mime })
+    }
+    if (options.format === "png") {
+      const buffer = await encodePngImageData(image, { interlaced: !!options.interlaced, metadata })
+      return new Blob([buffer], { type: "image/png" })
+    }
+    if (options.format === "jpeg") {
+      const buffer = await encodeJpegImageData(image, {
+        quality: options.quality,
+        progressive: !!options.progressive,
+        metadata,
+      })
+      return new Blob([buffer], { type: "image/jpeg" })
+    }
+  }
+
   if (
     options.format === "gif" ||
-    options.format === "tga" ||
-    options.format === "ppm" ||
-    options.format === "pgm" ||
-    options.format === "pbm" ||
-    (options.format === "jpeg" && doc.metadata)
+    (options.format === "jpeg" && options.includeMetadata && doc.metadata)
   ) {
     return dataUrlToBlob(exportRasterDataUrl(doc, options))
   }
@@ -1032,7 +1078,10 @@ export async function exportRasterBlob(doc: PsDocument, options: RasterExportOpt
   }
 
   const canvas = buildRasterExportCanvas(doc, options)
-  return canvasToBlobAsync(canvas, options.format, options.quality)
+  if (options.format === "png" || options.format === "jpeg" || options.format === "webp" || options.format === "avif") {
+    return canvasToBlobAsync(canvas, options.format, options.quality)
+  }
+  return dataUrlToBlob(exportRasterDataUrl(doc, options))
 }
 
 function documentWithTimelineFrame(doc: PsDocument, frameIndex: number): PsDocument {
@@ -1747,8 +1796,8 @@ export function createCompatibilityManifest(
     "browser-raster": "Adjustments are baked into the flattened export pixels.",
   })
   if (smartFilters) add("Smart filters", "preserved", "approximated", "flattened", {
-    project: `${reportPlural(smartFilters, "smart filter")} retain filter id, parameters, stack order, masks, opacity, and blend mode${smartFilterMasks ? `, including ${reportPlural(smartFilterMasks, "filter mask state")}` : ""}.`,
-    psd: `${reportPlural(smartFilters, "smart filter")} bake their visual result into the layer pixels for native compatibility; editable filter id, parameters, mask data, opacity, blend mode, and order round-trip only via the companion project (.psd-web) file, not the PSD itself.`,
+    project: `${reportPlural(smartFilters, "smart filter")} retain filter id, parameters, stack order, masks, opacity, blend mode, mask density, and mask feather${smartFilterMasks ? `, including ${reportPlural(smartFilterMasks, "filter mask state")}` : ""}.`,
+    psd: `${reportPlural(smartFilters, "smart filter")} bake their visual result into the layer pixels for native compatibility; editable filter id, parameters, mask data, opacity, blend mode, density, feather, and order round-trip only via the companion project (.psd-web) file, not the PSD itself.`,
     "browser-raster": "Smart filters are baked into the flattened export pixels.",
   })
   if (smartObjectLayers.length) add("Smart objects", "preserved", "approximated", "flattened", {
@@ -1896,18 +1945,25 @@ export function createExportLimitationReport(
     add("ICC profile embedding", "unsupported", `${profile ?? "Document"} profile metadata is tracked by the app but browser encoders do not embed native ICC payloads here.`)
   }
   if (metadataRequested) {
-    add("Metadata embedding", format === "svg" ? "approximated" : "unsupported", format === "svg"
-      ? "SVG export includes a compact app metadata block, not full IPTC/XMP/content-credential payloads."
-      : "Browser raster exports do not reliably embed IPTC/XMP/content-credential metadata.")
+    add("Metadata embedding", format === "png" || format === "jpeg" ? "preserved" : format === "svg" ? "approximated" : "unsupported", format === "png"
+      ? "PNG export embeds author, copyright, description, creation date, and XMP text chunks."
+      : format === "jpeg"
+        ? "JPEG export embeds XMP APP1 metadata for author, copyright, description, and creation date."
+        : format === "svg"
+          ? "SVG export includes a compact app metadata block, not full IPTC/XMP/content-credential payloads."
+          : "This format does not carry the app's export metadata fields.")
   }
 
   if (format === "png") {
-    if (options.interlaced) add("Interlaced PNG", "unsupported", "Canvas PNG encoding does not expose Adam7 interlacing controls.")
-    add("PNG color chunks", "unsupported", "Browser PNG output does not expose gAMA/cHRM/iCCP authoring controls for this app.")
+    if (options.interlaced) add("Interlaced PNG", "preserved", "The app writes Adam7 interlaced PNG scan passes with its typed-array PNG encoder.")
+    add("PNG color chunks", "unsupported", "PNG export does not author gAMA/cHRM/iCCP color chunks in this path.")
   } else if (format === "jpeg") {
-    if (options.progressive) add("Progressive JPEG", "unsupported", "Canvas JPEG encoding does not expose progressive scan controls.")
+    if (options.progressive) add("Progressive JPEG", "preserved", "The app routes JPEG export through the MozJPEG progressive encoder.")
     if (options.transparent !== false) add("Alpha transparency", "flattened", "JPEG has no alpha channel; transparent pixels are composited against the selected matte.")
-    add("JPEG quality", "approximated", `Requested quality ${Math.round(Number(options.quality ?? 92))}% is passed to the browser encoder, whose quantization tables are implementation-defined.`)
+    add("JPEG quality", "approximated", `Requested quality ${Math.round(Number(options.quality ?? 92))}% is passed to the selected JPEG encoder; exact quantization remains encoder-defined.`)
+  } else if (format === "tiff") {
+    add("TIFF encoder", "preserved", `Exports baseline RGBA TIFF strips with ${(options.tiffCompression ?? "none").toUpperCase()} compression.`)
+    add("TIFF metadata", "unsupported", "TIFF IPTC/XMP/EXIF directories are not authored by this export path.")
   } else if (format === "webp") {
     add("WebP encoder controls", "approximated", "Browser WebP exposes quality but not full lossless/near-lossless, metadata, or chunk-level controls.")
   } else if (format === "avif") {
@@ -1921,7 +1977,7 @@ export function createExportLimitationReport(
       ? "A compact app metadata block records document dimensions and layer descriptors."
       : "Enable metadata to include document dimensions and layer descriptors.")
   } else if (format === "tga") {
-    add("TGA encoder", "preserved", "Exports uncompressed 32-bit top-left TGA pixels with alpha.")
+    add("TGA encoder", "preserved", options.tgaRle ? "Exports RLE-compressed 32-bit top-left TGA pixels with alpha." : "Exports uncompressed 32-bit top-left TGA pixels with alpha.")
     add("TGA metadata", "unsupported", "TGA-specific extension areas and developer metadata are not authored.")
   } else if (format === "ppm" || format === "pgm" || format === "pbm") {
     add("Portable AnyMap encoder", "preserved", `${format.toUpperCase()} export writes binary browser-generated pixels in the matching Netpbm family format.`)
@@ -1963,8 +2019,8 @@ export function createExportCompatibilityManifest(
   if ((options.quality ?? 100) < 70 && ["jpeg", "webp", "avif"].includes(options.format)) {
     warnings.push(`${options.format.toUpperCase()} quality is below 70; visible compression artifacts are likely.`)
   }
-  if (options.includeMetadata && options.format !== "svg" && options.format !== "metadata-json") {
-    warnings.push("Browser raster encoders do not reliably embed IPTC, XMP, ICC, or content-credential metadata.")
+  if (options.includeMetadata && options.format !== "svg" && options.format !== "metadata-json" && options.format !== "png" && options.format !== "jpeg") {
+    warnings.push(`${options.format.toUpperCase()} export does not embed the app's metadata fields.`)
   }
   if (doc.colorMode !== "RGB" || doc.bitDepth > 8) {
     warnings.push(`${doc.colorMode}/${doc.bitDepth}-bit document intent is converted through an 8-bit browser canvas export path.`)
@@ -2102,7 +2158,7 @@ export function createDocumentReport(
       ? `${adjustmentLayers} non-destructive adjustment layer${adjustmentLayers === 1 ? "" : "s"} round-trip the current visual result; 16 types use native ag-psd descriptors. The 6 remaining types (shadows-highlights, hdr-toning, desaturate, match-color, replace-color, equalize) encode their params as a "__adj:<type>:<base64-json>__" suffix on the layer name, which is decoded back on import.`
       : `${adjustmentLayers} non-destructive adjustment layer${adjustmentLayers === 1 ? "" : "s"} retained in project format.`,
   })
-  if (smartFilters) items.push({ label: "Smart filters", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${smartFilters} smart filter${smartFilters === 1 ? "" : "s"} bake their visual result into the layer's exported pixels; editable filter id, parameters, order, masks${smartFilterMasks ? ` (${smartFilterMasks} mask state${smartFilterMasks === 1 ? "" : "s"})` : ""}, opacity, and blend mode survive only in the companion .psd-web project file, not the PSD bytes themselves.` })
+  if (smartFilters) items.push({ label: "Smart filters", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${smartFilters} smart filter${smartFilters === 1 ? "" : "s"} bake their visual result into the layer's exported pixels; editable filter id, parameters, order, masks${smartFilterMasks ? ` (${smartFilterMasks} mask state${smartFilterMasks === 1 ? "" : "s"})` : ""}, opacity, blend mode, density, and feather survive only in the companion .psd-web project file, not the PSD bytes themselves.` })
   if (smartObjectSources) items.push({ label: "Smart object sources", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${smartObjectSources} embedded smart source${smartObjectSources === 1 ? "" : "s"} round-trip via the native PSD placedLayer + linkedFiles array (PNG bytes, 30 MB cap), with app project preservation for relink metadata, export timestamps, and ${smartObjectEditPackages} edit package${smartObjectEditPackages === 1 ? "" : "s"}.` })
   if (smartObjectFileHandles) items.push({ label: "File System Access smart links", status: source.includes("PSD") ? "unsupported" : "preserved", detail: `${smartObjectFileHandles} linked smart object handle reference${smartObjectFileHandles === 1 ? "" : "s"} retain handle name, permission state, content hash, and modified time; live browser FileSystemFileHandle objects are intentionally not serialized.` })
   if (linkedSmartObjects) items.push({ label: "Linked smart objects", status: source.includes("PSD") ? "unsupported" : "info", detail: `${linkedSmartObjects} linked smart object reference${linkedSmartObjects === 1 ? "" : "s"} round-trip via the linkedFiles "linked" type; the source file is referenced by path rather than embedded.` })
@@ -2518,10 +2574,19 @@ function flattenPsdChildren(children: PsdLayer[] | undefined, docW: number, docH
   return { layers, directIds }
 }
 
-export async function deserializePsdFile(file: File): Promise<PsDocument> {
+export async function deserializePsdFile(file: File, options: PsdDeserializeOptions = {}): Promise<PsDocument> {
   assertFileSize(file, MAX_PSD_FILE_BYTES, "PSD file")
   const buffer = await file.arrayBuffer()
-  validatePsdHeaderDimensions(buffer)
+  const header = readPsdHeaderDimensions(buffer)
+  if (
+    header?.version === 2 &&
+    canvasSizeError(header.width || 1, header.height || 1, "PSD canvas") &&
+    options.psbLargeDocumentMode &&
+    options.psbLargeDocumentMode !== "full"
+  ) {
+    return deserializeOversizedPsb(buffer, file, options.psbLargeDocumentMode)
+  }
+  validatePsdHeaderDimensions(buffer, file.name)
   const { readPsd } = await loadPsdCodec()
   const metadata = readPsd(buffer, {
     skipLayerImageData: true,
@@ -2689,6 +2754,163 @@ function collectPsdLayerNodes(children: PsdLayer[] | undefined): PsdLayer[] {
   }
   walk(children)
   return out
+}
+
+function pixelDataToScaledCanvas(pixelData: PixelData | undefined, sourceWidth: number, sourceHeight: number, targetWidth: number, targetHeight: number) {
+  const canvas = makeIoCanvas(targetWidth, targetHeight)
+  if (!pixelData?.data) return canvas
+  const target = new ImageData(targetWidth, targetHeight)
+  const source = pixelData.data
+  const channels = Math.max(1, Math.floor(source.length / Math.max(1, sourceWidth * sourceHeight)))
+  for (let y = 0; y < targetHeight; y++) {
+    const sy = Math.min(sourceHeight - 1, Math.floor((y / targetHeight) * sourceHeight))
+    for (let x = 0; x < targetWidth; x++) {
+      const sx = Math.min(sourceWidth - 1, Math.floor((x / targetWidth) * sourceWidth))
+      const src = (sy * sourceWidth + sx) * channels
+      const dst = (y * targetWidth + x) * 4
+      target.data[dst] = Number(source[src] ?? 0)
+      target.data[dst + 1] = Number(source[src + 1] ?? source[src] ?? 0)
+      target.data[dst + 2] = Number(source[src + 2] ?? source[src] ?? 0)
+      target.data[dst + 3] = channels >= 4 ? Number(source[src + 3] ?? 255) : 255
+    }
+  }
+  canvas.getContext("2d")!.putImageData(target, 0, 0)
+  return canvas
+}
+
+function pixelDataToTileCanvas(pixelData: PixelData | undefined, sourceWidth: number, sourceHeight: number, x0: number, y0: number, tileWidth: number, tileHeight: number) {
+  const canvas = makeIoCanvas(tileWidth, tileHeight)
+  if (!pixelData?.data) return canvas
+  const tile = new ImageData(tileWidth, tileHeight)
+  const source = pixelData.data
+  const channels = Math.max(1, Math.floor(source.length / Math.max(1, sourceWidth * sourceHeight)))
+  for (let y = 0; y < tileHeight; y++) {
+    const sy = y0 + y
+    for (let x = 0; x < tileWidth; x++) {
+      const sx = x0 + x
+      const src = (sy * sourceWidth + sx) * channels
+      const dst = (y * tileWidth + x) * 4
+      tile.data[dst] = Number(source[src] ?? 0)
+      tile.data[dst + 1] = Number(source[src + 1] ?? source[src] ?? 0)
+      tile.data[dst + 2] = Number(source[src + 2] ?? source[src] ?? 0)
+      tile.data[dst + 3] = channels >= 4 ? Number(source[src + 3] ?? 255) : 255
+    }
+  }
+  canvas.getContext("2d")!.putImageData(tile, 0, 0)
+  return canvas
+}
+
+function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob)
+      else reject(new Error("Could not encode PSB tile"))
+    }, "image/png")
+  })
+}
+
+async function registerPsbCompositeTiles(docId: string, pixelData: PixelData | undefined, sourceWidth: number, sourceHeight: number, plan: ReturnType<typeof planPsbLargeDocumentOpen>) {
+  if (!pixelData?.data) return
+  const store = new TiledBackingStore({
+    width: sourceWidth,
+    height: sourceHeight,
+    tileSize: plan.tileView.tileSize,
+    memoryBudgetMB: 256,
+  })
+  for (let row = 0; row < plan.tileView.tileRows; row++) {
+    for (let col = 0; col < plan.tileView.tileColumns; col++) {
+      const x = col * plan.tileView.tileSize
+      const y = row * plan.tileView.tileSize
+      const w = Math.min(plan.tileView.tileSize, sourceWidth - x)
+      const h = Math.min(plan.tileView.tileSize, sourceHeight - y)
+      const tile = pixelDataToTileCanvas(pixelData, sourceWidth, sourceHeight, x, y, w, h)
+      await store.writeLayerTile({
+        layerId: PSB_TILE_VIEW_LAYER_ID,
+        layerKind: "raster",
+        sourceVersion: PSB_TILE_VIEW_SOURCE_VERSION,
+        col,
+        row,
+      }, await canvasToPngBlob(tile))
+    }
+  }
+  registerPsbTileViewStore(docId, store)
+}
+
+async function deserializeOversizedPsb(buffer: ArrayBuffer, file: File, mode: Exclude<PsbLargeDocumentMode, "full">): Promise<PsDocument> {
+  const header = readPsdHeaderDimensions(buffer)
+  if (!header) throw new Error("PSB header could not be read")
+  const plan = planPsbLargeDocumentOpen({ width: header.width, height: header.height, fileName: file.name })
+  const scale = mode === "downscale-50" ? 0.5 : plan.tileView.overviewScale
+  const width = mode === "downscale-50" ? plan.downscale50.width : plan.tileView.overviewWidth
+  const height = mode === "downscale-50" ? plan.downscale50.height : plan.tileView.overviewHeight
+  const sizeError = canvasSizeError(width, height, mode === "downscale-50" ? "50% PSB canvas" : "PSB tile overview")
+  if (sizeError) throw new Error(sizeError)
+  const { readPsd } = await loadPsdCodec()
+  const psd = readPsd(buffer, {
+    skipLayerImageData: true,
+    skipCompositeImageData: false,
+    skipThumbnail: true,
+    useImageData: true,
+    }) as Psd
+  const canvas = pixelDataToScaledCanvas(psd.imageData, header.width, header.height, width, height)
+  const docId = uid("doc")
+  const layer: Layer = {
+    id: uid("layer"),
+    name: mode === "downscale-50" ? "50% PSB composite" : "PSB tile overview",
+    kind: "raster",
+    visible: true,
+    locked: false,
+    opacity: 1,
+    blendMode: "normal",
+    canvas,
+    metadata: {
+      description: `Source: ${file.name}`,
+      tags: ["psb", mode],
+      custom: {
+        originalWidth: header.width,
+        originalHeight: header.height,
+        overviewScale: scale,
+        tileSize: plan.tileView.tileSize,
+        tileColumns: plan.tileView.tileColumns,
+        tileRows: plan.tileView.tileRows,
+      },
+    },
+  }
+  if (mode === "tile-view") await registerPsbCompositeTiles(docId, psd.imageData, header.width, header.height, plan)
+  return {
+    id: docId,
+    name: file.name.replace(/\.psb$/i, mode === "downscale-50" ? " (50%)" : " (Tile Overview)"),
+    width,
+    height,
+    zoom: 1,
+    layers: [layer],
+    activeLayerId: layer.id,
+    selectedLayerIds: [layer.id],
+    background: "#ffffff",
+    colorMode: "RGB",
+    bitDepth: 8,
+    selection: { bounds: null, shape: "rect" },
+    metadata: {
+      title: file.name,
+      description: mode === "downscale-50"
+        ? `Opened oversized PSB at 50% scale from ${header.width} x ${header.height} px.`
+        : `Opened oversized PSB tile overview from ${header.width} x ${header.height} px using ${plan.tileView.tileColumns} x ${plan.tileView.tileRows} tiles.`,
+      source: file.name,
+      createdAt: new Date().toISOString(),
+      largeDocumentTileView: mode === "tile-view" ? {
+        mode: "psb-tile-view",
+        sourceName: file.name,
+        originalWidth: header.width,
+        originalHeight: header.height,
+        overviewScale: plan.tileView.overviewScale,
+        tileSize: plan.tileView.tileSize,
+        tileColumns: plan.tileView.tileColumns,
+        tileRows: plan.tileView.tileRows,
+        tileCount: plan.tileView.tileCount,
+        selectedTile: { col: 0, row: 0 },
+      } : undefined,
+    },
+  }
 }
 
 type AssignedProfile = NonNullable<PsDocument["colorManagement"]>["assignedProfile"]

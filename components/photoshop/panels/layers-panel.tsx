@@ -139,6 +139,7 @@ export function LayersPanel() {
     commit,
     requestRender,
     selectedLayers,
+    activeSmartFilterMaskTarget,
   } = useEditor()
   const [search, setSearch] = React.useState("")
   const [filterKind, setFilterKind] = React.useState<FilterKind>("all")
@@ -148,18 +149,22 @@ export function LayersPanel() {
   const [altDown, setAltDown] = React.useState(false)
   const [altClipLayerId, setAltClipLayerId] = React.useState<string | null>(null)
   const [contextMenu, setContextMenu] = React.useState<{ layerId: string; x: number; y: number } | null>(null)
+  const [smartFilterContextMenu, setSmartFilterContextMenu] = React.useState<{ layerId: string; filterId: string; x: number; y: number } | null>(null)
   const searchRef = React.useRef<HTMLInputElement>(null)
 
   React.useEffect(() => {
-    if (!contextMenu) return
-    const close = () => setContextMenu(null)
+    if (!contextMenu && !smartFilterContextMenu) return
+    const close = () => {
+      setContextMenu(null)
+      setSmartFilterContextMenu(null)
+    }
     window.addEventListener("pointerdown", close)
     window.addEventListener("keydown", close)
     return () => {
       window.removeEventListener("pointerdown", close)
       window.removeEventListener("keydown", close)
     }
-  }, [contextMenu])
+  }, [contextMenu, smartFilterContextMenu])
 
   React.useEffect(() => {
     const handler = (event: Event) => {
@@ -281,6 +286,30 @@ export function LayersPanel() {
     setTimeout(() => commit("Layer Metadata", [layer.id]), 0)
   }
 
+  const updateSmartFilter = (layer: Layer, filterId: string, patch: Partial<NonNullable<Layer["smartFilters"]>[number]>, label: string) => {
+    dispatch({ type: "update-smart-filter", layerId: layer.id, filterId, patch })
+    requestRender()
+    setTimeout(() => commit(label, [layer.id]), 0)
+  }
+
+  const editSmartFilterMask = (layer: Layer, filterId: string) => {
+    if (layerLocked(layer)) return
+    const filter = layer.smartFilters?.find((candidate) => candidate.id === filterId)
+    if (!filter) return
+    dispatch({ type: "set-active-layer", id: layer.id })
+    if (!filter.mask) {
+      dispatch({ type: "set-smart-filter-mask", layerId: layer.id, filterId, mask: makeCanvas(activeDoc.width, activeDoc.height, "#ffffff"), enabled: true })
+      setTimeout(() => commit("Reveal Smart Filter Mask", [layer.id]), 0)
+    } else if (filter.maskEnabled === false) {
+      dispatch({ type: "update-smart-filter", layerId: layer.id, filterId, patch: { maskEnabled: true } })
+      setTimeout(() => commit("Enable Smart Filter Mask", [layer.id]), 0)
+    }
+    dispatch({ type: "set-active-smart-filter-mask", target: { layerId: layer.id, filterId } })
+    dispatch({ type: "set-tool", tool: "brush" })
+    requestRender()
+    setSmartFilterContextMenu(null)
+  }
+
   const commitLayerChange = (label: string, ids: string[] = active ? [active.id] : []) => {
     requestRender()
     window.setTimeout(() => commit(label, ids), 0)
@@ -375,8 +404,55 @@ export function LayersPanel() {
     dispatchPhotoshopEvent("ps-open-panel", "adjustments")
   }
 
+  const renderSmartFilterSubItems = (layer: Layer, indent: number) => {
+    if (!(layer.smartObject || layer.kind === "smart-object") || !layer.smartFilters?.length) return null
+    return layer.smartFilters.map((filter) => {
+      const editing = activeSmartFilterMaskTarget?.layerId === layer.id && activeSmartFilterMaskTarget.filterId === filter.id
+      const enabled = filter.enabled !== false
+      return (
+        <div
+          key={`${layer.id}-${filter.id}`}
+          data-testid={`layer-smart-filter-row-${layer.name}-${filter.name}`}
+          data-smart-filter-enabled={enabled ? "true" : "false"}
+          data-smart-filter-mask-editing={editing ? "true" : "false"}
+          className={cn(
+            "flex h-7 items-center gap-1.5 border-b border-[var(--ps-divider)]/40 px-1.5 text-[10px] text-[var(--ps-text-dim)]",
+            editing ? "bg-[var(--ps-accent)]/15 text-[var(--ps-text)]" : "bg-[var(--ps-panel)] hover:bg-[var(--ps-tool-hover)]/40",
+          )}
+          style={{ paddingLeft: indent + 28 }}
+          onClick={(e) => {
+            e.stopPropagation()
+            dispatch({ type: "set-active-layer", id: layer.id })
+          }}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            dispatch({ type: "set-active-layer", id: layer.id })
+            setSmartFilterContextMenu({ layerId: layer.id, filterId: filter.id, x: e.clientX, y: e.clientY })
+          }}
+        >
+          <button
+            type="button"
+            aria-label={`${enabled ? "Disable" : "Enable"} ${filter.name} smart filter`}
+            title={`${enabled ? "Disable" : "Enable"} smart filter`}
+            className="flex h-5 w-5 items-center justify-center rounded-sm hover:bg-[var(--ps-tool-hover)] text-[var(--ps-text)]"
+            onClick={(e) => {
+              e.stopPropagation()
+              updateSmartFilter(layer, filter.id, { enabled: !enabled }, "Toggle Smart Filter")
+            }}
+          >
+            {enabled ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3 opacity-50" />}
+          </button>
+          <SmartFilterMaskThumb mask={filter.mask} enabled={filter.maskEnabled !== false} editing={editing} />
+          <span className={cn("min-w-0 flex-1 truncate", !enabled && "line-through opacity-60")}>{filter.name}</span>
+          <span className="shrink-0 tabular-nums">{Math.round((filter.opacity ?? 1) * 100)}%</span>
+        </div>
+      )
+    })
+  }
+
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex h-full min-h-0 flex-col">
       <div className="px-2 py-2 border-b border-[var(--ps-divider)]">
         <Select
           value={active?.blendMode ?? "normal"}
@@ -555,7 +631,7 @@ export function LayersPanel() {
         </span>
       </div>
 
-      <div className="flex-1 overflow-y-auto" onDragLeave={() => setHoverId(null)}>
+      <div className="min-h-0 flex-1 overflow-y-auto pb-2" onDragLeave={() => setHoverId(null)}>
         {visibleLayers.map((l) => {
           const isActive = l.id === activeDoc.activeLayerId
           const isSelected = activeDoc.selectedLayerIds.includes(l.id)
@@ -570,9 +646,10 @@ export function LayersPanel() {
               ? COLOR_LABELS.find((c) => c.id === l.colorLabel)?.bg
               : undefined
           const maskState = adjustmentMaskState(l)
+          const rowIndent = isInGroup ? 18 : 6
           return (
+            <React.Fragment key={l.id}>
             <div
-              key={l.id}
               data-testid={`layer-row-${l.name}`}
               data-layer-kind={l.kind || "raster"}
               data-adjustment-clipped={l.kind === "adjustment" ? String(!!l.clipped) : undefined}
@@ -672,7 +749,7 @@ export function LayersPanel() {
                     ? "bg-[var(--ps-tool-hover)]"
                     : "hover:bg-[var(--ps-tool-hover)]/60",
               )}
-              style={{ paddingLeft: isInGroup ? 18 : 6 }}
+              style={{ paddingLeft: rowIndent }}
             >
               {/* Drop indicator */}
               {hoverId === l.id ? (
@@ -852,10 +929,11 @@ export function LayersPanel() {
               ) : null}
               {l.smartFilters?.length ? (
                 <span
+                  data-testid={`smart-filter-count-${l.name}`}
                   className="h-3 rounded-sm bg-[var(--ps-panel-2)] border border-[var(--ps-divider)] px-1 text-[7px] text-[var(--ps-text-dim)] flex items-center justify-center font-bold"
                   title={`${l.smartFilters.length} smart filter${l.smartFilters.length === 1 ? "" : "s"}`}
                 >
-                  SF {l.smartFilters.length}
+                  {l.smartFilters.length}
                 </span>
               ) : null}
               {l.style ? (
@@ -890,6 +968,8 @@ export function LayersPanel() {
                 </button>
               )}
             </div>
+            {renderSmartFilterSubItems(l, rowIndent)}
+            </React.Fragment>
           )
         })}
       </div>
@@ -938,6 +1018,38 @@ export function LayersPanel() {
               <span>{label.label}</span>
             </button>
           ))}
+        </div>
+      ) : null}
+
+      {smartFilterContextMenu ? (
+        <div
+          className="fixed z-50 w-48 border border-[var(--ps-divider)] bg-[var(--ps-panel)] py-1 text-[11px] shadow-xl"
+          style={{ left: smartFilterContextMenu.x, top: smartFilterContextMenu.y }}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          {(() => {
+            const layer = activeDoc.layers.find((candidate) => candidate.id === smartFilterContextMenu.layerId)
+            const filter = layer?.smartFilters?.find((candidate) => candidate.id === smartFilterContextMenu.filterId)
+            if (!layer || !filter) return null
+            return (
+              <>
+                <button
+                  role="menuitem"
+                  className="flex w-full items-center px-2 py-1 text-left hover:bg-[var(--ps-tool-hover)]"
+                  onClick={() => editSmartFilterMask(layer, filter.id)}
+                >
+                  Edit Smart Filter Mask
+                </button>
+                <button
+                  role="menuitem"
+                  className="flex w-full items-center px-2 py-1 text-left hover:bg-[var(--ps-tool-hover)]"
+                  onClick={() => updateSmartFilter(layer, filter.id, { enabled: filter.enabled === false }, "Toggle Smart Filter")}
+                >
+                  {filter.enabled === false ? "Enable Smart Filter" : "Disable Smart Filter"}
+                </button>
+              </>
+            )
+          })()}
         </div>
       ) : null}
 
@@ -1244,6 +1356,53 @@ function AdjustmentMaskThumb({ layer, maskState }: { layer: Layer; maskState: st
       title={`Adjustment mask: ${maskState}`}
       aria-label={`Adjustment mask ${maskState}`}
       className="h-6 w-8 shrink-0 rounded-[2px] border border-[var(--ps-divider)] bg-[var(--ps-panel-2)]"
+    />
+  )
+}
+
+function SmartFilterMaskThumb({
+  mask,
+  enabled,
+  editing,
+}: {
+  mask?: HTMLCanvasElement | null
+  enabled: boolean
+  editing: boolean
+}) {
+  const ref = React.useRef<HTMLCanvasElement>(null)
+  React.useEffect(() => {
+    const canvas = ref.current
+    if (!canvas) return
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    ctx.fillStyle = "#202020"
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    if (mask) {
+      ctx.globalAlpha = enabled ? 1 : 0.35
+      ctx.drawImage(mask, 0, 0, canvas.width, canvas.height)
+      ctx.globalAlpha = 1
+    } else {
+      ctx.strokeStyle = "#777"
+      ctx.setLineDash([2, 2])
+      ctx.strokeRect(2, 2, canvas.width - 4, canvas.height - 4)
+      ctx.setLineDash([])
+    }
+    if (editing) {
+      ctx.strokeStyle = "#5aa7ff"
+      ctx.lineWidth = 2
+      ctx.strokeRect(1, 1, canvas.width - 2, canvas.height - 2)
+    }
+  }, [mask, enabled, editing])
+
+  return (
+    <canvas
+      ref={ref}
+      width={18}
+      height={14}
+      className={cn("shrink-0 rounded-sm border", editing ? "border-[var(--ps-accent)]" : "border-[var(--ps-divider)]")}
+      title={mask ? "Smart filter mask" : "No smart filter mask"}
+      aria-label={editing ? "Editing smart filter mask" : "Smart filter mask"}
     />
   )
 }

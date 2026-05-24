@@ -78,6 +78,37 @@ test("slices round-trip through PSD encoding (3 named slices)", () => {
   expect(back[2]).toMatchObject({ name: "Footer", x: 0, y: 100, w: 400, h: 50 })
 })
 
+test("slice export settings round-trip through PSD slice name markers", () => {
+  const slices: Slice[] = [
+    {
+      id: "a",
+      name: "Hero",
+      x: 0,
+      y: 0,
+      w: 200,
+      h: 100,
+      format: "webp",
+      quality: 0.7,
+      compression: 5,
+      filename: "hero-export",
+      scale: 2,
+    },
+  ]
+
+  const psd = appSlicesToPsd(slices, 400, 150)
+  const back = psdSlicesToApp(psd)
+
+  expect(psd?.[0].slices[0].name).toContain("__ps-web-slice:")
+  expect(back[0]).toMatchObject({
+    name: "Hero",
+    format: "webp",
+    quality: 0.7,
+    compression: 5,
+    filename: "hero-export",
+    scale: 2,
+  })
+})
+
 test("layer comps round-trip with embedded per-layer state", () => {
   const comps: LayerComp[] = [
     {

@@ -103,6 +103,7 @@ export interface HighBitAdjustment {
   type:
     | "brightness-contrast"
     | "levels"
+    | "curves"
     | "exposure"
     | "invert"
     | "channel-mixer"
@@ -111,6 +112,54 @@ export interface HighBitAdjustment {
     | "posterize"
     | "threshold"
   params?: Record<string, number | string | boolean>
+}
+
+export interface HighBitToneMapOptions {
+  exposure?: number
+  gamma?: number
+}
+
+export interface HistogramChannels {
+  red: Uint32Array
+  green: Uint32Array
+  blue: Uint32Array
+  luminosity: Uint32Array
+}
+
+export interface HistogramStats {
+  mean: number
+  std: number
+  median: number
+  pixels: number
+  minValue: number
+  maxValue: number
+}
+
+export interface HistogramResult {
+  bins: number
+  bitDepth: PipelineBitDepth
+  source: "canvas" | "uint8" | "uint16" | "float32"
+  channels: HistogramChannels
+  stats: HistogramStats
+}
+
+export interface HighBitHistogramOptions {
+  floatBins?: number
+  floatMin?: number
+  floatMax?: number
+}
+
+export interface HighBitPixelReadout {
+  r: number
+  g: number
+  b: number
+  a: number
+  normalized: {
+    r: number
+    g: number
+    b: number
+    a: number
+  }
 }
 
 export interface FloatPixelBuffer {
@@ -125,7 +174,7 @@ export interface FloatPixelBuffer {
   warnings: string[]
 }
 
-export type FloatFilterKind = "exposure" | "box-blur" | "sharpen"
+export type FloatFilterKind = "brightness-contrast" | "levels" | "curves" | "exposure" | "box-blur" | "sharpen"
 
 function srgbToLinear(value: number) {
   const v = clamp(value / 255)
@@ -226,16 +275,39 @@ export function createHighBitImageFromImageData(source: ImageData, options: High
   }
 }
 
-export function toneMapHighBitImageToImageData(source: HighBitImage): ImageData {
+export function toneMapHighBitImageToImageData(source: HighBitImage, options: HighBitToneMapOptions = {}): ImageData {
   const out = new Uint8ClampedArray(source.width * source.height * 4)
+  const exposureFactor = 2 ** (Number.isFinite(options.exposure) ? options.exposure ?? 0 : 0)
+  const gamma = Math.max(0.01, Number.isFinite(options.gamma) ? options.gamma ?? 1 : 1)
+  const mapRgb = (value: number) => clamp8(Math.pow(clamp(value * exposureFactor), 1 / gamma) * 255)
   if (source.storage === "uint16") {
     const data = source.data as Uint16Array
-    for (let i = 0; i < out.length; i++) out[i] = clamp8(data[i] / 257)
+    for (let i = 0; i < out.length; i += 4) {
+      out[i] = mapRgb(data[i] / 65535)
+      out[i + 1] = mapRgb(data[i + 1] / 65535)
+      out[i + 2] = mapRgb(data[i + 2] / 65535)
+      out[i + 3] = clamp8((data[i + 3] / 65535) * 255)
+    }
   } else if (source.storage === "float32") {
     const data = source.data as Float32Array
-    for (let i = 0; i < out.length; i++) out[i] = clamp8(data[i] * 255)
+    for (let i = 0; i < out.length; i += 4) {
+      out[i] = mapRgb(data[i])
+      out[i + 1] = mapRgb(data[i + 1])
+      out[i + 2] = mapRgb(data[i + 2])
+      out[i + 3] = clamp8(clamp(data[i + 3]) * 255)
+    }
   } else {
-    out.set(source.data as Uint8ClampedArray)
+    const data = source.data as Uint8ClampedArray
+    if ((options.exposure ?? 0) === 0 && (options.gamma ?? 1) === 1) {
+      out.set(data)
+    } else {
+      for (let i = 0; i < out.length; i += 4) {
+        out[i] = mapRgb(data[i] / 255)
+        out[i + 1] = mapRgb(data[i + 1] / 255)
+        out[i + 2] = mapRgb(data[i + 2] / 255)
+        out[i + 3] = data[i + 3]
+      }
+    }
   }
   return new ImageData(out, source.width, source.height)
 }
@@ -306,11 +378,96 @@ function highBitChannelMixer(
   }
 }
 
+function highBitCurvePoints(params: Record<string, number | string | boolean>) {
+  if (typeof params.points === "string") {
+    const points = params.points
+      .split(";")
+      .map((pair) => {
+        const [x, y] = pair.split(",").map((n) => Number(n))
+        return Number.isFinite(x) && Number.isFinite(y)
+          ? [clamp(x / 255), clamp(y / 255)] as [number, number]
+          : null
+      })
+      .filter((point): point is [number, number] => !!point)
+      .sort((a, b) => a[0] - b[0])
+    if (!points.some((point) => point[0] === 0)) points.unshift([0, 0])
+    if (!points.some((point) => point[0] === 1)) points.push([1, 1])
+    if (points.length >= 2) return points
+  }
+
+  if ("shadows" in params || "midtones" in params || "highlights" in params) {
+    const shadows = highBitParam(params, "shadows", 0)
+    const midtones = highBitParam(params, "midtones", 0)
+    const highlights = highBitParam(params, "highlights", 0)
+    return [
+      [0, 0],
+      [64 / 255, clamp8(64 + shadows) / 255],
+      [128 / 255, clamp8(128 + midtones) / 255],
+      [192 / 255, clamp8(192 + highlights) / 255],
+      [1, 1],
+    ] as [number, number][]
+  }
+
+  const shadow = clamp(highBitParam(params, "shadow", 0) / 255)
+  const midtone = clamp(highBitParam(params, "midtone", 128) / 255)
+  const highlight = clamp(highBitParam(params, "highlight", 255) / 255)
+  return [[0, shadow], [128 / 255, midtone], [1, highlight]] as [number, number][]
+}
+
+function highBitCurveValue(value: number, points: [number, number][]) {
+  const pts = points
+    .map(([x, y]) => [clamp(x), clamp(y)] as [number, number])
+    .sort((a, b) => a[0] - b[0])
+    .filter((point, index, list) => index === 0 || point[0] !== list[index - 1][0])
+  const n = pts.length
+  if (n < 2) return value
+  const d = new Array(Math.max(0, n - 1)).fill(0)
+  const m = new Array(n).fill(0)
+  for (let i = 0; i < n - 1; i++) d[i] = (pts[i + 1][1] - pts[i][1]) / Math.max(0.000001, pts[i + 1][0] - pts[i][0])
+  m[0] = d[0] ?? 0
+  m[n - 1] = d[n - 2] ?? 0
+  for (let i = 1; i < n - 1; i++) m[i] = d[i - 1] * d[i] <= 0 ? 0 : (d[i - 1] + d[i]) / 2
+  for (let i = 0; i < n - 1; i++) {
+    if (d[i] === 0) {
+      m[i] = 0
+      m[i + 1] = 0
+    } else {
+      const a = m[i] / d[i]
+      const b = m[i + 1] / d[i]
+      const s = a * a + b * b
+      if (s > 9) {
+        const t = 3 / Math.sqrt(s)
+        m[i] = t * a * d[i]
+        m[i + 1] = t * b * d[i]
+      }
+    }
+  }
+  const x = clamp(value)
+  let segment = 0
+  while (segment < n - 2 && x > pts[segment + 1][0]) segment++
+  const x0 = pts[segment][0]
+  const y0 = pts[segment][1]
+  const x1 = pts[segment + 1][0]
+  const y1 = pts[segment + 1][1]
+  const span = Math.max(0.000001, x1 - x0)
+  const t = clamp((x - x0) / span)
+  const t2 = t * t
+  const t3 = t2 * t
+  return clamp(
+    (2 * t3 - 3 * t2 + 1) * y0 +
+    (t3 - 2 * t2 + t) * span * m[segment] +
+    (-2 * t3 + 3 * t2) * y1 +
+    (t3 - t2) * span * m[segment + 1],
+  )
+}
+
 export function applyHighBitAdjustment(source: HighBitImage, adjustment: HighBitAdjustment): HighBitImage {
   const storage = source.storage
   const Ctor = storage === "uint16" ? Uint16Array : storage === "float32" ? Float32Array : Uint8ClampedArray
   const out = new Ctor(source.data.length) as HighBitImage["data"]
   const params = adjustment.params ?? {}
+  const curvePoints = adjustment.type === "curves" ? highBitCurvePoints(params) : null
+  const curveChannel = String(params.channel ?? "rgb")
   for (let i = 0; i < source.data.length; i += 4) {
     let r = readHighBitUnit(source.data, storage, i)
     let g = readHighBitUnit(source.data, storage, i + 1)
@@ -346,6 +503,10 @@ export function applyHighBitAdjustment(source: HighBitImage, adjustment: HighBit
       if (channel === "red" || channel === "rgb") r = apply(r)
       if (channel === "green" || channel === "rgb") g = apply(g)
       if (channel === "blue" || channel === "rgb") b = apply(b)
+    } else if (adjustment.type === "curves" && curvePoints) {
+      if (curveChannel === "red" || curveChannel === "rgb") r = highBitCurveValue(r, curvePoints)
+      if (curveChannel === "green" || curveChannel === "rgb") g = highBitCurveValue(g, curvePoints)
+      if (curveChannel === "blue" || curveChannel === "rgb") b = highBitCurveValue(b, curvePoints)
     } else if (adjustment.type === "exposure") {
       const factor = 2 ** highBitParam(params, "ev", 0)
       r *= factor
@@ -380,6 +541,152 @@ export function applyHighBitAdjustment(source: HighBitImage, adjustment: HighBit
     out[i + 3] = source.data[i + 3]
   }
   return cloneHighBitWithData(source, out)
+}
+
+function emptyHistogramChannels(bins: number): HistogramChannels {
+  return {
+    red: new Uint32Array(bins),
+    green: new Uint32Array(bins),
+    blue: new Uint32Array(bins),
+    luminosity: new Uint32Array(bins),
+  }
+}
+
+function summarizeHistogram(hist: Uint32Array, bins: number, pixels: number, valueAtBin: (bin: number) => number): HistogramStats {
+  if (!pixels) return { mean: 0, std: 0, median: 0, pixels: 0, minValue: 0, maxValue: 0 }
+  let sum = 0
+  let sumSq = 0
+  let running = 0
+  let median: number | null = null
+  let minValue = 0
+  let maxValue = 0
+  let saw = false
+  for (let bin = 0; bin < bins; bin++) {
+    const count = hist[bin]
+    if (!count) continue
+    const value = valueAtBin(bin)
+    if (!saw) {
+      minValue = value
+      saw = true
+    }
+    maxValue = value
+    sum += value * count
+    sumSq += value * value * count
+    running += count
+    if (median === null && running >= pixels / 2) median = value
+  }
+  const mean = sum / pixels
+  return {
+    mean,
+    std: Math.sqrt(Math.max(0, sumSq / pixels - mean * mean)),
+    median: median ?? 0,
+    pixels,
+    minValue,
+    maxValue,
+  }
+}
+
+export function computeCanvasHistogram(source: ImageData): HistogramResult {
+  const bins = 256
+  const channels = emptyHistogramChannels(bins)
+  let pixels = 0
+  for (let i = 0; i < source.data.length; i += 4) {
+    if (source.data[i + 3] === 0) continue
+    const r = source.data[i]
+    const g = source.data[i + 1]
+    const b = source.data[i + 2]
+    const lum = clamp8(0.299 * r + 0.587 * g + 0.114 * b)
+    channels.red[r]++
+    channels.green[g]++
+    channels.blue[b]++
+    channels.luminosity[lum]++
+    pixels++
+  }
+  return {
+    bins,
+    bitDepth: 8,
+    source: "canvas",
+    channels,
+    stats: summarizeHistogram(channels.luminosity, bins, pixels, (bin) => bin),
+  }
+}
+
+export function computeHighBitHistogram(source: HighBitImage, options: HighBitHistogramOptions = {}): HistogramResult {
+  const bins = source.storage === "uint16"
+    ? 65536
+    : source.storage === "float32"
+      ? Math.max(16, Math.min(65536, Math.round(options.floatBins ?? 4096)))
+      : 256
+  const channels = emptyHistogramChannels(bins)
+  let pixels = 0
+  const data = source.data
+  const floatMin = source.storage === "float32" ? options.floatMin ?? 0 : 0
+  let floatMax = source.storage === "float32" ? options.floatMax : undefined
+  if (source.storage === "float32" && !Number.isFinite(floatMax)) {
+    floatMax = 1
+    for (let i = 0; i < data.length; i += 4) {
+      floatMax = Math.max(floatMax!, Number(data[i]), Number(data[i + 1]), Number(data[i + 2]))
+    }
+  }
+  const safeFloatMax = Math.max(floatMin + 0.000001, floatMax ?? 1)
+  const unitToBin = (value: number) => {
+    if (source.storage === "uint16") return Math.max(0, Math.min(65535, Math.round(value)))
+    if (source.storage === "uint8") return Math.max(0, Math.min(255, Math.round(value)))
+    return Math.max(0, Math.min(bins - 1, Math.round(((value - floatMin) / (safeFloatMax - floatMin)) * (bins - 1))))
+  }
+  const binToValue = (bin: number) => {
+    if (source.storage === "float32") return floatMin + (bin / Math.max(1, bins - 1)) * (safeFloatMax - floatMin)
+    return bin
+  }
+  for (let i = 0; i < data.length; i += 4) {
+    const alpha = Number(data[i + 3])
+    if (alpha <= 0) continue
+    const r = Number(data[i])
+    const g = Number(data[i + 1])
+    const b = Number(data[i + 2])
+    const lumValue = 0.299 * r + 0.587 * g + 0.114 * b
+    channels.red[unitToBin(r)]++
+    channels.green[unitToBin(g)]++
+    channels.blue[unitToBin(b)]++
+    channels.luminosity[unitToBin(source.storage === "float32" ? lumValue : Math.round(lumValue))]++
+    pixels++
+  }
+  const stats = summarizeHistogram(channels.luminosity, bins, pixels, binToValue)
+  if (source.storage === "float32") {
+    stats.minValue = floatMin
+    stats.maxValue = safeFloatMax
+  }
+  return {
+    bins,
+    bitDepth: source.bitDepth,
+    source: source.storage,
+    channels,
+    stats,
+  }
+}
+
+export function readHighBitPixel(source: HighBitImage, x: number, y: number): HighBitPixelReadout | null {
+  const px = Math.floor(x)
+  const py = Math.floor(y)
+  if (px < 0 || py < 0 || px >= source.width || py >= source.height) return null
+  const i = (py * source.width + px) * 4
+  const max = highBitMax(source.storage)
+  const r = Number(source.data[i])
+  const g = Number(source.data[i + 1])
+  const b = Number(source.data[i + 2])
+  const a = Number(source.data[i + 3])
+  return {
+    r,
+    g,
+    b,
+    a,
+    normalized: {
+      r: max ? r / max : 0,
+      g: max ? g / max : 0,
+      b: max ? b / max : 0,
+      a: max ? a / max : 0,
+    },
+  }
 }
 
 export function createFloatBufferFromImageData(source: ImageData, options: HighBitImageOptions = {}): FloatPixelBuffer {
@@ -485,6 +792,9 @@ export function applyFloatBufferFilter(
 ): FloatPixelBuffer {
   if (filter === "box-blur") return applyFloatBoxBlur(source, floatParam(params, "radius", 1))
   if (filter === "sharpen") return applyFloatSharpen(source, floatParam(params, "amount", 50))
+  if (filter === "brightness-contrast" || filter === "levels" || filter === "curves" || filter === "exposure") {
+    return applyHighBitAdjustment(source, { type: filter, params }) as FloatPixelBuffer
+  }
   const factor = 2 ** floatParam(params, "ev", 0)
   const out = new Float32Array(source.data)
   for (let i = 0; i < out.length; i += 4) {

@@ -10,18 +10,47 @@ import {
   appendPathToCanvas,
   convertAnchorPoint,
   deleteNearestAnchorPoint,
+  getRoundedRectCornerRadiusHandles,
   movePathHandle,
   nearestAnchorPoint,
   nearestPathHandle,
+  updateRoundedRectCornerRadius,
+  type RoundedRectCorner,
 } from "./vector-path-operations"
 import { normalizeBrushPointerSample, type BrushPointerSample } from "./brush-engine"
 import { planCompositeCache } from "./performance-engine"
 import { planMemoryBudget } from "./memory-budget"
 import { planProgressiveRender } from "./progressive-renderer"
 import { createRafCoalescer, type RafCoalescer } from "./raf-coalescer"
+import { isEmptyDirtyRect, planLayerDirtyRects } from "./dirty-rect"
+import { compositeDocumentWithWebGL, planWebGLCompositor } from "./webgl-compositor"
+import { acquirePooledCanvas, releasePooledCanvas } from "./canvas-utils"
 import { containsSelectionPoint, createSelectionHitTester, type SelectionHitTester } from "./selection-hit-testing"
 import { isAdjustmentNoop } from "./adjustment-layers"
 import { addPhotoshopEventListener } from "./events"
+import {
+  beginBlurGalleryInteraction,
+  isBlurGalleryFilterId,
+  normalizeBlurGalleryParams,
+  parseFieldBlurPins,
+  parsePathBlurPoints,
+  percentToCanvasPoint,
+  updateBlurGalleryInteraction,
+  type BlurGalleryDrag,
+  type BlurGalleryFilterId,
+  type BlurGalleryParams,
+} from "./blur-gallery-controls"
+import { smartFilterMaskAmountAt, smartFilterMaskToImageData } from "./smart-filter-masks"
+import {
+  DEFAULT_PREFERENCES,
+  calculatePrintSizeZoom,
+  loadPreferencesFromStorage,
+  type CursorStylePreference,
+  type RulerUnitPreference,
+} from "./preferences-engine"
+import { buildRulerTickMarks } from "./ruler-calibration"
+import { paintCanvasCursorOverlay, resolveCanvasCursorState } from "./cursor-overlay"
+import { buildEdgeAwareQuickSelectionMaskData } from "./algorithmic-operations"
 
 // Canvas identity cache for composite fingerprinting — gives each canvas a stable numeric ID
 const _canvasIdMap = new WeakMap<HTMLCanvasElement, number>()
@@ -64,6 +93,7 @@ import {
   patchSelectionFromSource,
   floodFillMask,
   featherMask,
+  magneticLassoSnap,
   selectSubjectMask,
   selectSkyMask,
   objectSelectionMask,
@@ -100,6 +130,15 @@ interface MouseMoveDetail {
   inside: boolean
 }
 
+interface CanvasRuntimePreferences {
+  cursorStyle: CursorStylePreference
+  showBrushPreview: boolean
+  showBrushSizeCrosshair: boolean
+  screenDpi: number
+  printResolution: number
+  rulerUnits: RulerUnitPreference
+}
+
 interface StampOptions {
   includeBrushOpacity?: boolean
   enforceTransparencyLock?: boolean
@@ -132,6 +171,9 @@ type ShapeToolRuntimeOptions = {
   sides: number
   innerRadiusRatio: number
   vertexRoundness: number
+  polygonStarMode: boolean
+  smoothCorners: boolean
+  smoothIndent: boolean
   rotation: number
   cornerRadiusTL?: number
   cornerRadiusTR?: number
@@ -144,6 +186,7 @@ type FrameToolRuntimeOptions = {
 }
 
 type EyedropperSampleSize = "point" | "3x3" | "5x5"
+type DirectShapeHandleId = "nw" | "ne" | "se" | "sw" | "center" | `radius-${RoundedRectCorner}`
 
 declare global {
   interface Window {
@@ -170,6 +213,9 @@ function getShapeRuntimeOptions(): ShapeToolRuntimeOptions {
     sides: Math.max(3, Math.min(64, window.__psShapeOptions?.sides ?? 6)),
     innerRadiusRatio: Math.max(0.05, Math.min(0.95, window.__psShapeOptions?.innerRadiusRatio ?? 0.45)),
     vertexRoundness: Math.max(0, Math.min(1, window.__psShapeOptions?.vertexRoundness ?? 0)),
+    polygonStarMode: window.__psShapeOptions?.polygonStarMode === true,
+    smoothCorners: window.__psShapeOptions?.smoothCorners === true,
+    smoothIndent: window.__psShapeOptions?.smoothIndent === true,
     rotation: window.__psShapeOptions?.rotation ?? 0,
     cornerRadiusTL: window.__psShapeOptions?.cornerRadiusTL,
     cornerRadiusTR: window.__psShapeOptions?.cornerRadiusTR,
@@ -209,6 +255,26 @@ function getEyedropperSampleSize(): EyedropperSampleSize {
   return window.__psEyedropperSampleSize ?? "point"
 }
 
+function readCanvasRuntimePreferences(): CanvasRuntimePreferences {
+  const prefs = loadPreferencesFromStorage()
+  return canvasRuntimePreferencesFrom(prefs)
+}
+
+function defaultCanvasRuntimePreferences(): CanvasRuntimePreferences {
+  return canvasRuntimePreferencesFrom(DEFAULT_PREFERENCES)
+}
+
+function canvasRuntimePreferencesFrom(prefs: ReturnType<typeof loadPreferencesFromStorage>): CanvasRuntimePreferences {
+  return {
+    cursorStyle: prefs.toolBehavior.cursorStyle,
+    showBrushPreview: prefs.toolBehavior.showBrushPreview,
+    showBrushSizeCrosshair: prefs.toolBehavior.showBrushSizeCrosshair,
+    screenDpi: prefs.rulerGrid.screenDpi,
+    printResolution: prefs.rulerGrid.printResolution,
+    rulerUnits: prefs.rulerGrid.rulerUnits,
+  }
+}
+
 function layerBlocksAllEdits(layer: Layer | null | undefined) {
   return !layer || layer.locked || layer.lockAll
 }
@@ -244,36 +310,39 @@ export function CanvasView() {
     toggleQuickMask,
     filterPreviews,
     history,
+    activeSmartFilterMaskTarget,
   } = ed
 
   const compositeRef = React.useRef<HTMLCanvasElement>(null)
   const overlayRef = React.useRef<HTMLCanvasElement>(null)
   const containerRef = React.useRef<HTMLDivElement>(null)
   const cursorRef = React.useRef<HTMLDivElement>(null)
+  const cursorCanvasRef = React.useRef<HTMLCanvasElement>(null)
   const stageRef = React.useRef<HTMLDivElement>(null)
   const panRef = React.useRef({ x: 0, y: 0 })
   const [viewZoom, setViewZoom] = React.useState(activeDoc?.zoom ?? 1)
+  const [blurGalleryOverlay, setBlurGalleryOverlay] = React.useState<{
+    filterId: BlurGalleryFilterId
+    params: BlurGalleryParams
+    docId?: string
+  } | null>(null)
+  const blurGalleryDragRef = React.useRef<BlurGalleryDrag | null>(null)
   const layoutZoomRef = React.useRef(activeDoc?.zoom ?? 1)
   const visualZoomRef = React.useRef(activeDoc?.zoom ?? 1)
   const pendingZoomRef = React.useRef<number | null>(null)
   const zoomFrameRef = React.useRef<number | null>(null)
   const zoomCommitTimerRef = React.useRef<number | null>(null)
 
-  /* ---- cursor style preference ---- */
-  const [, setCursorPref] = React.useState<"standard" | "precise" | "brush-size">("brush-size")
+  /* ---- canvas runtime preferences ---- */
+  const [canvasPrefs, setCanvasPrefs] = React.useState<CanvasRuntimePreferences>(() => defaultCanvasRuntimePreferences())
+  const [canvasPrefsReady, setCanvasPrefsReady] = React.useState(false)
+  const [customCursorReady, setCustomCursorReady] = React.useState(false)
   React.useEffect(() => {
     const read = () => {
       try {
-        const raw = localStorage.getItem("ps-preferences")
-        if (raw) {
-          const p = JSON.parse(raw)
-          if (p?.cursorStyle === "standard" || p?.cursorStyle === "precise" || p?.cursorStyle === "brush-size") {
-            setCursorPref(p.cursorStyle)
-            return
-          }
-        }
+        setCanvasPrefs(readCanvasRuntimePreferences())
+        setCanvasPrefsReady(true)
       } catch {}
-      setCursorPref("brush-size")
     }
     read()
     window.addEventListener("ps-preferences-changed", read)
@@ -282,6 +351,10 @@ export function CanvasView() {
       window.removeEventListener("ps-preferences-changed", read)
       window.removeEventListener("storage", read)
     }
+  }, [])
+  React.useEffect(() => {
+    const frame = window.requestAnimationFrame(() => setCustomCursorReady(true))
+    return () => window.cancelAnimationFrame(frame)
   }, [])
 
   const cloneSourceRef = React.useRef<{ sourceX: number; sourceY: number; destX?: number; destY?: number; layerId: string } | null>(null)
@@ -326,13 +399,8 @@ export function CanvasView() {
       const imageRendering = zoom >= 4 ? "pixelated" : "auto"
       if (compositeRef.current) compositeRef.current.style.imageRendering = imageRendering
       if (overlayRef.current) overlayRef.current.style.imageRendering = imageRendering
-      const cursor = cursorRef.current?.firstElementChild as HTMLElement | null
-      if (cursor) {
-        cursor.style.width = `${brush.size * zoom}px`
-        cursor.style.height = `${brush.size * zoom}px`
-      }
     },
-    [activeDoc, applyStageTransform, brush.size],
+    [activeDoc, applyStageTransform],
   )
 
   const applyViewZoom = React.useCallback(
@@ -397,6 +465,18 @@ export function CanvasView() {
     })
   }, [applyViewZoom])
 
+  React.useEffect(() => {
+    return addPhotoshopEventListener("ps-request-print-size-view", () => {
+      if (!activeDoc) return
+      try {
+        applyViewZoom(calculatePrintSizeZoom({
+          screenDpi: canvasPrefs.screenDpi,
+          documentDpi: activeDoc.dpi ?? canvasPrefs.printResolution,
+        }))
+      } catch {}
+    })
+  }, [activeDoc, applyViewZoom, canvasPrefs.printResolution, canvasPrefs.screenDpi])
+
   const schedulePaintCommit = React.useCallback(
     (label: string, changedLayerIds?: Parameters<typeof commit>[1]) => {
       // commit() now internally defers the expensive snapshot for brush-tool
@@ -420,7 +500,12 @@ export function CanvasView() {
   const progressiveFrameRef = React.useRef<number | null>(null)
   const progressiveFullPassRef = React.useRef(false)
 
-  const compose = React.useCallback((force = false, change?: { layerIds: "all" | string[]; reasons: string[] }) => {
+  const compose = React.useCallback((force = false, change?: {
+    layerIds: "all" | string[]
+    reasons: string[]
+    dirtyByLayer?: Record<string, DirtyRect[]>
+    fullFrame?: boolean
+  }) => {
     const cv = compositeRef.current
     if (!cv || !activeDoc) return
     if (cv.width !== activeDoc.width) cv.width = activeDoc.width
@@ -466,6 +551,64 @@ export function CanvasView() {
 
     const ctx = cv.getContext("2d")!
 
+    const canUseLayerPartial =
+      force &&
+      change &&
+      !change.fullFrame &&
+      change.dirtyByLayer &&
+      Object.keys(change.dirtyByLayer).length > 0 &&
+      cache.canvas &&
+      activeDoc.colorMode === "RGB" &&
+      !activeDoc.quickMask &&
+      Object.keys(filterPreviews).length === 0 &&
+      !activeDoc.layers.some((layer) => layer.kind === "adjustment")
+
+    if (canUseLayerPartial) {
+      const dirtyPlan = planLayerDirtyRects({
+        bounds: { width: cv.width, height: cv.height },
+        dirtyByLayer: change.dirtyByLayer!,
+      })
+      if (dirtyPlan.strategy === "layer-isolated" && !isEmptyDirtyRect(dirtyPlan.compositeRect)) {
+        const rect = dirtyPlan.compositeRect
+        ctx.save()
+        ctx.beginPath()
+        ctx.rect(rect.x, rect.y, rect.w, rect.h)
+        ctx.clip()
+        ctx.clearRect(rect.x, rect.y, rect.w, rect.h)
+        let prefixFp = ""
+        for (const layer of activeDoc.layers) {
+          if (!layer.visible) continue
+          if (layer.kind === "group") continue
+          if (typeof layer.canvas.getContext !== "function") continue
+          let clipMask: HTMLCanvasElement | null = null
+          if (layer.clipped) {
+            const idx = activeDoc.layers.indexOf(layer)
+            for (let j = idx - 1; j >= 0; j--) {
+              if (!activeDoc.layers[j].clipped) {
+                clipMask = activeDoc.layers[j].canvas
+                break
+              }
+            }
+          }
+          drawLayer(ctx, layer, clipMask, undefined)
+          const canvasId = _canvasIdMap.get(layer.canvas) ?? _assignCanvasId(layer.canvas)
+          const maskId = layer.mask ? _canvasIdMap.get(layer.mask) ?? _assignCanvasId(layer.mask) : ""
+          const clipId = clipMask ? _canvasIdMap.get(clipMask) ?? _assignCanvasId(clipMask) : ""
+          prefixFp +=
+            `${layer.id}:${layer.kind ?? "raster"}:${canvasId}:${maskId}:${clipId}:` +
+            `${layer.maskEnabled === false ? 0 : 1}:${layer.opacity}:${layer.fillOpacity ?? 1}:` +
+            `${layer.blendMode}:${layer.clipped ? 1 : 0}:${layer.style ? "S" : ""}|`
+        }
+        void prefixFp
+        ctx.restore()
+        cache.canvas!.getContext("2d")!.drawImage(cv, rect.x, rect.y, rect.w, rect.h, rect.x, rect.y, rect.w, rect.h)
+        cache.drawnFingerprint = fp
+        cache.width = cv.width
+        cache.height = cv.height
+        return
+      }
+    }
+
     const progressivePlan = planProgressiveRender({
       width: cv.width,
       height: cv.height,
@@ -489,6 +632,46 @@ export function CanvasView() {
         progressiveFullPassRef.current = false
       })
       return
+    }
+
+    const webglPlan = planWebGLCompositor({
+      width: cv.width,
+      height: cv.height,
+      layerCount: activeDoc.layers.length,
+      preferWebGL: true,
+      webglAvailable: (() => {
+        try {
+          if (typeof document === "undefined") return false
+          const probe = document.createElement("canvas")
+          return !!(probe.getContext("webgl2") || probe.getContext("webgl"))
+        } catch {
+          return false
+        }
+      })(),
+    })
+    if (
+      webglPlan.path !== "canvas-2d" &&
+      activeDoc.colorMode === "RGB" &&
+      !activeDoc.quickMask &&
+      Object.keys(filterPreviews).length === 0
+    ) {
+      const glCanvas = document.createElement("canvas")
+      glCanvas.width = cv.width
+      glCanvas.height = cv.height
+      const result = compositeDocumentWithWebGL(glCanvas, activeDoc.layers)
+      if (result.completed) {
+        ctx.clearRect(0, 0, cv.width, cv.height)
+        ctx.drawImage(glCanvas, 0, 0)
+        const cachePlan = planCompositeCache({ width: cv.width, height: cv.height, forcedRender: force })
+        if (cachePlan.storeCache) {
+          const cached = makeCanvas(cv.width, cv.height)
+          cached.getContext("2d")!.drawImage(cv, 0, 0)
+          compositeCacheRef.current = { fingerprint: fp, drawnFingerprint: fp, width: cv.width, height: cv.height, canvas: cached }
+        } else {
+          compositeCacheRef.current = { fingerprint: "", drawnFingerprint: fp, width: cv.width, height: cv.height, canvas: null }
+        }
+        return
+      }
     }
 
     ctx.clearRect(0, 0, cv.width, cv.height)
@@ -696,37 +879,10 @@ export function CanvasView() {
 
   function snapMagneticPoint(pt: { x: number; y: number }) {
     if (!activeLayer || typeof activeLayer.canvas.getContext !== "function") return pt
-    const radius = Math.max(6, Math.min(32, Math.round(selectionOptions.tolerance / 3)))
-    const ctx = activeLayer.canvas.getContext("2d")!
-    const w = activeLayer.canvas.width
-    const h = activeLayer.canvas.height
-    const sx = Math.max(1, Math.floor(pt.x - radius))
-    const sy = Math.max(1, Math.floor(pt.y - radius))
-    const sw = Math.min(w - sx - 1, radius * 2 + 1)
-    const sh = Math.min(h - sy - 1, radius * 2 + 1)
-    if (sw <= 2 || sh <= 2) return pt
-    const img = ctx.getImageData(sx - 1, sy - 1, sw + 2, sh + 2)
-    const lumAt = (x: number, y: number) => {
-      const i = (y * img.width + x) * 4
-      return 0.299 * img.data[i] + 0.587 * img.data[i + 1] + 0.114 * img.data[i + 2]
-    }
-    let best = { x: pt.x, y: pt.y, score: -1 }
-    for (let y = 1; y < img.height - 1; y++) {
-      for (let x = 1; x < img.width - 1; x++) {
-        const gx =
-          -lumAt(x - 1, y - 1) - 2 * lumAt(x - 1, y) - lumAt(x - 1, y + 1) +
-          lumAt(x + 1, y - 1) + 2 * lumAt(x + 1, y) + lumAt(x + 1, y + 1)
-        const gy =
-          -lumAt(x - 1, y - 1) - 2 * lumAt(x, y - 1) - lumAt(x + 1, y - 1) +
-          lumAt(x - 1, y + 1) + 2 * lumAt(x, y + 1) + lumAt(x + 1, y + 1)
-        const docX = sx + x - 1
-        const docY = sy + y - 1
-        const distancePenalty = Math.hypot(docX - pt.x, docY - pt.y) * 7
-        const score = Math.hypot(gx, gy) - distancePenalty
-        if (score > best.score) best = { x: docX, y: docY, score }
-      }
-    }
-    return { x: best.x, y: best.y }
+    return magneticLassoSnap(activeLayer.canvas, pt.x, pt.y, {
+      searchWidth: Math.max(4, Math.min(64, (selectionOptions.magneticWidth ?? Math.round(selectionOptions.tolerance / 3)) || 12)),
+      contrastThreshold: Math.max(1, Math.min(512, selectionOptions.magneticContrast ?? selectionOptions.tolerance ?? 24)),
+    })
   }
 
   function applyRedEyeCorrection(pt: { x: number; y: number }) {
@@ -774,10 +930,24 @@ export function CanvasView() {
 
   /* ---- brush stroke (raster-painting tools) ---- */
 
-  function getActiveCtx(): { ctx: CanvasRenderingContext2D; canvas: HTMLCanvasElement } | null {
+  function activeSmartFilterMaskCanvas(): HTMLCanvasElement | null {
+    if (!activeDoc || !activeSmartFilterMaskTarget) return null
+    if (activeLayer?.id !== activeSmartFilterMaskTarget.layerId) return null
+    if (!layerAllowsDrawing(activeLayer)) return null
+    const filter = activeLayer.smartFilters?.find((candidate) => candidate.id === activeSmartFilterMaskTarget.filterId)
+    if (!filter || filter.maskEnabled === false || !filter.mask) return null
+    return filter.mask
+  }
+
+  function getActiveCtx(): { ctx: CanvasRenderingContext2D; canvas: HTMLCanvasElement; targetKind?: "smart-filter-mask" } | null {
     if (activeDoc?.quickMask && activeDoc.quickMaskCanvas) {
       const cv = activeDoc.quickMaskCanvas
       return { ctx: cv.getContext("2d")!, canvas: cv }
+    }
+    const smartFilterMask = activeSmartFilterMaskCanvas()
+    if (smartFilterMask) {
+      const ctx = smartFilterMask.getContext("2d")
+      return ctx ? { ctx, canvas: smartFilterMask, targetKind: "smart-filter-mask" } : null
     }
     if (!layerAllowsDrawing(activeLayer)) return null
     if (activeLayer.kind === "adjustment") {
@@ -791,7 +961,7 @@ export function CanvasView() {
 
   function prepareTransparencyLockMask() {
     transparencyLockMaskRef.current = null
-    if (!activeDoc || activeDoc.quickMask || !activeLayer?.lockTransparency) return
+    if (!activeDoc || activeDoc.quickMask || activeSmartFilterMaskCanvas() || !activeLayer?.lockTransparency) return
     if (typeof activeLayer.canvas.getContext !== "function") return
     const mask = makeCanvas(activeLayer.canvas.width, activeLayer.canvas.height)
     mask.getContext("2d")!.drawImage(activeLayer.canvas, 0, 0)
@@ -2426,6 +2596,208 @@ export function CanvasView() {
     void b
   }
 
+  React.useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        filterId?: string
+        params?: BlurGalleryParams
+        docId?: string
+      } | null>).detail
+      if (!detail?.filterId || !isBlurGalleryFilterId(detail.filterId) || !detail.params) {
+        blurGalleryDragRef.current = null
+        setBlurGalleryOverlay(null)
+        const ov = overlayRef.current
+        if (ov) ov.getContext("2d")?.clearRect(0, 0, ov.width, ov.height)
+        return
+      }
+      setBlurGalleryOverlay({
+        filterId: detail.filterId,
+        params: normalizeBlurGalleryParams(detail.filterId, detail.params),
+        docId: detail.docId,
+      })
+    }
+    window.addEventListener("ps-blur-gallery-overlay-state", handler)
+    return () => window.removeEventListener("ps-blur-gallery-overlay-state", handler)
+  }, [])
+
+  React.useEffect(() => {
+    drawBlurGalleryOverlay(blurGalleryOverlay)
+  }, [blurGalleryOverlay, activeDoc?.id, activeDoc?.width, activeDoc?.height])
+
+  function emitBlurGalleryParams(filterId: BlurGalleryFilterId, params: BlurGalleryParams) {
+    window.dispatchEvent(new CustomEvent("ps-blur-gallery-overlay-change", { detail: { filterId, params } }))
+  }
+
+  function setBlurGalleryParams(filterId: BlurGalleryFilterId, params: BlurGalleryParams) {
+    const next = {
+      filterId,
+      params: normalizeBlurGalleryParams(filterId, params),
+      docId: activeDoc?.id,
+    }
+    setBlurGalleryOverlay(next)
+    drawBlurGalleryOverlay(next)
+    emitBlurGalleryParams(filterId, next.params)
+  }
+
+  function handleBlurGalleryPointerDown(pt: { x: number; y: number }) {
+    if (!activeDoc || !blurGalleryOverlay) return false
+    const result = beginBlurGalleryInteraction(
+      blurGalleryOverlay.filterId,
+      blurGalleryOverlay.params,
+      pt,
+      activeDoc.width,
+      activeDoc.height,
+      Math.max(8, 10 / Math.max(0.25, visualZoomRef.current)),
+    )
+    if (!result.drag) return false
+    blurGalleryDragRef.current = result.drag
+    setBlurGalleryParams(blurGalleryOverlay.filterId, result.params)
+    return true
+  }
+
+  function handleBlurGalleryPointerMove(pt: { x: number; y: number }) {
+    const drag = blurGalleryDragRef.current
+    if (!activeDoc || !blurGalleryOverlay || !drag) return false
+    const next = updateBlurGalleryInteraction(
+      blurGalleryOverlay.filterId,
+      blurGalleryOverlay.params,
+      drag,
+      pt,
+      activeDoc.width,
+      activeDoc.height,
+    )
+    setBlurGalleryParams(blurGalleryOverlay.filterId, next)
+    return true
+  }
+
+  function handleBlurGalleryPointerUp() {
+    if (!blurGalleryDragRef.current) return false
+    blurGalleryDragRef.current = null
+    drawBlurGalleryOverlay(blurGalleryOverlay)
+    return true
+  }
+
+  function drawBlurGalleryOverlay(state = blurGalleryOverlay) {
+    const ov = overlayRef.current
+    if (!ov || !activeDoc) return
+    const ctx = ov.getContext("2d")
+    if (!ctx) return
+    ctx.clearRect(0, 0, ov.width, ov.height)
+    if (!state || state.docId !== activeDoc.id) return
+
+    ctx.save()
+    ctx.lineWidth = Math.max(1, 1.5 / Math.max(0.5, visualZoomRef.current))
+    ctx.strokeStyle = "#38bdf8"
+    ctx.fillStyle = "#38bdf8"
+    ctx.shadowColor = "rgba(0,0,0,0.45)"
+    ctx.shadowBlur = 2 / Math.max(0.5, visualZoomRef.current)
+
+    if (state.filterId === "field-blur") {
+      const pins = parseFieldBlurPins(String(state.params.pins ?? ""))
+      for (const pin of pins) {
+        const center = percentToCanvasPoint(pin, activeDoc.width, activeDoc.height)
+        const handle = { x: center.x + pin.blur, y: center.y }
+        ctx.setLineDash([4, 4])
+        ctx.beginPath()
+        ctx.arc(center.x, center.y, Math.max(3, pin.blur), 0, Math.PI * 2)
+        ctx.stroke()
+        ctx.setLineDash([])
+        ctx.beginPath()
+        ctx.moveTo(center.x, center.y)
+        ctx.lineTo(handle.x, handle.y)
+        ctx.stroke()
+        drawRoundHandle(ctx, center.x, center.y, 5)
+        drawRoundHandle(ctx, handle.x, handle.y, 4, "#ffffff")
+      }
+    } else if (state.filterId === "iris-blur") {
+      const center = percentToCanvasPoint({ x: numOverlay(state.params.centerX, 50), y: numOverlay(state.params.centerY, 50) }, activeDoc.width, activeDoc.height)
+      const rx = activeDoc.width * numOverlay(state.params.radius, 42) / 100 * 0.5
+      const ry = activeDoc.height * numOverlay(state.params.radius, 42) / 100 * 0.5
+      const feather = 1 + numOverlay(state.params.feather, 30) / 100
+      ctx.setLineDash([])
+      ctx.beginPath()
+      ctx.ellipse(center.x, center.y, Math.max(1, rx), Math.max(1, ry), 0, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.setLineDash([5, 4])
+      ctx.beginPath()
+      ctx.ellipse(center.x, center.y, Math.max(1, rx * feather), Math.max(1, ry * feather), 0, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.setLineDash([])
+      drawRoundHandle(ctx, center.x, center.y, 5)
+      drawRoundHandle(ctx, center.x + rx, center.y, 4, "#ffffff")
+      drawRoundHandle(ctx, center.x + rx * feather, center.y, 4, "#ffffff")
+    } else if (state.filterId === "tilt-shift") {
+      const center = percentToCanvasPoint({ x: numOverlay(state.params.centerX, 50), y: numOverlay(state.params.centerY, 50) }, activeDoc.width, activeDoc.height)
+      const angle = numOverlay(state.params.angle, 0) * Math.PI / 180
+      const tangent = { x: Math.cos(angle), y: Math.sin(angle) }
+      const normal = { x: -Math.sin(angle), y: Math.cos(angle) }
+      const length = Math.hypot(activeDoc.width, activeDoc.height)
+      const radius = Math.min(activeDoc.width, activeDoc.height) * numOverlay(state.params.radius, 30) / 100 * 0.5
+      const feather = radius + Math.min(activeDoc.width, activeDoc.height) * numOverlay(state.params.feather, 30) / 100
+      drawTiltLine(ctx, center, tangent, normal, radius, length, false)
+      drawTiltLine(ctx, center, tangent, normal, -radius, length, false)
+      drawTiltLine(ctx, center, tangent, normal, feather, length, true)
+      drawTiltLine(ctx, center, tangent, normal, -feather, length, true)
+      drawRoundHandle(ctx, center.x, center.y, 5)
+    } else if (state.filterId === "path-blur") {
+      const points = parsePathBlurPoints(String(state.params.path ?? ""))
+      const canvasPoints = points.map((point) => percentToCanvasPoint(point, activeDoc.width, activeDoc.height))
+      if (canvasPoints.length > 0) {
+        ctx.beginPath()
+        ctx.moveTo(canvasPoints[0].x, canvasPoints[0].y)
+        for (let i = 1; i < canvasPoints.length; i++) ctx.lineTo(canvasPoints[i].x, canvasPoints[i].y)
+        ctx.stroke()
+        for (const point of canvasPoints) drawRoundHandle(ctx, point.x, point.y, 5)
+      }
+    } else if (state.filterId === "spin-blur") {
+      const center = percentToCanvasPoint({ x: numOverlay(state.params.centerX, 50), y: numOverlay(state.params.centerY, 50) }, activeDoc.width, activeDoc.height)
+      const radius = Math.min(activeDoc.width, activeDoc.height) * numOverlay(state.params.radius, 55) / 100 * 0.5
+      ctx.beginPath()
+      ctx.arc(center.x, center.y, Math.max(1, radius), 0, Math.PI * 2)
+      ctx.stroke()
+      drawRoundHandle(ctx, center.x, center.y, 5)
+      drawRoundHandle(ctx, center.x + radius, center.y, 4, "#ffffff")
+    }
+
+    ctx.restore()
+  }
+
+  function drawRoundHandle(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, fill = "#38bdf8") {
+    ctx.save()
+    ctx.fillStyle = fill
+    ctx.strokeStyle = "#0f172a"
+    ctx.lineWidth = Math.max(1, 1 / Math.max(0.5, visualZoomRef.current))
+    ctx.beginPath()
+    ctx.arc(x, y, radius / Math.max(0.5, visualZoomRef.current), 0, Math.PI * 2)
+    ctx.fill()
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  function drawTiltLine(
+    ctx: CanvasRenderingContext2D,
+    center: { x: number; y: number },
+    tangent: { x: number; y: number },
+    normal: { x: number; y: number },
+    offset: number,
+    length: number,
+    dashed: boolean,
+  ) {
+    ctx.setLineDash(dashed ? [5, 5] : [])
+    const x = center.x + normal.x * offset
+    const y = center.y + normal.y * offset
+    ctx.beginPath()
+    ctx.moveTo(x - tangent.x * length, y - tangent.y * length)
+    ctx.lineTo(x + tangent.x * length, y + tangent.y * length)
+    ctx.stroke()
+    ctx.setLineDash([])
+  }
+
+  function numOverlay(value: BlurGalleryParams[string], fallback: number) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : fallback
+  }
+
   /* ---- pointer state ---- */
 
   const drawingRef = React.useRef<{
@@ -2470,7 +2842,7 @@ export function CanvasView() {
     directLayerId?: string
     directPointIndex?: number
     directPathHandle?: "in" | "out"
-    directShapeHandle?: "nw" | "ne" | "se" | "sw" | "center"
+    directShapeHandle?: DirectShapeHandleId
     sliceDraftId?: string
   }>({ type: null })
   const brushResizeRef = React.useRef<{ startClientX: number; startSize: number } | null>(null)
@@ -2570,6 +2942,11 @@ export function CanvasView() {
     }
 
     if (e.button === 2) return
+
+    if (handleBlurGalleryPointerDown(pt)) {
+      e.preventDefault()
+      return
+    }
 
     // Pan with hand tool / middle mouse / spacebar overlay (tool is hand)
     if (tool === "hand" || e.button === 1) {
@@ -2968,7 +3345,7 @@ export function CanvasView() {
       return
     }
 
-    // Magic wand / quick selection = single-click local region selection.
+    // Magic wand / quick selection = single-click region selection.
     if (tool === "magic-wand" || tool === "quick-selection") {
       if (!activeLayer) return
       if (typeof activeLayer.canvas.getContext !== "function") return
@@ -2977,7 +3354,23 @@ export function CanvasView() {
       const ctx = srcCanvas.getContext("2d")!
       const src = ctx.getImageData(0, 0, activeDoc.width, activeDoc.height)
       const { x, y } = pt
-      const m = floodFillMask(src, x, y, selectionOptions.tolerance, selectionOptions.contiguous)
+      const m = tool === "quick-selection"
+        ? (() => {
+            const result = buildEdgeAwareQuickSelectionMaskData(src, {
+              seed: { x, y },
+              tolerance: selectionOptions.tolerance,
+              sampleSize: selectionOptions.sampleSize ?? "point",
+              contiguous: selectionOptions.contiguous,
+              adaptive: true,
+              includeDiagonals: true,
+            })
+            const mask = new ImageData(activeDoc.width, activeDoc.height)
+            for (let i = 0; i < result.maskData.length; i++) {
+              mask.data[i * 4 + 3] = result.maskData[i]
+            }
+            return mask
+          })()
+        : floodFillMask(src, x, y, selectionOptions.tolerance, selectionOptions.contiguous)
       // mask -> bounds
       let minX = activeDoc.width
       let minY = activeDoc.height
@@ -3248,6 +3641,7 @@ export function CanvasView() {
     if (cur) {
       cur.style.left = `${e.clientX}px`
       cur.style.top = `${e.clientY}px`
+      if (cur.firstElementChild) cur.style.opacity = "1"
     }
 
     // status bar
@@ -3259,6 +3653,11 @@ export function CanvasView() {
     const coalescer = mouseMoveCoalescerRef.current
     if (coalescer) coalescer.push(mouseDetail)
     else window.dispatchEvent(new CustomEvent("ps-mousemove", { detail: mouseDetail }))
+
+    if (handleBlurGalleryPointerMove(pt)) {
+      e.preventDefault()
+      return
+    }
 
     const drag = drawingRef.current
     if (drag.type === null) {
@@ -3443,7 +3842,7 @@ export function CanvasView() {
     if (drag.type === "path-direct" && drag.directLayerId && activeDoc) {
       const layer = activeDoc.layers.find((candidate) => candidate.id === drag.directLayerId)
       if (!layerAllowsDrawing(layer)) return
-      updateDirectSelectionDrag(layer, pt, drag)
+      updateDirectSelectionDrag(layer, pt, drag, !e.altKey)
       requestRender()
       drawPathSelectionPreview(layer)
       drag.last = pt
@@ -3526,6 +3925,11 @@ export function CanvasView() {
     const drag = drawingRef.current
     const pt = getCanvasPoint(e.clientX, e.clientY)
 
+    if (handleBlurGalleryPointerUp()) {
+      e.preventDefault()
+      return
+    }
+
     if (tool === "slice" && drag.type === null && activeDoc) {
       const w = Math.max(1, Math.round(activeDoc.width * 0.12))
       const h = Math.max(1, Math.round(activeDoc.height * 0.09))
@@ -3557,12 +3961,13 @@ export function CanvasView() {
     }
 
     if (drag.type === "stroke") {
-      const label = labelForTool(tool)
+      const smartFilterMaskLayerId = activeSmartFilterMaskCanvas() ? activeSmartFilterMaskTarget?.layerId : null
+      const label = smartFilterMaskLayerId ? "Smart Filter Mask" : labelForTool(tool)
       const changedLayerIds =
         activeLayer && drag.dirty && !activeDoc?.quickMask
-          ? { ids: [activeLayer.id], bounds: { [activeLayer.id]: drag.dirty } }
+          ? { ids: [smartFilterMaskLayerId ?? activeLayer.id], bounds: { [smartFilterMaskLayerId ?? activeLayer.id]: drag.dirty } }
           : activeLayer
-            ? [activeLayer.id]
+            ? [smartFilterMaskLayerId ?? activeLayer.id]
             : undefined
       finishBufferedStroke()
       drawingRef.current = { type: null }
@@ -3923,7 +4328,7 @@ export function CanvasView() {
               : tool === "shape-rounded-rect"
                 ? "Rounded Rectangle"
                 : tool === "shape-polygon"
-                  ? "Polygon"
+                  ? shape.type === "star" ? "Star" : "Polygon"
                   : tool === "shape-star"
                     ? "Star"
                     : tool === "shape-triangle"
@@ -4468,10 +4873,17 @@ export function CanvasView() {
         return { pointIndex: handleHit.index, pathHandle: handleHit.handle, shapeHandle: undefined }
       }
     }
+    if (layer.shape?.type === "rect") {
+      for (const handle of getRoundedRectCornerRadiusHandles(layer.shape)) {
+        if (Math.hypot(handle.x - pt.x, handle.y - pt.y) <= 14) {
+          return { pointIndex: undefined, pathHandle: undefined, shapeHandle: `radius-${handle.corner}` as DirectShapeHandleId }
+        }
+      }
+    }
     const bounds = vectorLayerBounds(layer)
     if (!bounds) return null
     const handles = shapeHandles(bounds)
-    let best: { shapeHandle: NonNullable<React.MutableRefObject<typeof drawingRef.current>["current"]["directShapeHandle"]>; distance: number } | null = null
+    let best: { shapeHandle: DirectShapeHandleId; distance: number } | null = null
     for (const handle of handles) {
       const distance = Math.hypot(handle.x - pt.x, handle.y - pt.y)
       if (distance <= 16 && (!best || distance < best.distance)) best = { shapeHandle: handle.id, distance }
@@ -4481,10 +4893,10 @@ export function CanvasView() {
       : { pointIndex: undefined, pathHandle: undefined, shapeHandle: "center" as const }
   }
 
-  function updateDirectSelectionDrag(layer: Layer, pt: { x: number; y: number }, drag: typeof drawingRef.current) {
+  function updateDirectSelectionDrag(layer: Layer, pt: { x: number; y: number }, drag: typeof drawingRef.current, mirrorPathHandles = true) {
     if (layer.path && drag.directPointIndex !== undefined && drag.directPointIndex >= 0) {
       if (drag.directPathHandle) {
-        layer.path = movePathHandle(layer.path, drag.directPointIndex, drag.directPathHandle, pt)
+        layer.path = movePathHandle(layer.path, drag.directPointIndex, drag.directPathHandle, pt, { mirror: mirrorPathHandles })
         rerenderVectorLayer(layer)
         return
       }
@@ -4508,12 +4920,18 @@ export function CanvasView() {
     const dx = pt.x - drag.last.x
     const dy = pt.y - drag.last.y
     if (layer.shape) {
-      layer.shape = resizeShapeRect(layer.shape, drag.directShapeHandle, pt, dx, dy)
+      if (drag.directShapeHandle.startsWith("radius-") && layer.shape.type === "rect") {
+        layer.shape = updateRoundedRectCornerRadius(layer.shape, drag.directShapeHandle.slice("radius-".length) as RoundedRectCorner, pt)
+      } else {
+        layer.shape = resizeShapeRect(layer.shape, drag.directShapeHandle as Exclude<DirectShapeHandleId, `radius-${RoundedRectCorner}`>, pt, dx, dy)
+      }
     } else if (layer.frame) {
-      const next = resizePlainRect(layer.frame, drag.directShapeHandle, pt, dx, dy)
+      if (drag.directShapeHandle.startsWith("radius-")) return
+      const next = resizePlainRect(layer.frame, drag.directShapeHandle as Exclude<DirectShapeHandleId, `radius-${RoundedRectCorner}`>, pt, dx, dy)
       layer.frame = { ...layer.frame, ...next }
     } else if (layer.artboard) {
-      const next = resizePlainRect(layer.artboard, drag.directShapeHandle, pt, dx, dy)
+      if (drag.directShapeHandle.startsWith("radius-")) return
+      const next = resizePlainRect(layer.artboard, drag.directShapeHandle as Exclude<DirectShapeHandleId, `radius-${RoundedRectCorner}`>, pt, dx, dy)
       layer.artboard = { ...layer.artboard, ...next }
     }
     rerenderVectorLayer(layer)
@@ -4547,6 +4965,25 @@ export function CanvasView() {
         ctx.strokeStyle = "#38bdf8"
         ctx.fillRect(handle.x - 3, handle.y - 3, 6, 6)
         ctx.strokeRect(handle.x - 3, handle.y - 3, 6, 6)
+      }
+      if (layer.shape?.type === "rect") {
+        for (const handle of getRoundedRectCornerRadiusHandles(layer.shape)) {
+          ctx.beginPath()
+          ctx.fillStyle = "#0f172a"
+          ctx.strokeStyle = "#f59e0b"
+          ctx.arc(handle.x, handle.y, 4, 0, Math.PI * 2)
+          ctx.fill()
+          ctx.stroke()
+          const corner =
+            handle.corner === "tl" ? { x: layer.shape.x, y: layer.shape.y } :
+              handle.corner === "tr" ? { x: layer.shape.x + layer.shape.w, y: layer.shape.y } :
+                handle.corner === "br" ? { x: layer.shape.x + layer.shape.w, y: layer.shape.y + layer.shape.h } :
+                  { x: layer.shape.x, y: layer.shape.y + layer.shape.h }
+          ctx.beginPath()
+          ctx.moveTo(corner.x, corner.y)
+          ctx.lineTo(handle.x, handle.y)
+          ctx.stroke()
+        }
       }
       ctx.restore()
     }
@@ -4866,7 +5303,7 @@ export function CanvasView() {
 
   const onPointerEnter = () => {
     const cur = cursorRef.current
-    if (cur) cur.style.opacity = "1"
+    if (cur) cur.style.opacity = cur.firstElementChild ? "1" : "0"
   }
   const onPointerLeave = () => {
     const cur = cursorRef.current
@@ -4884,16 +5321,6 @@ export function CanvasView() {
     // is sufficient.
   }
 
-  if (!activeDoc) {
-    return (
-      <div className="flex-1 bg-[var(--ps-canvas-bg)] flex items-center justify-center text-[var(--ps-text-dim)]">
-        No document open. Use File ▸ New… to start.
-      </div>
-    )
-  }
-
-  const displayW = activeDoc.width * viewZoom
-  const displayH = activeDoc.height * viewZoom
   const showBrushCursor =
     tool === "brush" ||
     tool === "eraser" ||
@@ -4918,7 +5345,62 @@ export function CanvasView() {
     tool === "remove-tool" ||
     tool === "refine-edge-brush"
 
-  const cursorStyle = cursorForTool(tool, showBrushCursor)
+  const standardCssCursor = (() => {
+    const value = cursorForTool(tool, false)
+    return showBrushCursor && value === "default" ? "crosshair" : value
+  })()
+  const customCanvasCursorEnabled = customCursorReady && canvasPrefsReady
+  const canvasCursorState = React.useMemo(
+    () =>
+      resolveCanvasCursorState({
+        standardCssCursor,
+        cursorStyle: customCanvasCursorEnabled
+          ? canvasPrefs.cursorStyle
+          : DEFAULT_PREFERENCES.toolBehavior.cursorStyle,
+        tool,
+        isBrushTool: showBrushCursor,
+        brushSize: brush.size,
+        zoom: viewZoom,
+        showBrushPreview: customCanvasCursorEnabled
+          ? canvasPrefs.showBrushPreview
+          : DEFAULT_PREFERENCES.toolBehavior.showBrushPreview,
+        showBrushSizeCrosshair: customCanvasCursorEnabled
+          ? canvasPrefs.showBrushSizeCrosshair
+          : DEFAULT_PREFERENCES.toolBehavior.showBrushSizeCrosshair,
+      }),
+    [
+      brush.size,
+      canvasPrefs.cursorStyle,
+      canvasPrefs.showBrushPreview,
+      canvasPrefs.showBrushSizeCrosshair,
+      customCanvasCursorEnabled,
+      showBrushCursor,
+      standardCssCursor,
+      tool,
+      viewZoom,
+    ],
+  )
+
+  React.useLayoutEffect(() => {
+    const canvas = cursorCanvasRef.current
+    const cursorEl = cursorRef.current
+    if (!customCanvasCursorEnabled || !canvas || !canvasCursorState.overlay) {
+      if (cursorEl) cursorEl.style.opacity = "0"
+      return
+    }
+    paintCanvasCursorOverlay(canvas, canvasCursorState.overlay, window.devicePixelRatio)
+  }, [canvasCursorState, customCanvasCursorEnabled])
+
+  if (!activeDoc) {
+    return (
+      <div className="flex-1 bg-[var(--ps-canvas-bg)] flex items-center justify-center text-[var(--ps-text-dim)]">
+        No document open. Use File ▸ New… to start.
+      </div>
+    )
+  }
+
+  const displayW = activeDoc.width * viewZoom
+  const displayH = activeDoc.height * viewZoom
 
   return (
     <div
@@ -4929,7 +5411,13 @@ export function CanvasView() {
       role="region"
       aria-label="Image editor canvas"
     >
-      {activeDoc && <Rulers width={activeDoc.width} height={activeDoc.height} zoom={viewZoom} onCreateGuide={(orient, pos) => {
+      {activeDoc && <Rulers
+        width={activeDoc.width}
+        height={activeDoc.height}
+        zoom={viewZoom}
+        unit={activeDoc.rulerUnits ?? canvasPrefs.rulerUnits}
+        documentDpi={activeDoc.dpi ?? canvasPrefs.printResolution}
+        onCreateGuide={(orient, pos) => {
         const id = `g_${Math.random().toString(36).slice(2, 8)}`
         dispatch({ type: "add-guide", guide: { id, orientation: orient, position: Math.round(pos) } })
       }} />}
@@ -4941,7 +5429,7 @@ export function CanvasView() {
         onPointerEnter={onPointerEnter}
         onPointerLeave={onPointerLeave}
         onDoubleClick={onDoubleClick}
-        style={{ cursor: cursorStyle }}
+        style={{ cursor: customCanvasCursorEnabled ? canvasCursorState.cssCursor : standardCssCursor }}
       >
         <div
           ref={stageRef}
@@ -5028,26 +5516,19 @@ export function CanvasView() {
           ) : null}
         </div>
       </div>
-      {/* Brush cursor circle */}
       <div
         ref={cursorRef}
         className="pointer-events-none fixed -translate-x-1/2 -translate-y-1/2 transition-opacity z-50"
         style={{ opacity: 0, willChange: "transform, left, top" }}
       >
-        {showBrushCursor ? (
-          <div
-            className="rounded-full border border-black mix-blend-difference"
-            // brush.size is loaded from localStorage post-hydrate, so the
-            // SSR width may not match the first client render. The cursor
-            // is invisible at hydration time (parent has opacity:0 until
-            // the user actually moves the mouse over the canvas), so
-            // suppressing the warning is harmless.
+        {customCanvasCursorEnabled && canvasCursorState.overlay ? (
+          <canvas
+            ref={cursorCanvasRef}
+            data-testid="custom-canvas-cursor"
+            data-cursor-kind={canvasCursorState.overlay.kind}
+            className="block mix-blend-difference"
+            aria-hidden="true"
             suppressHydrationWarning
-            style={{
-              width: brush.size * viewZoom,
-              height: brush.size * viewZoom,
-              boxShadow: "inset 0 0 0 1px white",
-            }}
           />
         ) : null}
       </div>
@@ -5562,7 +6043,21 @@ function TextEditOverlay({
 
 /* ============================== Rulers ============================== */
 
-function Rulers({ width, height, zoom, onCreateGuide }: { width: number; height: number; zoom: number; onCreateGuide?: (orient: "horizontal" | "vertical", pos: number) => void }) {
+function Rulers({
+  width,
+  height,
+  zoom,
+  unit,
+  documentDpi,
+  onCreateGuide,
+}: {
+  width: number
+  height: number
+  zoom: number
+  unit: RulerUnitPreference
+  documentDpi: number
+  onCreateGuide?: (orient: "horizontal" | "vertical", pos: number) => void
+}) {
   const [dragGuide, setDragGuide] = React.useState<{ orient: "horizontal" | "vertical"; pos: number } | null>(null)
   const dragGuideRef = React.useRef<{ orient: "horizontal" | "vertical"; pos: number } | null>(null)
 
@@ -5609,13 +6104,13 @@ function Rulers({ width, height, zoom, onCreateGuide }: { width: number; height:
         className="absolute top-0 left-[18px] right-0 h-[18px] bg-[var(--ps-panel)] border-b border-[var(--ps-divider)] overflow-hidden z-10 cursor-s-resize"
         onPointerDown={(e) => handleRulerDrag("horizontal", e)}
       >
-        <RulerTicks length={width} zoom={zoom} orientation="horizontal" />
+        <RulerTicks length={width} zoom={zoom} orientation="horizontal" unit={unit} documentDpi={documentDpi} />
       </div>
       <div
         className="absolute top-[18px] left-0 bottom-0 w-[18px] bg-[var(--ps-panel)] border-r border-[var(--ps-divider)] overflow-hidden z-10 cursor-e-resize"
         onPointerDown={(e) => handleRulerDrag("vertical", e)}
       >
-        <RulerTicks length={height} zoom={zoom} orientation="vertical" />
+        <RulerTicks length={height} zoom={zoom} orientation="vertical" unit={unit} documentDpi={documentDpi} />
       </div>
       <div className="absolute top-0 left-0 w-[18px] h-[18px] bg-[var(--ps-panel)] border-r border-b border-[var(--ps-divider)] z-10" />
       {dragGuide ? (
@@ -5650,43 +6145,46 @@ const RulerTicks = React.memo(function RulerTicks({
   length,
   zoom,
   orientation,
+  unit,
+  documentDpi,
 }: {
   length: number
   zoom: number
   orientation: "horizontal" | "vertical"
+  unit: RulerUnitPreference
+  documentDpi: number
 }) {
-  const step = zoom > 2 ? 25 : zoom > 1 ? 50 : 100
+  const tickMarks = buildRulerTickMarks({ lengthPx: length, zoom, unit, documentDpi })
   const ticks: React.ReactNode[] = []
-  for (let i = 0; i <= length; i += step) {
-    const isMajor = i % (step * 2) === 0
-    const pos = i * zoom
+  for (const tick of tickMarks) {
+    const key = `${tick.value}-${tick.major ? "major" : "minor"}`
     if (orientation === "horizontal") {
       ticks.push(
         <div
-          key={i}
+          key={key}
           className="absolute top-0 text-[9px] text-[var(--ps-text-dim)]"
-          style={{ left: `calc(50% + ${pos - (length * zoom) / 2}px)` }}
+          style={{ left: `calc(50% + ${tick.positionPx - (length * zoom) / 2}px)` }}
         >
           <div
             className="bg-[var(--ps-text-dim)]"
-            style={{ width: 1, height: isMajor ? 8 : 4, marginLeft: -0.5 }}
+            style={{ width: 1, height: tick.major ? 8 : 4, marginLeft: -0.5 }}
           />
-          {isMajor ? <span className="ml-1">{i}</span> : null}
+          {tick.major ? <span className="ml-1">{tick.label}</span> : null}
         </div>,
       )
     } else {
       ticks.push(
         <div
-          key={i}
+          key={key}
           className="absolute left-0 text-[9px] text-[var(--ps-text-dim)] flex flex-col items-start"
-          style={{ top: `calc(50% + ${pos - (length * zoom) / 2}px)` }}
+          style={{ top: `calc(50% + ${tick.positionPx - (length * zoom) / 2}px)` }}
         >
           <div
             className="bg-[var(--ps-text-dim)]"
-            style={{ height: 1, width: isMajor ? 8 : 4, marginTop: -0.5 }}
+            style={{ height: 1, width: tick.major ? 8 : 4, marginTop: -0.5 }}
           />
-          {isMajor ? (
-            <span style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}>{i}</span>
+          {tick.major ? (
+            <span style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}>{tick.label}</span>
           ) : null}
         </div>,
       )
@@ -5698,27 +6196,12 @@ const RulerTicks = React.memo(function RulerTicks({
 /* ============================== helpers ============================== */
 
 /* ----------- canvas pool (reuse offscreen canvases) ----------- */
-const _canvasPool: HTMLCanvasElement[] = []
-const MAX_POOL = 24
-
 function acquireCanvas(w: number, h: number): HTMLCanvasElement {
-  for (let i = _canvasPool.length - 1; i >= 0; i--) {
-    const c = _canvasPool[i]
-    if (c.width === w && c.height === h) {
-      _canvasPool.splice(i, 1)
-      const ctx = c.getContext("2d")
-      if (ctx) ctx.clearRect(0, 0, w, h)
-      return c
-    }
-  }
-  const c = document.createElement("canvas")
-  c.width = w
-  c.height = h
-  return c
+  return acquirePooledCanvas(w, h)
 }
 
 function releaseCanvas(c: HTMLCanvasElement) {
-  if (_canvasPool.length < MAX_POOL) _canvasPool.push(c)
+  releasePooledCanvas(c)
 }
 
 /* ----------- smart filter result cache ----------- */
@@ -5733,7 +6216,8 @@ function smartFilterCacheKey(smartFilters: NonNullable<Layer["smartFilters"]>): 
     .filter((sf) => sf.enabled)
     .map((sf) => {
       const maskId = sf.mask ? _canvasIdMap.get(sf.mask) ?? _assignCanvasId(sf.mask) : ""
-      return `${sf.id}:${sf.filterId}:${JSON.stringify(sf.params)}:${sf.opacity ?? 1}:${sf.blendMode ?? "normal"}:${sf.maskEnabled === false ? 0 : 1}:${maskId}`
+      const maskEpoch = sf.mask ? _maskAlphaEpoch : 0
+      return `${sf.id}:${sf.filterId}:${JSON.stringify(sf.params)}:${sf.opacity ?? 1}:${sf.blendMode ?? "normal"}:${sf.maskEnabled === false ? 0 : 1}:${maskId}:${sf.maskDensity ?? 1}:${sf.maskFeather ?? 0}:${maskEpoch}`
     })
     .join("|")
 }
@@ -6037,30 +6521,31 @@ function imageDataToCanvas(data: ImageData) {
   return canvas
 }
 
-function maskAmountAt(mask: ImageData | null, x: number, y: number) {
-  if (!mask || x >= mask.width || y >= mask.height) return 1
-  const i = (y * mask.width + x) * 4
-  const luminance = (mask.data[i] + mask.data[i + 1] + mask.data[i + 2]) / 765
-  return luminance * (mask.data[i + 3] / 255)
-}
-
 interface SmartFilterMaskCacheEntry {
   epoch: number
   width: number
   height: number
+  feather: number
   mask: ImageData
 }
 const _smartFilterMaskCache = new WeakMap<HTMLCanvasElement, SmartFilterMaskCacheEntry>()
-function readSmartFilterMask(canvas: HTMLCanvasElement, width: number, height: number): ImageData | null {
+function readSmartFilterMask(canvas: HTMLCanvasElement, width: number, height: number, feather = 0): ImageData | null {
   const w = Math.min(canvas.width, width)
   const h = Math.min(canvas.height, height)
   if (w <= 0 || h <= 0) return null
   const cached = _smartFilterMaskCache.get(canvas)
-  if (cached && cached.epoch === _maskAlphaEpoch && cached.width === w && cached.height === h) return cached.mask
-  const ctx = canvas.getContext("2d")
-  if (!ctx) return null
-  const mask = ctx.getImageData(0, 0, w, h)
-  _smartFilterMaskCache.set(canvas, { epoch: _maskAlphaEpoch, width: w, height: h, mask })
+  if (
+    cached &&
+    cached.epoch === _maskAlphaEpoch &&
+    cached.width === w &&
+    cached.height === h &&
+    cached.feather === feather
+  ) {
+    return cached.mask
+  }
+  const mask = smartFilterMaskToImageData(canvas, width, height, feather)
+  if (!mask) return null
+  _smartFilterMaskCache.set(canvas, { epoch: _maskAlphaEpoch, width: w, height: h, feather, mask })
   return mask
 }
 
@@ -6075,7 +6560,7 @@ function smartFilterResult(
   if (opacity <= 0) return before
   const blendMode = (smartFilter.blendMode ?? "normal") as BlendMode
   const maskCanvas = smartFilter.maskEnabled === false ? null : smartFilter.mask ?? null
-  const mask = maskCanvas ? readSmartFilterMask(maskCanvas, width, height) : null
+  const mask = maskCanvas ? readSmartFilterMask(maskCanvas, width, height, smartFilter.maskFeather ?? 0) : null
 
   if (!mask && opacity >= 1 && blendMode === "normal") return after
 
@@ -6084,7 +6569,7 @@ function smartFilterResult(
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const i = (y * width + x) * 4
-        overlay.data[i + 3] = Math.round(overlay.data[i + 3] * maskAmountAt(mask, x, y))
+        overlay.data[i + 3] = Math.round(overlay.data[i + 3] * smartFilterMaskAmountAt(mask, x, y, smartFilter.maskDensity ?? 1))
       }
     }
   }
@@ -6588,6 +7073,20 @@ function shapePropsForTool(
     return { type: "ellipse", x, y, w, h, fill: foreground, stroke, rotation: options.rotation }
   }
   if (tool === "shape-polygon") {
+    if (options.polygonStarMode) {
+      return {
+        type: "star",
+        x, y, w, h,
+        fill: foreground,
+        stroke,
+        starPoints: options.sides,
+        innerRadiusRatio: options.innerRadiusRatio,
+        vertexRoundness: options.vertexRoundness,
+        smoothCorners: options.smoothCorners,
+        smoothIndent: options.smoothIndent,
+        rotation: options.rotation,
+      }
+    }
     return {
       type: "polygon",
       x, y, w, h,
@@ -6595,6 +7094,7 @@ function shapePropsForTool(
       stroke,
       sides: options.sides,
       vertexRoundness: options.vertexRoundness,
+      smoothCorners: options.smoothCorners,
       rotation: options.rotation,
     }
   }
@@ -6606,6 +7106,7 @@ function shapePropsForTool(
       stroke,
       sides: 3,
       vertexRoundness: options.vertexRoundness,
+      smoothCorners: options.smoothCorners,
       rotation: options.rotation,
     }
   }
@@ -6618,6 +7119,8 @@ function shapePropsForTool(
       starPoints: options.sides,
       innerRadiusRatio: options.innerRadiusRatio,
       vertexRoundness: options.vertexRoundness,
+      smoothCorners: options.smoothCorners,
+      smoothIndent: options.smoothIndent,
       rotation: options.rotation,
     }
   }
@@ -6754,17 +7257,17 @@ function shapeRect(shape: ShapeProps) {
 
 function shapeHandles(bounds: { x: number; y: number; w: number; h: number }) {
   return [
-    { id: "nw" as const, x: bounds.x, y: bounds.y },
-    { id: "ne" as const, x: bounds.x + bounds.w, y: bounds.y },
-    { id: "se" as const, x: bounds.x + bounds.w, y: bounds.y + bounds.h },
-    { id: "sw" as const, x: bounds.x, y: bounds.y + bounds.h },
-    { id: "center" as const, x: bounds.x + bounds.w / 2, y: bounds.y + bounds.h / 2 },
+    { id: "nw" as DirectShapeHandleId, x: bounds.x, y: bounds.y },
+    { id: "ne" as DirectShapeHandleId, x: bounds.x + bounds.w, y: bounds.y },
+    { id: "se" as DirectShapeHandleId, x: bounds.x + bounds.w, y: bounds.y + bounds.h },
+    { id: "sw" as DirectShapeHandleId, x: bounds.x, y: bounds.y + bounds.h },
+    { id: "center" as DirectShapeHandleId, x: bounds.x + bounds.w / 2, y: bounds.y + bounds.h / 2 },
   ]
 }
 
 function resizePlainRect(
   rect: { x: number; y: number; w: number; h: number },
-  handle: "nw" | "ne" | "se" | "sw" | "center",
+  handle: Exclude<DirectShapeHandleId, `radius-${RoundedRectCorner}`>,
   pt: { x: number; y: number },
   dx: number,
   dy: number,
@@ -6791,7 +7294,7 @@ function resizePlainRect(
 
 function resizeShapeRect(
   shape: ShapeProps,
-  handle: "nw" | "ne" | "se" | "sw" | "center",
+  handle: Exclude<DirectShapeHandleId, `radius-${RoundedRectCorner}`>,
   pt: { x: number; y: number },
   dx: number,
   dy: number,

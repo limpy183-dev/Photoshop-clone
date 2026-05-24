@@ -64,6 +64,23 @@ test("Blur Gallery filters exist as named algorithms with spatially varying outp
   }
 })
 
+test("Field Blur pins interpolate blur amount across the canvas", () => {
+  const src = gradientFixture(9, 3)
+  const filter = getFilter("field-blur")!
+
+  const out = filter.apply(src, {
+    blur: 18,
+    pins: "0,50,0;100,50,18",
+  })
+
+  const left = 1 * 4
+  const right = (1 * src.width + 7) * 4
+  const leftDelta = Math.abs(out.data[left] - src.data[left])
+  const rightDelta = Math.abs(out.data[right] - src.data[right])
+
+  expect(leftDelta).toBeLessThan(rightDelta)
+})
+
 test("tiled filter execution reproduces full-frame output for local per-pixel filters", async () => {
   const src = gradientFixture(6, 4)
   const filter = getFilter("brightness-contrast")!

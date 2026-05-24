@@ -7,10 +7,13 @@ import {
   convertAnchorPoint,
   deleteNearestAnchorPoint,
   exportPathToSvgPath,
+  getRoundedRectCornerRadiusHandles,
   movePathHandle,
   normalizeCornerRadii,
   shapeToEditablePath,
+  updateRoundedRectCornerRadius,
 } from "../components/photoshop/vector-path-operations"
+import { appShapeToPsd, psdShapeToApp } from "../components/photoshop/psd-vector-text"
 import {
   applySmartObjectStackMode,
   convertSmartObjectToLayers,
@@ -93,6 +96,62 @@ test("per-corner rectangle radii and star controls create editable geometry", ()
   expect(shapeToEditablePath(rounded).points.some((point) => point.cp1 || point.cp2)).toBe(true)
   expect(shapeToEditablePath(star).points).toHaveLength(14)
   expect(shapeToEditablePath(star).points[0].x).not.toBe(50)
+})
+
+test("rounded rectangle corner radius handles edit individual corners and survive PSD markers", () => {
+  const rounded: ShapeProps = {
+    type: "rect",
+    x: 10,
+    y: 20,
+    w: 120,
+    h: 80,
+    fill: "#ffffff",
+    stroke: null,
+    cornerRadii: [6, 18, 30, 12],
+  }
+
+  const handles = getRoundedRectCornerRadiusHandles(rounded)
+  const edited = updateRoundedRectCornerRadius(rounded, "br", { x: 96, y: 66 })
+  const psd = appShapeToPsd(edited, 200, 160)
+  const restored = psdShapeToApp({
+    name: psd.markerName,
+    vectorMask: psd.vectorMask,
+    vectorFill: psd.vectorFill,
+    vectorStroke: psd.vectorStroke,
+  } as Parameters<typeof psdShapeToApp>[0])
+
+  expect(handles.map((handle) => handle.corner)).toEqual(["tl", "tr", "br", "bl"])
+  expect(handles[0]).toMatchObject({ corner: "tl", radius: 6, x: 16, y: 26 })
+  expect(normalizeCornerRadii(edited)).toEqual([6, 18, 34, 12])
+  expect(restored?.cornerRadii).toEqual([6, 18, 34, 12])
+})
+
+test("star smoothing can round outer corners independently from inner indents", () => {
+  const outerOnly: ShapeProps = {
+    type: "star",
+    x: 0,
+    y: 0,
+    w: 100,
+    h: 100,
+    fill: "#ffffff",
+    stroke: null,
+    starPoints: 5,
+    innerRadiusRatio: 0.42,
+    vertexRoundness: 0.6,
+    smoothCorners: true,
+    smoothIndent: false,
+  }
+  const both: ShapeProps = { ...outerOnly, smoothIndent: true }
+
+  const outerPath = shapeToEditablePath(outerOnly)
+  const bothPath = shapeToEditablePath(both)
+  const roundedOuter = outerPath.points.filter((point, index) => index % 2 === 0 && (point.cp1 || point.cp2))
+  const roundedInner = outerPath.points.filter((point, index) => index % 2 === 1 && (point.cp1 || point.cp2))
+  const bothInner = bothPath.points.filter((point, index) => index % 2 === 1 && (point.cp1 || point.cp2))
+
+  expect(roundedOuter).toHaveLength(5)
+  expect(roundedInner).toHaveLength(0)
+  expect(bothInner).toHaveLength(5)
 })
 
 test("boolean shape operations remain editable and appearance stacks preserve paint order", () => {

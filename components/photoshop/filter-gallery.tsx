@@ -16,6 +16,7 @@ import { compositeFilterImageData, FILTERS, type FilterDef, type FilterParam } f
 import { useEditor } from "./editor-context"
 import { Trash2, Plus, Eye, EyeOff, ChevronDown, ChevronRight, GripVertical } from "lucide-react"
 import type { BlendMode, SmartFilter } from "./types"
+import { normalizeSmartFilterMaskDensity, normalizeSmartFilterMaskFeather, smartFilterMaskToImageData } from "./smart-filter-masks"
 
 interface FilterStackEntry {
   id: string
@@ -27,6 +28,8 @@ interface FilterStackEntry {
   blendMode: BlendMode
   mask?: HTMLCanvasElement | null
   maskEnabled?: boolean
+  maskDensity?: number
+  maskFeather?: number
 }
 
 const BLEND_MODES: BlendMode[] = [
@@ -62,14 +65,7 @@ function defaultParams(f: FilterDef): Record<string, number | string | boolean> 
 
 function entryMaskData(entry: FilterStackEntry, width: number, height: number) {
   if (!entry.mask || entry.maskEnabled === false) return null
-  if (entry.mask.width === width && entry.mask.height === height) {
-    return entry.mask.getContext("2d")!.getImageData(0, 0, width, height)
-  }
-  const scaled = document.createElement("canvas")
-  scaled.width = width
-  scaled.height = height
-  scaled.getContext("2d")!.drawImage(entry.mask, 0, 0, width, height)
-  return scaled.getContext("2d")!.getImageData(0, 0, width, height)
+  return smartFilterMaskToImageData(entry.mask, width, height, entry.maskFeather ?? 0)
 }
 
 function compositeStackEntry(before: ImageData, after: ImageData, entry: FilterStackEntry) {
@@ -81,6 +77,7 @@ function compositeStackEntry(before: ImageData, after: ImageData, entry: FilterS
     maskWidth: mask?.width,
     maskHeight: mask?.height,
     maskEnabled: entry.maskEnabled ?? true,
+    maskDensity: entry.maskDensity ?? 1,
   })
 }
 
@@ -98,6 +95,7 @@ export function FilterGalleryDialog({
   const [stack, setStack] = React.useState<FilterStackEntry[]>([])
   const [selectedIdx, setSelectedIdx] = React.useState(-1)
   const [expandedCats, setExpandedCats] = React.useState<Set<string>>(new Set(["Blur", "Adjustments"]))
+  const [draggedFilterIdx, setDraggedFilterIdx] = React.useState<number | null>(null)
 
   const previewCanvasRef = React.useRef<HTMLCanvasElement>(null)
   const srcDataRef = React.useRef<ImageData | null>(null)
@@ -121,6 +119,8 @@ export function FilterGalleryDialog({
           blendMode: sf.blendMode ?? "normal",
           mask: sf.mask ?? null,
           maskEnabled: sf.maskEnabled ?? true,
+          maskDensity: sf.maskDensity ?? 1,
+          maskFeather: sf.maskFeather ?? 0,
         })) ?? []
       : []
     setStack(existing)
@@ -178,6 +178,8 @@ export function FilterGalleryDialog({
       blendMode: "normal",
       mask: null,
       maskEnabled: true,
+      maskDensity: 1,
+      maskFeather: 0,
     }
     setStack((prev) => [...prev, entry])
     setSelectedIdx(stack.length)
@@ -215,6 +217,17 @@ export function FilterGalleryDialog({
     setSelectedIdx(to)
   }
 
+  const moveFilterTo = (from: number, to: number) => {
+    if (from === to || from < 0 || from >= stack.length || to < 0 || to >= stack.length) return
+    setStack((prev) => {
+      const next = [...prev]
+      const [entry] = next.splice(from, 1)
+      next.splice(to, 0, entry)
+      return next
+    })
+    setSelectedIdx(to)
+  }
+
   const applyToLayer = () => {
     if (!activeLayer || !activeDoc || !srcDataRef.current) return
     if (activeLayer.smartObject || activeLayer.kind === "smart-object") {
@@ -227,6 +240,8 @@ export function FilterGalleryDialog({
         blendMode: entry.blendMode ?? "normal",
         mask: entry.mask ?? undefined,
         maskEnabled: entry.maskEnabled ?? true,
+        maskDensity: normalizeSmartFilterMaskDensity(entry.maskDensity),
+        maskFeather: normalizeSmartFilterMaskFeather(entry.maskFeather),
         params: entry.params,
       }))
       dispatch({ type: "set-layer-smart-filters", id: activeLayer.id, smartFilters })
@@ -329,11 +344,33 @@ export function FilterGalleryDialog({
                 {stack.map((entry, idx) => (
                   <div
                     key={entry.id}
+                    data-testid={`filter-gallery-stack-row-${entry.filterName}`}
+                    draggable
                     className={`flex items-center gap-1 px-2 py-1.5 text-[11px] cursor-pointer border-b border-[var(--ps-divider)] ${
                       idx === selectedIdx
                         ? "bg-[var(--ps-accent)]/20 text-[var(--ps-text)]"
                         : "hover:bg-[var(--ps-tool-hover)]"
                     }`}
+                    onDragStart={(e) => {
+                      setDraggedFilterIdx(idx)
+                      e.dataTransfer.setData("application/x-ps-filter-index", String(idx))
+                      e.dataTransfer.effectAllowed = "move"
+                    }}
+                    onDragOver={(e) => {
+                      const raw = e.dataTransfer.getData("application/x-ps-filter-index")
+                      const from = raw ? Number(raw) : draggedFilterIdx
+                      if (typeof from !== "number" || !Number.isFinite(from) || from === idx) return
+                      e.preventDefault()
+                      e.dataTransfer.dropEffect = "move"
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      const raw = e.dataTransfer.getData("application/x-ps-filter-index")
+                      const from = raw ? Number(raw) : draggedFilterIdx
+                      if (typeof from === "number" && Number.isFinite(from)) moveFilterTo(from, idx)
+                      setDraggedFilterIdx(null)
+                    }}
+                    onDragEnd={() => setDraggedFilterIdx(null)}
                     onClick={() => setSelectedIdx(idx)}
                   >
                     <GripVertical className="w-3 h-3 text-[var(--ps-text-dim)] shrink-0" />
@@ -400,14 +437,40 @@ export function FilterGalleryDialog({
                       </select>
                     </label>
                     {selectedEntry.mask ? (
-                      <label className="flex items-center gap-2 text-[10px]">
-                        <Checkbox
-                          checked={selectedEntry.maskEnabled !== false}
-                          onCheckedChange={(v) => updateEntry(selectedIdx, { maskEnabled: v === true })}
-                          className="border-[var(--ps-divider)]"
-                        />
-                        Enable filter mask
-                      </label>
+                      <div className="space-y-2">
+                        <label className="flex items-center gap-2 text-[10px]">
+                          <Checkbox
+                            checked={selectedEntry.maskEnabled !== false}
+                            onCheckedChange={(v) => updateEntry(selectedIdx, { maskEnabled: v === true })}
+                            className="border-[var(--ps-divider)]"
+                          />
+                          Enable filter mask
+                        </label>
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between text-[10px]">
+                            <span className="text-[var(--ps-text-dim)]">Mask Density</span>
+                            <span className="tabular-nums">{Math.round((selectedEntry.maskDensity ?? 1) * 100)}%</span>
+                          </div>
+                          <Slider
+                            min={0}
+                            max={100}
+                            value={[Math.round((selectedEntry.maskDensity ?? 1) * 100)]}
+                            onValueChange={(v) => updateEntry(selectedIdx, { maskDensity: v[0] / 100 })}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between text-[10px]">
+                            <span className="text-[var(--ps-text-dim)]">Mask Feather</span>
+                            <span className="tabular-nums">{Math.round(selectedEntry.maskFeather ?? 0)} px</span>
+                          </div>
+                          <Slider
+                            min={0}
+                            max={250}
+                            value={[Math.round(selectedEntry.maskFeather ?? 0)]}
+                            onValueChange={(v) => updateEntry(selectedIdx, { maskFeather: v[0] })}
+                          />
+                        </div>
+                      </div>
                     ) : null}
                   </div>
                   {selectedFilterDef.params.map((param) => (

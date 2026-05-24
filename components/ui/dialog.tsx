@@ -50,10 +50,12 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  showOverlay = true,
   "aria-describedby": ariaDescribedBy,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
+  showOverlay?: boolean
 }) {
   // Radix-Dialog warns whenever DialogContent is rendered without an
   // associated DialogDescription. If the caller already provided one
@@ -70,7 +72,7 @@ function DialogContent({
 
   return (
     <DialogPortal data-slot="dialog-portal">
-      <DialogOverlay />
+      {showOverlay ? <DialogOverlay /> : null}
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(

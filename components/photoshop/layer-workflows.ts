@@ -9,6 +9,7 @@ import type {
   Slice,
   SmartFilter,
 } from "./types"
+import { normalizeSmartFilterMaskDensity, normalizeSmartFilterMaskFeather } from "./smart-filter-masks"
 import { uid } from "./uid"
 
 function deepClonePlain<T>(value: T): T {
@@ -306,6 +307,12 @@ export function updateSmartFilterStack(filters: SmartFilter[] | undefined, filte
           ...patch,
           opacity: patch.opacity === undefined ? filter.opacity : Math.max(0, Math.min(1, Number(patch.opacity) || 0)),
           blendMode: (patch.blendMode ?? filter.blendMode) as BlendMode | undefined,
+          maskDensity: patch.maskDensity === undefined
+            ? filter.maskDensity
+            : normalizeSmartFilterMaskDensity(patch.maskDensity),
+          maskFeather: patch.maskFeather === undefined
+            ? filter.maskFeather
+            : normalizeSmartFilterMaskFeather(patch.maskFeather),
         }
       : filter,
   )

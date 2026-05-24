@@ -36,6 +36,7 @@ import {
   type BrowserRasterExportFormat,
   type ExportFormat,
 } from "./document-io"
+import type { RasterExportMetadata, TiffCompression } from "./raster-codecs"
 import { canvasSizeError } from "./canvas-limits"
 import { cn } from "@/lib/utils"
 import type { AssetLibraryItem } from "./types"
@@ -51,10 +52,17 @@ type ExportPresetPayload = Partial<{
   losslessWebp: boolean
   includeMetadata: boolean
   precision: number
+  tiffCompression: TiffCompression
+  tgaRle: boolean
+  metadataAuthor: string
+  metadataCopyright: string
+  metadataDescription: string
+  metadataCreationDate: string
 }>
 
 const EXPORT_FORMATS: Array<{ format: ExportFormat; label: string }> = [
   { format: "png", label: "PNG" },
+  { format: "tiff", label: "TIFF" },
   { format: "jpeg", label: "JPG" },
   { format: "webp", label: "WebP" },
   { format: "gif", label: "GIF" },
@@ -71,6 +79,7 @@ const EXPORT_FORMATS: Array<{ format: ExportFormat; label: string }> = [
 
 const EXPORT_EXTENSIONS: Record<ExportFormat, string> = {
   png: "png",
+  tiff: "tiff",
   jpeg: "jpg",
   webp: "webp",
   avif: "avif",
@@ -91,6 +100,7 @@ function previewRasterFormat(format: ExportFormat): BrowserRasterExportFormat {
     format === "metadata-json" ||
     format === "apng" ||
     format === "animated-webp" ||
+    format === "tiff" ||
     format === "tga" ||
     format === "ppm" ||
     format === "pgm" ||
@@ -126,14 +136,26 @@ export function ExportAsDialog({
   const [dither, setDither] = React.useState(false)
   const [interlaced, setInterlaced] = React.useState(false)
   const [progressive, setProgressive] = React.useState(true)
+  const [tiffCompression, setTiffCompression] = React.useState<TiffCompression>("none")
+  const [tgaRle, setTgaRle] = React.useState(true)
   const [losslessWebp, setLosslessWebp] = React.useState(false)
   const [includeMetadata, setIncludeMetadata] = React.useState(false)
+  const [metadataAuthor, setMetadataAuthor] = React.useState("")
+  const [metadataCopyright, setMetadataCopyright] = React.useState("")
+  const [metadataDescription, setMetadataDescription] = React.useState("")
+  const [metadataCreationDate, setMetadataCreationDate] = React.useState("")
   const [precision, setPrecision] = React.useState(2)
   const [estimate, setEstimate] = React.useState("0 KB")
   const [selectedPresetId, setSelectedPresetId] = React.useState("")
   const [presetName, setPresetName] = React.useState("")
 
   const scaleRatio = Math.max(0.01, scale / 100)
+  const metadataPayload = React.useCallback((): RasterExportMetadata => ({
+    author: metadataAuthor.trim() || undefined,
+    copyright: metadataCopyright.trim() || undefined,
+    description: metadataDescription.trim() || undefined,
+    creationDate: metadataCreationDate.trim() || undefined,
+  }), [metadataAuthor, metadataCopyright, metadataCreationDate, metadataDescription])
 
   const refreshPreview = React.useCallback(() => {
     if (!activeDoc || !previewRef.current) return
@@ -192,7 +214,7 @@ export function ExportAsDialog({
             includeMetadata,
             precision,
           })
-        : format === "tga" || format === "ppm" || format === "pgm" || format === "pbm"
+        : format === "tiff" || format === "tga" || format === "ppm" || format === "pgm" || format === "pbm"
           ? exportRasterDataUrl(activeDoc, {
               format,
               scale: scaleRatio,
@@ -200,6 +222,10 @@ export function ExportAsDialog({
               transparent,
               matte,
               dither,
+              tiffCompression,
+              tgaRle,
+              includeMetadata,
+              metadata: metadataPayload(),
             })
           : canvas.toDataURL(rasterMime(rasterFormat), losslessWebp && rasterFormat === "webp" ? 1 : quality / 100)
     setEstimate(formatBytes(dataUrlBytes(dataUrl)))
@@ -210,9 +236,12 @@ export function ExportAsDialog({
     includeMetadata,
     losslessWebp,
     matte,
+    metadataPayload,
     precision,
     quality,
     scaleRatio,
+    tgaRle,
+    tiffCompression,
     transparent,
   ])
 
@@ -231,8 +260,22 @@ export function ExportAsDialog({
     if (typeof initial.dither === "boolean") setDither(initial.dither)
     if (typeof initial.losslessWebp === "boolean") setLosslessWebp(initial.losslessWebp)
     if (typeof initial.includeMetadata === "boolean") setIncludeMetadata(initial.includeMetadata)
+    if (initial.tiffCompression) setTiffCompression(initial.tiffCompression)
+    if (typeof initial.tgaRle === "boolean") setTgaRle(initial.tgaRle)
+    if (typeof initial.metadataAuthor === "string") setMetadataAuthor(initial.metadataAuthor)
+    if (typeof initial.metadataCopyright === "string") setMetadataCopyright(initial.metadataCopyright)
+    if (typeof initial.metadataDescription === "string") setMetadataDescription(initial.metadataDescription)
+    if (typeof initial.metadataCreationDate === "string") setMetadataCreationDate(initial.metadataCreationDate)
     if (typeof initial.precision === "number") setPrecision(Math.max(0, Math.min(6, initial.precision)))
   }, [open, initial])
+
+  React.useEffect(() => {
+    if (!open || !activeDoc || initial) return
+    setMetadataAuthor(activeDoc.metadata?.author ?? "")
+    setMetadataCopyright(activeDoc.metadata?.copyright ?? "")
+    setMetadataDescription(activeDoc.metadata?.description ?? "")
+    setMetadataCreationDate(activeDoc.metadata?.createdAt ?? new Date().toISOString())
+  }, [activeDoc, initial, open])
 
   React.useEffect(() => {
     if (!open) return
@@ -253,6 +296,8 @@ export function ExportAsDialog({
     includeMetadata,
     interlaced,
     progressive,
+    tiffCompression,
+    tgaRle,
     transparent,
     quality,
   })
@@ -261,6 +306,8 @@ export function ExportAsDialog({
     includeMetadata,
     interlaced,
     progressive,
+    tiffCompression,
+    tgaRle,
     transparent,
     quality,
   })
@@ -308,6 +355,12 @@ export function ExportAsDialog({
           transparent,
           matte,
           dither,
+          interlaced,
+          progressive,
+          tiffCompression,
+          tgaRle,
+          includeMetadata,
+          metadata: metadataPayload(),
         })
       downloadBlob(blob, `${safeName}.${EXPORT_EXTENSIONS[format]}`)
     }
@@ -325,6 +378,12 @@ export function ExportAsDialog({
     losslessWebp,
     includeMetadata,
     precision,
+    tiffCompression,
+    tgaRle,
+    metadataAuthor,
+    metadataCopyright,
+    metadataDescription,
+    metadataCreationDate,
   })
 
   const applyPreset = (asset: AssetLibraryItem) => {
@@ -338,6 +397,12 @@ export function ExportAsDialog({
     if (typeof payload.dither === "boolean") setDither(payload.dither)
     if (typeof payload.losslessWebp === "boolean") setLosslessWebp(payload.losslessWebp)
     if (typeof payload.includeMetadata === "boolean") setIncludeMetadata(payload.includeMetadata)
+    if (payload.tiffCompression) setTiffCompression(payload.tiffCompression)
+    if (typeof payload.tgaRle === "boolean") setTgaRle(payload.tgaRle)
+    if (typeof payload.metadataAuthor === "string") setMetadataAuthor(payload.metadataAuthor)
+    if (typeof payload.metadataCopyright === "string") setMetadataCopyright(payload.metadataCopyright)
+    if (typeof payload.metadataDescription === "string") setMetadataDescription(payload.metadataDescription)
+    if (typeof payload.metadataCreationDate === "string") setMetadataCreationDate(payload.metadataCreationDate)
     if (typeof payload.precision === "number") setPrecision(Math.max(0, Math.min(6, payload.precision)))
   }
 
@@ -360,7 +425,7 @@ export function ExportAsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[760px] bg-[var(--ps-panel)] border-[var(--ps-divider)] text-[var(--ps-text)]">
+      <DialogContent className="max-h-[calc(100vh-32px)] overflow-y-auto sm:max-w-[760px] bg-[var(--ps-panel)] border-[var(--ps-divider)] text-[var(--ps-text)]">
         <DialogHeader>
           <DialogTitle>Export As</DialogTitle>
           <DialogDescription className="sr-only">
@@ -487,9 +552,56 @@ export function ExportAsDialog({
                   <CheckRow label="Dither" checked={dither} onCheckedChange={setDither} disabled={format === "jpeg" || format === "avif"} />
                   <CheckRow label="Interlaced PNG" checked={interlaced} onCheckedChange={setInterlaced} disabled={format !== "png"} />
                   <CheckRow label="Progressive JPG" checked={progressive} onCheckedChange={setProgressive} disabled={format !== "jpeg"} />
+                  <CheckRow label="TGA RLE" checked={tgaRle} onCheckedChange={setTgaRle} disabled={format !== "tga"} />
                   <CheckRow label="Lossless WebP" checked={losslessWebp} onCheckedChange={setLosslessWebp} disabled={format !== "webp"} />
-                  <CheckRow label="Embed Metadata" checked={includeMetadata} onCheckedChange={setIncludeMetadata} />
+                  <CheckRow label="Embed Metadata" checked={includeMetadata} onCheckedChange={setIncludeMetadata} disabled={format !== "png" && format !== "jpeg"} />
                 </div>
+                {format === "tiff" ? (
+                  <div className="mt-3 grid grid-cols-[110px_1fr] items-center gap-2">
+                    <Label className="text-[11px] text-[var(--ps-text-dim)]">TIFF compression</Label>
+                    <select
+                      value={tiffCompression}
+                      onChange={(event) => setTiffCompression(event.target.value as TiffCompression)}
+                      className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px]"
+                    >
+                      <option value="none">None</option>
+                      <option value="lzw">LZW</option>
+                      <option value="deflate">Deflate</option>
+                    </select>
+                  </div>
+                ) : null}
+                {includeMetadata && (format === "png" || format === "jpeg") ? (
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <Input
+                      aria-label="Metadata author"
+                      placeholder="Author"
+                      value={metadataAuthor}
+                      onChange={(event) => setMetadataAuthor(event.target.value)}
+                      className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
+                    />
+                    <Input
+                      aria-label="Metadata copyright"
+                      placeholder="Copyright"
+                      value={metadataCopyright}
+                      onChange={(event) => setMetadataCopyright(event.target.value)}
+                      className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
+                    />
+                    <Input
+                      aria-label="Metadata description"
+                      placeholder="Description"
+                      value={metadataDescription}
+                      onChange={(event) => setMetadataDescription(event.target.value)}
+                      className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
+                    />
+                    <Input
+                      aria-label="Metadata creation date"
+                      placeholder="Creation date"
+                      value={metadataCreationDate}
+                      onChange={(event) => setMetadataCreationDate(event.target.value)}
+                      className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
+                    />
+                  </div>
+                ) : null}
                 <div className="mt-3 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1.5 text-[10px] text-[var(--ps-text-dim)]">
                   <div className="mb-1 font-medium text-[var(--ps-text)]">{limitationReport.summary}</div>
                   <div className="grid gap-1">
@@ -511,7 +623,7 @@ export function ExportAsDialog({
                     Timeline frames are exported when present; otherwise the current composite becomes one frame.
                   </div>
                 ) : null}
-                {format === "tga" || format === "ppm" || format === "pgm" || format === "pbm" ? (
+                {format === "tiff" || format === "tga" || format === "ppm" || format === "pgm" || format === "pbm" ? (
                   <div className="mt-3 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1.5 text-[10px] text-[var(--ps-text-dim)]">
                     This format is encoded by the app from canvas pixels, bypassing browser MIME encoder support.
                   </div>

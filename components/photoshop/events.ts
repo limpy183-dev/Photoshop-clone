@@ -3,6 +3,7 @@ export type PhotoshopEventMap = {
   "ps-open-export-as": unknown | undefined
   "ps-open-panel": string
   "ps-request-zoom": { zoom?: number; factor?: number }
+  "ps-request-print-size-view": undefined
   "ps-set-dock-width": number
 }
 

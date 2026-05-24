@@ -96,6 +96,27 @@ export interface OffscreenCanvasPlanInput {
   capabilities?: Partial<OffscreenCanvasCapabilities>
 }
 
+export interface OffscreenTransferDiagnosticInput {
+  requestedWorker?: boolean
+  offscreenCanvasSupported: boolean
+  workerTransferSupported: boolean
+  transferToImageBitmapSupported: boolean
+  transferError?: unknown
+}
+
+export interface OffscreenTransferDiagnostic {
+  active: boolean
+  reason:
+    | "worker-offscreen-active"
+    | "worker-not-requested"
+    | "offscreen-api-missing"
+    | "worker-transfer-api-missing"
+    | "image-bitmap-transfer-missing"
+    | "transfer-failed"
+  badge: "Offscreen active" | "Canvas fallback"
+  warning?: string
+}
+
 export interface OffscreenCanvasPlan {
   surface: "offscreen-canvas" | "html-canvas"
   reason:
@@ -171,6 +192,45 @@ export function planOffscreenCanvasUsage(input: OffscreenCanvasPlanInput): Offsc
   return { surface: "offscreen-canvas", reason: "offscreen-ready", width: size.width, height: size.height }
 }
 
+export function diagnoseOffscreenCanvasTransfer(input: OffscreenTransferDiagnosticInput): OffscreenTransferDiagnostic {
+  if (!input.requestedWorker) {
+    return { active: false, reason: "worker-not-requested", badge: "Canvas fallback" }
+  }
+  if (!input.offscreenCanvasSupported) {
+    return {
+      active: false,
+      reason: "offscreen-api-missing",
+      badge: "Canvas fallback",
+      warning: "OffscreenCanvas is not available in this browser.",
+    }
+  }
+  if (!input.workerTransferSupported) {
+    return {
+      active: false,
+      reason: "worker-transfer-api-missing",
+      badge: "Canvas fallback",
+      warning: "HTMLCanvasElement.transferControlToOffscreen is unavailable.",
+    }
+  }
+  if (!input.transferToImageBitmapSupported) {
+    return {
+      active: false,
+      reason: "image-bitmap-transfer-missing",
+      badge: "Canvas fallback",
+      warning: "OffscreenCanvas.transferToImageBitmap is unavailable.",
+    }
+  }
+  if (input.transferError) {
+    return {
+      active: false,
+      reason: "transfer-failed",
+      badge: "Canvas fallback",
+      warning: input.transferError instanceof Error ? input.transferError.message : String(input.transferError),
+    }
+  }
+  return { active: true, reason: "worker-offscreen-active", badge: "Offscreen active" }
+}
+
 export interface CanvasSurface {
   readonly width: number
   readonly height: number
@@ -231,8 +291,18 @@ export function createCanvasSurface(
         }
       }
       return new OffscreenSurface(surface)
-    } catch {
-      // fall through to HTMLCanvas
+    } catch (error) {
+      const capabilities = detectOffscreenCanvasCapabilities()
+      const diagnostic = diagnoseOffscreenCanvasTransfer({
+        requestedWorker: !!options.needsWorkerTransfer,
+        offscreenCanvasSupported: capabilities.offscreenCanvasSupported,
+        workerTransferSupported: capabilities.workerOffscreenSupported,
+        transferToImageBitmapSupported: capabilities.transferToImageBitmapSupported,
+        transferError: error,
+      })
+      if (typeof console !== "undefined" && console.warn) {
+        console.warn(`[OffscreenCanvas] Falling back to HTML canvas: ${diagnostic.reason}`, diagnostic.warning ?? error)
+      }
     }
   }
   return new HTMLSurface(makeCanvas(plan.width, plan.height, options.fill))

@@ -38,6 +38,37 @@ test("project round trip preserves rich app-only fixture metadata", async () => 
   expect(smart.smartSource?.canvas?.width).toBe(32)
 })
 
+test("project round trip preserves per-slice export settings", async () => {
+  const doc = {
+    ...richFixtureDocument(),
+    slices: [
+      {
+        id: "slice_export",
+        name: "Hero Card",
+        x: 2,
+        y: 3,
+        w: 24,
+        h: 12,
+        format: "gif" as const,
+        quality: 0.72,
+        compression: 6,
+        filename: "hero-card-mobile",
+      },
+    ],
+    selectedSliceId: "slice_export",
+  }
+
+  const restored = await deserializeProject(serializeProject(doc))
+
+  expect(restored.slices?.[0]).toMatchObject({
+    format: "gif",
+    quality: 0.72,
+    compression: 6,
+    filename: "hero-card-mobile",
+  })
+  expect(restored.selectedSliceId).toBe("slice_export")
+})
+
 test("smart object helpers track linked lifecycle, replacement, and export payloads", () => {
   const doc = richFixtureDocument()
   const smart = doc.layers.find((layer) => layer.id === "layer_smart")!

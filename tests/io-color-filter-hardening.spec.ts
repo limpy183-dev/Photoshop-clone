@@ -75,10 +75,10 @@ test("export limitation reports are explicit for browser raster and SVG exports"
   const jpeg = createExportLimitationReport(doc, { format: "jpeg", includeMetadata: true, progressive: true, quality: 82 })
   const svg = createExportLimitationReport(doc, { format: "svg", includeMetadata: true })
 
-  expect(png.items).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Interlaced PNG", status: "unsupported" })]))
-  expect(jpeg.items).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Progressive JPEG", status: "unsupported" })]))
+  expect(png.items).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Interlaced PNG", status: "preserved" })]))
+  expect(jpeg.items).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Progressive JPEG", status: "preserved" })]))
   expect(jpeg.items).toEqual(expect.arrayContaining([expect.objectContaining({ label: "ICC profile embedding", status: "unsupported" })]))
-  expect(svg.items).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Editable vector structure", status: "flattened" })]))
+  expect(svg.items).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Editable vector structure", status: "approximated" })]))
 })
 
 test("document color honesty warns about metadata modes versus browser canvas reality", () => {
@@ -104,7 +104,8 @@ test("status bar exposes color and bit-depth honesty warning for non-RGB or high
   await page.getByRole("button", { name: /Photo 6 x 4 in/ }).click()
   await page.getByRole("button", { name: "Create" }).click()
 
-  await expect(page.getByText("16-bit metadata, 8-bit RGBA canvas")).toBeVisible()
+  await expect(page.getByText("Editing at 8-bit | Document: 16-bit")).toBeVisible()
+  await expect(page.getByText("Precision warning")).toBeVisible()
 })
 
 test("expanded worker filters include Gaussian blur with a fixed golden output", async () => {

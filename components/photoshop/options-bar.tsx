@@ -51,6 +51,8 @@ import {
   PenLine,
   Crosshair,
   RotateCw,
+  Plus,
+  Minus,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { CustomShapeId, GradientStop, QuickMaskPaintMode, TextAntiAliasMode, ToolId } from "./types"
@@ -534,7 +536,9 @@ export function OptionsBar() {
 
   function SelectionToolOptions() {
     const { selectionOptions } = useEditor()
-    const wandLike = tool === "magic-wand" || tool === "object-select"
+    const quickLike = tool === "quick-selection"
+    const wandLike = tool === "magic-wand" || quickLike || tool === "object-select"
+    const magneticLike = tool === "lasso-magnetic"
     const refineLike = tool === "refine-edge-brush"
     return (
       <>
@@ -585,6 +589,16 @@ export function OptionsBar() {
               onChange={(e) => dispatch({ type: "set-selection-options", selectionOptions: { tolerance: Math.max(0, Math.min(255, Number(e.target.value) || 0)) } })}
               className={numInputClass}
             />
+            {quickLike ? (
+              <Slider
+                min={0}
+                max={255}
+                step={1}
+                value={[selectionOptions.tolerance]}
+                onValueChange={(value) => dispatch({ type: "set-selection-options", selectionOptions: { tolerance: value[0] } })}
+                className="w-24"
+              />
+            ) : null}
             <label className="flex items-center gap-1.5 ml-1">
               <input
                 type="checkbox"
@@ -603,6 +617,64 @@ export function OptionsBar() {
               />
               <span>Sample All Layers</span>
             </label>
+            {quickLike ? (
+              <>
+                <Divider />
+                <span className={labelClass}>Sample:</span>
+                <Select
+                  value={selectionOptions.sampleSize ?? "point"}
+                  onValueChange={(value) => dispatch({ type: "set-selection-options", selectionOptions: { sampleSize: value as NonNullable<typeof selectionOptions.sampleSize> } })}
+                >
+                  <SelectTrigger className="h-6 w-28 text-[11px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="point">Point</SelectItem>
+                    <SelectItem value="3x3">3 x 3</SelectItem>
+                    <SelectItem value="5x5">5 x 5</SelectItem>
+                  </SelectContent>
+                </Select>
+                <button
+                  type="button"
+                  title="Grow selection"
+                  className="h-6 w-7 border border-[var(--ps-divider)] rounded-sm hover:bg-[var(--ps-tool-hover)] inline-flex items-center justify-center"
+                  onClick={() => dispatch({ type: "grow-selection", amount: 2 })}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  title="Shrink selection"
+                  className="h-6 w-7 border border-[var(--ps-divider)] rounded-sm hover:bg-[var(--ps-tool-hover)] inline-flex items-center justify-center"
+                  onClick={() => dispatch({ type: "contract-selection", amount: 2 })}
+                >
+                  <Minus className="h-3.5 w-3.5" />
+                </button>
+              </>
+            ) : null}
+          </>
+        ) : null}
+        {magneticLike ? (
+          <>
+            <Divider />
+            <span className={labelClass}>Width:</span>
+            <Input
+              type="number"
+              min={2}
+              max={64}
+              value={selectionOptions.magneticWidth ?? 12}
+              onChange={(event) => dispatch({ type: "set-selection-options", selectionOptions: { magneticWidth: Math.max(2, Math.min(64, Number(event.target.value) || 12)) } })}
+              className={numInputClass}
+            />
+            <span className={labelClass}>Contrast:</span>
+            <Input
+              type="number"
+              min={1}
+              max={512}
+              value={selectionOptions.magneticContrast ?? 24}
+              onChange={(event) => dispatch({ type: "set-selection-options", selectionOptions: { magneticContrast: Math.max(1, Math.min(512, Number(event.target.value) || 24)) } })}
+              className={numInputClass}
+            />
           </>
         ) : null}
         {refineLike ? (
@@ -813,7 +885,7 @@ export function OptionsBar() {
   }
 
   function ShapeOptions() {
-    type ShapeOptionKey =
+    type ShapeNumberOptionKey =
       | "strokeWidth"
       | "radius"
       | "sides"
@@ -824,12 +896,16 @@ export function OptionsBar() {
       | "cornerRadiusTR"
       | "cornerRadiusBR"
       | "cornerRadiusBL"
+    type ShapeBooleanOptionKey = "polygonStarMode" | "smoothCorners" | "smoothIndent"
     const [opts, setOpts] = React.useState({
       strokeWidth: 0,
       radius: 18,
       sides: tool === "shape-triangle" ? 3 : 6,
       innerRadiusRatio: 0.45,
       vertexRoundness: 0,
+      polygonStarMode: false,
+      smoothCorners: false,
+      smoothIndent: false,
       rotation: 0,
       cornerRadiusTL: 18,
       cornerRadiusTR: 18,
@@ -839,10 +915,13 @@ export function OptionsBar() {
     React.useEffect(() => {
       window.__psShapeOptions = opts
     }, [opts])
-    const update = (key: ShapeOptionKey, value: number) => {
+    const update = (key: ShapeNumberOptionKey, value: number) => {
       setOpts((current) => ({ ...current, [key]: value }))
     }
-    const number = (label: string, key: ShapeOptionKey, min: number, max: number, step = 1, title?: string) => (
+    const updateBool = (key: ShapeBooleanOptionKey, value: boolean) => {
+      setOpts((current) => ({ ...current, [key]: value }))
+    }
+    const number = (label: string, key: ShapeNumberOptionKey, min: number, max: number, step = 1, title?: string) => (
       <label className="flex items-center gap-1" title={title}>
         <span className={labelClass}>{label}</span>
         <Input
@@ -856,8 +935,20 @@ export function OptionsBar() {
         />
       </label>
     )
+    const checkbox = (label: string, key: ShapeBooleanOptionKey, title?: string) => (
+      <label className="flex items-center gap-1.5" title={title}>
+        <input
+          type="checkbox"
+          checked={opts[key]}
+          onChange={(event) => updateBool(key, event.target.checked)}
+          className="accent-[var(--ps-accent)]"
+        />
+        <span className={labelClass}>{label}</span>
+      </label>
+    )
     const showCorners = tool === "shape-rounded-rect"
     const showPolygon = tool === "shape-polygon" || tool === "shape-star"
+    const starControls = tool === "shape-star" || (tool === "shape-polygon" && opts.polygonStarMode)
     return (
       <>
         <Square className="w-3.5 h-3.5" />
@@ -879,9 +970,12 @@ export function OptionsBar() {
         <Divider />
         {showPolygon ? (
           <>
+            {tool === "shape-polygon" ? checkbox("Star", "polygonStarMode", "Create a star from the Polygon Tool") : null}
             {number(tool === "shape-star" ? "Points:" : "Sides:", "sides", 3, 64, 1)}
-            {tool === "shape-star" ? number("Inner:", "innerRadiusRatio", 0.05, 0.95, 0.01, "Inner radius ratio") : null}
+            {starControls ? number("Inset:", "innerRadiusRatio", 0.05, 0.95, 0.01, "Inner radius ratio") : null}
             {number("Round:", "vertexRoundness", 0, 1, 0.01, "Vertex roundness")}
+            {checkbox("Smooth corners", "smoothCorners")}
+            {starControls ? checkbox("Smooth indent", "smoothIndent") : null}
           </>
         ) : showCorners ? (
           <>

@@ -1,0 +1,638 @@
+================================================================================
+  IMPLEMENTABLE GAP REPORT — Browser Photoshop Clone
+  Generated: May 21, 2026
+================================================================================
+
+This report catalogs only gaps that can be closed with pure client-side
+browser code changes — NO Adobe proprietary APIs, NO external cloud services,
+NO AI/ML models. Everything here is doable within the existing Next.js +
+HTML5 Canvas architecture.
+
+Excluded from this report:
+  - Gaps requiring Adobe proprietary algorithms/text engines
+  - Gaps requiring cloud sync, external APIs, or service backends
+  - Gaps requiring AI/ML models (neural filters, generative fill, Sensei)
+  - Gaps caused by browser sandbox that CANNOT be worked around
+  - PSD format limitations caused by ag-psd library (upstream dependency)
+
+================================================================================
+  SECTION 1: MISSING FEATURE (ZERO IMPLEMENTATION)
+================================================================================
+
+Contact Sheet / Picture Package Generation
+  Status: Not implemented at all
+  Files needed: ~1-2 new files
+  What to build:
+  - A dialog that imports multiple images (FileReader / drag-and-drop)
+  - Grid layout engine: user picks columns/rows, spacing, labels
+  - Renders each image thumbnail onto a composite canvas with optional
+    filename labels beneath
+  - Export the composite as PNG/JPEG via canvas.toBlob()
+  - Picture package variant: template-driven layout (2x2, 4x4, wallet-size
+    grids, etc.)
+  - All pure canvas compositing — no external dependencies needed
+
+================================================================================
+  SECTION 2: "USABLE" FEATURES — IMPLEMENTABLE GAPS
+================================================================================
+
+--------------------------------------------------------------------------------
+  2.1 TOOLS
+--------------------------------------------------------------------------------
+
+Rounded Rectangle Tool — Per-Corner Radius Completion
+  Current state:
+  - Types already have cornerRadiusTL/TR/BR/BL fields
+  - Options-bar already has 4 numeric inputs (TL, TR, BR, BL)
+  - Canvas already checks for per-corner values and passes them to
+    roundRect() drawing
+  What's missing (implementable):
+  - The per-corner radius drawing path may not be wired for ALL shape
+    operations (transform, path operations, boolean path ops)
+  - On-canvas corner radius scrubbing handles (drag individual corner
+    radius handles directly on the shape)
+  - Per-corner radius serialization in project format and PSD export
+    (via marker encoding, same pattern already used elsewhere)
+  Effort: Medium — extend existing partial implementation
+
+Polygon Tool — Advanced Controls
+  Current state:
+  - Creates polygon shape layers with side-count metadata
+  What's missing (implementable):
+  - Star mode: toggle between polygon and star, with inset ratio slider
+    (how far inner points pull toward center)
+  - Smooth corners checkbox: rounds the polygon/star vertices
+  - Smooth indent checkbox: rounds the star inner points
+  - Options-bar UI: inset %, smooth corners toggle, smooth indent toggle
+  - Canvas drawing: use existing canvas arc/bezier for smooth corners
+  - All pure math on <canvas> — drawStar(), drawSmoothPolygon() helpers
+  Effort: Small — ~100 lines of canvas drawing + ~50 lines of UI
+
+Freeform Pen Tool — Improved Magnetic Fitting
+  Current state:
+  - magneticLassoSnap() exists using Sobel edge detection
+  What's missing (implementable):
+  - Increase Sobel kernel precision (currently basic 3x3)
+  - Add hysteresis thresholding (Canny-style edge linking) for smoother
+    path following
+  - Add configurable magnetic width and contrast threshold
+  - Add rubber-band preview while drawing
+  - All pure ImageData pixel math — no external deps
+  Effort: Medium — enhance existing magneticLassoSnap()
+
+Anchor Point Editing — On-Canvas Bezier Handle Manipulation
+  Current state:
+  - Anchor add/remove/convert exists
+  What's missing (implementable):
+  - Interactive handle dragging: grab a handle endpoint and drag to
+    adjust curve, with real-time path preview
+  - Symmetric handle mode: both handles move together
+  - Break handle symmetry: Alt-drag one handle independently
+  - Handle hit-testing with proximity radius
+  - All pure canvas pointer events + path math
+  Effort: Medium — ~200 lines in canvas-view.tsx pointer handlers
+
+Slice Select Tool — Per-Slice Export Settings
+  Current state:
+  - Slices exist and are selectable/editable
+  What's missing (implementable):
+  - Per-slice export format selector (PNG, JPEG, WebP, GIF)
+  - Per-slice quality/compression setting
+  - Per-slice filename override
+  - "Export all slices" action: iterates slices, extracts each region
+    from composite canvas via drawImage() clipping, exports individually
+  - All pure canvas region extraction + toBlob()
+  Effort: Medium — ~150 lines of UI + slice iteration logic
+
+Quick Selection Tool — Configurable Threshold
+  Current state:
+  - Region growing from seed point using edge-aware color matching
+  What's missing (implementable):
+  - Tolerance slider in options bar (how far color can deviate)
+  - Sample size: point sample / 3x3 average / 5x5 average
+  - Contiguous checkbox: select only connected pixels vs all matching
+  - Grow/Shrink selection buttons
+  - Options-bar UI already has patterns for tool-specific controls
+  Effort: Small — add parameters to existing region-growing algorithm
+
+--------------------------------------------------------------------------------
+  2.2 TYPOGRAPHY
+--------------------------------------------------------------------------------
+
+Find/Replace Text — Enhanced Search
+  Current state:
+  - Searches editable text layers, case/word-aware replacement
+  What's missing (implementable):
+  - Regex/grep mode toggle (use RegExp with user-provided pattern)
+  - Highlight all matches across layers before replacing
+  - Match count display ("3 matches in 2 layers")
+  - All pure string operations — no external deps
+  Effort: Small — ~80 lines in existing find/replace dialog
+
+OpenType Controls — More Feature Toggles
+  Current state:
+  - Stores liga, calt, swsh, tnum and applies via font-variation-settings
+  What's missing (implementable):
+  - Add more OpenType feature toggles the browser actually supports:
+    "frac" (fractions), "sups" (superscript), "subs" (subscript),
+    "ordn" (ordinals), "zero" (slashed zero), "onum" (oldstyle figures)
+  - Toggle grid UI showing all supported features for the active font
+  - Detect available features via document.fonts and font feature detection
+  - All pure CSS/canvas font-feature-settings — browser-native API
+  Effort: Small — extend existing OpenType toggle list + UI
+
+Variable Font Axes — Interactive Sliders
+  Current state:
+  - Stores axis metadata and applies CSS font-variation-settings
+  What's missing (implementable):
+  - UI sliders for each axis (wght, wdth, opsz, slnt, ital, etc.)
+  - Read axis ranges from the font itself via variation axis API
+  - Named instance detection: if the font has named instances, show
+    them as presets in a dropdown
+  - Live preview as sliders move
+  - All pure CSS font-variation-settings + font access API
+  Effort: Medium — ~200 lines UI + font introspection
+
+Vertical Type Tool — Improved Vertical Metrics
+  Current state:
+  - Creates vertical text layers with writing-mode metadata
+  What's missing (implementable):
+  - Vertical text alignment controls (top/middle/bottom for vertical flow)
+  - Glyph orientation toggle: upright vs sideways in vertical mode
+    (text-orientation: mixed | upright | sideways)
+  - Vertical tracking/kerning that respects vertical flow direction
+  - All pure CSS writing-mode + text-orientation — browser-native
+  Effort: Small — add CSS properties + UI controls already in TextProps type
+
+Font Preview / Missing-Font Diagnostics — Visual Comparison
+  Current state:
+  - Font availability checks, per-layer missing font reports
+  What's missing (implementable):
+  - Side-by-side font substitution preview: render the same text in
+    original font (if available) vs fallback
+  - Font specimen rendering: "The quick brown fox..." in each candidate
+  - List system fonts alongside web fonts with visual previews
+  - Pure canvas text rendering for comparison
+  Effort: Medium — ~150 lines UI for comparison view
+
+--------------------------------------------------------------------------------
+  2.3 VIDEO
+--------------------------------------------------------------------------------
+
+Video Trim and Split — Frame-Accurate Controls
+  Current state:
+  - Video layer metadata supports trim ranges, split clip creation
+  What's missing (implementable):
+  - Frame-accurate trim handles on timeline (drag start/end markers)
+  - Split-at-playhead button: splits a video clip into two at current time
+  - Keyboard shortcuts: I (in point), O (out point), Ctrl+K (split)
+  - Thumbnail strip preview along timeline for visual reference
+  - All pure <video> element seeking + canvas frame extraction
+  Effort: Large — mostly timeline UI + keyboard handling
+
+Video Transitions — Render Transition Frames
+  Current state:
+  - Video group records store transition metadata
+  What's missing (implementable):
+  - Cross-dissolve: blend two overlapping clips frame-by-frame
+  - Fade in/out: adjust per-frame opacity across transition duration
+  - Transition duration slider on timeline
+  - Render transition preview: composite two video frames with
+    weighted blend, displayed on canvas
+  - All pure canvas compositing of video frames
+  Effort: Medium — canvas video frame blending + timeline UI
+
+Frame Animation Export — Complete Pipeline
+  Current state:
+  - Named export presets cover GIF/frame animation workflows
+  What's missing (implementable):
+  - Extract frames from timeline at specified FPS
+  - Encode as animated GIF: use existing GIF encoder (gif.js or custom)
+    to assemble frames with per-frame delay
+  - Encode as APNG: assemble PNG frames with acTL/fcTL/fdAT chunks
+  - Encode as animated WebP: use canvas.toBlob() frame assembly
+  - Download button for each format
+  - All pure browser encoding — GIF/APNG can be done with typed arrays
+  Effort: Large — frame extraction + animated format encoders
+
+Audio Mixing — Real-Time Web Audio Export
+  Current state:
+  - Audio track metadata stored (pan, fade, mute, volume)
+  What's missing (implementable):
+  - OfflineAudioContext for rendering the final mix
+  - Apply stored gain/fade/pan to each audio source node
+  - Export rendered mix as WAV (via AudioBuffer → WAV encoder) or
+    use MediaRecorder on a combined stream
+  - All Web Audio API — browser-native, no external deps
+  Effort: Medium — offline audio rendering pipeline
+
+--------------------------------------------------------------------------------
+  2.4 PREFERENCES
+--------------------------------------------------------------------------------
+
+Cursor Preferences — Custom Canvas Cursors
+  Current state:
+  - Tool cursor style stored in preferences
+  What's missing (implementable):
+  - Per-tool custom cursor rendering: render tool-specific cursor
+    (brush size circle, crosshair with tool icon, etc.) on a
+    cursor-following canvas overlay
+  - Precise vs standard cursor toggle
+  - Show brush size crosshair
+  - Pure CSS cursor + canvas overlay for custom cursors
+  Effort: Small — canvas overlay following mouse + CSS cursor changes
+
+Ruler/Grid Preferences — Physical Calibration
+  Current state:
+  - Ruler units, grid subdivision, colors stored
+  What's missing (implementable):
+  - Screen DPI calibration wizard: show a line of known length, user
+    measures with physical ruler, inputs actual mm — calculates actual DPI
+  - Store calibration in preferences, use for accurate ruler display
+  - Print-size view: zoom to actual print dimensions based on calibration
+  - All pure math + user input
+  Effort: Small — calibration dialog + DPI math
+
+Preferences — Import/Export File Dialog
+  Current state:
+  - Import/export versioned JSON works
+  What's missing (implementable):
+  - Drag-and-drop .json preference file onto the app to import
+  - Better import validation: schema-check imported JSON, reject
+    malformed files with specific error messages
+  - Section-level partial import: import only "Units & Rulers" from
+    a preference file while keeping other sections
+  - All pure JSON parsing + validation
+  Effort: Small — drag-drop handler + JSON schema validation
+
+--------------------------------------------------------------------------------
+  2.5 FORMATS
+--------------------------------------------------------------------------------
+
+PSB — Extend Document Size Limits
+  Current state:
+  - Uses ag-psd Large Document mode
+  What's missing (implementable):
+  - Warn user when document exceeds browser canvas max (varies by browser)
+    with a clear error message suggesting downscaling
+  - Progressive downscale option: offer to open at 50% scale
+  - Tile-view mode: view individual tiles of a huge PSB at full resolution
+    while compositing a downscaled overview
+  - All within the tiled backing store architecture already present
+  Effort: Medium — extend existing tile store + zoom/viewport logic
+
+Baseline TIFF — Compressed Export
+  Current state:
+  - TIFF import via UTIF2; export is uncompressed
+  What's missing (implementable):
+  - LZW compression for TIFF export: implement LZW encoder on typed arrays
+  - Deflate compression for TIFF export: use browser's native
+    CompressionStream API (deflate-raw) where available
+  - Offer compression options in export dialog
+  - All pure typed-array encoding — LZW is a well-documented algorithm
+  Effort: Medium — LZW encoder implementation + CompressionStream usage
+
+TGA Export
+  Current state:
+  - TGA import only, no export
+  What's missing (implementable):
+  - TGA encoder: write TGA header (18 bytes) + pixel data in BGR(A) order
+  - TGA is one of the simplest image formats to encode — 18-byte header
+    followed by raw or RLE-compressed pixel data
+  - RLE compression pass on pixel rows
+  - Offer as export option alongside PNG/JPEG/WebP
+  - Pure typed-array encoding, no external deps
+  Effort: Small — TGA encoder is ~50 lines of code
+
+PNM Export
+  Current state:
+  - PNM import only, no export
+  What's missing (implementable):
+  - PPM export: write ASCII P6 header + raw RGB bytes
+  - PGM export: grayscale variant
+  - PBM export: 1-bit black and white variant
+  - All are trivial formats: header string + raw bytes
+  - Offer as export options
+  Effort: Trivial — PNM encoders are ~30 lines each
+
+Progressive JPEG / Interlaced PNG Export
+  Current state:
+  - Browser raster export has no metadata control
+  What's missing (implementable):
+  - JPEG: encode progressive scan JPEG using a JS JPEG encoder
+    (or use OffscreenCanvas + toBlob with quality setting)
+  - PNG: encode interlaced PNG (Adam7) using a JS PNG encoder that
+    supports interlacing
+  - Add progressive/interlace checkboxes in export dialog
+  - JS PNG/JPEG encoders exist (e.g., UPNG.js can be vendored)
+  Effort: Large — requires vendoring a JS image encoder library
+
+Metadata Embedding in Exports
+  Current state:
+  - No metadata in raster exports
+  What's missing (implementable):
+  - Embed basic text metadata as PNG tEXt/iTXt chunks:
+    author, copyright, description, creation date
+  - Embed XMP as a PNG iTXt chunk or JPEG XMP APP1 marker
+  - Add metadata fields to export dialog
+  - PNG chunk writing is well-documented; implement chunked PNG export
+  Effort: Medium — PNG chunk writer + JPEG marker insertion
+
+--------------------------------------------------------------------------------
+  2.6 COLOR
+--------------------------------------------------------------------------------
+
+8-bit RGBA — Visual Feedback for Bit Depth Mismatch
+  Current state:
+  - Editing is 8-bit regardless of document metadata
+  What's missing (implementable):
+  - Status bar indicator: "Editing at 8-bit | Document: 16-bit"
+  - Warning badge when editing operations may lose precision
+  - Histogram computed from canvas data with 256-bin display
+  - These are purely informational UI additions that honestly show
+    the browser limitation rather than hiding it
+  Effort: Small — status bar indicator + histogram panel
+
+16/32-bit — Expand Typed Array Operations
+  Current state:
+  - Typed-array high-bit image model exists for local algorithms
+  What's missing (implementable):
+  - Expose more filters through the high-bit path:
+    levels, curves, brightness/contrast, exposure on Float32Array data
+  - High-bit histogram computation (65536 bins for 16-bit, float bucketing)
+  - Tone-mapping preview controls: exposure slider, gamma slider
+  - Info panel: show actual 16/32-bit pixel values under cursor
+    (read from source typed array, not canvas)
+  - All pure typed-array math
+  Effort: Medium — extend existing high-bit pipeline to more operations
+
+--------------------------------------------------------------------------------
+  2.7 SMART OBJECTS
+--------------------------------------------------------------------------------
+
+Smart Filters — Local Project Format Fidelity
+  Current state:
+  - Smart filter metadata, order, masks, opacity, blend mode stored
+  - PSD export rasterizes them
+  What's missing (implementable):
+  - Smart filter re-ordering via drag-and-drop in the filters panel
+  - On-canvas smart filter mask painting (paint black/white to reveal/hide
+    filter effect on specific regions)
+  - Filter opacity slider with live preview
+  - Smart filter mask density and feather controls
+  - All pure canvas mask compositing — already have mask infrastructure
+  Effort: Medium — extend existing mask painting to smart filter masks
+
+Smart Object / Smart Filter — Visual Indicators
+  Current state:
+  - Smart filter metadata exists
+  What's missing (implementable):
+  - Layer panel badge: show filter count on smart object layers
+  - Filter list sub-items under smart object in layers panel with
+    enable/disable toggle per filter
+  - Right-click "Edit Smart Filter Mask" on a filter entry
+  - Pure UI additions using existing data model
+  Effort: Small — layers panel UI enhancements
+
+--------------------------------------------------------------------------------
+  2.8 FILTERS
+--------------------------------------------------------------------------------
+
+Blur Gallery — On-Canvas Interactive Pins
+  Current state:
+  - Field/Iris/Tilt-Shift/Path/Spin Blur algorithms exist
+  What's missing (implementable):
+  - On-canvas pin/control placement: click to place a blur pin,
+    drag to reposition, drag handle to adjust blur radius
+  - Field Blur: multiple pins with per-pin blur amount, smooth
+    interpolation between pins
+  - Iris Blur: draggable ellipse overlay showing focus area and
+    feather region
+  - Tilt-Shift: draggable parallel lines showing in-focus band
+  - Path Blur: draggable path control points
+  - Spin Blur: draggable center + radius control
+  - All pure canvas overlay rendering + pointer events on existing filters
+  Effort: Large — interactive canvas overlay for each blur type
+
+Worker Filter Coverage — Offload More Filters
+  Current state:
+  - Some deterministic filters run in workers
+  What's missing (implementable):
+  - Audit all 60+ filters for worker compatibility
+  - Refactor main-thread-only filters to use typed-array I/O so they
+    can run in workers via postMessage(ImageData)
+  - Batch filter operations: queue multiple filters and run them
+    sequentially in a single worker to avoid transfer overhead
+  - Progress callback from worker to main thread for filter progress bar
+  - All within existing worker infrastructure
+  Effort: Medium — systematic audit + refactor of filter I/O
+
+--------------------------------------------------------------------------------
+  2.9 PERFORMANCE
+--------------------------------------------------------------------------------
+
+Tiled Backing Store — Extend to Smart Objects and 3D
+  Current state:
+  - Only targets raster layers
+  What's missing (implementable):
+  - Tile smart object layers: render smart object content once per tile,
+    cache in tile store, reuse across frames
+  - Tile 3D layer previews: render 3D scene at tile resolution,
+    cache renders per camera angle
+  - Tile invalidation for smart objects: when source changes, mark
+    affected tiles as dirty
+  - All within existing tile store architecture
+  Effort: Medium — extend tile system to non-raster layer types
+
+Progressive Preview — Better Coarse Pass
+  Current state:
+  - Nearest-neighbor downsampling for coarse pass
+  What's missing (implementable):
+  - Bicubic or bilinear downsampling for smoother intermediate previews
+  - Progressive tile refinement: refine individual tiles from coarse
+    to fine rather than whole-frame replacement
+  - Cancel existing refinement pass when new interaction starts
+    (requestAnimationFrame ID tracking)
+  - All image resampling algorithms — pure typed-array math
+  Effort: Small — swap nearest-neighbor for bilinear/bicubic in
+    progressive-renderer.ts
+
+Dirty-Rect — Per-Layer Tracking
+  Current state:
+  - Dirty rectangles tracked, promote to full redraw above 60%
+  What's missing (implementable):
+  - Per-layer dirty rects: when only one layer changes, only
+    composite the dirty region for that layer
+  - Layer-isolated redraw: scissor to dirty region, redraw only
+    changed layer, composite with cached background
+  - Adaptive promotion threshold: tune 60% based on document size
+  - All within existing render-bus.ts + compositor
+  Effort: Medium — extend dirty rect tracking to layer granularity
+
+Memory Budget — Heap Introspection
+  Current state:
+  - Caller-declared allocation sizes
+  What's missing (implementable):
+  - Where available, use performance.memory.usedJSHeapSize to track
+    actual heap usage and cross-reference with declared allocations
+  - GC pressure detection: monitor sharp drops in heap size (indicating
+    GC just ran) to trigger proactive cache eviction
+  - Memory usage display in status bar or performance panel
+  - All browser performance.memory API (Chrome) + fallback gracefully
+  Effort: Small — add heap monitoring alongside existing tracker
+
+Incremental Autosave — Background Compaction
+  Current state:
+  - Delta chain capped at ~8 entries / ~12 MB
+  What's missing (implementable):
+  - Background idle-time compaction: when browser is idle
+    (requestIdleCallback), compact delta chain into fewer entries
+  - Streaming compression of delta entries using CompressionStream
+  - Smarter fingerprinting: detect when two deltas are near-identical
+    and merge them
+  - All within existing OPFS autosave infrastructure
+  Effort: Medium — idle compaction + compression
+
+OffscreenCanvas — Feature Detection and User Feedback
+  Current state:
+  - Capability detection picks OffscreenCanvas, falls back silently
+  What's missing (implementable):
+  - Performance panel: show whether OffscreenCanvas workers are active
+  - Diagnose why OffscreenCanvas transfer failed (console warning with
+    specific reason)
+  - Graceful degradation indicator: subtle badge when running in
+    fallback mode
+  - All UI additions + better error logging
+  Effort: Small — diagnostics panel + console improvements
+
+Canvas Pooling — Smarter Reuse
+  Current state:
+  - Canvas pooling reduces GC pressure
+  What's missing (implementable):
+  - Size-bucketed pools: separate pools for small/medium/large canvases
+  - Idle cleanup: release oversized canvases after idle period
+  - Pool statistics: track hit/miss rate for debugging
+  - All within existing canvas utility functions
+  Effort: Small — pool bucketing + statistics
+
+Large Documents — WebGL Compositing Path
+  Current state:
+  - Single HTML5 2D compositor is the bottleneck
+  What's missing (implementable):
+  - WebGL 2D-compatible compositor: render each layer as a textured
+    quad with blend mode implemented via GL blend functions
+  - Much higher canvas area limit (WebGL texture max is typically
+    16384x16384, but can tile larger)
+  - GPU-accelerated filter chain for compatible filters
+  - Fallback to HTML5 2D when WebGL is unavailable
+  - Uses WebGL API — browser-native, no external deps
+  Effort: Very Large — entire new compositing pipeline
+  Note: This is the single highest-impact implementation for unlocking
+  larger documents and faster compositing.
+
+RAF Coalescer — Smarter Scheduling
+  Current state:
+  - raf-coalescer.ts exists
+  What's missing (implementable):
+  - Priority levels: input events (high), filter preview (medium),
+    UI updates (low)
+  - Coalesced filter previews: while slider is dragging, skip
+    intermediate filter renders, render only latest value
+  - Budget-aware rendering: measure last frame time, skip non-critical
+    renders if budget exceeded
+  - All within existing rAF scheduling
+  Effort: Medium — priority queue + frame budget tracking
+
+================================================================================
+  SECTION 3: SUMMARY — IMPLEMENTABLE GAPS BY EFFORT
+================================================================================
+
+TRIVIAL (~30 min each, ~30-50 lines):
+  1. PNM Export (PBM/PGM/PPM encoders)
+  2. TGA Export (18-byte header + pixel data)
+  3. Bit-depth status bar indicator
+  4. Smart filter sub-items in layers panel
+
+SMALL (~1-2 hrs each, ~50-150 lines):
+  5. Polygon star/smooth controls
+  6. Quick selection tolerance slider
+  7. Find/replace regex mode + match count
+  8. More OpenType feature toggles (frac, sups, ordn, etc.)
+  9. Vertical text alignment controls
+  10. Custom canvas cursors per tool
+  11. Physical screen DPI calibration wizard
+  12. Preference file drag-and-drop import
+  13. Bicubic coarse pass for progressive preview
+  14. Memory heap introspection + status bar
+  15. OffscreenCanvas diagnostics panel
+  16. Canvas pool bucketing + statistics
+
+MEDIUM (~4-8 hrs each, ~150-400 lines):
+  17. Per-corner radius completion
+  18. Magnetic lasso improvements (Canny edge detection)
+  19. On-canvas Bezier handle dragging
+  20. Per-slice export settings + "Export All Slices"
+  21. Variable font axis sliders with named instances
+  22. Font substitution side-by-side preview
+  23. Cross-dissolve/fade video transitions on canvas
+  24. Audio mixing via OfflineAudioContext
+  25. PSB progressive downscale option
+  26. TIFF LZW/deflate compressed export
+  27. PNG metadata chunk embedding
+  28. High-bit path expansion (more filters on Float32Array)
+  29. Smart filter mask painting on canvas
+  30. Worker filter coverage audit + refactor
+  31. Tile store for smart objects and 3D layers
+  32. Per-layer dirty rect tracking
+  33. Background autosave compaction + compression
+  34. RAF coalescer priority levels + frame budget
+  35. Frame animation export pipeline (GIF/APNG/WebP)
+
+LARGE (~1-2 weeks each, ~400-1000+ lines):
+  36. Video trim/split with frame-accurate timeline
+  37. On-canvas blur gallery interactive pins
+  38. Progressive JPEG / interlaced PNG encoders
+  39. Contact sheet / picture package generation
+
+VERY LARGE (~2-4 weeks, ~2000+ lines):
+  40. WebGL compositor path (highest impact, most effort)
+
+================================================================================
+  SECTION 4: RECOMMENDED PRIORITY ORDER
+================================================================================
+
+Phase 1 — Quick Wins (immediate user-visible improvement):
+  1. TGA + PNM export (trivial, fills format gaps)
+  2. Polygon star controls (small, missing tool feature)
+  3. Bit-depth status indicator (trivial, honesty improvement)
+  4. Custom canvas cursors (small, UX polish)
+  5. OpenType feature toggles (small, typography completeness)
+
+Phase 2 — Tool Completion (rounds out core editing):
+  6. Per-corner radius (medium, already mostly wired)
+  7. Bezier handle dragging (medium, core vector editing)
+  8. Quick selection tolerance slider (small, selection UX)
+  9. Blur gallery interactive pins (large, flagship filter feature)
+  10. Magnetic lasso improvements (medium, selection tool)
+
+Phase 3 — Export/Format Completeness:
+  11. TIFF compressed export (medium)
+  12. Frame animation export pipeline (medium, video workflow)
+  13. Per-slice export settings (medium)
+  14. PNG metadata embedding (medium)
+
+Phase 4 — Performance Infrastructure:
+  15. Per-layer dirty rect tracking (medium)
+  16. Bicubic progressive preview (small)
+  17. Tile store for smart objects (medium)
+  18. Worker filter coverage (medium)
+  19. RAF coalescer priority levels (medium)
+
+Phase 5 — Major Infrastructure:
+  20. Contact sheet / picture package (large)
+  21. Audio mixing export (medium)
+  22. WebGL compositor path (very large, highest impact)
+
+================================================================================
+  END OF REPORT
+================================================================================

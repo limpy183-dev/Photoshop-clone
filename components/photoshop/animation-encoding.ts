@@ -9,11 +9,14 @@
  */
 
 import type { PsDocument, TimelineFrame, TimelineSettings } from "./types"
-import { renderTimelineFrameComposite, DEFAULT_TIMELINE_SETTINGS } from "./timeline-engine"
+import { easingProgress, renderTimelineFrameComposite, DEFAULT_TIMELINE_SETTINGS } from "./timeline-engine"
 
 export interface AnimatedExportFrame {
   durationMs: number
   canvas: HTMLCanvasElement
+  sourceFrameId?: string
+  timeMs?: number
+  sampleIndex?: number
 }
 
 export interface AnimatedExportOptions {
@@ -25,6 +28,8 @@ export interface AnimatedExportOptions {
   loopCount?: number
   /** Quality (0..1) for WebP frames. */
   quality?: number
+  /** Timeline sampling rate for frame animation export. Defaults to document timeline FPS. */
+  fps?: number
 }
 
 /* -------------------------------- helpers -------------------------------- */
@@ -198,6 +203,122 @@ export function collectAnimationFrames(
     )
     return { durationMs: Math.max(20, frame.durationMs), canvas: target }
   })
+}
+
+function drawTimelineTransitionSample(
+  from: HTMLCanvasElement,
+  to: HTMLCanvasElement | null,
+  transition: TimelineFrame["transition"],
+  progress: number,
+  matte: string,
+): HTMLCanvasElement {
+  if (!transition || transition === "hold" || !to) return from
+  const out = document.createElement("canvas")
+  out.width = from.width
+  out.height = from.height
+  const ctx = out.getContext("2d")
+  if (!ctx) return from
+  ctx.clearRect(0, 0, out.width, out.height)
+  const t = clamp(progress, 0, 1)
+
+  if (transition === "fade-black" || transition === "fade-white") {
+    ctx.drawImage(from, 0, 0)
+    ctx.save()
+    ctx.globalAlpha = t
+    ctx.fillStyle = transition === "fade-white" ? "#ffffff" : "#000000"
+    ctx.fillRect(0, 0, out.width, out.height)
+    ctx.restore()
+    return out
+  }
+  if (transition === "wipe-left" || transition === "wipe-right") {
+    ctx.drawImage(from, 0, 0)
+    const w = out.width * t
+    const x = transition === "wipe-right" ? 0 : out.width - w
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(x, 0, w, out.height)
+    ctx.clip()
+    ctx.drawImage(to, 0, 0)
+    ctx.restore()
+    return out
+  }
+
+  ctx.save()
+  ctx.globalAlpha = 1 - t
+  ctx.drawImage(from, 0, 0)
+  ctx.restore()
+  ctx.save()
+  ctx.globalAlpha = t
+  ctx.drawImage(to, 0, 0)
+  ctx.restore()
+  ctx.save()
+  ctx.globalCompositeOperation = "destination-over"
+  ctx.fillStyle = matte
+  ctx.fillRect(0, 0, out.width, out.height)
+  ctx.restore()
+  return out
+}
+
+export function collectAnimationFramesAtFps(
+  doc: PsDocument,
+  options: AnimatedExportOptions = {},
+): AnimatedExportFrame[] {
+  const transparent = options.transparent ?? true
+  const matte = options.matte ?? doc.background ?? "#ffffff"
+  const scale = options.scale ?? 1
+  const frames = doc.timelineFrames ?? []
+  const fps = Math.max(1, Math.round(options.fps ?? doc.timelineSettings?.fps ?? DEFAULT_TIMELINE_SETTINGS.fps))
+  const frameDuration = Math.max(1, Math.round(1000 / fps))
+  if (!frames.length) {
+    const canvas = renderTimelineFrameComposite(
+      doc,
+      {
+        id: "_default",
+        name: "frame",
+        durationMs: frameDuration,
+        layerVisibility: Object.fromEntries(doc.layers.map((l) => [l.id, l.visible])),
+        layerOpacity: Object.fromEntries(doc.layers.map((l) => [l.id, l.opacity])),
+      },
+      { transparent, matte },
+    )
+    const target = ensureSize(canvas, Math.max(1, Math.round(doc.width * scale)), Math.max(1, Math.round(doc.height * scale)))
+    return [{ durationMs: frameDuration, canvas: target, sourceFrameId: "_default", timeMs: 0, sampleIndex: 0 }]
+  }
+
+  const rendered = frames.map((frame) => renderTimelineFrameComposite(doc, frame, { transparent, matte }))
+  const out: AnimatedExportFrame[] = []
+  let timeMs = 0
+  for (let frameIndex = 0; frameIndex < frames.length; frameIndex++) {
+    const frame = frames[frameIndex]
+    const sampleCount = Math.max(1, Math.round(frame.durationMs / frameDuration))
+    for (let sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++) {
+      const linear = sampleCount <= 1 ? 0 : sampleIndex / (sampleCount - 1)
+      const progress = frame.transition && frame.transition !== "hold"
+        ? easingProgress(linear, frame.easing ?? "linear")
+        : 0
+      const transitioned = drawTimelineTransitionSample(
+        rendered[frameIndex],
+        rendered[frameIndex + 1] ?? null,
+        frame.transition,
+        progress,
+        matte,
+      )
+      const target = ensureSize(
+        transitioned,
+        Math.max(1, Math.round(doc.width * scale)),
+        Math.max(1, Math.round(doc.height * scale)),
+      )
+      out.push({
+        durationMs: frameDuration,
+        canvas: target,
+        sourceFrameId: frame.id,
+        timeMs,
+        sampleIndex,
+      })
+      timeMs += frameDuration
+    }
+  }
+  return out
 }
 
 export function resolveTimelineSettings(doc: PsDocument): TimelineSettings {
@@ -594,19 +715,19 @@ export async function encodeAnimatedWebP(
 
 export async function exportTimelineAsGifBytes(doc: PsDocument, options: AnimatedExportOptions = {}): Promise<Uint8Array> {
   const settings = resolveTimelineSettings(doc)
-  const frames = collectAnimationFrames(doc, options)
+  const frames = collectAnimationFramesAtFps(doc, { ...options, fps: options.fps ?? settings.fps })
   return encodeAnimatedGif(frames, { ...options, loopCount: options.loopCount ?? settings.loopCount })
 }
 
 export async function exportTimelineAsApngBytes(doc: PsDocument, options: AnimatedExportOptions = {}): Promise<Uint8Array> {
   const settings = resolveTimelineSettings(doc)
-  const frames = collectAnimationFrames(doc, options)
+  const frames = collectAnimationFramesAtFps(doc, { ...options, fps: options.fps ?? settings.fps })
   return encodeApngFromFrames(frames, { ...options, loopCount: options.loopCount ?? settings.loopCount })
 }
 
 export async function exportTimelineAsWebPBytes(doc: PsDocument, options: AnimatedExportOptions = {}): Promise<Uint8Array> {
   const settings = resolveTimelineSettings(doc)
-  const frames = collectAnimationFrames(doc, options)
+  const frames = collectAnimationFramesAtFps(doc, { ...options, fps: options.fps ?? settings.fps })
   return encodeAnimatedWebP(frames, { ...options, loopCount: options.loopCount ?? settings.loopCount })
 }
 

@@ -7,12 +7,24 @@
  * worker coverage.
  */
 
-import { getFilter } from "./filters"
+import { FILTERS, getFilter } from "./filters"
 import { planTileGrid } from "./performance-engine"
+
+export interface FilterBatchOperation {
+  filterId: string
+  params: Record<string, number | string | boolean>
+}
+
+export interface FilterProgressEvent {
+  completed: number
+  total: number
+  filterId: string
+}
 
 interface FilterWorkerRequest {
   id: number
-  filterId: string
+  filterId?: string
+  operations?: FilterBatchOperation[]
   width: number
   height: number
   buffer: ArrayBuffer
@@ -25,6 +37,7 @@ interface FilterWorkerResponse {
   height: number
   buffer?: ArrayBuffer
   error?: string
+  progress?: FilterProgressEvent
 }
 
 let _worker: Worker | null = null
@@ -33,6 +46,7 @@ let _nextId = 0
 const _pending = new Map<number, {
   resolve: (data: ImageData) => void
   reject: (err: Error) => void
+  progress?: (event: FilterProgressEvent) => void
 }>()
 
 const WORKER_SUPPORTED_FILTERS = [
@@ -62,6 +76,11 @@ const WORKER_SUPPORTED_FILTERS = [
   "offset",
   "custom-convolution",
   "lighting-effects",
+  "field-blur",
+  "iris-blur",
+  "tilt-shift",
+  "path-blur",
+  "spin-blur",
 ] as const
 
 type WorkerSupportedFilter = typeof WORKER_SUPPORTED_FILTERS[number]
@@ -76,6 +95,67 @@ export function getFilterWorkerSupport() {
   return {
     strategy: "worker-for-supported-filters-with-async-main-thread-fallback",
     supportedFilters: [...WORKER_SUPPORTED_FILTERS],
+  }
+}
+
+export type FilterWorkerAuditStrategy = "worker" | "main-thread-typed-array" | "main-thread-context"
+
+export interface FilterWorkerAuditEntry {
+  filterId: string
+  name: string
+  category: string
+  strategy: FilterWorkerAuditStrategy
+  transferableImageData: boolean
+  reason: string
+}
+
+const CONTEXT_REQUIRED_FILTERS = new Set([
+  "match-color",
+  "displace",
+  "apply-image",
+  "calculations",
+])
+
+export function getFilterWorkerAudit() {
+  const entries: FilterWorkerAuditEntry[] = Object.values(FILTERS)
+    .map((filter) => {
+      if (isFilterWorkerSupported(filter.id)) {
+        return {
+          filterId: filter.id,
+          name: filter.name,
+          category: filter.category,
+          strategy: "worker" as const,
+          transferableImageData: true,
+          reason: "Dedicated typed-array worker implementation accepts transferable ImageData buffers.",
+        }
+      }
+      if (CONTEXT_REQUIRED_FILTERS.has(filter.id)) {
+        return {
+          filterId: filter.id,
+          name: filter.name,
+          category: filter.category,
+          strategy: "main-thread-context" as const,
+          transferableImageData: false,
+          reason: "Requires additional document/layer context that is not represented by a single transferable ImageData buffer.",
+        }
+      }
+      return {
+        filterId: filter.id,
+        name: filter.name,
+        category: filter.category,
+        strategy: "main-thread-typed-array" as const,
+        transferableImageData: true,
+        reason: "Pure ImageData algorithm is audited for typed-array I/O and uses async main-thread fallback until a parity worker implementation is added.",
+      }
+    })
+    .sort((a, b) => a.filterId.localeCompare(b.filterId))
+
+  return {
+    totalFilters: entries.length,
+    workerSupportedCount: entries.filter((entry) => entry.strategy === "worker").length,
+    typedArrayFallbackCount: entries.filter((entry) => entry.strategy === "main-thread-typed-array").length,
+    contextRequiredCount: entries.filter((entry) => entry.strategy === "main-thread-context").length,
+    entries,
   }
 }
 
@@ -222,6 +302,32 @@ const num = (value, fallback) => {
   return Number.isFinite(n) ? n : fallback;
 };
 const bool = (value, fallback = false) => typeof value === "boolean" ? value : fallback;
+const clamp01 = (value) => Math.max(0, Math.min(1, value));
+const round2 = (value) => Math.round(value * 100) / 100;
+function pseudoDither(i) {
+  const x = Math.sin((i + 1) * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+function parsePercentPoints(value) {
+  return String(value || "")
+    .split(";")
+    .map((entry) => entry.split(",").map((part) => Number(String(part).trim())))
+    .filter((parts) => parts.length >= 2 && Number.isFinite(parts[0]) && Number.isFinite(parts[1]))
+    .map(([x, y]) => ({ x: Math.max(0, Math.min(100, x)), y: Math.max(0, Math.min(100, y)) }));
+}
+
+function parseFieldPins(value) {
+  return String(value || "")
+    .split(";")
+    .map((entry) => entry.split(",").map((part) => Number(String(part).trim())))
+    .filter((parts) => parts.length >= 3 && parts.every(Number.isFinite))
+    .map(([x, y, blur]) => ({
+      x: Math.max(0, Math.min(100, x)),
+      y: Math.max(0, Math.min(100, y)),
+      blur: Math.max(0, Math.min(80, Math.round(blur))),
+    }));
+}
 
 function brightnessContrast(data, params) {
   const brightness = num(params.brightness, 0);
@@ -575,34 +681,199 @@ function radialBlur(data, width, height, params) {
   const cx = Math.max(0, Math.min(1, num(params.centerX, 50) / 100)) * (width - 1);
   const cy = Math.max(0, Math.min(1, num(params.centerY, 50) / 100)) * (height - 1);
   const strength = Math.max(0, Math.min(100, amount)) / 100;
-  const steps = quality === "best" ? 40 : quality === "good" ? 22 : 10;
+  if (strength <= 0) return;
+  const steps = quality === "best" ? 48 : quality === "good" ? 24 : 12;
+  const diag = Math.hypot(width, height);
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      let rs = 0, gs = 0, bs = 0, as_ = 0;
+      let rs = 0, gs = 0, bs = 0, as_ = 0, wSum = 0;
       const dx = x - cx, dy = y - cy;
+      const dist = Math.hypot(dx, dy);
       for (let s = 0; s < steps; s++) {
-        const t = (s / Math.max(1, steps - 1) - 0.5) * strength;
+        const stepWeight = 1 - Math.abs((s / Math.max(1, steps - 1)) - 0.5) * 2;
+        const jitter = quality === "best" ? (pseudoDither(y * width + x + s * 17) - 0.5) / steps : 0;
+        const t = (s / Math.max(1, steps - 1) - 0.5 + jitter) * strength;
         let sx = x, sy = y;
         if (method === "zoom") {
-          sx = cx + dx * (1 + t * 1.2);
-          sy = cy + dy * (1 + t * 1.2);
+          const scale = 1 + t * 1.3;
+          sx = cx + dx * scale;
+          sy = cy + dy * scale;
         } else {
-          const angle = t * Math.PI * 0.75;
-          const cos = Math.cos(angle), sin = Math.sin(angle);
+          const arc = t * (diag * 0.5) / Math.max(8, dist);
+          const cos = Math.cos(arc), sin = Math.sin(arc);
           sx = cx + dx * cos - dy * sin;
           sy = cy + dx * sin + dy * cos;
         }
         const sample = bilinearSample(data, width, height, sx, sy);
-        rs += sample[0]; gs += sample[1]; bs += sample[2]; as_ += sample[3];
+        rs += sample[0] * stepWeight; gs += sample[1] * stepWeight; bs += sample[2] * stepWeight; as_ += sample[3] * stepWeight;
+        wSum += stepWeight;
       }
       const i = (y * width + x) * 4;
-      out[i] = rs / steps;
-      out[i + 1] = gs / steps;
-      out[i + 2] = bs / steps;
-      out[i + 3] = as_ / steps;
+      out[i] = rs / wSum;
+      out[i + 1] = gs / wSum;
+      out[i + 2] = bs / wSum;
+      out[i + 3] = as_ / wSum;
     }
   }
   data.set(out);
+}
+
+function mixBlurredByWeight(original, blurred, width, height, weightForPixel) {
+  const out = new Uint8ClampedArray(original);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const weight = clamp01(weightForPixel(x, y));
+      if (weight <= 0) continue;
+      out[i] = clamp8(original[i] * (1 - weight) + blurred[i] * weight);
+      out[i + 1] = clamp8(original[i + 1] * (1 - weight) + blurred[i + 1] * weight);
+      out[i + 2] = clamp8(original[i + 2] * (1 - weight) + blurred[i + 2] * weight);
+      out[i + 3] = original[i + 3];
+    }
+  }
+  return out;
+}
+
+function fieldBlurGallery(data, width, height, params) {
+  const blur = num(params.blur, 12);
+  const pins = parseFieldPins(params.pins);
+  if (pins.length > 0) {
+    const maxBlur = Math.max(0, blur, ...pins.map((pin) => pin.blur));
+    if (maxBlur <= 0) return;
+    const blurred = new Uint8ClampedArray(data);
+    boxBlur(blurred, width, height, { radius: Math.max(1, maxBlur) });
+    const out = mixBlurredByWeight(data, blurred, width, height, (x, y) => {
+      const px = (x / Math.max(1, width - 1)) * 100;
+      const py = (y / Math.max(1, height - 1)) * 100;
+      let weightedBlur = 0;
+      let totalWeight = 0;
+      for (const pin of pins) {
+        const dx = ((px - pin.x) / 100) * width;
+        const dy = ((py - pin.y) / 100) * height;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < 0.25) return pin.blur / maxBlur;
+        const weight = 1 / Math.max(1, d2);
+        weightedBlur += pin.blur * weight;
+        totalWeight += weight;
+      }
+      return totalWeight > 0 ? weightedBlur / totalWeight / maxBlur : 0;
+    });
+    data.set(out);
+    return;
+  }
+
+  const blurred = new Uint8ClampedArray(data);
+  boxBlur(blurred, width, height, { radius: Math.max(1, blur) });
+  const cx = (num(params.centerX, 50) / 100) * Math.max(1, width - 1);
+  const cy = (num(params.centerY, 50) / 100) * Math.max(1, height - 1);
+  const maxDistance = Math.hypot(Math.max(cx, width - cx), Math.max(cy, height - cy)) || 1;
+  const keepRadius = maxDistance * clamp01((100 - num(params.falloff, 45)) / 140);
+  data.set(mixBlurredByWeight(data, blurred, width, height, (x, y) => {
+    const d = Math.max(0, Math.hypot(x - cx, y - cy) - keepRadius);
+    return d / Math.max(1, maxDistance - keepRadius);
+  }));
+}
+
+function irisBlurGallery(data, width, height, params) {
+  const blurred = new Uint8ClampedArray(data);
+  boxBlur(blurred, width, height, { radius: Math.max(1, num(params.blur, 14)) });
+  const cx = (num(params.centerX, 50) / 100) * Math.max(1, width - 1);
+  const cy = (num(params.centerY, 50) / 100) * Math.max(1, height - 1);
+  const rx = Math.max(1, width * (num(params.radius, 42) / 100) * 0.5);
+  const ry = Math.max(1, height * (num(params.radius, 42) / 100) * 0.5);
+  const featherWidth = Math.max(0.01, num(params.feather, 30) / 100);
+  data.set(mixBlurredByWeight(data, blurred, width, height, (x, y) => {
+    const d = Math.hypot((x - cx) / rx, (y - cy) / ry);
+    return (d - 1) / featherWidth;
+  }));
+}
+
+function tiltShiftGallery(data, width, height, params) {
+  const blurred = new Uint8ClampedArray(data);
+  boxBlur(blurred, width, height, { radius: Math.max(1, num(params.blur, 16)) });
+  const radians = (num(params.angle, 0) * Math.PI) / 180;
+  const nx = -Math.sin(radians);
+  const ny = Math.cos(radians);
+  const cx = (num(params.centerX, 50) / 100) * Math.max(1, width - 1);
+  const cy = (num(params.centerY, 50) / 100) * Math.max(1, height - 1);
+  const clearBand = Math.max(1, Math.min(width, height) * (num(params.radius, 30) / 100) * 0.5);
+  const featherBand = Math.max(1, Math.min(width, height) * (num(params.feather, 30) / 100));
+  data.set(mixBlurredByWeight(data, blurred, width, height, (x, y) => {
+    const d = Math.abs((x - cx) * nx + (y - cy) * ny);
+    return (d - clearBand) / featherBand;
+  }));
+}
+
+function pathAngleFromPoints(points, width, height) {
+  const first = points[0];
+  const last = points[points.length - 1];
+  const dx = ((last.x - first.x) / 100) * width;
+  const dy = ((last.y - first.y) / 100) * height;
+  return Math.atan2(dy, dx) * 180 / Math.PI;
+}
+
+function distanceToSegment(point, a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  if (len2 <= 0.0001) return Math.hypot(point.x - a.x, point.y - a.y);
+  const t = clamp01(((point.x - a.x) * dx + (point.y - a.y) * dy) / len2);
+  return Math.hypot(point.x - (a.x + dx * t), point.y - (a.y + dy * t));
+}
+
+function distanceToPolyline(point, points) {
+  let best = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < points.length - 1; i++) best = Math.min(best, distanceToSegment(point, points[i], points[i + 1]));
+  return best;
+}
+
+function pathBlurGallery(data, width, height, params) {
+  const hasPath = String(params.path || "").trim().length > 0;
+  const points = hasPath ? parsePercentPoints(params.path) : [];
+  const angle = hasPath && points.length >= 2 ? pathAngleFromPoints(points, width, height) : num(params.angle, 0);
+  const blurred = new Uint8ClampedArray(data);
+  motionBlur(blurred, width, height, { distance: Math.max(1, num(params.distance, 24)), angle });
+  const taperAmount = clamp01(num(params.taper, 18) / 100);
+  if (hasPath && points.length >= 2) {
+    const canvasPoints = points.map((point) => ({
+      x: (point.x / 100) * Math.max(1, width - 1),
+      y: (point.y / 100) * Math.max(1, height - 1),
+    }));
+    const influenceBand = Math.max(8, Math.min(width, height) * 0.18);
+    data.set(mixBlurredByWeight(data, blurred, width, height, (x, y) => {
+      const nearest = distanceToPolyline({ x, y }, canvasPoints);
+      const pathWeight = 1 - clamp01(nearest / influenceBand);
+      if (taperAmount <= 0) return pathWeight;
+      const edge = Math.min(x, y, width - 1 - x, height - 1 - y);
+      const edgeWeight = 1 - clamp01(edge / Math.max(1, Math.min(width, height) * 0.5) * taperAmount);
+      return Math.max(pathWeight, edgeWeight * 0.35);
+    }));
+    return;
+  }
+  if (taperAmount <= 0) {
+    data.set(blurred);
+    return;
+  }
+  data.set(mixBlurredByWeight(data, blurred, width, height, (x, y) => {
+    const edge = Math.min(x, y, width - 1 - x, height - 1 - y);
+    return 1 - clamp01(edge / (Math.min(width, height) * 0.5) * taperAmount);
+  }));
+}
+
+function spinBlurGallery(data, width, height, params) {
+  const shifted = new Uint8ClampedArray(data);
+  radialBlur(shifted, width, height, {
+    amount: Math.max(1, num(params.amount, 28)),
+    method: "spin",
+    quality: "best",
+    centerX: num(params.centerX, 50),
+    centerY: num(params.centerY, 50),
+  });
+  const cx = (num(params.centerX, 50) / 100) * Math.max(1, width - 1);
+  const cy = (num(params.centerY, 50) / 100) * Math.max(1, height - 1);
+  const radiusPx = Math.max(1, Math.min(width, height) * clamp01(num(params.radius, 55) / 100) * 0.5);
+  const featherPx = Math.max(2, radiusPx * 0.2);
+  data.set(mixBlurredByWeight(data, shifted, width, height, (x, y) => 1 - clamp01((Math.hypot(x - cx, y - cy) - radiusPx) / featherPx)));
 }
 
 function lumaByte(r, g, b) {
@@ -963,6 +1234,21 @@ function applyFilter(filterId, data, params, width, height) {
     case "radial-blur":
       radialBlur(data, width, height, params);
       return;
+    case "field-blur":
+      fieldBlurGallery(data, width, height, params);
+      return;
+    case "iris-blur":
+      irisBlurGallery(data, width, height, params);
+      return;
+    case "tilt-shift":
+      tiltShiftGallery(data, width, height, params);
+      return;
+    case "path-blur":
+      pathBlurGallery(data, width, height, params);
+      return;
+    case "spin-blur":
+      spinBlurGallery(data, width, height, params);
+      return;
     case "surface-blur":
       surfaceBlur(data, width, height, params);
       return;
@@ -993,7 +1279,21 @@ self.onmessage = (event) => {
   const request = event.data;
   try {
     const data = new Uint8ClampedArray(request.buffer);
-    applyFilter(request.filterId, data, request.params || {}, request.width, request.height);
+    if (Array.isArray(request.operations)) {
+      const total = request.operations.length;
+      for (let i = 0; i < request.operations.length; i++) {
+        const operation = request.operations[i];
+        applyFilter(operation.filterId, data, operation.params || {}, request.width, request.height);
+        self.postMessage({
+          id: request.id,
+          width: request.width,
+          height: request.height,
+          progress: { completed: i + 1, total, filterId: operation.filterId },
+        });
+      }
+    } else {
+      applyFilter(request.filterId, data, request.params || {}, request.width, request.height);
+    }
     self.postMessage({ id: request.id, width: request.width, height: request.height, buffer: data.buffer }, [data.buffer]);
   } catch (err) {
     self.postMessage({ id: request.id, width: request.width, height: request.height, error: err instanceof Error ? err.message : String(err) });
@@ -1015,6 +1315,10 @@ function getWorker(): Worker | null {
       const response = event.data
       const pending = _pending.get(response.id)
       if (!pending) return
+      if (response.progress) {
+        pending.progress?.(response.progress)
+        return
+      }
       _pending.delete(response.id)
       if (response.error || !response.buffer) {
         pending.reject(new Error(response.error ?? "Filter worker returned no image data"))
@@ -1122,12 +1426,70 @@ export function applyFilterAsync(
   return runFilterOnMainThread(filterId, src, params)
 }
 
+export interface FilterBatchOptions {
+  onProgress?: (event: FilterProgressEvent) => void
+  fallbackOnWorkerError?: boolean
+}
+
+export async function applyFilterBatch(
+  src: ImageData,
+  operations: FilterBatchOperation[],
+  options: FilterBatchOptions = {},
+): Promise<ImageData> {
+  if (operations.length === 0) {
+    return new ImageData(new Uint8ClampedArray(src.data), src.width, src.height)
+  }
+
+  const canUseWorker = operations.every((operation) => isFilterWorkerSupported(operation.filterId))
+  const worker = canUseWorker ? getWorker() : null
+  if (worker) {
+    const id = _nextId++
+    const buffer = new ArrayBuffer(src.data.byteLength)
+    new Uint8ClampedArray(buffer).set(src.data)
+    const request: FilterWorkerRequest = {
+      id,
+      operations,
+      width: src.width,
+      height: src.height,
+      buffer,
+      params: {},
+    }
+    return new Promise<ImageData>((resolve, reject) => {
+      _pending.set(id, { resolve, reject, progress: options.onProgress })
+      worker.postMessage(request, [buffer])
+    }).catch((err) => {
+      _workerFailed = true
+      if (options.fallbackOnWorkerError === false) {
+        throw err instanceof Error ? err : new Error(String(err))
+      }
+      return runFilterBatchOnMainThread(src, operations, options.onProgress)
+    })
+  }
+
+  return runFilterBatchOnMainThread(src, operations, options.onProgress)
+}
+
+async function runFilterBatchOnMainThread(
+  src: ImageData,
+  operations: FilterBatchOperation[],
+  onProgress?: (event: FilterProgressEvent) => void,
+) {
+  let current = new ImageData(new Uint8ClampedArray(src.data), src.width, src.height)
+  for (let i = 0; i < operations.length; i++) {
+    const operation = operations[i]
+    current = await runFilterOnMainThread(operation.filterId, current, operation.params)
+    onProgress?.({ completed: i + 1, total: operations.length, filterId: operation.filterId })
+  }
+  return current
+}
+
 export interface TiledFilterOptions {
   tileSize?: number
   overlap?: number
   useWorker?: boolean
   signal?: AbortSignal
   yieldEveryTiles?: number
+  onProgress?: (event: FilterProgressEvent) => void
 }
 
 /**
@@ -1181,6 +1543,7 @@ export async function applyFilterTiled(
         out.data.set(filtered.data.slice(srcStart, srcStart + writeW * 4), dstStart)
       }
       processedTiles++
+      options.onProgress?.({ completed: processedTiles, total: plan.tileCount, filterId })
       if (processedTiles % yieldEveryTiles === 0) await Promise.resolve()
     }
   }

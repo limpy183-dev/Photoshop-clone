@@ -49,6 +49,21 @@ export interface AudioMixPlan {
   peakGain: number
 }
 
+export interface VideoThumbnailPlanItem {
+  index: number
+  timeMs: number
+  label: string
+}
+
+export interface VideoTransitionWeights {
+  progress: number
+  fromOpacity: number
+  toOpacity: number
+  matteOpacity: number
+  matteColor: string | null
+  wipeProgress: number
+}
+
 export interface FrameAnimation {
   fps: number
   durationMs: number
@@ -61,6 +76,21 @@ export interface FrameAnimation {
     layerOpacity?: Record<string, number>
     transition: TimelineFrame["transition"]
     transitionProgress: number
+  }>
+}
+
+export interface OfflineAudioMixSchedule {
+  sampleRate: number
+  durationMs: number
+  masterVolume: number
+  tracks: Array<AudioTrack & {
+    startSeconds: number
+    durationSeconds: number
+    fadeInSeconds: number
+    fadeOutSeconds: number
+    gain: number
+    leftGain: number
+    rightGain: number
   }>
 }
 
@@ -547,6 +577,22 @@ export function trimVideoClip(video: VideoLayerProps, inPointMs: number, outPoin
   }
 }
 
+export function snapTimeToFrame(timeMs: number, fps: number): number {
+  const safeFps = Math.max(1, Math.round(Number.isFinite(fps) ? fps : 1))
+  const frameMs = 1000 / safeFps
+  return Math.round(Math.max(0, timeMs) / frameMs) * frameMs
+}
+
+export function trimVideoClipToFrame(video: VideoLayerProps, inPointMs: number, outPointMs: number, fps: number): VideoLayerProps {
+  const start = snapTimeToFrame(inPointMs, fps)
+  const end = snapTimeToFrame(outPointMs, fps)
+  const trimmed = trimVideoClip(video, start, Math.max(start, end))
+  return {
+    ...trimmed,
+    currentTimeMs: clamp(Math.round(snapTimeToFrame(trimmed.currentTimeMs, fps)), trimmed.inPointMs, trimmed.outPointMs),
+  }
+}
+
 function cloneCanvas(canvas: HTMLCanvasElement) {
   const next = document.createElement("canvas")
   next.width = canvas.width
@@ -571,9 +617,216 @@ export function splitVideoLayer(layer: Layer, splitTimeMs: number): [Layer, Laye
   return [left, right]
 }
 
+export function splitVideoLayerAtPlayhead(layer: Layer, playheadMs: number, fps: number): [Layer, Layer] {
+  return splitVideoLayer(layer, snapTimeToFrame(playheadMs, fps))
+}
+
 export function applyVideoTransition(video: VideoLayerProps, transition: Omit<VideoTransition, "id"> & { id?: string }): VideoLayerProps {
   const next: VideoTransition = { ...transition, id: transition.id ?? uid("transition") }
   return { ...video, transitions: [...(video.transitions ?? []), next] }
+}
+
+export function updateVideoTransitionDuration(video: VideoLayerProps, transitionId: string | undefined, durationMs: number): VideoLayerProps {
+  const duration = clamp(Math.round(durationMs), 0, Math.max(0, video.durationMs))
+  const transitions = video.transitions ?? []
+  if (!transitions.length) {
+    return applyVideoTransition(video, { kind: "cross-dissolve", durationMs: duration, easing: "linear" })
+  }
+  return {
+    ...video,
+    transitions: transitions.map((transition, index) =>
+      (transitionId ? transition.id === transitionId : index === 0)
+        ? { ...transition, durationMs: duration }
+        : transition,
+    ),
+  }
+}
+
+export function buildVideoThumbnailPlan(
+  video: VideoLayerProps,
+  options: { count?: number; fps?: number } = {},
+): VideoThumbnailPlanItem[] {
+  const count = clamp(Math.round(options.count ?? 8), 1, 48)
+  const fps = Math.max(1, Math.round(options.fps ?? 24))
+  const start = video.trimHandles?.inMs ?? video.inPointMs
+  const end = video.trimHandles?.outMs ?? video.outPointMs
+  const span = Math.max(0, end - start)
+  return Array.from({ length: count }, (_, index) => {
+    const raw = count === 1 ? start : start + (span * index) / (count - 1)
+    const timeMs = clamp(Math.round(snapTimeToFrame(raw, fps)), 0, Math.max(0, video.durationMs))
+    return {
+      index,
+      timeMs,
+      label: `${(timeMs / 1000).toFixed(2)}s`,
+    }
+  })
+}
+
+export function createVideoElementForSource(source: string): HTMLVideoElement {
+  const video = document.createElement("video")
+  video.src = source
+  video.muted = true
+  video.preload = "auto"
+  video.crossOrigin = "anonymous"
+  video.playsInline = true
+  return video
+}
+
+export function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {
+  if (Number.isFinite(video.duration) && video.readyState >= 1) return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      video.removeEventListener("loadedmetadata", onLoaded)
+      video.removeEventListener("error", onError)
+    }
+    const onLoaded = () => {
+      cleanup()
+      resolve()
+    }
+    const onError = () => {
+      cleanup()
+      reject(new Error("Could not read video metadata"))
+    }
+    video.addEventListener("loadedmetadata", onLoaded, { once: true })
+    video.addEventListener("error", onError, { once: true })
+  })
+}
+
+export async function seekVideoElement(video: HTMLVideoElement, timeMs: number): Promise<void> {
+  await waitForVideoMetadata(video)
+  const target = clamp(timeMs / 1000, 0, Math.max(0, video.duration || 0))
+  if (Math.abs(video.currentTime - target) < 0.001 && video.readyState >= 2) return
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      video.removeEventListener("seeked", onSeeked)
+      video.removeEventListener("error", onError)
+    }
+    const onSeeked = () => {
+      cleanup()
+      resolve()
+    }
+    const onError = () => {
+      cleanup()
+      reject(new Error("Could not seek video frame"))
+    }
+    video.addEventListener("seeked", onSeeked, { once: true })
+    video.addEventListener("error", onError, { once: true })
+    video.currentTime = target
+  })
+}
+
+export async function extractVideoFrameToCanvas(
+  video: HTMLVideoElement,
+  timeMs: number,
+  options: { width: number; height: number },
+): Promise<HTMLCanvasElement> {
+  await seekVideoElement(video, timeMs)
+  const canvas = document.createElement("canvas")
+  canvas.width = Math.max(1, Math.round(options.width))
+  canvas.height = Math.max(1, Math.round(options.height))
+  const ctx = canvas.getContext("2d")
+  if (!ctx) throw new Error("2D context unavailable")
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+  return canvas
+}
+
+export async function extractVideoThumbnailStrip(
+  source: string | HTMLVideoElement,
+  video: VideoLayerProps,
+  options: { count?: number; fps?: number; width: number; height: number },
+): Promise<Array<VideoThumbnailPlanItem & { canvas: HTMLCanvasElement; dataUrl: string }>> {
+  const element = typeof source === "string" ? createVideoElementForSource(source) : source
+  const plan = buildVideoThumbnailPlan(video, options)
+  const out: Array<VideoThumbnailPlanItem & { canvas: HTMLCanvasElement; dataUrl: string }> = []
+  for (const item of plan) {
+    const canvas = await extractVideoFrameToCanvas(element, item.timeMs, options)
+    out.push({ ...item, canvas, dataUrl: canvas.toDataURL("image/jpeg", 0.72) })
+  }
+  return out
+}
+
+function transitionEase(progress: number, easing: VideoTransition["easing"] = "linear") {
+  const t = clamp(progress, 0, 1)
+  if (easing === "ease-in") return t * t
+  if (easing === "ease-out") return 1 - (1 - t) * (1 - t)
+  if (easing === "ease-in-out") return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2
+  return t
+}
+
+export function calculateTransitionWeights(
+  transition: Pick<VideoTransition, "kind" | "durationMs" | "easing">,
+  localTimeMs: number,
+  direction: "in" | "out" = "in",
+): VideoTransitionWeights {
+  const duration = Math.max(1, transition.durationMs)
+  const progress = transitionEase(localTimeMs / duration, transition.easing)
+  if (transition.kind === "cross-dissolve") {
+    return { progress, fromOpacity: 1 - progress, toOpacity: progress, matteOpacity: 0, matteColor: null, wipeProgress: progress }
+  }
+  if (transition.kind === "fade-black" || transition.kind === "fade-white") {
+    const matteColor = transition.kind === "fade-white" ? "#ffffff" : "#000000"
+    if (direction === "out") {
+      return { progress, fromOpacity: 1 - progress, toOpacity: 0, matteOpacity: progress, matteColor, wipeProgress: progress }
+    }
+    return { progress, fromOpacity: progress, toOpacity: 0, matteOpacity: 1 - progress, matteColor, wipeProgress: progress }
+  }
+  if (transition.kind === "wipe-left" || transition.kind === "wipe-right") {
+    return { progress, fromOpacity: 1, toOpacity: 1, matteOpacity: 0, matteColor: null, wipeProgress: progress }
+  }
+  return { progress, fromOpacity: 1, toOpacity: 0, matteOpacity: 0, matteColor: null, wipeProgress: 0 }
+}
+
+export function renderVideoTransitionPreview(
+  fromCanvas: HTMLCanvasElement,
+  toCanvas: HTMLCanvasElement | null | undefined,
+  transition: Pick<VideoTransition, "kind" | "durationMs" | "easing">,
+  localTimeMs: number,
+  options: { width?: number; height?: number; direction?: "in" | "out" } = {},
+): HTMLCanvasElement {
+  const width = Math.max(1, Math.round(options.width ?? fromCanvas.width ?? toCanvas?.width ?? 1))
+  const height = Math.max(1, Math.round(options.height ?? fromCanvas.height ?? toCanvas?.height ?? 1))
+  const out = document.createElement("canvas")
+  out.width = width
+  out.height = height
+  const ctx = out.getContext("2d")
+  if (!ctx) return out
+  const weights = calculateTransitionWeights(transition, localTimeMs, options.direction)
+  const target = toCanvas ?? fromCanvas
+
+  ctx.clearRect(0, 0, width, height)
+  if (weights.matteColor && weights.matteOpacity > 0) {
+    ctx.save()
+    ctx.globalAlpha = weights.matteOpacity
+    ctx.fillStyle = weights.matteColor
+    ctx.fillRect(0, 0, width, height)
+    ctx.restore()
+  }
+  if (transition.kind === "wipe-left" || transition.kind === "wipe-right") {
+    ctx.drawImage(fromCanvas, 0, 0, width, height)
+    ctx.save()
+    const wipeWidth = width * weights.wipeProgress
+    const x = transition.kind === "wipe-right" ? 0 : width - wipeWidth
+    ctx.beginPath()
+    ctx.rect(x, 0, wipeWidth, height)
+    ctx.clip()
+    ctx.drawImage(target, 0, 0, width, height)
+    ctx.restore()
+    return out
+  }
+
+  if (weights.fromOpacity > 0) {
+    ctx.save()
+    ctx.globalAlpha = weights.fromOpacity
+    ctx.drawImage(fromCanvas, 0, 0, width, height)
+    ctx.restore()
+  }
+  if (weights.toOpacity > 0 && target) {
+    ctx.save()
+    ctx.globalAlpha = weights.toOpacity
+    ctx.drawImage(target, 0, 0, width, height)
+    ctx.restore()
+  }
+  return out
 }
 
 export function createVideoGroup(
@@ -630,6 +883,149 @@ export function buildAudioMixPlan(tracks: AudioTrack[], timeMs: number, options:
   const leftGain = clamp(activeTracks.reduce((sum, track) => sum + track.leftGain, 0), 0, 1)
   const rightGain = clamp(activeTracks.reduce((sum, track) => sum + track.rightGain, 0), 0, 1)
   return { timeMs, masterVolume, activeTracks, leftGain, rightGain, peakGain: Math.max(leftGain, rightGain) }
+}
+
+export function buildOfflineAudioMixSchedule(
+  tracks: AudioTrack[],
+  options: { masterVolume?: number; sampleRate?: number; durationMs?: number } = {},
+): OfflineAudioMixSchedule {
+  const masterVolume = clamp(options.masterVolume ?? 1, 0, 1)
+  const sampleRate = Math.max(8000, Math.round(options.sampleRate ?? 48_000))
+  const scheduled = tracks
+    .filter((track) => !track.muted && !!track.dataUrl && track.durationMs > 0)
+    .map((track) => {
+      const gain = clamp((track.volume ?? 1) * masterVolume, 0, 1)
+      const pan = clamp(track.pan ?? 0, -1, 1)
+      const leftGain = gain * (pan <= 0 ? 1 : 1 - pan)
+      const rightGain = gain * (pan >= 0 ? 1 : 1 + pan)
+      return {
+        ...track,
+        gain,
+        leftGain,
+        rightGain,
+        startSeconds: Math.max(0, track.startMs) / 1000,
+        durationSeconds: Math.max(0, track.durationMs) / 1000,
+        fadeInSeconds: Math.max(0, track.fadeInMs ?? 0) / 1000,
+        fadeOutSeconds: Math.max(0, track.fadeOutMs ?? 0) / 1000,
+      }
+    })
+  const inferredDuration = scheduled.reduce((max, track) => Math.max(max, track.startMs + track.durationMs), 0)
+  return {
+    sampleRate,
+    durationMs: Math.max(1, Math.round(options.durationMs ?? inferredDuration)),
+    masterVolume,
+    tracks: scheduled,
+  }
+}
+
+function dataUrlToArrayBuffer(dataUrl: string): ArrayBuffer {
+  const comma = dataUrl.indexOf(",")
+  const header = comma >= 0 ? dataUrl.slice(0, comma) : ""
+  const payload = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl
+  if (/;base64/i.test(header)) {
+    const binary = atob(payload)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+  }
+  const encoded = new TextEncoder().encode(decodeURIComponent(payload))
+  return encoded.buffer.slice(encoded.byteOffset, encoded.byteOffset + encoded.byteLength) as ArrayBuffer
+}
+
+function offlineAudioContextCtor(): typeof OfflineAudioContext {
+  const candidate = globalThis.OfflineAudioContext
+    ?? (globalThis as typeof globalThis & { webkitOfflineAudioContext?: typeof OfflineAudioContext }).webkitOfflineAudioContext
+  if (!candidate) throw new Error("OfflineAudioContext is not available in this browser")
+  return candidate
+}
+
+export async function renderAudioMixToAudioBuffer(
+  tracks: AudioTrack[],
+  options: { masterVolume?: number; sampleRate?: number; durationMs?: number } = {},
+): Promise<AudioBuffer> {
+  const schedule = buildOfflineAudioMixSchedule(tracks, options)
+  const OfflineCtx = offlineAudioContextCtor()
+  const length = Math.max(1, Math.ceil((schedule.durationMs / 1000) * schedule.sampleRate))
+  const context = new OfflineCtx(2, length, schedule.sampleRate)
+
+  for (const track of schedule.tracks) {
+    if (!track.dataUrl) continue
+    const source = context.createBufferSource()
+    const data = dataUrlToArrayBuffer(track.dataUrl)
+    source.buffer = await context.decodeAudioData(data.slice(0))
+    source.playbackRate.value = Math.max(0.01, track.playbackRate ?? 1)
+
+    const gain = context.createGain()
+    const start = track.startSeconds
+    const end = Math.min(schedule.durationMs / 1000, start + track.durationSeconds)
+    const fadeInEnd = Math.min(end, start + track.fadeInSeconds)
+    const fadeOutStart = Math.max(start, end - track.fadeOutSeconds)
+    gain.gain.setValueAtTime(track.fadeInSeconds > 0 ? 0 : track.gain, start)
+    if (track.fadeInSeconds > 0) gain.gain.linearRampToValueAtTime(track.gain, fadeInEnd)
+    gain.gain.setValueAtTime(track.gain, fadeOutStart)
+    if (track.fadeOutSeconds > 0) gain.gain.linearRampToValueAtTime(0, end)
+
+    const maybeStereo = typeof context.createStereoPanner === "function" ? context.createStereoPanner() : null
+    if (maybeStereo) {
+      maybeStereo.pan.value = clamp(track.pan ?? 0, -1, 1)
+      source.connect(gain)
+      gain.connect(maybeStereo)
+      maybeStereo.connect(context.destination)
+    } else {
+      source.connect(gain)
+      gain.connect(context.destination)
+    }
+    source.start(start, 0, Math.max(0.001, end - start))
+  }
+
+  return context.startRendering()
+}
+
+function writeAscii(view: DataView, offset: number, text: string) {
+  for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i) & 0xff)
+}
+
+export function encodeWavFromAudioBuffer(buffer: AudioBuffer): Uint8Array {
+  const channels = Math.max(1, Math.min(2, buffer.numberOfChannels || 1))
+  const sampleRate = Math.max(1, Math.round(buffer.sampleRate || 44_100))
+  const bitsPerSample = 16
+  const blockAlign = channels * (bitsPerSample / 8)
+  const byteRate = sampleRate * blockAlign
+  const dataSize = buffer.length * blockAlign
+  const out = new Uint8Array(44 + dataSize)
+  const view = new DataView(out.buffer)
+  writeAscii(view, 0, "RIFF")
+  view.setUint32(4, 36 + dataSize, true)
+  writeAscii(view, 8, "WAVE")
+  writeAscii(view, 12, "fmt ")
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, channels, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, byteRate, true)
+  view.setUint16(32, blockAlign, true)
+  view.setUint16(34, bitsPerSample, true)
+  writeAscii(view, 36, "data")
+  view.setUint32(40, dataSize, true)
+
+  const channelData = Array.from({ length: channels }, (_, channel) => buffer.getChannelData(Math.min(channel, buffer.numberOfChannels - 1)))
+  let offset = 44
+  for (let i = 0; i < buffer.length; i++) {
+    for (let channel = 0; channel < channels; channel++) {
+      const sample = clamp(channelData[channel][i] ?? 0, -1, 1)
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true)
+      offset += 2
+    }
+  }
+  return out
+}
+
+export async function renderAudioMixToWavBlob(
+  tracks: AudioTrack[],
+  options: { masterVolume?: number; sampleRate?: number; durationMs?: number } = {},
+): Promise<Blob> {
+  const buffer = await renderAudioMixToAudioBuffer(tracks, options)
+  return new Blob([encodeWavFromAudioBuffer(buffer)], { type: "audio/wav" })
 }
 
 export function resolveVideoExportPreset(id: string, overrides: Partial<VideoExportPreset> = {}): VideoExportPreset {

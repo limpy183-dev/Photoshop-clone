@@ -82,6 +82,8 @@ export interface EdgeAwareQuickSelectionOptions {
   adaptive?: boolean
   includeDiagonals?: boolean
   edgeSensitivity?: number
+  sampleSize?: "point" | "3x3" | "5x5"
+  contiguous?: boolean
 }
 
 function sampledSeedColor(src: ImageData, x: number, y: number, radius: number, minAlpha: number) {
@@ -125,6 +127,12 @@ function localColorGradient(data: Uint8ClampedArray, width: number, height: numb
   return gradient
 }
 
+function sampleSizeRadius(size: EdgeAwareQuickSelectionOptions["sampleSize"]) {
+  if (size === "5x5") return 2
+  if (size === "3x3") return 1
+  return 0
+}
+
 export function buildEdgeAwareQuickSelectionMaskData(
   src: ImageData,
   options: EdgeAwareQuickSelectionOptions = {},
@@ -155,17 +163,30 @@ export function buildEdgeAwareQuickSelectionMaskData(
 
   const seedX = start % width
   const seedY = (start - seedX) / width
-  const seed = options.adaptive
-    ? sampledSeedColor(src, seedX, seedY, 1, minAlpha)
+  const sampleRadius = sampleSizeRadius(options.sampleSize)
+  const seed = options.adaptive || sampleRadius > 0
+    ? sampledSeedColor(src, seedX, seedY, sampleRadius, minAlpha)
     : { r: src.data[start * 4], g: src.data[start * 4 + 1], b: src.data[start * 4 + 2], spread: 0 }
   const visited = new Uint8Array(width * height)
-  const queue = [start]
   const adaptiveTolerance = tolerance + seed.spread * 0.65
   const edgeLimit = Math.max(42, adaptiveTolerance * (options.edgeSensitivity ?? 1.75))
   const maxPixels = Math.max(1, options.maxPixels ?? width * height)
   const includeDiagonals = options.includeDiagonals ?? options.adaptive ?? false
   let accepted = 0
 
+  if (options.contiguous === false) {
+    for (let p = 0; p < width * height && accepted < maxPixels; p++) {
+      const pi = p * 4
+      if (src.data[pi + 3] <= minAlpha) continue
+      if (rgbDistanceToSeed(src.data, pi, seed) > adaptiveTolerance) continue
+      if (localColorGradient(src.data, width, height, p) > edgeLimit * 1.25 && rgbDistanceToSeed(src.data, pi, seed) > adaptiveTolerance * 0.72) continue
+      maskData[p] = 255
+      accepted++
+    }
+    return { maskData, width, height, bounds: maskDataBounds(maskData, width, height) }
+  }
+
+  const queue = [start]
   visited[start] = 1
   for (let head = 0; head < queue.length && accepted < maxPixels; head++) {
     const p = queue[head]

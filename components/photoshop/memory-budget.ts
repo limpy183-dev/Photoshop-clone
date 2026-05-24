@@ -8,8 +8,8 @@
  * callers can refuse new allocations and spill to OPFS or downscale.
  *
  * The planner functions are pure so they can be unit tested without a
- * browser. The tracker itself avoids `performance.memory` (Chrome-only,
- * unreliable) and instead requires callers to declare allocation sizes.
+ * browser. The tracker records declared allocations and, when available,
+ * can be cross-checked against Chrome's `performance.memory` heap data.
  */
 
 const DEFAULT_BUDGET_MB = 1024
@@ -44,6 +44,19 @@ export interface MemoryBudgetSnapshot {
   underSoft: boolean
   underHard: boolean
   availableBytes: number
+}
+
+export interface HeapMemorySample {
+  supported: boolean
+  timestamp: number
+  declaredBytes: number
+  usedJSHeapSize: number | null
+  totalJSHeapSize: number | null
+  jsHeapSizeLimit: number | null
+  discrepancyBytes: number
+  deltaBytes: number
+  gcDetected: boolean
+  recommendedEvictBytes: number
 }
 
 export interface MemoryBudgetOptions {
@@ -406,6 +419,71 @@ export class MemoryBudgetTracker {
   }
 }
 
+type PerformanceWithMemory = Performance & {
+  memory?: {
+    usedJSHeapSize?: number
+    totalJSHeapSize?: number
+    jsHeapSizeLimit?: number
+  }
+}
+
+export interface HeapMemoryMonitorOptions {
+  tracker?: MemoryBudgetTracker
+  performance?: Performance
+  now?: () => number
+  gcDropRatio?: number
+  gcDropBytes?: number
+  proactiveEvictRatio?: number
+}
+
+export interface HeapMemoryMonitor {
+  sample(): HeapMemorySample
+}
+
+function bytes(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.round(value)) : null
+}
+
+export function createHeapMemoryMonitor(options: HeapMemoryMonitorOptions = {}): HeapMemoryMonitor {
+  const tracker = options.tracker ?? getGlobalMemoryBudget()
+  const perf = (options.performance ??
+    (typeof performance !== "undefined" ? performance : undefined)) as PerformanceWithMemory | undefined
+  const now = options.now ?? (() => Date.now())
+  const gcDropRatio = Math.max(0.05, Math.min(0.9, options.gcDropRatio ?? 0.25))
+  const gcDropBytes = positiveInt(options.gcDropBytes, 16 * MIB)
+  const proactiveEvictRatio = Math.max(0.01, Math.min(0.75, options.proactiveEvictRatio ?? 0.12))
+  let previousUsed: number | null = null
+
+  return {
+    sample() {
+      const declaredBytes = tracker.snapshot().usedBytes
+      const used = bytes(perf?.memory?.usedJSHeapSize)
+      const total = bytes(perf?.memory?.totalJSHeapSize)
+      const limit = bytes(perf?.memory?.jsHeapSizeLimit)
+      const deltaBytes = used !== null && previousUsed !== null ? used - previousUsed : 0
+      const dropBytes = deltaBytes < 0 ? Math.abs(deltaBytes) : 0
+      const gcDetected =
+        used !== null &&
+        previousUsed !== null &&
+        dropBytes >= gcDropBytes &&
+        dropBytes / Math.max(1, previousUsed) >= gcDropRatio
+      previousUsed = used
+      return {
+        supported: used !== null,
+        timestamp: now(),
+        declaredBytes,
+        usedJSHeapSize: used,
+        totalJSHeapSize: total,
+        jsHeapSizeLimit: limit,
+        discrepancyBytes: used !== null ? used - declaredBytes : 0,
+        deltaBytes,
+        gcDetected,
+        recommendedEvictBytes: gcDetected ? Math.max(1, Math.round(declaredBytes * proactiveEvictRatio)) : 0,
+      }
+    },
+  }
+}
+
 let _globalTracker: MemoryBudgetTracker | null = null
 
 export function getGlobalMemoryBudget(): MemoryBudgetTracker {
@@ -427,4 +505,20 @@ export function estimateImageBytes(width: number, height: number, bytesPerPixel 
   const h = positiveInt(height, 0)
   const bpp = positiveInt(bytesPerPixel, 4)
   return w * h * bpp
+}
+
+function formatMB(value: number | null) {
+  if (value === null) return "n/a"
+  return `${(value / MIB).toFixed(1)} MB`
+}
+
+export function formatMemoryUsage(sample: HeapMemorySample): string {
+  if (sample.supported) {
+    return [
+      `Heap ${formatMB(sample.usedJSHeapSize)}`,
+      `Declared ${formatMB(sample.declaredBytes)}`,
+      sample.gcDetected ? "GC pressure detected" : null,
+    ].filter(Boolean).join(" / ")
+  }
+  return `Declared ${formatMB(sample.declaredBytes)} / heap unavailable`
 }

@@ -99,6 +99,9 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
   const [replaceTo, setReplaceTo] = React.useState("#ff3366")
   const [findText, setFindText] = React.useState("Untitled")
   const [replaceTextValue, setReplaceTextValue] = React.useState("Edited")
+  const [findUseRegex, setFindUseRegex] = React.useState(false)
+  const [findCaseSensitive, setFindCaseSensitive] = React.useState(false)
+  const [findWholeWord, setFindWholeWord] = React.useState(false)
   const [selectionScale, setSelectionScale] = React.useState(1.12)
   const [selectionRotate, setSelectionRotate] = React.useState(0)
   const [gamutWarning, setGamutWarning] = React.useState(false)
@@ -110,6 +113,17 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
   const [seamProtectLayerId, setSeamProtectLayerId] = React.useState<string>("")
   const [seamRemoveLayerId, setSeamRemoveLayerId] = React.useState<string>("")
   const layers = selectedLayers.length ? selectedLayers : activeLayer ? [activeLayer] : []
+  const findPreview = React.useMemo(() => {
+    if (!activeDoc || !findText) return null
+    return findReplaceTextLayers(activeDoc.layers, {
+      find: findText,
+      replace: replaceTextValue,
+      caseSensitive: findCaseSensitive,
+      wholeWord: findWholeWord,
+      useRegex: findUseRegex,
+      previewOnly: true,
+    })
+  }, [activeDoc, findText, replaceTextValue, findCaseSensitive, findWholeWord, findUseRegex])
 
   const requireDoc = () => {
     if (!activeDoc) toast.error("Open a document first.")
@@ -320,9 +334,14 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
     const result = findReplaceTextLayers(doc.layers, {
       find: findText,
       replace: replaceTextValue,
-      caseSensitive: false,
-      wholeWord: false,
+      caseSensitive: findCaseSensitive,
+      wholeWord: findWholeWord,
+      useRegex: findUseRegex,
     })
+    if (result.error) {
+      toast.error(result.error)
+      return
+    }
     for (const id of result.changedLayerIds) {
       const next = result.layers.find((layer) => layer.id === id)
       if (!next?.text) continue
@@ -331,7 +350,7 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
     }
     if (!result.changedLayerIds.length) toast.info("No matching text layers found.")
     else {
-      toast.success(`Replaced ${result.replacements} text match${result.replacements === 1 ? "" : "es"}.`)
+      toast.success(`Replaced ${result.matchCountLabel}.`)
       finish("Find/Replace Text", result.changedLayerIds)
     }
   }
@@ -705,6 +724,35 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
                   <TextField label="Find" value={findText} onChange={setFindText} />
                   <TextField label="Replace" value={replaceTextValue} onChange={setReplaceTextValue} />
                 </ControlGrid>
+                <div className="grid grid-cols-3 gap-2 rounded-md border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2 text-[10px]">
+                  <label className="flex items-center gap-2 text-[var(--ps-text-dim)]">
+                    <Checkbox checked={findUseRegex} onCheckedChange={(value) => setFindUseRegex(value === true)} />
+                    Regex
+                  </label>
+                  <label className="flex items-center gap-2 text-[var(--ps-text-dim)]">
+                    <Checkbox checked={findCaseSensitive} onCheckedChange={(value) => setFindCaseSensitive(value === true)} />
+                    Case
+                  </label>
+                  <label className="flex items-center gap-2 text-[var(--ps-text-dim)]">
+                    <Checkbox checked={findWholeWord} onCheckedChange={(value) => setFindWholeWord(value === true)} />
+                    Whole word
+                  </label>
+                </div>
+                {findPreview ? (
+                  <div className="rounded-md border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2 text-[10px]">
+                    <div className={findPreview.error ? "text-amber-300" : "text-[var(--ps-text)]"}>
+                      {findPreview.error ?? findPreview.matchCountLabel}
+                    </div>
+                    {!findPreview.error && findPreview.matches.length ? (
+                      <div className="mt-2 max-h-28 space-y-1 overflow-auto">
+                        {findPreview.matches.slice(0, 8).map((match, index) => {
+                          const source = activeDoc.layers.find((layer) => layer.id === match.layerId)?.text?.content ?? ""
+                          return <FindMatchPreview key={`${match.layerId}-${match.index}-${index}`} match={match} source={source} />
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 <ButtonGrid>
                   <Button size="sm" onClick={replaceTextLayers}>Find/Replace Text</Button>
                   <Button size="sm" variant="secondary" onClick={spellCheckText}>Spell Check</Button>
@@ -843,6 +891,32 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
 
 function pickText(text: TextProps, keys: (keyof TextProps)[]) {
   return Object.fromEntries(keys.map((key) => [key, text[key]]).filter(([, value]) => value !== undefined))
+}
+
+function FindMatchPreview({
+  match,
+  source,
+}: {
+  match: ReturnType<typeof findReplaceTextLayers>["matches"][number]
+  source: string
+}) {
+  const start = Math.max(0, match.index - 24)
+  const end = Math.min(source.length, match.index + match.length + 24)
+  const before = source.slice(start, match.index)
+  const hit = source.slice(match.index, match.index + match.length)
+  const after = source.slice(match.index + match.length, end)
+  return (
+    <div className="min-w-0 rounded-sm bg-[var(--ps-panel)] px-2 py-1">
+      <div className="truncate text-[9px] text-[var(--ps-text-dim)]">{match.layerName}</div>
+      <div className="truncate text-[10px]">
+        {start > 0 ? "..." : ""}
+        {before}
+        <mark className="rounded-sm bg-amber-400/30 px-0.5 text-amber-100">{hit}</mark>
+        {after}
+        {end < source.length ? "..." : ""}
+      </div>
+    </div>
+  )
 }
 
 function Section({ title, note, children }: { title: string; note: string; children: React.ReactNode }) {

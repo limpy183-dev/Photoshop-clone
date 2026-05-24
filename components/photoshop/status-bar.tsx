@@ -4,19 +4,48 @@ import * as React from "react"
 import { X } from "lucide-react"
 import { describeDocumentColorHonesty } from "./color-pipeline"
 import { useEditor } from "./editor-context"
+import { createHeapMemoryMonitor, formatMemoryUsage, getGlobalMemoryBudget } from "./memory-budget"
+import { detectOffscreenCanvasCapabilities, diagnoseOffscreenCanvasTransfer } from "./offscreen-canvas"
 import { requestCanvasZoom } from "./zoom-events"
 
 export function StatusBar({ onHide }: { onHide?: () => void }) {
   const { activeDoc, tool, brush, foreground } = useEditor()
   const [zoomInput, setZoomInput] = React.useState("")
+  const [memoryUsage, setMemoryUsage] = React.useState("")
+  const [clientReady, setClientReady] = React.useState(false)
+  const offscreenDiagnostic = React.useMemo(() => {
+    const capabilities = detectOffscreenCanvasCapabilities()
+    return diagnoseOffscreenCanvasTransfer({
+      requestedWorker: true,
+      offscreenCanvasSupported: capabilities.offscreenCanvasSupported,
+      workerTransferSupported: capabilities.workerOffscreenSupported,
+      transferToImageBitmapSupported: capabilities.transferToImageBitmapSupported,
+    })
+  }, [])
   const colorHonesty = React.useMemo(
     () => activeDoc ? describeDocumentColorHonesty(activeDoc) : null,
     [activeDoc],
   )
+  const showPrecisionWarning = clientReady && !!colorHonesty?.hasWarnings
+  const editingDepthLabel = clientReady && activeDoc && activeDoc.bitDepth > 8
+    ? `Editing at 8-bit | Document: ${activeDoc.bitDepth}-bit`
+    : "Editing at 8-bit"
+
+  React.useEffect(() => {
+    setClientReady(true)
+  }, [])
 
   React.useEffect(() => {
     setZoomInput(`${Math.round((activeDoc?.zoom ?? 1) * 100)}%`)
   }, [activeDoc?.zoom])
+
+  React.useEffect(() => {
+    const monitor = createHeapMemoryMonitor({ tracker: getGlobalMemoryBudget() })
+    const update = () => setMemoryUsage(formatMemoryUsage(monitor.sample()))
+    update()
+    const id = window.setInterval(update, 2500)
+    return () => window.clearInterval(id)
+  }, [])
 
   if (!activeDoc) {
     return (
@@ -74,22 +103,44 @@ export function StatusBar({ onHide }: { onHide?: () => void }) {
         {activeDoc.width} x {activeDoc.height}px
       </span>
       <span>|</span>
-      <span>
+      <span suppressHydrationWarning>
         {activeDoc.colorMode} / {activeDoc.bitDepth} bit
       </span>
-      {colorHonesty?.hasWarnings ? (
+      <span>|</span>
+      <span
+        suppressHydrationWarning
+        className={clientReady && activeDoc.bitDepth > 8 ? "text-amber-200" : undefined}
+        title="Browser canvas painting and display are 8-bit RGBA."
+      >
+        {editingDepthLabel}
+      </span>
+      {showPrecisionWarning ? (
         <>
           <span>|</span>
           <span
-            className="max-w-[320px] truncate text-amber-300"
+            className="max-w-[320px] truncate rounded-[2px] border border-amber-400/40 bg-amber-400/10 px-1 text-amber-200"
             title={colorHonesty.items.map((item) => `${item.label}: ${item.detail}`).join("\n")}
           >
-            {colorHonesty.badge}
+            Precision warning
           </span>
         </>
       ) : null}
       <span>|</span>
       <span>{activeDoc.layers.length} layers</span>
+      {memoryUsage ? (
+        <>
+          <span>|</span>
+          <span title={memoryUsage}>{memoryUsage}</span>
+        </>
+      ) : null}
+      {clientReady && !offscreenDiagnostic.active ? (
+        <>
+          <span>|</span>
+          <span title={offscreenDiagnostic.warning ?? offscreenDiagnostic.reason} className="text-amber-300">
+            {offscreenDiagnostic.badge}
+          </span>
+        </>
+      ) : null}
 
       <div className="flex-1" />
 

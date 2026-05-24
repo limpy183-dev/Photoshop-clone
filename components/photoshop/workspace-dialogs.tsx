@@ -14,10 +14,9 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
-import { Grid2X2, ImagePlus, LayoutGrid, Plus } from "lucide-react"
-import { makeCanvas, makeDocument, useEditor } from "./editor-context"
-import { loadImageFromFile } from "./document-io"
-import type { Guide, Layer } from "./types"
+import { LayoutGrid, Plus } from "lucide-react"
+import { useEditor } from "./editor-context"
+import type { Guide } from "./types"
 import { cn } from "@/lib/utils"
 import { uid } from "./uid"
 
@@ -357,148 +356,6 @@ export function GuideLayoutDialog({
           <Button onClick={apply}>
             <LayoutGrid className="w-4 h-4" />
             Create
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-export function ContactSheetDialog({
-  open,
-  onOpenChange,
-}: {
-  open: boolean
-  onOpenChange: (v: boolean) => void
-}) {
-  const { createDocument } = useEditor()
-  const [files, setFiles] = React.useState<File[]>([])
-  const [columns, setColumns] = React.useState(4)
-  const [thumbW, setThumbW] = React.useState(220)
-  const [thumbH, setThumbH] = React.useState(160)
-  const [padding, setPadding] = React.useState(32)
-  const [gutter, setGutter] = React.useState(18)
-  const [showNames, setShowNames] = React.useState(true)
-  const [fontSize, setFontSize] = React.useState(12)
-  const [background, setBackground] = React.useState("#ffffff")
-  const [sort, setSort] = React.useState<"name" | "original">("name")
-  const [busy, setBusy] = React.useState(false)
-
-  const build = async () => {
-    if (!files.length) return
-    setBusy(true)
-    try {
-      const ordered = sort === "name" ? [...files].sort((a, b) => a.name.localeCompare(b.name)) : files
-      const images = await Promise.all(ordered.map(async (file) => ({ file, img: await loadImageFromFile(file) })))
-      const cols = Math.max(1, columns)
-      const rows = Math.ceil(images.length / cols)
-      const labelH = showNames ? fontSize + 12 : 0
-      const cellW = thumbW + gutter
-      const cellH = thumbH + labelH + gutter
-      const width = padding * 2 + cols * thumbW + (cols - 1) * gutter
-      const height = padding * 2 + rows * (thumbH + labelH) + (rows - 1) * gutter
-      const doc = makeDocument("Contact Sheet", width, height, background)
-      doc.layers = [doc.layers[0]]
-      doc.activeLayerId = doc.layers[0].id
-      doc.selectedLayerIds = [doc.layers[0].id]
-      doc.guides = []
-
-      images.forEach(({ file, img }, index) => {
-        const col = index % cols
-        const row = Math.floor(index / cols)
-        const x = padding + col * cellW
-        const y = padding + row * cellH
-        const scale = Math.min(thumbW / img.naturalWidth, thumbH / img.naturalHeight)
-        const dw = Math.max(1, img.naturalWidth * scale)
-        const dh = Math.max(1, img.naturalHeight * scale)
-        const dx = x + (thumbW - dw) / 2
-        const dy = y + (thumbH - dh) / 2
-        const canvas = makeCanvas(width, height)
-        const ctx = canvas.getContext("2d")!
-        ctx.imageSmoothingEnabled = true
-        ctx.imageSmoothingQuality = "high"
-        ctx.drawImage(img, dx, dy, dw, dh)
-        if (showNames) {
-          ctx.fillStyle = "#111111"
-          ctx.font = `${fontSize}px Arial, sans-serif`
-          ctx.textAlign = "center"
-          ctx.textBaseline = "top"
-          const label = file.name.length > 36 ? `${file.name.slice(0, 33)}...` : file.name
-          ctx.fillText(label, x + thumbW / 2, y + thumbH + 8, thumbW)
-        }
-        const layer: Layer = {
-          id: uid("layer"),
-          name: file.name,
-          kind: "raster",
-          visible: true,
-          locked: false,
-          opacity: 1,
-          blendMode: "normal",
-          canvas,
-        }
-        doc.layers.push(layer)
-        doc.activeLayerId = layer.id
-        doc.selectedLayerIds = [layer.id]
-      })
-
-      for (let c = 1; c < cols; c++) {
-        doc.guides.push({ id: uid("g"), orientation: "vertical", position: padding + c * thumbW + (c - 0.5) * gutter, color: "#60a5fa" })
-      }
-      for (let r = 1; r < rows; r++) {
-        doc.guides.push({ id: uid("g"), orientation: "horizontal", position: padding + r * (thumbH + labelH) + (r - 0.5) * gutter, color: "#60a5fa" })
-      }
-      createDocument(doc, "Contact Sheet")
-      onOpenChange(false)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[620px] bg-[var(--ps-panel)] border-[var(--ps-divider)] text-[var(--ps-text)]">
-        <DialogHeader>
-          <DialogTitle>Contact Sheet II</DialogTitle>
-          <DialogDescription className="sr-only">
-            Build a new document containing imported images arranged as a customizable contact sheet.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4">
-          <label className="flex h-20 cursor-pointer flex-col items-center justify-center rounded-sm border border-dashed border-[var(--ps-divider)] bg-[var(--ps-panel-2)] text-[11px] text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)]">
-            <ImagePlus className="mb-1 h-5 w-5" />
-            {files.length ? `${files.length} image files selected` : "Choose images"}
-            <input
-              type="file"
-              multiple
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
-            />
-          </label>
-          <div className="grid grid-cols-4 gap-3">
-            <Field label="Columns"><Input type="number" min={1} max={12} value={columns} onChange={(e) => setColumns(Math.max(1, Number(e.target.value) || 1))} className="h-8 text-[11px]" /></Field>
-            <Field label="Thumb W"><Input type="number" min={24} value={thumbW} onChange={(e) => setThumbW(Math.max(24, Number(e.target.value) || 220))} className="h-8 text-[11px]" /></Field>
-            <Field label="Thumb H"><Input type="number" min={24} value={thumbH} onChange={(e) => setThumbH(Math.max(24, Number(e.target.value) || 160))} className="h-8 text-[11px]" /></Field>
-            <Field label="Gutter"><Input type="number" min={0} value={gutter} onChange={(e) => setGutter(Math.max(0, Number(e.target.value) || 0))} className="h-8 text-[11px]" /></Field>
-          </div>
-          <div className="grid grid-cols-4 gap-3">
-            <Field label="Padding"><Input type="number" min={0} value={padding} onChange={(e) => setPadding(Math.max(0, Number(e.target.value) || 0))} className="h-8 text-[11px]" /></Field>
-            <Field label="Font size"><Input type="number" min={8} value={fontSize} onChange={(e) => setFontSize(Math.max(8, Number(e.target.value) || 12))} className="h-8 text-[11px]" /></Field>
-            <Field label="Background"><Input type="color" value={background} onChange={(e) => setBackground(e.target.value)} className="h-8 w-20 p-1" /></Field>
-            <Field label="Sort">
-              <select value={sort} onChange={(e) => setSort(e.target.value as "name" | "original")} className="h-8 bg-[var(--ps-panel-2)] border border-[var(--ps-divider)] rounded-sm px-2 text-[11px]">
-                <option value="name">By name</option>
-                <option value="original">Original order</option>
-              </select>
-            </Field>
-          </div>
-          <CheckRow label="Use filenames as captions" checked={showNames} onCheckedChange={setShowNames} />
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button disabled={!files.length || busy} onClick={build}>
-            <Grid2X2 className="w-4 h-4" />
-            {busy ? "Creating..." : "Create"}
           </Button>
         </DialogFooter>
       </DialogContent>

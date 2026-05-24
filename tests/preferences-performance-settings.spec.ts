@@ -3,18 +3,24 @@ import { expect, test } from "@playwright/test"
 import { getCapability, listCapabilities } from "../components/photoshop/capabilities"
 import {
   DEFAULT_PREFERENCES,
+  PREFERENCE_IMPORT_SECTIONS,
   appendHistoryLog,
   applyPreferencesToDocumentSettings,
+  calculatePrintSizeZoom,
+  calculateScreenDpiFromCalibration,
   createHistoryLogEntry,
   deriveFileHandlingPolicy,
   exportPreferencesSet,
   formatHistoryLog,
+  importPreferenceSections,
   normalizePreferences,
   parsePreferencesSet,
   resetPreferencesSet,
   serializePreferences,
   summarizePerformancePolicy,
 } from "../components/photoshop/preferences-engine"
+import { buildRulerTickMarks } from "../components/photoshop/ruler-calibration"
+import { resolveCanvasCursorState } from "../components/photoshop/cursor-overlay"
 
 test("normalizes legacy preference sets into the full schema", () => {
   const prefs = normalizePreferences({
@@ -28,7 +34,7 @@ test("normalizes legacy preference sets into the full schema", () => {
     smoothing: 123,
   })
 
-  expect(prefs.schemaVersion).toBe(2)
+  expect(prefs.schemaVersion).toBe(3)
   expect(prefs.undoLimit).toBe(500)
   expect(prefs.memory.historyStates).toBe(500)
   expect(prefs.gridSize).toBe(4)
@@ -43,6 +49,8 @@ test("normalizes legacy preference sets into the full schema", () => {
   expect(prefs.showTooltips).toBe(false)
   expect(prefs.toolBehavior.brushSmoothing).toBe(100)
   expect(prefs.smoothing).toBe(100)
+  expect(prefs.toolBehavior.showBrushSizeCrosshair).toBe(true)
+  expect(prefs.rulerGrid.screenDpi).toBe(96)
 })
 
 test("summarizes RAM, cache, scratch disk, and GPU policies with browser fallbacks", () => {
@@ -197,6 +205,74 @@ test("applies deep ruler, unit, grid, pixel grid, and snapping settings to docum
   })
 })
 
+test("calibrates screen DPI and derives print-size zoom from document resolution", () => {
+  const cssPixels = (100 / 25.4) * 96
+  const screenDpi = calculateScreenDpiFromCalibration({ cssPixelLength: cssPixels, measuredMm: 92 })
+  const zoom = calculatePrintSizeZoom({ screenDpi, documentDpi: 300 })
+
+  expect(screenDpi).toBeCloseTo(104.35, 2)
+  expect(zoom).toBeCloseTo(0.3478, 3)
+
+  expect(() => calculateScreenDpiFromCalibration({ cssPixelLength: cssPixels, measuredMm: 0 })).toThrow(/measured length/i)
+  expect(() => calculatePrintSizeZoom({ screenDpi: 96, documentDpi: 0 })).toThrow(/document dpi/i)
+})
+
+test("builds ruler tick marks in document print units", () => {
+  const inchTicks = buildRulerTickMarks({ lengthPx: 300, zoom: 1, unit: "in", documentDpi: 300 })
+  const oneInchTick = inchTicks.find((tick) => tick.label === "1")
+
+  expect(inchTicks[0]).toMatchObject({ value: 0, label: "0", positionPx: 0, major: true })
+  expect(oneInchTick).toMatchObject({ value: 1, positionPx: 300, major: true })
+
+  const mmTicks = buildRulerTickMarks({ lengthPx: 300, zoom: 1, unit: "mm", documentDpi: 300 })
+  expect(mmTicks.some((tick) => tick.label === "10")).toBe(true)
+})
+
+test("resolves canvas cursor overlays from cursor preferences and active tool", () => {
+  const brushCursor = resolveCanvasCursorState({
+    standardCssCursor: "crosshair",
+    cursorStyle: "brush-size",
+    tool: "brush",
+    isBrushTool: true,
+    brushSize: 32,
+    zoom: 1.5,
+    showBrushPreview: true,
+    showBrushSizeCrosshair: true,
+  })
+
+  expect(brushCursor.cssCursor).toBe("none")
+  expect(brushCursor.overlay).toMatchObject({
+    kind: "brush",
+    diameterPx: 48,
+    showCrosshair: true,
+    toolLabel: "B",
+  })
+
+  const standardMove = resolveCanvasCursorState({
+    standardCssCursor: "move",
+    cursorStyle: "standard",
+    tool: "move",
+    isBrushTool: false,
+    brushSize: 20,
+    zoom: 1,
+    showBrushPreview: true,
+    showBrushSizeCrosshair: true,
+  })
+  expect(standardMove).toEqual({ cssCursor: "move", overlay: null })
+
+  const preciseEyedropper = resolveCanvasCursorState({
+    standardCssCursor: "crosshair",
+    cursorStyle: "precise",
+    tool: "eyedropper",
+    isBrushTool: false,
+    brushSize: 20,
+    zoom: 1,
+    showBrushPreview: true,
+    showBrushSizeCrosshair: false,
+  })
+  expect(preciseEyedropper.overlay).toMatchObject({ kind: "precise", toolLabel: "I" })
+})
+
 test("exports, imports, and resets preference sets by section", () => {
   const prefs = normalizePreferences({
     gpu: { ...DEFAULT_PREFERENCES.gpu, enabled: false },
@@ -216,6 +292,36 @@ test("exports, imports, and resets preference sets by section", () => {
   expect(resetGrid.gpu.enabled).toBe(false)
   expect(resetGrid.rulerGrid).toEqual(DEFAULT_PREFERENCES.rulerGrid)
   expect(resetAll).toEqual(DEFAULT_PREFERENCES)
+})
+
+test("validates preference imports with specific schema errors", () => {
+  expect(() => parsePreferencesSet("{not json")).toThrow(/not valid JSON/i)
+  expect(() => parsePreferencesSet({ preferences: "bad" })).toThrow(/preferences must be an object/i)
+  expect(() => parsePreferencesSet({ rulerGrid: "bad" })).toThrow(/rulerGrid must be an object/i)
+  expect(() => parsePreferencesSet({ rulerGrid: { printResolution: "300" } })).toThrow(/rulerGrid\.printResolution must be a number/i)
+  expect(() => parsePreferencesSet({ toolBehavior: { cursorStyle: "giant" } })).toThrow(/toolBehavior\.cursorStyle must be one of/i)
+})
+
+test("imports only selected preference sections while preserving the rest", () => {
+  const current = normalizePreferences({
+    gpu: { ...DEFAULT_PREFERENCES.gpu, enabled: false },
+    rulerGrid: { ...DEFAULT_PREFERENCES.rulerGrid, rulerUnits: "px", gridColor: "#111111" },
+    toolBehavior: { ...DEFAULT_PREFERENCES.toolBehavior, cursorStyle: "standard" },
+  })
+  const imported = normalizePreferences({
+    gpu: { ...DEFAULT_PREFERENCES.gpu, enabled: true },
+    rulerGrid: { ...DEFAULT_PREFERENCES.rulerGrid, rulerUnits: "mm", gridColor: "#abcdef", screenDpi: 112 },
+    toolBehavior: { ...DEFAULT_PREFERENCES.toolBehavior, cursorStyle: "precise" },
+  })
+
+  const partial = importPreferenceSections(current, imported, ["rulerGrid"])
+
+  expect(PREFERENCE_IMPORT_SECTIONS).toContain("rulerGrid")
+  expect(partial.rulerGrid.rulerUnits).toBe("mm")
+  expect(partial.rulerGrid.gridColor).toBe("#abcdef")
+  expect(partial.rulerGrid.screenDpi).toBe(112)
+  expect(partial.gpu.enabled).toBe(false)
+  expect(partial.toolBehavior.cursorStyle).toBe("standard")
 })
 
 test("capability registry exposes preferences and performance settings coverage", () => {

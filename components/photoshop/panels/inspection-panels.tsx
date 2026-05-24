@@ -6,8 +6,18 @@ import { compositeLayer } from "../blend-modes"
 import { getFilter } from "../filters"
 import { applyLayerStyle } from "../layer-styles"
 import { Slider } from "@/components/ui/slider"
+import {
+  computeCanvasHistogram,
+  computeHighBitHistogram,
+  createHighBitImageFromImageData,
+  readHighBitPixel,
+  toneMapHighBitImageToImageData,
+  type HighBitImage,
+  type HighBitPixelReadout,
+} from "../color-pipeline"
 import type { BlendMode, Layer, PsDocument } from "../types"
 import { requestCanvasZoom } from "../zoom-events"
+import { smartFilterMaskAmountAt, smartFilterMaskToImageData } from "../smart-filter-masks"
 
 function makePanelCanvas(w: number, h: number) {
   const c = document.createElement("canvas")
@@ -100,17 +110,16 @@ function smartFilterResult(
   const opacity = Math.max(0, Math.min(1, smartFilter.opacity ?? 1))
   if (opacity <= 0) return before
   const blendMode = (smartFilter.blendMode ?? "normal") as BlendMode
-  const maskCtx = smartFilter.maskEnabled === false ? null : smartFilter.mask?.getContext("2d") ?? null
-  const mask = maskCtx
-    ? maskCtx.getImageData(0, 0, Math.min(smartFilter.mask!.width, width), Math.min(smartFilter.mask!.height, height))
-    : null
+  const mask = smartFilter.maskEnabled === false || !smartFilter.mask
+    ? null
+    : smartFilterMaskToImageData(smartFilter.mask, width, height, smartFilter.maskFeather ?? 0)
   if (!mask && opacity >= 1 && blendMode === "normal") return after
   const overlay = new ImageData(new Uint8ClampedArray(after.data), width, height)
   if (mask) {
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const i = (y * width + x) * 4
-        overlay.data[i + 3] = Math.round(overlay.data[i + 3] * maskAmountAt(mask, x, y))
+        overlay.data[i + 3] = Math.round(overlay.data[i + 3] * smartFilterMaskAmountAt(mask, x, y, smartFilter.maskDensity ?? 1))
       }
     }
   }
@@ -218,12 +227,132 @@ export function NavigatorPanel() {
 }
 
 type HistogramChannel = "composite" | "rgb" | "red" | "green" | "blue" | "luminosity"
+type HighBitArray = Uint8ClampedArray | Uint16Array | Float32Array
+type HighBitSideBand = {
+  r: HighBitArray
+  g: HighBitArray
+  b: HighBitArray
+  a: HighBitArray
+}
+type LayerWithHighBitSource = Layer & {
+  __highBitImageData?: HighBitImage
+  __highBitDepthData?: HighBitSideBand
+}
+type DocumentWithHighBitSource = PsDocument & {
+  __highBitImageData?: HighBitImage
+}
+
+function highBitStorageForArray(data: HighBitArray): HighBitImage["storage"] {
+  if (data instanceof Uint16Array) return "uint16"
+  if (data instanceof Float32Array) return "float32"
+  return "uint8"
+}
+
+function highBitDepthForStorage(storage: HighBitImage["storage"]): HighBitImage["bitDepth"] {
+  if (storage === "uint16") return 16
+  if (storage === "float32") return 32
+  return 8
+}
+
+function highBitImageFromLayerSideBand(layer: Layer, doc: PsDocument): { image: HighBitImage; label: string } | null {
+  const enriched = layer as LayerWithHighBitSource
+  if (enriched.__highBitImageData) return { image: enriched.__highBitImageData, label: `${layer.name} source typed array` }
+  const sideBand = enriched.__highBitDepthData
+  if (!sideBand) return null
+  const storage = highBitStorageForArray(sideBand.r)
+  const width = layer.canvas.width || doc.width
+  const height = layer.canvas.height || doc.height
+  const total = Math.min(width * height, sideBand.r.length, sideBand.g.length, sideBand.b.length, sideBand.a.length)
+  const Ctor = storage === "uint16" ? Uint16Array : storage === "float32" ? Float32Array : Uint8ClampedArray
+  const data = new Ctor(width * height * 4) as HighBitImage["data"]
+  for (let pixel = 0; pixel < total; pixel++) {
+    const i = pixel * 4
+    data[i] = sideBand.r[pixel]
+    data[i + 1] = sideBand.g[pixel]
+    data[i + 2] = sideBand.b[pixel]
+    data[i + 3] = sideBand.a[pixel]
+  }
+  return {
+    image: {
+      width,
+      height,
+      channels: 4,
+      bitDepth: highBitDepthForStorage(storage),
+      colorMode: doc.colorMode,
+      profile: doc.colorManagement?.assignedProfile,
+      storage,
+      data,
+      warnings: ["Layer source high-bit channel data is used for readouts; browser canvas display remains 8-bit RGBA."],
+    },
+    label: `${layer.name} source typed array`,
+  }
+}
+
+function findDocumentHighBitSource(doc: PsDocument): { image: HighBitImage; label: string } | null {
+  const docSource = (doc as DocumentWithHighBitSource).__highBitImageData
+  if (docSource) return { image: docSource, label: "Document source typed array" }
+  const activeLayer = doc.layers.find((layer) => layer.id === doc.activeLayerId)
+  const candidates = [
+    ...(activeLayer ? [activeLayer] : []),
+    ...doc.layers.filter((layer) => layer.id !== doc.activeLayerId && layer.visible !== false),
+  ]
+  for (const layer of candidates) {
+    const source = highBitImageFromLayerSideBand(layer, doc)
+    if (source) return source
+  }
+  return null
+}
+
+function createProjectedHighBitSource(doc: PsDocument, imageData: ImageData): { image: HighBitImage; label: string } {
+  return {
+    image: createHighBitImageFromImageData(imageData, {
+      bitDepth: doc.bitDepth === 32 ? 32 : doc.bitDepth === 16 ? 16 : 8,
+      colorMode: doc.colorMode,
+      profile: doc.colorManagement?.assignedProfile,
+    }),
+    label: "Canvas projection typed array",
+  }
+}
+
+function formatHistogramValue(value: number, bitDepth: PsDocument["bitDepth"]) {
+  if (bitDepth === 32) return value.toFixed(3)
+  return Math.round(value).toLocaleString()
+}
+
+function formatHighBitReadout(readout: HighBitPixelReadout | null, bitDepth: PsDocument["bitDepth"] | undefined) {
+  if (!readout || !bitDepth || bitDepth <= 8) return "-"
+  if (bitDepth === 32) {
+    return `R ${readout.r.toFixed(4)}  G ${readout.g.toFixed(4)}  B ${readout.b.toFixed(4)}  A ${readout.a.toFixed(4)}`
+  }
+  return `R ${Math.round(readout.r)}  G ${Math.round(readout.g)}  B ${Math.round(readout.b)}  A ${Math.round(readout.a)}`
+}
+
+function maxFiniteFloatValue(data: Float32Array) {
+  let max = 1
+  for (let i = 0; i < data.length; i++) {
+    const value = data[i]
+    if (Number.isFinite(value)) max = Math.max(max, value)
+  }
+  return max
+}
 
 export function HistogramPanel() {
   const { activeDoc } = useEditor()
   const canvasRef = React.useRef<HTMLCanvasElement>(null)
+  const previewRef = React.useRef<HTMLCanvasElement>(null)
   const [channel, setChannel] = React.useState<HistogramChannel>("composite")
-  const [stats, setStats] = React.useState({ mean: 0, std: 0, median: 0, pixels: 0 })
+  const [toneExposure, setToneExposure] = React.useState(0)
+  const [toneGamma, setToneGamma] = React.useState(1)
+  const [stats, setStats] = React.useState({
+    mean: 0,
+    std: 0,
+    median: 0,
+    pixels: 0,
+    bins: 256,
+    source: "Canvas preview",
+    bitDepth: 8 as PsDocument["bitDepth"],
+    canvasBins: 256,
+  })
 
   const draw = React.useCallback(() => {
     const out = canvasRef.current
@@ -237,51 +366,54 @@ export function HistogramPanel() {
     const sampleScale = Math.min(1, 256 / Math.max(activeDoc.width, activeDoc.height))
     const source = renderComposite(activeDoc, sampleScale)
     const img = source.getContext("2d")!.getImageData(0, 0, source.width, source.height)
-    const channels = {
-      red: new Array<number>(256).fill(0),
-      green: new Array<number>(256).fill(0),
-      blue: new Array<number>(256).fill(0),
-      luminosity: new Array<number>(256).fill(0),
-    }
-    let count = 0
-    let sum = 0
-    let sumSq = 0
-    for (let i = 0; i < img.data.length; i += 4) {
-      if (img.data[i + 3] === 0) continue
-      const r = img.data[i]
-      const g = img.data[i + 1]
-      const b = img.data[i + 2]
-      const lum = Math.round(0.299 * r + 0.587 * g + 0.114 * b)
-      channels.red[r]++
-      channels.green[g]++
-      channels.blue[b]++
-      channels.luminosity[lum]++
-      count++
-      sum += lum
-      sumSq += lum * lum
-    }
-    const statHist = channels.luminosity
-    let running = 0
-    let median = 0
-    for (let i = 0; i < 256; i++) {
-      running += statHist[i]
-      if (running >= count / 2) {
-        median = i
-        break
+    const canvasHistogram = computeCanvasHistogram(img)
+    const highBitSource = activeDoc.bitDepth > 8
+      ? findDocumentHighBitSource(activeDoc) ?? createProjectedHighBitSource(activeDoc, img)
+      : null
+    const histogram = highBitSource
+      ? computeHighBitHistogram(highBitSource.image, {
+        floatBins: 4096,
+        floatMin: 0,
+        floatMax: highBitSource.image.storage === "float32" ? maxFiniteFloatValue(highBitSource.image.data as Float32Array) : undefined,
+      })
+      : canvasHistogram
+    const preview = previewRef.current
+    if (preview) {
+      if (highBitSource) {
+        const previewImage = toneMapHighBitImageToImageData(highBitSource.image, { exposure: toneExposure, gamma: toneGamma })
+        const temp = imageDataToCanvas(previewImage)
+        preview.width = 252
+        preview.height = Math.max(1, Math.round((previewImage.height / Math.max(1, previewImage.width)) * preview.width))
+        const pctx = preview.getContext("2d")!
+        pctx.imageSmoothingEnabled = true
+        pctx.clearRect(0, 0, preview.width, preview.height)
+        pctx.drawImage(temp, 0, 0, preview.width, preview.height)
+      } else {
+        preview.width = 1
+        preview.height = 1
+        preview.getContext("2d")!.clearRect(0, 0, 1, 1)
       }
     }
-    const mean = count ? sum / count : 0
-    const std = count ? Math.sqrt(sumSq / count - mean * mean) : 0
-    setStats({ mean, std, median, pixels: count })
+    setStats({
+      mean: histogram.stats.mean,
+      std: histogram.stats.std,
+      median: histogram.stats.median,
+      pixels: histogram.stats.pixels,
+      bins: histogram.bins,
+      source: highBitSource ? highBitSource.label : "Canvas preview",
+      bitDepth: histogram.bitDepth,
+      canvasBins: canvasHistogram.bins,
+    })
 
-    const drawHist = (hist: number[], color: string, alpha = 0.85) => {
-      const max = Math.max(1, ...hist)
+    const drawHist = (hist: Uint32Array, color: string, alpha = 0.85) => {
+      let max = 1
+      for (let i = 0; i < hist.length; i++) max = Math.max(max, hist[i])
       ctx.save()
       ctx.globalAlpha = alpha
       ctx.strokeStyle = color
       ctx.beginPath()
-      for (let i = 0; i < 256; i++) {
-        const x = (i / 255) * out.width
+      for (let i = 0; i < hist.length; i++) {
+        const x = (i / Math.max(1, hist.length - 1)) * out.width
         const y = out.height - (hist[i] / max) * (out.height - 8)
         if (i === 0) ctx.moveTo(x, y)
         else ctx.lineTo(x, y)
@@ -291,21 +423,21 @@ export function HistogramPanel() {
     }
 
     if (channel === "rgb" || channel === "composite") {
-      drawHist(channels.red, "#ef4444", channel === "composite" ? 0.55 : 0.85)
-      drawHist(channels.green, "#22c55e", channel === "composite" ? 0.55 : 0.85)
-      drawHist(channels.blue, "#3b82f6", channel === "composite" ? 0.55 : 0.85)
-      if (channel === "composite") drawHist(channels.luminosity, "#e5e7eb", 0.9)
+      drawHist(histogram.channels.red, "#ef4444", channel === "composite" ? 0.55 : 0.85)
+      drawHist(histogram.channels.green, "#22c55e", channel === "composite" ? 0.55 : 0.85)
+      drawHist(histogram.channels.blue, "#3b82f6", channel === "composite" ? 0.55 : 0.85)
+      if (channel === "composite") drawHist(histogram.channels.luminosity, "#e5e7eb", 0.9)
     } else {
       const map = {
-        red: ["#ef4444", channels.red],
-        green: ["#22c55e", channels.green],
-        blue: ["#3b82f6", channels.blue],
-        luminosity: ["#e5e7eb", channels.luminosity],
+        red: ["#ef4444", histogram.channels.red],
+        green: ["#22c55e", histogram.channels.green],
+        blue: ["#3b82f6", histogram.channels.blue],
+        luminosity: ["#e5e7eb", histogram.channels.luminosity],
       } as const
       const [color, hist] = map[channel]
       drawHist(hist, color, 0.95)
     }
-  }, [activeDoc, channel])
+  }, [activeDoc, channel, toneExposure, toneGamma])
 
   React.useEffect(draw, [draw])
   useRenderSubscription(draw)
@@ -328,10 +460,32 @@ export function HistogramPanel() {
         </select>
       </div>
       <canvas ref={canvasRef} className="block w-full border border-[var(--ps-divider)] rounded-sm" />
+      {activeDoc && activeDoc.bitDepth > 8 ? (
+        <div className="space-y-2 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] text-[var(--ps-text-dim)]">
+            <span>High-bit: {stats.bins.toLocaleString()} bins</span>
+            <span>Canvas: {stats.canvasBins} bins</span>
+            <span className="col-span-2 truncate" title={stats.source}>Source: {stats.source}</span>
+          </div>
+          <canvas ref={previewRef} className="block max-h-20 w-full border border-[var(--ps-divider)] rounded-sm object-contain" />
+          <div className="grid gap-2">
+            <div className="grid grid-cols-[58px_1fr_42px] items-center gap-2">
+              <span className="text-[10px] text-[var(--ps-text-dim)]">Exposure</span>
+              <Slider min={-4} max={4} step={0.1} value={[toneExposure]} onValueChange={(v) => setToneExposure(v[0])} />
+              <span className="text-right tabular-nums text-[10px]">{toneExposure.toFixed(1)}</span>
+            </div>
+            <div className="grid grid-cols-[58px_1fr_42px] items-center gap-2">
+              <span className="text-[10px] text-[var(--ps-text-dim)]">Gamma</span>
+              <Slider min={0.1} max={4} step={0.1} value={[toneGamma]} onValueChange={(v) => setToneGamma(v[0])} />
+              <span className="text-right tabular-nums text-[10px]">{toneGamma.toFixed(1)}</span>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] text-[var(--ps-text-dim)]">
-        <span>Mean: {stats.mean.toFixed(1)}</span>
-        <span>Std Dev: {stats.std.toFixed(1)}</span>
-        <span>Median: {stats.median}</span>
+        <span>Mean: {formatHistogramValue(stats.mean, stats.bitDepth)}</span>
+        <span>Std Dev: {formatHistogramValue(stats.std, stats.bitDepth)}</span>
+        <span>Median: {formatHistogramValue(stats.median, stats.bitDepth)}</span>
         <span>Pixels: {stats.pixels.toLocaleString()}</span>
       </div>
     </div>
@@ -341,14 +495,30 @@ export function HistogramPanel() {
 export function InfoPanel() {
   const { activeDoc } = useEditor()
   const compositeRef = React.useRef<HTMLCanvasElement | null>(null)
+  const highBitSourceRef = React.useRef<{ image: HighBitImage; label: string } | null>(null)
   const lastRebuildRef = React.useRef(0)
   const rebuildTimerRef = React.useRef<number | null>(null)
   const [mouse, setMouse] = React.useState<{ x: number; y: number; inside: boolean }>({ x: 0, y: 0, inside: false })
   const [rgba, setRgba] = React.useState([0, 0, 0, 0])
+  const [highBitReadout, setHighBitReadout] = React.useState<HighBitPixelReadout | null>(null)
+  const [highBitSourceLabel, setHighBitSourceLabel] = React.useState("-")
 
   const rebuildNow = React.useCallback(() => {
     if (!activeDoc) return
-    compositeRef.current = renderComposite(activeDoc, 1)
+    const composite = renderComposite(activeDoc, 1)
+    compositeRef.current = composite
+    if (activeDoc.bitDepth > 8) {
+      const source = findDocumentHighBitSource(activeDoc) ?? createProjectedHighBitSource(
+        activeDoc,
+        composite.getContext("2d")!.getImageData(0, 0, composite.width, composite.height),
+      )
+      highBitSourceRef.current = source
+      setHighBitSourceLabel(source.label)
+    } else {
+      highBitSourceRef.current = null
+      setHighBitSourceLabel("-")
+      setHighBitReadout(null)
+    }
     lastRebuildRef.current = performance.now()
   }, [activeDoc])
 
@@ -379,9 +549,16 @@ export function InfoPanel() {
       if (!detail) return
       setMouse(detail)
       const c = compositeRef.current
-      if (!c || !detail.inside) return
-      const px = c.getContext("2d")!.getImageData(Math.floor(detail.x), Math.floor(detail.y), 1, 1).data
+      if (!c || !detail.inside) {
+        setHighBitReadout(null)
+        return
+      }
+      const x = Math.floor(detail.x)
+      const y = Math.floor(detail.y)
+      const px = c.getContext("2d")!.getImageData(x, y, 1, 1).data
       setRgba([px[0], px[1], px[2], px[3]])
+      const highBitImage = highBitSourceRef.current?.image
+      setHighBitReadout(highBitImage ? readHighBitPixel(highBitImage, x, y) : null)
     }
     window.addEventListener("ps-mousemove", handler)
     return () => window.removeEventListener("ps-mousemove", handler)
@@ -398,12 +575,16 @@ export function InfoPanel() {
       <InfoSection title="Cursor">
         <InfoRow label="X/Y" value={mouse.inside ? `${Math.round(mouse.x)}, ${Math.round(mouse.y)} px` : "Outside canvas"} />
         <InfoRow label="RGBA" value={`${rgba[0]}, ${rgba[1]}, ${rgba[2]}, ${Math.round((rgba[3] / 255) * 100)}%`} />
+        {activeDoc && activeDoc.bitDepth > 8 ? (
+          <InfoRow label={`${activeDoc.bitDepth}-bit`} value={formatHighBitReadout(highBitReadout, activeDoc.bitDepth)} />
+        ) : null}
         <InfoRow label="HSB" value={`${hsb.h.toFixed(0)} / ${hsb.s.toFixed(0)} / ${hsb.b.toFixed(0)}`} />
         <InfoRow label="Lab" value={`${lab.l.toFixed(0)} / ${lab.a.toFixed(0)} / ${lab.b.toFixed(0)}`} />
       </InfoSection>
       <InfoSection title="Document">
         <InfoRow label="Size" value={activeDoc ? `${activeDoc.width} x ${activeDoc.height}px` : "-"} />
         <InfoRow label="Mode" value={activeDoc ? `${activeDoc.colorMode}, ${activeDoc.bitDepth}-bit` : "-"} />
+        {activeDoc && activeDoc.bitDepth > 8 ? <InfoRow label="Source" value={highBitSourceLabel} /> : null}
         <InfoRow label="Selection" value={activeDoc?.selection.bounds ? `${Math.round(activeDoc.selection.bounds.w)} x ${Math.round(activeDoc.selection.bounds.h)}px` : "None"} />
       </InfoSection>
       <InfoSection title="Measurement">

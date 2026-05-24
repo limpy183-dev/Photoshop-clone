@@ -7,6 +7,7 @@
 import type { BlendMode } from "./types"
 import { hexToRgb as hexToRgbFilter } from "./color-utils"
 import { applyChannelMixerToImageData, type ChannelMixerParams } from "./color-channel-ops"
+import { parseFieldBlurPins, parsePathBlurPoints } from "./blur-gallery-controls"
 
 export type FilterParam =
   | { type: "slider"; key: string; label: string; min: number; max: number; step?: number; default: number; suffix?: string }
@@ -51,6 +52,7 @@ export interface FilterCompositeOptions {
   maskWidth?: number
   maskHeight?: number
   maskEnabled?: boolean
+  maskDensity?: number
 }
 
 function blendFilterChannel(src: number, dest: number, mode: BlendMode) {
@@ -94,9 +96,13 @@ function filterMaskAlpha(options: FilterCompositeOptions, x: number, y: number, 
   if (options.maskData.length >= pixelCount * 4) {
     const i = (my * options.maskWidth + mx) * 4
     const luminance = (options.maskData[i] + options.maskData[i + 1] + options.maskData[i + 2]) / 765
-    return luminance * (options.maskData[i + 3] / 255)
+    const raw = luminance * (options.maskData[i + 3] / 255)
+    const density = clamp01(options.maskDensity ?? 1)
+    return 1 - density + raw * density
   }
-  return options.maskData[my * options.maskWidth + mx] / 255
+  const raw = options.maskData[my * options.maskWidth + mx] / 255
+  const density = clamp01(options.maskDensity ?? 1)
+  return 1 - density + raw * density
 }
 
 export function compositeFilterImageData(
@@ -2553,7 +2559,30 @@ function mixBlurredByWeight(src: ImageData, blurred: ImageData, weightForPixel: 
   return new ImageData(out, src.width, src.height)
 }
 
-function fieldBlur(src: ImageData, blur: number, centerX: number, centerY: number, falloff: number) {
+function fieldBlur(src: ImageData, blur: number, centerX: number, centerY: number, falloff: number, pinsSpec = "") {
+  const pins = parseFieldBlurPins(pinsSpec)
+  if (pins.length > 0) {
+    const maxBlur = Math.max(0, blur, ...pins.map((pin) => pin.blur))
+    if (maxBlur <= 0) return clone(src)
+    const blurred = boxBlur(src, Math.max(1, maxBlur))
+    return mixBlurredByWeight(src, blurred, (x, y) => {
+      const px = (x / Math.max(1, src.width - 1)) * 100
+      const py = (y / Math.max(1, src.height - 1)) * 100
+      let weightedBlur = 0
+      let totalWeight = 0
+      for (const pin of pins) {
+        const dx = ((px - pin.x) / 100) * src.width
+        const dy = ((py - pin.y) / 100) * src.height
+        const d2 = dx * dx + dy * dy
+        if (d2 < 0.25) return pin.blur / maxBlur
+        const weight = 1 / Math.max(1, d2)
+        weightedBlur += pin.blur * weight
+        totalWeight += weight
+      }
+      return totalWeight > 0 ? weightedBlur / totalWeight / maxBlur : 0
+    })
+  }
+
   const blurred = boxBlur(src, Math.max(1, blur))
   const cx = (centerX / 100) * Math.max(1, src.width - 1)
   const cy = (centerY / 100) * Math.max(1, src.height - 1)
@@ -2578,13 +2607,13 @@ function irisBlur(src: ImageData, blur: number, centerX: number, centerY: number
   })
 }
 
-function tiltShiftBlur(src: ImageData, blur: number, angle: number, radius: number, feather: number) {
+function tiltShiftBlur(src: ImageData, blur: number, angle: number, radius: number, feather: number, centerX = 50, centerY = 50) {
   const blurred = boxBlur(src, Math.max(1, blur))
   const radians = (angle * Math.PI) / 180
   const nx = -Math.sin(radians)
   const ny = Math.cos(radians)
-  const cx = (src.width - 1) / 2
-  const cy = (src.height - 1) / 2
+  const cx = (centerX / 100) * Math.max(1, src.width - 1)
+  const cy = (centerY / 100) * Math.max(1, src.height - 1)
   const clearBand = Math.max(1, Math.min(src.width, src.height) * (radius / 100) * 0.5)
   const featherBand = Math.max(1, Math.min(src.width, src.height) * (feather / 100))
   return mixBlurredByWeight(src, blurred, (x, y) => {
@@ -2593,9 +2622,27 @@ function tiltShiftBlur(src: ImageData, blur: number, angle: number, radius: numb
   })
 }
 
-function pathBlur(src: ImageData, distance: number, angle: number, taper: number) {
-  const blurred = motionBlur(src, Math.max(1, distance), angle)
+function pathBlur(src: ImageData, distance: number, angle: number, taper: number, pathSpec = "") {
+  const hasPath = pathSpec.trim().length > 0
+  const points = hasPath ? parsePathBlurPoints(pathSpec) : []
+  const pathAngle = hasPath && points.length >= 2 ? angleFromPathPoints(points, src.width, src.height) : angle
+  const blurred = motionBlur(src, Math.max(1, distance), Number.isFinite(pathAngle) ? pathAngle : angle)
   const taperAmount = clamp01(taper / 100)
+  if (hasPath && points.length >= 2) {
+    const canvasPoints = points.map((point) => ({
+      x: (point.x / 100) * Math.max(1, src.width - 1),
+      y: (point.y / 100) * Math.max(1, src.height - 1),
+    }))
+    const influenceBand = Math.max(8, Math.min(src.width, src.height) * 0.18)
+    return mixBlurredByWeight(src, blurred, (x, y) => {
+      const nearest = distanceToPolyline({ x, y }, canvasPoints)
+      const pathWeight = 1 - clamp01(nearest / influenceBand)
+      if (taperAmount <= 0) return pathWeight
+      const edge = Math.min(x, y, src.width - 1 - x, src.height - 1 - y)
+      const edgeWeight = 1 - clamp01(edge / Math.max(1, Math.min(src.width, src.height) * 0.5) * taperAmount)
+      return Math.max(pathWeight, edgeWeight * 0.35)
+    })
+  }
   if (taperAmount <= 0) return blurred
   return mixBlurredByWeight(src, blurred, (x, y) => {
     const edge = Math.min(x, y, src.width - 1 - x, src.height - 1 - y)
@@ -2603,11 +2650,38 @@ function pathBlur(src: ImageData, distance: number, angle: number, taper: number
   })
 }
 
-function spinBlur(src: ImageData, amount: number, centerX: number, centerY: number) {
-  const shifted = radialBlur(src, Math.max(1, amount), "spin", "best")
-  if (centerX === 50 && centerY === 50) return shifted
-  const field = fieldBlur(src, Math.max(1, amount / 4), centerX, centerY, 40)
-  return mixBlurredByWeight(field, shifted, () => 0.65)
+function spinBlur(src: ImageData, amount: number, centerX: number, centerY: number, radius = 100) {
+  const shifted = radialBlur(src, Math.max(1, amount), "spin", "best", centerX, centerY)
+  const cx = (centerX / 100) * Math.max(1, src.width - 1)
+  const cy = (centerY / 100) * Math.max(1, src.height - 1)
+  const radiusPx = Math.max(1, Math.min(src.width, src.height) * clamp01(radius / 100) * 0.5)
+  const featherPx = Math.max(2, radiusPx * 0.2)
+  return mixBlurredByWeight(src, shifted, (x, y) => 1 - clamp01((Math.hypot(x - cx, y - cy) - radiusPx) / featherPx))
+}
+
+function angleFromPathPoints(points: { x: number; y: number }[], width: number, height: number) {
+  const first = points[0]
+  const last = points[points.length - 1]
+  const dx = ((last.x - first.x) / 100) * width
+  const dy = ((last.y - first.y) / 100) * height
+  return Math.atan2(dy, dx) * 180 / Math.PI
+}
+
+function distanceToPolyline(point: { x: number; y: number }, points: { x: number; y: number }[]) {
+  let best = Number.POSITIVE_INFINITY
+  for (let i = 0; i < points.length - 1; i++) {
+    best = Math.min(best, distanceToSegment(point, points[i], points[i + 1]))
+  }
+  return best
+}
+
+function distanceToSegment(point: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const len2 = dx * dx + dy * dy
+  if (len2 <= 0.0001) return Math.hypot(point.x - a.x, point.y - a.y)
+  const t = clamp01(((point.x - a.x) * dx + (point.y - a.y) * dy) / len2)
+  return Math.hypot(point.x - (a.x + dx * t), point.y - (a.y + dy * t))
 }
 
 /* ------------------------- lens profile presets -------------------------- */
@@ -4136,8 +4210,9 @@ export const FILTERS: Record<string, FilterDef> = {
       { type: "slider", key: "centerX", label: "Center X", min: 0, max: 100, step: 1, default: 50, suffix: "%" },
       { type: "slider", key: "centerY", label: "Center Y", min: 0, max: 100, step: 1, default: 50, suffix: "%" },
       { type: "slider", key: "falloff", label: "Falloff", min: 0, max: 100, step: 1, default: 45, suffix: "%" },
+      { type: "text", key: "pins", label: "Pins", default: "", placeholder: "x%,y%,blur; x%,y%,blur" },
     ],
-    apply: (src, p) => fieldBlur(src, Number(p.blur), Number(p.centerX), Number(p.centerY), Number(p.falloff)),
+    apply: (src, p) => fieldBlur(src, Number(p.blur), Number(p.centerX), Number(p.centerY), Number(p.falloff), String(p.pins ?? "")),
   },
   "iris-blur": {
     id: "iris-blur",
@@ -4158,11 +4233,13 @@ export const FILTERS: Record<string, FilterDef> = {
     category: "Blur Gallery",
     params: [
       { type: "slider", key: "blur", label: "Blur", min: 0, max: 80, step: 1, default: 16, suffix: "px" },
+      { type: "slider", key: "centerX", label: "Center X", min: 0, max: 100, step: 1, default: 50, suffix: "%" },
+      { type: "slider", key: "centerY", label: "Center Y", min: 0, max: 100, step: 1, default: 50, suffix: "%" },
       { type: "slider", key: "angle", label: "Angle", min: -180, max: 180, step: 1, default: 0, suffix: "deg" },
       { type: "slider", key: "radius", label: "Sharp Band", min: 1, max: 100, step: 1, default: 30, suffix: "%" },
       { type: "slider", key: "feather", label: "Feather", min: 1, max: 100, step: 1, default: 30, suffix: "%" },
     ],
-    apply: (src, p) => tiltShiftBlur(src, Number(p.blur), Number(p.angle), Number(p.radius), Number(p.feather)),
+    apply: (src, p) => tiltShiftBlur(src, Number(p.blur), Number(p.angle), Number(p.radius), Number(p.feather), Number(p.centerX ?? 50), Number(p.centerY ?? 50)),
   },
   "path-blur": {
     id: "path-blur",
@@ -4172,8 +4249,9 @@ export const FILTERS: Record<string, FilterDef> = {
       { type: "slider", key: "distance", label: "Speed", min: 1, max: 160, step: 1, default: 24, suffix: "px" },
       { type: "slider", key: "angle", label: "Direction", min: -180, max: 180, step: 1, default: 0, suffix: "deg" },
       { type: "slider", key: "taper", label: "Taper", min: 0, max: 100, step: 1, default: 18, suffix: "%" },
+      { type: "text", key: "path", label: "Path Points", default: "25,50;75,50", placeholder: "x%,y%; x%,y%" },
     ],
-    apply: (src, p) => pathBlur(src, Number(p.distance), Number(p.angle), Number(p.taper)),
+    apply: (src, p) => pathBlur(src, Number(p.distance), Number(p.angle), Number(p.taper), String(p.path ?? "")),
   },
   "spin-blur": {
     id: "spin-blur",
@@ -4183,8 +4261,9 @@ export const FILTERS: Record<string, FilterDef> = {
       { type: "slider", key: "amount", label: "Angle", min: 1, max: 100, step: 1, default: 28 },
       { type: "slider", key: "centerX", label: "Center X", min: 0, max: 100, step: 1, default: 50, suffix: "%" },
       { type: "slider", key: "centerY", label: "Center Y", min: 0, max: 100, step: 1, default: 50, suffix: "%" },
+      { type: "slider", key: "radius", label: "Radius", min: 1, max: 100, step: 1, default: 55, suffix: "%" },
     ],
-    apply: (src, p) => spinBlur(src, Number(p.amount), Number(p.centerX), Number(p.centerY)),
+    apply: (src, p) => spinBlur(src, Number(p.amount), Number(p.centerX), Number(p.centerY), Number(p.radius ?? 55)),
   },
   sharpen: {
     id: "sharpen",

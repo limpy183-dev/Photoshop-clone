@@ -6,16 +6,23 @@ import {
   analyzeThreeDPrintReadiness,
   applyVideoTransition,
   assignPlanarUvs,
+  buildOfflineAudioMixSchedule,
+  buildVideoThumbnailPlan,
   buildAudioMixPlan,
+  calculateTransitionWeights,
   convertVideoTimelineToFrameAnimation,
   createThreeDCrossSection,
   createVideoGroup,
+  encodeWavFromAudioBuffer,
   exportAdvancedThreeDScene,
   importAdvancedThreeDScene,
   paintThreeDSurface,
   rayTraceScene,
+  renderVideoTransitionPreview,
   resolveVideoExportPreset,
+  splitVideoLayerAtPlayhead,
   splitVideoLayer,
+  trimVideoClipToFrame,
   trimVideoClip,
   updateThreeDMaterial,
 } from "../components/photoshop/three-d-video-engine"
@@ -197,6 +204,39 @@ test("video trimming, splitting, transitions, and video groups preserve timing m
   expect(group.group.videoGroup?.durationMs).toBe(6400)
 })
 
+test("frame-accurate video edit helpers snap trim handles, split at playhead, and plan thumbnails", () => {
+  const clip = videoLayer("clip", videoProps({ currentTimeMs: 4567 }))
+  const trimmed = trimVideoClipToFrame(clip.video!, 1234, 8765, 10)
+  const [left, right] = splitVideoLayerAtPlayhead({ ...clip, video: trimmed }, 4567, 10)
+  const thumbnails = buildVideoThumbnailPlan(trimmed, { count: 5, fps: 10 })
+
+  expect(trimmed.inPointMs).toBe(1200)
+  expect(trimmed.outPointMs).toBe(8800)
+  expect(trimmed.trimHandles).toEqual({ inMs: 1200, outMs: 8800 })
+  expect(trimmed.currentTimeMs).toBe(4600)
+  expect(left.video?.outPointMs).toBe(4600)
+  expect(right.video?.inPointMs).toBe(4600)
+  expect(thumbnails.map((item) => item.timeMs)).toEqual([1200, 3100, 5000, 6900, 8800])
+  expect(thumbnails.every((item) => item.timeMs % 100 === 0)).toBe(true)
+})
+
+test("video transition preview computes cross-dissolve and fade frame weights", () => {
+  const from = videoLayer("from").canvas
+  const to = videoLayer("to").canvas
+  const dissolve = calculateTransitionWeights({ kind: "cross-dissolve", durationMs: 1000 }, 250)
+  const fadeIn = calculateTransitionWeights({ kind: "fade-black", durationMs: 1000 }, 250, "in")
+  const fadeOut = calculateTransitionWeights({ kind: "fade-white", durationMs: 1000 }, 250, "out")
+  const preview = renderVideoTransitionPreview(from, to, { kind: "cross-dissolve", durationMs: 1000 }, 250, { width: 64, height: 36 })
+
+  expect(dissolve.fromOpacity).toBeCloseTo(0.75)
+  expect(dissolve.toOpacity).toBeCloseTo(0.25)
+  expect(fadeIn.matteOpacity).toBeCloseTo(0.75)
+  expect(fadeOut.fromOpacity).toBeCloseTo(0.75)
+  expect(fadeOut.matteColor).toBe("#ffffff")
+  expect(preview.width).toBe(64)
+  expect(preview.height).toBe(36)
+})
+
 test("audio mixing plan computes playback state, fades, pan, and master gain", () => {
   const tracks: AudioTrack[] = [
     { id: "a", name: "Music", startMs: 0, durationMs: 5000, volume: 0.8, fadeInMs: 1000, fadeOutMs: 1000, pan: -0.5 },
@@ -209,6 +249,32 @@ test("audio mixing plan computes playback state, fades, pan, and master gain", (
   expect(mix.leftGain).toBeGreaterThan(mix.rightGain)
   expect(mix.masterVolume).toBe(0.75)
   expect(mix.peakGain).toBeLessThanOrEqual(1)
+})
+
+test("offline audio export plans source gain, fade, pan and writes a WAV container", () => {
+  const tracks: AudioTrack[] = [
+    { id: "a", name: "Music", startMs: 100, durationMs: 1200, volume: 0.8, fadeInMs: 200, fadeOutMs: 300, pan: -0.5, dataUrl: "data:audio/wav;base64,AAAA" },
+    { id: "b", name: "Muted", startMs: 0, durationMs: 1000, volume: 1, muted: true, dataUrl: "data:audio/wav;base64,AAAA" },
+  ]
+  const schedule = buildOfflineAudioMixSchedule(tracks, { masterVolume: 0.5, sampleRate: 48_000 })
+  const buffer = {
+    numberOfChannels: 2,
+    sampleRate: 48_000,
+    length: 4,
+    getChannelData: (channel: number) => new Float32Array(channel === 0 ? [0, 0.5, -0.5, 0.25] : [0, -0.25, 0.25, 0.5]),
+  } as AudioBuffer
+  const wav = encodeWavFromAudioBuffer(buffer)
+  const wavText = Array.from(wav.slice(0, 12), (byte) => String.fromCharCode(byte)).join("")
+
+  expect(schedule.durationMs).toBe(1300)
+  expect(schedule.tracks).toHaveLength(1)
+  expect(schedule.tracks[0].gain).toBeCloseTo(0.4)
+  expect(schedule.tracks[0].leftGain).toBeCloseTo(0.4)
+  expect(schedule.tracks[0].rightGain).toBeCloseTo(0.2)
+  expect(schedule.tracks[0].fadeInSeconds).toBeCloseTo(0.2)
+  expect(schedule.tracks[0].fadeOutSeconds).toBeCloseTo(0.3)
+  expect(wavText).toBe("RIFF4\u0000\u0000\u0000WAVE")
+  expect(wav.length).toBe(44 + 4 * 2 * 2)
 })
 
 test("video export presets and frame animation conversion support timeline workflows", () => {

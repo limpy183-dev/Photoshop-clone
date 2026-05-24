@@ -22,10 +22,12 @@ import {
 import { Checkbox } from "@/components/ui/checkbox"
 import { useEditor, makeDocument, makeCanvas } from "./editor-context"
 import { canvasSizeError, clampCanvasSize } from "./canvas-limits"
-import type { DocumentModeSettings, Layer } from "./types"
+import { createHighBitImageFromImageData, type HighBitImage } from "./color-pipeline"
+import type { DocumentModeSettings, Layer, PsDocument } from "./types"
 
 type Unit = "px" | "in" | "cm" | "mm"
 type BackgroundChoice = "white" | "black" | "transparent" | "foreground" | "background" | "custom"
+type DocumentWithHighBitSource = PsDocument & { __highBitImageData?: HighBitImage }
 
 interface Preset {
   name: string
@@ -191,6 +193,20 @@ export function NewDocumentDialog({
         expanded: true,
       }
       doc.layers = [doc.layers[0], artboard, ...doc.layers.slice(1).map((layer) => ({ ...layer, parentId: artboard.id }))]
+    }
+    if (bitDepth > 8) {
+      const sourceCanvas = makeCanvas(doc.width, doc.height)
+      const sourceCtx = sourceCanvas.getContext("2d")!
+      for (const layer of doc.layers) {
+        if (layer.visible === false || layer.kind === "group") continue
+        sourceCtx.drawImage(layer.canvas, 0, 0)
+      }
+      const sourcePixels = sourceCtx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height)
+      ;(doc as DocumentWithHighBitSource).__highBitImageData = createHighBitImageFromImageData(sourcePixels, {
+        bitDepth,
+        colorMode,
+        profile: doc.colorManagement?.assignedProfile,
+      })
     }
     createDocument(doc, "New Document")
     onOpenChange(false)

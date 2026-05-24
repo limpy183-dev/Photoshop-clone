@@ -4,7 +4,15 @@ import * as React from "react"
 import { useEditor } from "../editor-context"
 import { rasterizeText } from "../tool-helpers"
 import type { TextAntiAliasMode } from "../types"
-import { DEFAULT_VARIABLE_AXIS_DEFINITIONS, listOpenTypeFeatureToggles } from "../typography-engine"
+import {
+  applyVariableFontNamedInstance,
+  DEFAULT_VARIABLE_AXIS_DEFINITIONS,
+  detectOpenTypeFeatureSupport,
+  inspectVariableFont,
+  listOpenTypeFeatureToggles,
+  type OpenTypeFeatureSupport,
+  type VariableFontInspection,
+} from "../typography-engine"
 import { Slider } from "@/components/ui/slider"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -21,6 +29,9 @@ import {
 export function CharacterPanel() {
   const { activeLayer, dispatch, requestRender, commit } = useEditor()
   const text = activeLayer?.kind === "text" ? activeLayer.text : null
+  const textFont = text?.font
+  const [fontInspection, setFontInspection] = React.useState<VariableFontInspection | null>(null)
+  const [featureSupport, setFeatureSupport] = React.useState<OpenTypeFeatureSupport | null>(null)
 
   const update = (patch: Partial<NonNullable<typeof text>>) => {
     if (!activeLayer || !text) return
@@ -36,6 +47,41 @@ export function CharacterPanel() {
   const updateAxis = (tag: string, value: number) => {
     update({ variableAxes: { ...(text?.variableAxes ?? {}), [tag]: value } })
   }
+  const applyNamedInstance = (name: string) => {
+    if (!text || !name) {
+      update({ variableNamedInstance: undefined })
+      return
+    }
+    const instance = fontInspection?.namedInstances.find((item) => item.name === name)
+    if (!instance) return
+    update(applyVariableFontNamedInstance(text, instance, fontInspection?.axes.length ? fontInspection.axes : text.variableAxisDefinitions))
+    commitChange(`Variable Font ${instance.name}`)
+  }
+  const inspectActiveFont = async (allowLocalFontAccess = false) => {
+    if (!text) return
+    const inspection = await inspectVariableFont(text.font, { allowLocalFontAccess })
+    setFontInspection(inspection)
+    if (inspection.axes.length && allowLocalFontAccess) {
+      update({ variableAxisDefinitions: inspection.axes })
+      commitChange("Inspect Variable Font")
+    }
+  }
+
+  React.useEffect(() => {
+    if (!textFont) {
+      setFontInspection(null)
+      setFeatureSupport(null)
+      return
+    }
+    setFeatureSupport(detectOpenTypeFeatureSupport(textFont))
+    let cancelled = false
+    inspectVariableFont(textFont).then((inspection) => {
+      if (!cancelled) setFontInspection(inspection)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [textFont])
 
   if (!text) {
     return (
@@ -45,8 +91,10 @@ export function CharacterPanel() {
     )
   }
 
-  const axisDefinitions = text.variableAxisDefinitions?.length ? text.variableAxisDefinitions : DEFAULT_VARIABLE_AXIS_DEFINITIONS
-  const openTypeToggles = listOpenTypeFeatureToggles()
+  const detectedAxes = fontInspection?.axes.length ? fontInspection.axes : undefined
+  const axisDefinitions = detectedAxes ?? (text.variableAxisDefinitions?.length ? text.variableAxisDefinitions : DEFAULT_VARIABLE_AXIS_DEFINITIONS)
+  const supportedTags = featureSupport?.supportedTags
+  const openTypeToggles = listOpenTypeFeatureToggles(supportedTags?.size ? { supportedTags } : {})
 
   return (
     <div className="overflow-y-auto text-[11px]">
@@ -187,7 +235,32 @@ export function CharacterPanel() {
       </div>
 
       <div className="px-3 py-2 border-b border-[var(--ps-divider)] space-y-2">
-        <label className="text-[10px] text-[var(--ps-text-dim)]">Variable Font Axes</label>
+        <div className="flex items-center justify-between gap-2">
+          <label className="text-[10px] text-[var(--ps-text-dim)]">Variable Font Axes</label>
+          <button
+            type="button"
+            onClick={() => void inspectActiveFont(true)}
+            className="h-5 rounded-sm border border-[var(--ps-divider)] px-1.5 text-[9px] hover:bg-[var(--ps-tool-hover)]"
+            title="Inspect the local font file for real variation axes and named instances"
+          >
+            Inspect
+          </button>
+        </div>
+        {fontInspection?.namedInstances.length ? (
+          <label className="grid gap-1 text-[10px] text-[var(--ps-text-dim)]">
+            Instance
+            <select
+              value={text.variableNamedInstance ?? ""}
+              onChange={(e) => applyNamedInstance(e.target.value)}
+              className="h-6 bg-[var(--ps-panel-2)] border border-[var(--ps-divider)] rounded-sm px-1 text-[10px]"
+            >
+              <option value="">Custom</option>
+              {fontInspection.namedInstances.map((instance) => (
+                <option key={instance.name} value={instance.name}>{instance.name}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         {axisDefinitions.map((axis) => (
           <CharSlider
             key={axis.tag}
@@ -200,20 +273,32 @@ export function CharacterPanel() {
             onCommit={() => commitChange(`Variable ${axis.name}`)}
           />
         ))}
+        {fontInspection?.error ? (
+          <p className="text-[9px] leading-snug text-amber-300">{fontInspection.error}</p>
+        ) : (
+          <p className="text-[9px] leading-snug text-[var(--ps-text-dim)]">
+            {fontInspection?.source === "font-access" ? "Axes read from local font data." : "Using browser/default axis metadata until local inspection is available."}
+          </p>
+        )}
       </div>
 
       <div className="px-3 py-2 border-b border-[var(--ps-divider)] space-y-2">
-        <label className="text-[10px] text-[var(--ps-text-dim)]">OpenType</label>
+        <div className="flex items-center justify-between gap-2">
+          <label className="text-[10px] text-[var(--ps-text-dim)]">OpenType</label>
+          <span className="text-[9px] text-[var(--ps-text-dim)]">
+            {openTypeToggles.length} features
+          </span>
+        </div>
         <div className="grid grid-cols-2 gap-1">
           {openTypeToggles.map((toggle) => {
-            const checked = (text as unknown as Record<string, boolean | undefined>)[toggle.key] ?? text.openType?.[toggle.key] ?? toggle.defaultEnabled
+            const checked = text.openType?.[toggle.key] ?? (text as unknown as Record<string, boolean | undefined>)[toggle.key] ?? toggle.defaultEnabled
             return (
               <CheckRow
                 key={toggle.tag}
                 label={toggle.label}
                 checked={!!checked}
                 onChange={(v) => {
-                  update({ [toggle.key]: v } as Partial<NonNullable<typeof text>>)
+                  update({ openType: { ...(text.openType ?? {}), [toggle.key]: v } })
                   commitChange(toggle.label)
                 }}
               />
@@ -253,6 +338,30 @@ export function CharacterPanel() {
             <option value="compact">Compact</option>
             <option value="loose">Loose</option>
             <option value="none">None</option>
+          </select>
+          <select
+            value={text.textOrientation ?? (text.tateChuYoko ? "mixed" : "upright")}
+            onChange={(e) => {
+              update({ textOrientation: e.target.value as NonNullable<typeof text>["textOrientation"] })
+              commitChange("Text Orientation")
+            }}
+            className="h-6 bg-[var(--ps-panel-2)] border border-[var(--ps-divider)] rounded-sm px-1 text-[10px]"
+          >
+            <option value="mixed">Mixed</option>
+            <option value="upright">Upright</option>
+            <option value="sideways">Sideways</option>
+          </select>
+          <select
+            value={text.verticalAlign ?? "top"}
+            onChange={(e) => {
+              update({ verticalAlign: e.target.value as NonNullable<typeof text>["verticalAlign"] })
+              commitChange("Vertical Align")
+            }}
+            className="h-6 bg-[var(--ps-panel-2)] border border-[var(--ps-divider)] rounded-sm px-1 text-[10px]"
+          >
+            <option value="top">Top</option>
+            <option value="middle">Middle</option>
+            <option value="bottom">Bottom</option>
           </select>
         </div>
         <CheckRow label="Tate Chu Yoko" checked={text.tateChuYoko === true} onChange={(v) => { update({ tateChuYoko: v }); commitChange("Tate Chu Yoko") }} />

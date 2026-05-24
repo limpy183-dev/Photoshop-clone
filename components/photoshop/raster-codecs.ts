@@ -1,4 +1,5 @@
-import { assertCanvasSize } from "./canvas-limits"
+import { assertCanvasSize, canvasLimitLabel, canvasSizeError, clampCanvasSize } from "./canvas-limits"
+import { planTiledBackingStore } from "./tile-store"
 
 
 export interface DecodedRaster {
@@ -14,6 +15,61 @@ export interface DecodedRaster {
   metadata?: Record<string, string | number | boolean>
 }
 
+export type TiffCompression = "none" | "lzw" | "deflate"
+export type PnmExportFormat = "ppm" | "pgm" | "pbm"
+
+export interface RasterExportMetadata {
+  author?: string
+  copyright?: string
+  description?: string
+  creationDate?: string
+  xmp?: string
+}
+
+export interface TiffEncodeOptions {
+  compression?: TiffCompression
+}
+
+export interface TgaEncodeOptions {
+  rle?: boolean
+}
+
+export interface PngEncodeOptions {
+  interlaced?: boolean
+  metadata?: RasterExportMetadata
+}
+
+export interface JpegEncodeOptions {
+  quality?: number
+  progressive?: boolean
+  metadata?: RasterExportMetadata
+}
+
+export interface PsbLargeDocumentOpenPlan {
+  width: number
+  height: number
+  fileName: string
+  fitsBrowserCanvas: boolean
+  defaultError: string | null
+  downscale50: {
+    scale: 0.5
+    width: number
+    height: number
+    fits: boolean
+    error: string | null
+  }
+  tileView: {
+    tileSize: number
+    tileColumns: number
+    tileRows: number
+    tileCount: number
+    overviewScale: number
+    overviewWidth: number
+    overviewHeight: number
+    recommendation: ReturnType<typeof planTiledBackingStore>["recommendation"]
+  }
+}
+
 export interface ExrInspection {
   magic: boolean
   version?: number
@@ -24,6 +80,121 @@ export interface ExrInspection {
 const textDecoder = new TextDecoder("ascii")
 const clamp8 = (value: number) => Math.max(0, Math.min(255, Math.round(value)))
 const EXR_FLOAT_TYPE = 1015 as const
+
+function concatUint8(arrays: Uint8Array[]): Uint8Array {
+  let total = 0
+  for (const array of arrays) total += array.length
+  const out = new Uint8Array(total)
+  let offset = 0
+  for (const array of arrays) {
+    out.set(array, offset)
+    offset += array.length
+  }
+  return out
+}
+
+function asciiBytes(value: string): Uint8Array {
+  const out = new Uint8Array(value.length)
+  for (let i = 0; i < value.length; i++) out[i] = value.charCodeAt(i) & 0xff
+  return out
+}
+
+function latin1Bytes(value: string): Uint8Array {
+  const out = new Uint8Array(value.length)
+  for (let i = 0; i < value.length; i++) out[i] = value.charCodeAt(i) & 0xff
+  return out
+}
+
+function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength)
+  copy.set(bytes)
+  return copy.buffer
+}
+
+function u32BE(value: number): Uint8Array {
+  return new Uint8Array([(value >>> 24) & 255, (value >>> 16) & 255, (value >>> 8) & 255, value & 255])
+}
+
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256)
+  for (let n = 0; n < 256; n++) {
+    let c = n
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+    table[n] = c >>> 0
+  }
+  return table
+})()
+
+function crc32(data: Uint8Array): number {
+  let c = 0xffffffff
+  for (let i = 0; i < data.length; i++) c = CRC_TABLE[(c ^ data[i]) & 255] ^ (c >>> 8)
+  return (c ^ 0xffffffff) >>> 0
+}
+
+function pngChunk(type: string, data: Uint8Array): Uint8Array {
+  const typeBytes = asciiBytes(type)
+  const crcInput = concatUint8([typeBytes, data])
+  return concatUint8([u32BE(data.length), typeBytes, data, u32BE(crc32(crcInput))])
+}
+
+function adler32(data: Uint8Array): number {
+  let a = 1
+  let b = 0
+  const mod = 65521
+  for (let i = 0; i < data.length; i++) {
+    a = (a + data[i]) % mod
+    b = (b + a) % mod
+  }
+  return ((b << 16) | a) >>> 0
+}
+
+function deflateRawStore(data: Uint8Array): Uint8Array {
+  const blocks: Uint8Array[] = []
+  const maxBlock = 0xffff
+  let offset = 0
+  do {
+    const end = Math.min(offset + maxBlock, data.length)
+    const len = end - offset
+    const nlen = 0xffff - len
+    const block = new Uint8Array(5 + len)
+    block[0] = end === data.length ? 1 : 0
+    block[1] = len & 255
+    block[2] = (len >>> 8) & 255
+    block[3] = nlen & 255
+    block[4] = (nlen >>> 8) & 255
+    block.set(data.subarray(offset, end), 5)
+    blocks.push(block)
+    offset = end
+  } while (offset < data.length)
+  return concatUint8(blocks)
+}
+
+function zlibStore(data: Uint8Array): Uint8Array {
+  const checksum = adler32(data)
+  return concatUint8([
+    new Uint8Array([0x78, 0x01]),
+    deflateRawStore(data),
+    new Uint8Array([(checksum >>> 24) & 255, (checksum >>> 16) & 255, (checksum >>> 8) & 255, checksum & 255]),
+  ])
+}
+
+async function compressWithStream(data: Uint8Array, format: CompressionFormat): Promise<Uint8Array | null> {
+  if (typeof CompressionStream !== "function") return null
+  try {
+    const stream = new Blob([data]).stream().pipeThrough(new CompressionStream(format))
+    return new Uint8Array(await new Response(stream).arrayBuffer())
+  } catch {
+    return null
+  }
+}
+
+async function deflateRaw(data: Uint8Array): Promise<Uint8Array> {
+  return (await compressWithStream(data, "deflate-raw")) ?? deflateRawStore(data)
+}
+
+async function deflateZlib(data: Uint8Array): Promise<Uint8Array> {
+  return (await compressWithStream(data, "deflate")) ?? zlibStore(data)
+}
 
 class FallbackImageData {
   data: Uint8ClampedArray
@@ -122,6 +293,8 @@ export async function decodeAdvancedRasterBufferAsync(buffer: ArrayBuffer, name 
   if (isTiff || ["tif", "tiff", "dng"].includes(ext)) {
     const tiff = await decodeTiffWithUtif(buffer)
     if (tiff) return tiff
+    const fallback = await decodeTiffBufferAsyncFallback(buffer).catch(() => null)
+    if (fallback) return fallback
   }
   return decodeAdvancedRasterBuffer(buffer, name)
 }
@@ -599,7 +772,62 @@ function readTiffValues(view: DataView, entryOffset: number, little: boolean): n
   return values
 }
 
+function decodeTiffLzw(data: Uint8Array, expectedLength: number): Uint8Array {
+  const out = new Uint8Array(expectedLength)
+  let outOffset = 0
+  let bitOffset = 0
+  let codeSize = 9
+  let nextCode = 258
+  let previous: number[] | null = null
+  const dict: number[][] = []
+
+  const reset = () => {
+    dict.length = 0
+    for (let i = 0; i < 256; i++) dict[i] = [i]
+    codeSize = 9
+    nextCode = 258
+    previous = null
+  }
+  const readCode = () => {
+    if (bitOffset + codeSize > data.length * 8) return null
+    const byte = bitOffset >>> 3
+    const bit = bitOffset & 7
+    const window = ((data[byte] ?? 0) << 16) | ((data[byte + 1] ?? 0) << 8) | (data[byte + 2] ?? 0)
+    const code = (window >>> (24 - bit - codeSize)) & ((1 << codeSize) - 1)
+    bitOffset += codeSize
+    return code
+  }
+  const add = (entry: number[]) => {
+    if (nextCode > 4095) return
+    dict[nextCode++] = entry
+    if (nextCode + 1 === 1 << codeSize && codeSize < 12) codeSize++
+  }
+  const write = (entry: number[]) => {
+    for (const value of entry) {
+      if (outOffset >= out.length) return
+      out[outOffset++] = value
+    }
+  }
+
+  reset()
+  while (outOffset < out.length) {
+    const code = readCode()
+    if (code === null || code === 257) break
+    if (code === 256) {
+      reset()
+      continue
+    }
+    const entry: number[] | null = dict[code] ?? (code === nextCode && previous ? [...previous, previous[0]] : null)
+    if (!entry) break
+    write(entry)
+    if (previous) add([...previous, entry[0]])
+    previous = entry
+  }
+  return out
+}
+
 export function decodeTiffBuffer(buffer: ArrayBuffer): DecodedRaster {
+  const bytes = new Uint8Array(buffer)
   const view = new DataView(buffer)
   const byteOrder = readAscii(buffer, 0, 2)
   const little = byteOrder === "II"
@@ -625,7 +853,7 @@ export function decodeTiffBuffer(buffer: ArrayBuffer): DecodedRaster {
   const planar = tags.get(284)?.[0] ?? 1
   if (!width || !height) throw new Error("TIFF dimensions are missing")
   assertCanvasSize(width, height, "TIFF image")
-  if (compression !== 1) throw new Error(`Unsupported TIFF compression: ${compression}`)
+  if (compression !== 1 && compression !== 5) throw new Error(`Unsupported TIFF compression: ${compression}`)
   if (planar !== 1) throw new Error("Planar TIFF data is not supported")
   if (![0, 1, 2].includes(photometric)) throw new Error(`Unsupported TIFF photometric interpretation: ${photometric}`)
 
@@ -635,14 +863,20 @@ export function decodeTiffBuffer(buffer: ArrayBuffer): DecodedRaster {
   const warnings: string[] = []
   let row = 0
   for (let stripIndex = 0; stripIndex < stripOffsets.length && row < height; stripIndex++) {
-    let p = stripOffsets[stripIndex]
-    const stripEnd = p + (stripByteCounts[stripIndex] ?? Number.MAX_SAFE_INTEGER)
     const rows = Math.min(rowsPerStrip, height - row)
-    for (let sy = 0; sy < rows && p < stripEnd; sy++, row++) {
+    const stripOffset = stripOffsets[stripIndex]
+    const stripByteCount = stripByteCounts[stripIndex] ?? Math.max(0, bytes.length - stripOffset)
+    const expectedStripBytes = rows * width * samplesPerPixel * sampleBytes
+    const stripData = compression === 5
+      ? decodeTiffLzw(bytes.subarray(stripOffset, stripOffset + stripByteCount), expectedStripBytes)
+      : bytes.subarray(stripOffset, stripOffset + stripByteCount)
+    const stripView = new DataView(stripData.buffer, stripData.byteOffset, stripData.byteLength)
+    let p = 0
+    for (let sy = 0; sy < rows && p < stripData.byteLength; sy++, row++) {
       for (let x = 0; x < width; x++) {
         const samples: number[] = []
         for (let s = 0; s < samplesPerPixel; s++) {
-          const sample = sampleBytes === 2 ? view.getUint16(p, little) : view.getUint8(p)
+          const sample = sampleBytes === 2 ? stripView.getUint16(p, little) : stripView.getUint8(p)
           p += sampleBytes
           samples.push(scaleSample(sample, (1 << Math.min(16, bits[Math.min(s, bits.length - 1)] ?? maxBitDepth)) - 1))
         }
@@ -682,7 +916,162 @@ export function decodeTiffBuffer(buffer: ArrayBuffer): DecodedRaster {
   }
 }
 
-export function encodeTiffImageData(imageData: ImageData): ArrayBuffer {
+async function inflateRawAsync(data: Uint8Array): Promise<Uint8Array> {
+  if (typeof DecompressionStream !== "function") throw new Error("Deflate TIFF decoding requires DecompressionStream support")
+  const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))
+  return new Uint8Array(await new Response(stream).arrayBuffer())
+}
+
+async function decodeTiffBufferAsyncFallback(buffer: ArrayBuffer): Promise<DecodedRaster> {
+  const bytes = new Uint8Array(buffer)
+  const view = new DataView(buffer)
+  const byteOrder = readAscii(buffer, 0, 2)
+  const little = byteOrder === "II"
+  if (!little && byteOrder !== "MM") throw new Error("TIFF byte order is missing")
+  if (view.getUint16(2, little) !== 42) throw new Error("Unsupported TIFF header")
+  const ifdOffset = view.getUint32(4, little)
+  const tagCount = view.getUint16(ifdOffset, little)
+  const tags = new Map<number, number[]>()
+  for (let i = 0; i < tagCount; i++) {
+    const entry = ifdOffset + 2 + i * 12
+    tags.set(view.getUint16(entry, little), readTiffValues(view, entry, little))
+  }
+
+  const width = tags.get(256)?.[0] ?? 0
+  const height = tags.get(257)?.[0] ?? 0
+  const bits = tags.get(258) ?? [1]
+  const compression = tags.get(259)?.[0] ?? 1
+  const photometric = tags.get(262)?.[0] ?? 2
+  const stripOffsets = tags.get(273) ?? []
+  const samplesPerPixel = tags.get(277)?.[0] ?? (photometric === 2 ? 3 : 1)
+  const rowsPerStrip = tags.get(278)?.[0] ?? height
+  const stripByteCounts = tags.get(279) ?? []
+  const planar = tags.get(284)?.[0] ?? 1
+  if (!width || !height) throw new Error("TIFF dimensions are missing")
+  assertCanvasSize(width, height, "TIFF image")
+  if (compression !== 8 && compression !== 32946) return decodeTiffBuffer(buffer)
+  if (planar !== 1) throw new Error("Planar TIFF data is not supported")
+  if (![0, 1, 2].includes(photometric)) throw new Error(`Unsupported TIFF photometric interpretation: ${photometric}`)
+
+  const rgba = new Uint8ClampedArray(width * height * 4)
+  const maxBitDepth = Math.max(...bits)
+  const sampleBytes = maxBitDepth > 8 ? 2 : 1
+  const warnings: string[] = []
+  let row = 0
+  for (let stripIndex = 0; stripIndex < stripOffsets.length && row < height; stripIndex++) {
+    const rows = Math.min(rowsPerStrip, height - row)
+    const stripOffset = stripOffsets[stripIndex]
+    const stripByteCount = stripByteCounts[stripIndex] ?? Math.max(0, bytes.length - stripOffset)
+    const stripData = await inflateRawAsync(bytes.subarray(stripOffset, stripOffset + stripByteCount))
+    const stripView = new DataView(stripData.buffer, stripData.byteOffset, stripData.byteLength)
+    let p = 0
+    for (let sy = 0; sy < rows && p < stripData.byteLength; sy++, row++) {
+      for (let x = 0; x < width; x++) {
+        const samples: number[] = []
+        for (let s = 0; s < samplesPerPixel; s++) {
+          const sample = sampleBytes === 2 ? stripView.getUint16(p, little) : stripView.getUint8(p)
+          p += sampleBytes
+          samples.push(scaleSample(sample, (1 << Math.min(16, bits[Math.min(s, bits.length - 1)] ?? maxBitDepth)) - 1))
+        }
+        const i = (row * width + x) * 4
+        if (photometric === 2) {
+          rgba[i] = samples[0] ?? 0
+          rgba[i + 1] = samples[1] ?? samples[0] ?? 0
+          rgba[i + 2] = samples[2] ?? samples[0] ?? 0
+          rgba[i + 3] = samples[3] ?? 255
+        } else {
+          const gray = photometric === 0 ? 255 - (samples[0] ?? 0) : samples[0] ?? 0
+          rgba[i] = gray
+          rgba[i + 1] = gray
+          rgba[i + 2] = gray
+          rgba[i + 3] = samples[1] ?? 255
+        }
+      }
+    }
+  }
+  if (row < height) warnings.push(`TIFF decoder filled ${row} of ${height} rows from available strip data.`)
+
+  return {
+    format: "TIFF",
+    width,
+    height,
+    bitDepth: maxBitDepth,
+    channels: samplesPerPixel,
+    colorModel: photometric === 2 ? "RGB" : "Grayscale",
+    compression: "deflate",
+    imageData: imageDataFromRgba(width, height, rgba),
+    warnings,
+    metadata: {
+      strips: stripOffsets.length,
+      rowsPerStrip,
+      byteOrder,
+    },
+  }
+}
+
+function rgbaPixelBytes(imageData: ImageData): Uint8Array {
+  return new Uint8Array(imageData.data)
+}
+
+function encodeTiffLzw(data: Uint8Array): Uint8Array {
+  const clear = 256
+  const eoi = 257
+  const maxCode = 4095
+  let codeSize = 9
+  let nextCode = 258
+  const dict = new Map<string, number>()
+  const out: number[] = []
+  let bitBuffer = 0
+  let bitCount = 0
+
+  const reset = () => {
+    dict.clear()
+    for (let i = 0; i < 256; i++) dict.set(String.fromCharCode(i), i)
+    codeSize = 9
+    nextCode = 258
+  }
+  const emit = (code: number) => {
+    bitBuffer = (bitBuffer << codeSize) | code
+    bitCount += codeSize
+    while (bitCount >= 8) {
+      out.push((bitBuffer >>> (bitCount - 8)) & 255)
+      bitCount -= 8
+      bitBuffer &= (1 << bitCount) - 1
+    }
+  }
+  const add = (key: string) => {
+    if (nextCode > maxCode) {
+      emit(clear)
+      reset()
+      return
+    }
+    dict.set(key, nextCode++)
+    if (nextCode + 1 === 1 << codeSize && codeSize < 12) codeSize++
+  }
+
+  reset()
+  emit(clear)
+  if (data.length) {
+    let w = String.fromCharCode(data[0])
+    for (let i = 1; i < data.length; i++) {
+      const k = String.fromCharCode(data[i])
+      const wk = w + k
+      if (dict.has(wk)) {
+        w = wk
+      } else {
+        emit(dict.get(w) ?? data[i - 1])
+        add(wk)
+        w = k
+      }
+    }
+    emit(dict.get(w) ?? 0)
+  }
+  emit(eoi)
+  if (bitCount > 0) out.push((bitBuffer << (8 - bitCount)) & 255)
+  return new Uint8Array(out)
+}
+
+function buildTiffImageData(imageData: ImageData, compressionTag: number, pixelBytes: Uint8Array): ArrayBuffer {
   const width = imageData.width
   const height = imageData.height
   assertCanvasSize(width, height, "TIFF export")
@@ -691,8 +1080,7 @@ export function encodeTiffImageData(imageData: ImageData): ArrayBuffer {
   const bitsOffset = ifdOffset + 2 + tagCount * 12 + 4
   const extraOffset = bitsOffset + 8
   const pixelOffset = extraOffset + 2
-  const pixelBytes = width * height * 4
-  const bytes = new Uint8Array(pixelOffset + pixelBytes)
+  const bytes = new Uint8Array(pixelOffset + pixelBytes.byteLength)
   const view = new DataView(bytes.buffer)
   bytes[0] = 0x49
   bytes[1] = 0x49
@@ -710,19 +1098,360 @@ export function encodeTiffImageData(imageData: ImageData): ArrayBuffer {
   writeEntry(256, 4, 1, width)
   writeEntry(257, 4, 1, height)
   writeEntry(258, 3, 4, bitsOffset)
-  writeEntry(259, 3, 1, 1)
+  writeEntry(259, 3, 1, compressionTag)
   writeEntry(262, 3, 1, 2)
   writeEntry(273, 4, 1, pixelOffset)
   writeEntry(277, 3, 1, 4)
   writeEntry(278, 4, 1, height)
-  writeEntry(279, 4, 1, pixelBytes)
+  writeEntry(279, 4, 1, pixelBytes.byteLength)
   writeEntry(284, 3, 1, 1)
   writeEntry(338, 3, 1, extraOffset)
   view.setUint32(entry, 0, true)
   for (let i = 0; i < 4; i++) view.setUint16(bitsOffset + i * 2, 8, true)
   view.setUint16(extraOffset, 2, true)
-  bytes.set(new Uint8Array(imageData.data.buffer, imageData.data.byteOffset, imageData.data.byteLength), pixelOffset)
+  bytes.set(pixelBytes, pixelOffset)
   return bytes.buffer
+}
+
+export function encodeTiffImageData(imageData: ImageData, options: TiffEncodeOptions = {}): ArrayBuffer {
+  const compression = options.compression ?? "none"
+  if (compression === "deflate") {
+    throw new Error("Deflate TIFF export is asynchronous. Use encodeTiffImageDataAsync().")
+  }
+  const pixels = rgbaPixelBytes(imageData)
+  if (compression === "lzw") return buildTiffImageData(imageData, 5, encodeTiffLzw(pixels))
+  return buildTiffImageData(imageData, 1, pixels)
+}
+
+export async function encodeTiffImageDataAsync(imageData: ImageData, options: TiffEncodeOptions = {}): Promise<ArrayBuffer> {
+  const compression = options.compression ?? "none"
+  if (compression === "deflate") return buildTiffImageData(imageData, 8, await deflateRaw(rgbaPixelBytes(imageData)))
+  return encodeTiffImageData(imageData, options)
+}
+
+function sameRgba(data: Uint8ClampedArray, a: number, b: number) {
+  return data[a] === data[b] && data[a + 1] === data[b + 1] && data[a + 2] === data[b + 2] && data[a + 3] === data[b + 3]
+}
+
+function pushTgaPixel(out: number[], data: Uint8ClampedArray, offset: number) {
+  out.push(data[offset + 2], data[offset + 1], data[offset], data[offset + 3])
+}
+
+export function encodeTgaImageData(imageData: ImageData, options: TgaEncodeOptions = {}): ArrayBuffer {
+  const width = imageData.width
+  const height = imageData.height
+  assertCanvasSize(width, height, "TGA export")
+  if (width > 0xffff || height > 0xffff) throw new Error("TGA export is limited to 65535 px per side.")
+  const header = new Uint8Array(18)
+  header[2] = options.rle ? 10 : 2
+  header[12] = width & 255
+  header[13] = (width >>> 8) & 255
+  header[14] = height & 255
+  header[15] = (height >>> 8) & 255
+  header[16] = 32
+  header[17] = 0x28
+  const data = imageData.data
+  if (!options.rle) {
+    const body = new Uint8Array(width * height * 4)
+    let out = 0
+    for (let i = 0; i < data.length; i += 4) {
+      body[out++] = data[i + 2]
+      body[out++] = data[i + 1]
+      body[out++] = data[i]
+      body[out++] = data[i + 3]
+    }
+    return exactArrayBuffer(concatUint8([header, body]))
+  }
+
+  const body: number[] = []
+  const total = width * height
+  let pixel = 0
+  while (pixel < total) {
+    const offset = pixel * 4
+    let run = 1
+    while (pixel + run < total && run < 128 && sameRgba(data, offset, (pixel + run) * 4)) run++
+    if (run >= 2) {
+      body.push(0x80 | (run - 1))
+      pushTgaPixel(body, data, offset)
+      pixel += run
+      continue
+    }
+
+    const rawStart = pixel
+    pixel++
+    while (pixel < total && pixel - rawStart < 128) {
+      const current = pixel * 4
+      const repeated = pixel + 1 < total && sameRgba(data, current, (pixel + 1) * 4)
+      if (repeated) break
+      pixel++
+    }
+    body.push(pixel - rawStart - 1)
+    for (let p = rawStart; p < pixel; p++) pushTgaPixel(body, data, p * 4)
+  }
+  return exactArrayBuffer(concatUint8([header, new Uint8Array(body)]))
+}
+
+export function encodePnmImageData(imageData: ImageData, format: PnmExportFormat): ArrayBuffer {
+  const width = imageData.width
+  const height = imageData.height
+  assertCanvasSize(width, height, `${format.toUpperCase()} export`)
+  const header =
+    format === "ppm"
+      ? `P6\n${width} ${height}\n255\n`
+      : format === "pgm"
+        ? `P5\n${width} ${height}\n255\n`
+        : `P4\n${width} ${height}\n`
+  const headerBytes = asciiBytes(header)
+  const body =
+    format === "ppm"
+      ? new Uint8Array(width * height * 3)
+      : format === "pgm"
+        ? new Uint8Array(width * height)
+        : new Uint8Array(Math.ceil(width / 8) * height)
+
+  if (format === "ppm") {
+    for (let p = 0, i = 0, o = 0; p < width * height; p++, i += 4) {
+      body[o++] = imageData.data[i]
+      body[o++] = imageData.data[i + 1]
+      body[o++] = imageData.data[i + 2]
+    }
+  } else if (format === "pgm") {
+    for (let p = 0, i = 0; p < width * height; p++, i += 4) {
+      body[p] = Math.round(0.299 * imageData.data[i] + 0.587 * imageData.data[i + 1] + 0.114 * imageData.data[i + 2])
+    }
+  } else {
+    const stride = Math.ceil(width / 8)
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = (y * width + x) * 4
+        const gray = 0.299 * imageData.data[i] + 0.587 * imageData.data[i + 1] + 0.114 * imageData.data[i + 2]
+        if (gray < 128) body[y * stride + (x >> 3)] |= 0x80 >> (x & 7)
+      }
+    }
+  }
+
+  return exactArrayBuffer(concatUint8([headerBytes, body]))
+}
+
+function textMetadataChunks(metadata: RasterExportMetadata | undefined): Uint8Array[] {
+  if (!metadata) return []
+  const pairs: Array<[string, string | undefined]> = [
+    ["Author", metadata.author],
+    ["Copyright", metadata.copyright],
+    ["Description", metadata.description],
+    ["Creation Time", metadata.creationDate],
+  ]
+  const chunks: Uint8Array[] = []
+  for (const [keyword, value] of pairs) {
+    if (!value) continue
+    chunks.push(pngChunk("tEXt", concatUint8([latin1Bytes(keyword), new Uint8Array([0]), latin1Bytes(value.slice(0, 2048))])))
+  }
+  const xmp = metadata.xmp ?? buildXmpPacket(metadata)
+  if (xmp) {
+    const keyword = asciiBytes("XML:com.adobe.xmp")
+    const separators = new Uint8Array([0, 0, 0, 0, 0])
+    chunks.push(pngChunk("iTXt", concatUint8([keyword, separators, new TextEncoder().encode(xmp)])))
+  }
+  return chunks
+}
+
+function pngScanlines(imageData: ImageData, interlaced: boolean): Uint8Array {
+  const width = imageData.width
+  const height = imageData.height
+  const data = imageData.data
+  if (!interlaced) {
+    const stride = width * 4
+    const out = new Uint8Array((stride + 1) * height)
+    for (let y = 0; y < height; y++) {
+      out[y * (stride + 1)] = 0
+      out.set(data.subarray(y * stride, y * stride + stride), y * (stride + 1) + 1)
+    }
+    return out
+  }
+
+  const passes = [
+    [0, 0, 8, 8],
+    [4, 0, 8, 8],
+    [0, 4, 4, 8],
+    [2, 0, 4, 4],
+    [0, 2, 2, 4],
+    [1, 0, 2, 2],
+    [0, 1, 1, 2],
+  ] as const
+  const parts: Uint8Array[] = []
+  for (const [x0, y0, dx, dy] of passes) {
+    if (x0 >= width || y0 >= height) continue
+    const passWidth = Math.floor((width - 1 - x0) / dx) + 1
+    const passHeight = Math.floor((height - 1 - y0) / dy) + 1
+    const rowBytes = passWidth * 4
+    const pass = new Uint8Array((rowBytes + 1) * passHeight)
+    let out = 0
+    for (let py = 0; py < passHeight; py++) {
+      pass[out++] = 0
+      const y = y0 + py * dy
+      for (let px = 0; px < passWidth; px++) {
+        const x = x0 + px * dx
+        const src = (y * width + x) * 4
+        pass[out++] = data[src]
+        pass[out++] = data[src + 1]
+        pass[out++] = data[src + 2]
+        pass[out++] = data[src + 3]
+      }
+    }
+    parts.push(pass)
+  }
+  return concatUint8(parts)
+}
+
+const PNG_SIGNATURE = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+
+export async function encodePngImageData(imageData: ImageData, options: PngEncodeOptions = {}): Promise<ArrayBuffer> {
+  const width = imageData.width
+  const height = imageData.height
+  assertCanvasSize(width, height, "PNG export")
+  const ihdr = new Uint8Array(13)
+  ihdr.set(u32BE(width), 0)
+  ihdr.set(u32BE(height), 4)
+  ihdr[8] = 8
+  ihdr[9] = 6
+  ihdr[10] = 0
+  ihdr[11] = 0
+  ihdr[12] = options.interlaced ? 1 : 0
+  const compressed = await deflateZlib(pngScanlines(imageData, !!options.interlaced))
+  return exactArrayBuffer(concatUint8([
+    PNG_SIGNATURE,
+    pngChunk("IHDR", ihdr),
+    ...textMetadataChunks(options.metadata),
+    pngChunk("IDAT", compressed),
+    pngChunk("IEND", new Uint8Array(0)),
+  ]))
+}
+
+function xmlEscape(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;")
+}
+
+function buildXmpPacket(metadata: RasterExportMetadata | undefined): string {
+  if (!metadata) return ""
+  const author = metadata.author ? `<dc:creator><rdf:Seq><rdf:li>${xmlEscape(metadata.author)}</rdf:li></rdf:Seq></dc:creator>` : ""
+  const description = metadata.description ? `<dc:description><rdf:Alt><rdf:li xml:lang="x-default">${xmlEscape(metadata.description)}</rdf:li></rdf:Alt></dc:description>` : ""
+  const rights = metadata.copyright ? `<dc:rights><rdf:Alt><rdf:li xml:lang="x-default">${xmlEscape(metadata.copyright)}</rdf:li></rdf:Alt></dc:rights>` : ""
+  const created = metadata.creationDate ? ` xmp:CreateDate="${xmlEscape(metadata.creationDate)}"` : ""
+  if (!author && !description && !rights && !created) return ""
+  return `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:xmp="http://ns.adobe.com/xap/1.0/"${created}>${author}${description}${rights}</rdf:Description></rdf:RDF></x:xmpmeta>`
+}
+
+function insertJpegXmp(bytes: Uint8Array, metadata: RasterExportMetadata | undefined): Uint8Array {
+  const xmp = metadata?.xmp ?? buildXmpPacket(metadata)
+  if (!xmp || bytes[0] !== 0xff || bytes[1] !== 0xd8) return bytes
+  const payload = concatUint8([asciiBytes("http://ns.adobe.com/xap/1.0/"), new Uint8Array([0]), new TextEncoder().encode(xmp)])
+  const length = payload.length + 2
+  if (length > 0xffff) return bytes
+  const segment = new Uint8Array(4 + payload.length)
+  segment[0] = 0xff
+  segment[1] = 0xe1
+  segment[2] = (length >>> 8) & 255
+  segment[3] = length & 255
+  segment.set(payload, 4)
+  return concatUint8([bytes.subarray(0, 2), segment, bytes.subarray(2)])
+}
+
+let nodeMozJpegEncoderReady: Promise<{
+  default: (data: ImageData, options?: Record<string, unknown>) => Promise<ArrayBuffer>
+}> | null = null
+
+async function loadMozJpegEncoder() {
+  if (typeof window !== "undefined") {
+    const mod = await import("@jsquash/jpeg/encode.js")
+    return { default: mod.default as (data: ImageData, options?: Record<string, unknown>) => Promise<ArrayBuffer> }
+  }
+  if (!nodeMozJpegEncoderReady) {
+    nodeMozJpegEncoderReady = (async () => {
+      const dynamicImport = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<unknown>
+      const mod = await dynamicImport("@jsquash/jpeg/encode.js") as {
+        default: (data: ImageData, options?: Record<string, unknown>) => Promise<ArrayBuffer>
+        init: (module?: WebAssembly.Module) => Promise<void>
+      }
+      const fs = await dynamicImport("node:fs/promises") as { readFile: (path: string) => Promise<Buffer> }
+      const path = await dynamicImport("node:path") as { join: (...parts: string[]) => string }
+      const wasmPath = path.join(process.cwd(), "node_modules", "@jsquash", "jpeg", "codec", "enc", "mozjpeg_enc.wasm")
+      const wasm = await WebAssembly.compile(await fs.readFile(wasmPath))
+      await mod.init(wasm)
+      return { default: mod.default }
+    })()
+  }
+  return nodeMozJpegEncoderReady
+}
+
+export async function encodeJpegImageData(imageData: ImageData, options: JpegEncodeOptions = {}): Promise<ArrayBuffer> {
+  assertCanvasSize(imageData.width, imageData.height, "JPEG export")
+  const quality = Math.max(1, Math.min(100, Math.round((options.quality ?? 0.92) <= 1 ? (options.quality ?? 0.92) * 100 : options.quality ?? 92)))
+  const { default: encode } = await loadMozJpegEncoder()
+  const encoded = await encode(imageData, {
+    quality,
+    progressive: options.progressive !== false,
+    baseline: options.progressive === false,
+  })
+  return exactArrayBuffer(insertJpegXmp(new Uint8Array(encoded), options.metadata))
+}
+
+export function planPsbLargeDocumentOpen(input: {
+  width: number
+  height: number
+  fileName?: string
+  tileSize?: number
+  layerCount?: number
+  memoryBudgetMB?: number
+}): PsbLargeDocumentOpenPlan {
+  const width = Math.max(1, Math.round(Number(input.width) || 1))
+  const height = Math.max(1, Math.round(Number(input.height) || 1))
+  const fileName = input.fileName || "PSB document"
+  const tileSize = Math.max(128, Math.round(Number(input.tileSize) || 512))
+  const fitsBrowserCanvas = !canvasSizeError(width, height, "PSB canvas")
+  const halfWidth = Math.max(1, Math.round(width * 0.5))
+  const halfHeight = Math.max(1, Math.round(height * 0.5))
+  const halfError = canvasSizeError(halfWidth, halfHeight, "50% PSB canvas")
+  const overview = clampCanvasSize(width, height)
+  const overviewScale = Math.min(1, overview.width / width, overview.height / height)
+  const tilePlan = planTiledBackingStore({
+    width,
+    height,
+    tileSize,
+    layerCount: input.layerCount,
+    memoryBudgetMB: input.memoryBudgetMB,
+  })
+  const defaultError = fitsBrowserCanvas
+    ? null
+    : `${fileName} is ${width} x ${height} px, which exceeds this browser canvas limit (${canvasLimitLabel()}). open at 50% scale or use tile view, or downscale the PSB before opening for full-document editing.`
+  return {
+    width,
+    height,
+    fileName,
+    fitsBrowserCanvas,
+    defaultError,
+    downscale50: {
+      scale: 0.5,
+      width: halfWidth,
+      height: halfHeight,
+      fits: !halfError,
+      error: halfError,
+    },
+    tileView: {
+      tileSize: tilePlan.tileSize,
+      tileColumns: tilePlan.tileColumns,
+      tileRows: tilePlan.tileRows,
+      tileCount: tilePlan.tileCount,
+      overviewScale,
+      overviewWidth: overview.width,
+      overviewHeight: overview.height,
+      recommendation: tilePlan.recommendation,
+    },
+  }
 }
 
 export function encodeOpenExrImageData(imageData: ImageData): ArrayBuffer {

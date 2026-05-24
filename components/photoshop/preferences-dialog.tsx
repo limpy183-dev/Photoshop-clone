@@ -16,20 +16,27 @@ import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import { downloadText } from "./document-io"
 import {
+  DEFAULT_CALIBRATION_CSS_PIXELS,
+  DEFAULT_CALIBRATION_LINE_MM,
   DEFAULT_PREFERENCES,
   MAX_PREFERENCES_IMPORT_BYTES,
+  PREFERENCE_IMPORT_SECTIONS,
+  PREFERENCE_SECTION_LABELS,
   PREFERENCES_STORAGE_KEY,
   type FileHandlingPreferences,
   type GpuPreferences,
   type HistoryLogPreferences,
   type MemoryPreferences,
+  type PreferenceSection,
   type PhotoshopPreferences,
   type RulerGridPreferences,
   type ScratchDiskPreference,
   type ToolBehaviorPreferences,
+  calculateScreenDpiFromCalibration,
   deriveFileHandlingPolicy,
   exportPreferencesSet,
   formatHistoryLog,
+  importPreferenceSections,
   loadPreferencesFromStorage,
   normalizePreferences,
   parsePreferencesSet,
@@ -37,6 +44,8 @@ import {
   savePreferencesToStorage,
   summarizePerformancePolicy,
 } from "./preferences-engine"
+import { detectOffscreenCanvasCapabilities, diagnoseOffscreenCanvasTransfer } from "./offscreen-canvas"
+import { requestPrintSizeView } from "./zoom-events"
 
 type PreferenceTab =
   | "general"
@@ -57,7 +66,7 @@ const TABS: Array<{ id: PreferenceTab; label: string }> = [
   { id: "files", label: "File Handling" },
   { id: "history", label: "History Log" },
   { id: "cursors", label: "Cursors & Tools" },
-  { id: "units", label: "Units & Grid" },
+  { id: "units", label: "Units & Rulers" },
   { id: "sets", label: "Preference Sets" },
 ]
 
@@ -200,12 +209,20 @@ export function PreferencesDialog({
   const [prefs, setPrefs] = React.useState<PhotoshopPreferences>(() => loadPreferencesFromStorage())
   const [tab, setTab] = React.useState<PreferenceTab>("general")
   const [importError, setImportError] = React.useState("")
+  const [calibrationError, setCalibrationError] = React.useState("")
+  const [calibrationMeasuredMm, setCalibrationMeasuredMm] = React.useState(DEFAULT_CALIBRATION_LINE_MM)
+  const [importSections, setImportSections] = React.useState<Set<PreferenceSection>>(
+    () => new Set(PREFERENCE_IMPORT_SECTIONS),
+  )
+  const [isDraggingPreferenceFile, setIsDraggingPreferenceFile] = React.useState(false)
   const importRef = React.useRef<HTMLInputElement | null>(null)
 
   React.useEffect(() => {
     if (open) {
       setPrefs(loadPreferencesFromStorage())
       setImportError("")
+      setCalibrationError("")
+      setCalibrationMeasuredMm(loadPreferencesFromStorage().rulerGrid.screenCalibration?.measuredMm ?? DEFAULT_CALIBRATION_LINE_MM)
     }
   }, [open])
 
@@ -217,6 +234,15 @@ export function PreferencesDialog({
   }, [open])
 
   const performancePolicy = React.useMemo(() => summarizePerformancePolicy(prefs), [prefs])
+  const offscreenDiagnostic = React.useMemo(() => {
+    const capabilities = detectOffscreenCanvasCapabilities()
+    return diagnoseOffscreenCanvasTransfer({
+      requestedWorker: prefs.gpu.useWorkers,
+      offscreenCanvasSupported: capabilities.offscreenCanvasSupported,
+      workerTransferSupported: capabilities.workerOffscreenSupported,
+      transferToImageBitmapSupported: capabilities.transferToImageBitmapSupported,
+    })
+  }, [prefs.gpu.useWorkers])
   const filePolicy = React.useMemo(
     () => deriveFileHandlingPolicy(prefs, { name: "large-layered-file.psd", format: "psd", sizeMB: 750, hasMissingFonts: true }),
     [prefs],
@@ -300,30 +326,103 @@ export function PreferencesDialog({
     downloadText(formatHistoryLog(prefs), `${preferenceFileName("photoshop-history-log")}.txt`, "text/plain")
   }
 
+  const selectedImportSections = React.useMemo(() => PREFERENCE_IMPORT_SECTIONS.filter((section) => importSections.has(section)), [importSections])
+
+  const toggleImportSection = (section: PreferenceSection, checked: boolean) => {
+    setImportSections((current) => {
+      const next = new Set(current)
+      if (checked) next.add(section)
+      else next.delete(section)
+      return next
+    })
+  }
+
+  const handlePreferenceFile = async (file: File) => {
+    if (!file.name.toLowerCase().endsWith(".json") && file.type !== "application/json") {
+      throw new Error("Preference import requires a .json file.")
+    }
+    if (file.size > MAX_PREFERENCES_IMPORT_BYTES) {
+      throw new Error(`Preference imports are limited to ${Math.round(MAX_PREFERENCES_IMPORT_BYTES / 1024)} KB.`)
+    }
+    if (!selectedImportSections.length) {
+      throw new Error("Select at least one preference section to import.")
+    }
+    const text = await file.text()
+    const imported = parsePreferencesSet(text)
+    setPrefs((current) => importPreferenceSections(current, imported, selectedImportSections))
+    setImportError("")
+  }
+
   const importSet = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
     try {
-      if (file.size > MAX_PREFERENCES_IMPORT_BYTES) {
-        throw new Error(`Preference imports are limited to ${Math.round(MAX_PREFERENCES_IMPORT_BYTES / 1024)} KB.`)
-      }
-      const text = await file.text()
-      setPrefs(parsePreferencesSet(text))
-      setImportError("")
-    } catch {
-      setImportError("Could not import that preference set.")
+      await handlePreferenceFile(file)
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : "Could not import that preference set.")
     } finally {
       event.target.value = ""
     }
   }
 
+  const handleDialogDragOver = (event: React.DragEvent) => {
+    if (!Array.from(event.dataTransfer.items).some((item) => item.kind === "file")) return
+    event.preventDefault()
+    setIsDraggingPreferenceFile(true)
+  }
+
+  const handleDialogDrop = async (event: React.DragEvent) => {
+    const file = Array.from(event.dataTransfer.files).find((candidate) =>
+      candidate.name.toLowerCase().endsWith(".json") || candidate.type === "application/json",
+    )
+    if (!file) return
+    event.preventDefault()
+    setIsDraggingPreferenceFile(false)
+    setTab("sets")
+    try {
+      await handlePreferenceFile(file)
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : "Could not import that preference set.")
+    }
+  }
+
+  const calibrateScreenDpi = () => {
+    try {
+      const screenDpi = calculateScreenDpiFromCalibration({
+        cssPixelLength: DEFAULT_CALIBRATION_CSS_PIXELS,
+        measuredMm: calibrationMeasuredMm,
+      })
+      updateRulerGrid({
+        screenDpi,
+        screenCalibration: {
+          cssPixelLength: DEFAULT_CALIBRATION_CSS_PIXELS,
+          measuredMm: calibrationMeasuredMm,
+          calibratedAt: new Date().toISOString(),
+        },
+      })
+      setCalibrationError("")
+    } catch (error) {
+      setCalibrationError(error instanceof Error ? error.message : "Could not calculate screen DPI.")
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[820px] max-h-[calc(100vh-2rem)] overflow-hidden bg-[var(--ps-panel)] border-[var(--ps-divider)] text-[var(--ps-text)]">
+      <DialogContent
+        className="sm:max-w-[820px] max-h-[calc(100vh-2rem)] overflow-hidden bg-[var(--ps-panel)] border-[var(--ps-divider)] text-[var(--ps-text)]"
+        onDragOver={handleDialogDragOver}
+        onDragLeave={() => setIsDraggingPreferenceFile(false)}
+        onDrop={handleDialogDrop}
+      >
         <DialogHeader>
           <DialogTitle>Preferences</DialogTitle>
           <DialogDescription className="sr-only">Application, performance, file handling, history, cursor, ruler, and grid settings.</DialogDescription>
         </DialogHeader>
+        {isDraggingPreferenceFile ? (
+          <div className="pointer-events-none absolute inset-2 z-50 grid place-items-center rounded-sm border border-dashed border-[var(--ps-accent)] bg-black/45 text-[12px] font-medium text-white">
+            Drop JSON preference file
+          </div>
+        ) : null}
 
         <div className="grid grid-cols-1 sm:grid-cols-[150px_1fr] gap-4 min-h-0 sm:min-h-[470px]">
           <nav className="grid grid-cols-2 gap-1 sm:block sm:space-y-0.5 sm:border-r border-[var(--ps-divider)] sm:pr-3">
@@ -493,8 +592,11 @@ export function PreferencesDialog({
                     </div>
                   </Section>
                   <Section title="Current Path">
-                    <div className="text-[11px] text-[var(--ps-text-muted)]">
-                      Preview path: {performancePolicy.gpuPath}. Worker filters: {performancePolicy.workerFilters ? "enabled" : "disabled"}.
+                    <div className="grid gap-1 text-[11px] text-[var(--ps-text-muted)]">
+                      <span>Preview path: {performancePolicy.gpuPath}. Worker filters: {performancePolicy.workerFilters ? "enabled" : "disabled"}.</span>
+                      <span title={offscreenDiagnostic.warning ?? offscreenDiagnostic.reason}>
+                        Offscreen workers: {offscreenDiagnostic.active ? "active" : `fallback (${offscreenDiagnostic.reason})`}.
+                      </span>
                     </div>
                   </Section>
                 </>
@@ -605,6 +707,7 @@ export function PreferencesDialog({
                     <SliderField label="Brush Smoothing" value={prefs.toolBehavior.brushSmoothing} min={0} max={100} suffix="%" onChange={(value) => updateToolBehavior({ brushSmoothing: value })} />
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <ToggleRow checked={prefs.toolBehavior.showBrushPreview} onCheckedChange={(checked) => updateToolBehavior({ showBrushPreview: checked })} label="Show brush preview" />
+                      <ToggleRow checked={prefs.toolBehavior.showBrushSizeCrosshair} onCheckedChange={(checked) => updateToolBehavior({ showBrushSizeCrosshair: checked })} label="Show brush size crosshair" />
                       <ToggleRow checked={prefs.toolBehavior.precisePicking} onCheckedChange={(checked) => updateToolBehavior({ precisePicking: checked })} label="Precise layer picking" />
                       <ToggleRow checked={prefs.toolBehavior.shiftCyclesTools} onCheckedChange={(checked) => updateToolBehavior({ shiftCyclesTools: checked })} label="Shift cycles grouped tools" />
                       <ToggleRow checked={prefs.toolBehavior.springLoadedTools} onCheckedChange={(checked) => updateToolBehavior({ springLoadedTools: checked })} label="Spring-loaded tool switching" />
@@ -641,6 +744,44 @@ export function PreferencesDialog({
                       <div className="grid gap-1.5">
                         <FieldLabel>Print Resolution</FieldLabel>
                         <NumberField value={prefs.rulerGrid.printResolution} min={1} max={2400} onChange={(value) => updateRulerGrid({ printResolution: value })} />
+                      </div>
+                    </div>
+                  </Section>
+                  <Section title="Screen Calibration">
+                    <div className="grid gap-3">
+                      <div className="overflow-x-auto rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-3">
+                        <div
+                          className="relative h-7 border-x border-[var(--ps-accent)]"
+                          style={{ width: DEFAULT_CALIBRATION_CSS_PIXELS }}
+                        >
+                          <div className="absolute left-0 right-0 top-1/2 h-px -translate-y-1/2 bg-[var(--ps-accent)]" />
+                          <div className="absolute left-0 top-0 h-7 w-px bg-[var(--ps-accent)]" />
+                          <div className="absolute right-0 top-0 h-7 w-px bg-[var(--ps-accent)]" />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto_auto] gap-3 items-end">
+                        <div className="grid gap-1.5">
+                          <FieldLabel>Measured Line (mm)</FieldLabel>
+                          <NumberField value={calibrationMeasuredMm} min={1} max={1000} step={0.1} onChange={setCalibrationMeasuredMm} />
+                        </div>
+                        <div className="grid gap-1.5">
+                          <FieldLabel>Screen DPI</FieldLabel>
+                          <NumberField
+                            value={prefs.rulerGrid.screenDpi}
+                            min={30}
+                            max={600}
+                            step={0.01}
+                            onChange={(value) => updateRulerGrid({ screenDpi: value, screenCalibration: null })}
+                          />
+                        </div>
+                        <Button size="sm" variant="secondary" onClick={calibrateScreenDpi}>Calibrate</Button>
+                        <Button size="sm" variant="outline" onClick={() => requestPrintSizeView()} disabled={!prefs.rulerGrid.screenDpi}>
+                          Print Size
+                        </Button>
+                      </div>
+                      {calibrationError ? <p className="text-[11px] text-red-300">{calibrationError}</p> : null}
+                      <div className="text-[11px] text-[var(--ps-text-muted)]">
+                        Calibration line: {DEFAULT_CALIBRATION_LINE_MM} mm. Current screen: {prefs.rulerGrid.screenDpi.toFixed(2)} DPI.
                       </div>
                     </div>
                   </Section>
@@ -687,10 +828,36 @@ export function PreferencesDialog({
 
               {tab === "sets" && (
                 <Section title="Reset, Export, and Import">
-                  <div className="flex flex-wrap gap-2">
-                    <Button size="sm" variant="secondary" onClick={exportSet}>Export Preferences</Button>
-                    <Button size="sm" variant="secondary" onClick={() => importRef.current?.click()}>Import Preferences</Button>
-                    <Button size="sm" variant="outline" onClick={restoreDefaults}>Reset All</Button>
+                  <div className="grid gap-4">
+                    <div className="flex flex-wrap gap-2">
+                      <Button size="sm" variant="secondary" onClick={exportSet}>Export Preferences</Button>
+                      <Button size="sm" variant="secondary" onClick={() => importRef.current?.click()}>Import Preferences</Button>
+                      <Button size="sm" variant="outline" onClick={restoreDefaults}>Reset All</Button>
+                    </div>
+                    <div className="grid gap-2">
+                      <FieldLabel>Import Sections</FieldLabel>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {PREFERENCE_IMPORT_SECTIONS.map((section) => (
+                          <ToggleRow
+                            key={section}
+                            checked={importSections.has(section)}
+                            onCheckedChange={(checked) => toggleImportSection(section, checked)}
+                            label={PREFERENCE_SECTION_LABELS[section]}
+                          />
+                        ))}
+                      </div>
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="outline" onClick={() => setImportSections(new Set(PREFERENCE_IMPORT_SECTIONS))}>All</Button>
+                        <Button size="sm" variant="outline" onClick={() => setImportSections(new Set())}>None</Button>
+                      </div>
+                    </div>
+                    <label
+                      className="flex h-24 cursor-pointer flex-col items-center justify-center rounded-sm border border-dashed border-[var(--ps-divider)] bg-[var(--ps-panel-2)] text-[11px] text-[var(--ps-text-muted)] hover:bg-[var(--ps-tool-hover)]"
+                      onClick={() => importRef.current?.click()}
+                    >
+                      Drop .json preference file or click to import
+                      <span className="mt-1 text-[10px]">Selected sections: {selectedImportSections.length}</span>
+                    </label>
                   </div>
                   <input ref={importRef} type="file" accept="application/json,.json" onChange={importSet} className="hidden" />
                   {importError && <p className="text-[11px] text-red-300">{importError}</p>}

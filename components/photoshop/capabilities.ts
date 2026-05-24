@@ -254,7 +254,7 @@ const records = [
     label: "Cursor, Tool Behavior, Units, Rulers, and Grid Preferences",
     kind: "preferences",
     status: "usable",
-    summary: "Tool cursor style, tooltip behavior, brush smoothing, shift-cycling, auto-select behavior, ruler units, type units, print resolution, grid subdivision/color/opacity, pixel grid, snap, smart guides, and ruler origin are persisted and applied to active documents.",
+    summary: "Tool cursor style, brush-preview crosshairs, tooltip behavior, brush smoothing, shift-cycling, auto-select behavior, ruler units, type units, print resolution, calibrated screen DPI, grid subdivision/color/opacity, pixel grid, snap, smart guides, and ruler origin are persisted and applied to active documents.",
     limitations: ["Some tool behavior settings remain local editor preferences rather than operating-system level cursor settings."],
     testCoverage: "unit",
   },
@@ -263,7 +263,7 @@ const records = [
     label: "Preference Set Import, Export, and Reset",
     kind: "preferences",
     status: "usable",
-    summary: "Preference sets normalize old localStorage values, import/export versioned JSON, and reset either all settings or a single preference section.",
+    summary: "Preference sets normalize old localStorage values, import/export versioned JSON, validate malformed imports with section-specific errors, support drag-and-drop JSON imports, and can import only selected preference sections.",
     limitations: ["Preference sync is local to the browser profile; no cloud account sync is provided."],
     testCoverage: "unit",
   },
@@ -449,7 +449,7 @@ const records = [
     label: "TGA and Portable AnyMap",
     kind: "format",
     status: "usable",
-    summary: "Decodes TGA true-color/grayscale/indexed RLE data plus PBM/PGM/PPM/PNM ASCII and binary rasters.",
+    summary: "Decodes TGA true-color/grayscale/indexed RLE data plus PBM/PGM/PPM/PNM ASCII and binary rasters; exports TGA RLE and PBM/PGM/PPM from canvas pixels.",
     limitations: ["Imports resolve to browser 8-bit RGBA layers; source comments and format-specific export metadata are not round-tripped."],
     testCoverage: "unit",
   },
@@ -476,8 +476,8 @@ const records = [
     label: "Browser Raster Export",
     kind: "export",
     status: "usable",
-    summary: "Exports browser canvas encodings for supported MIME types.",
-    limitations: ["Cannot embed metadata, ICC profiles, progressive JPEG settings, or interlaced PNG chunks."],
+    summary: "Exports browser canvas encodings plus app-authored TIFF, TGA, PNM, interlaced PNG, progressive JPEG, and PNG/JPEG metadata paths.",
+    limitations: ["ICC profiles and content credentials are still reported rather than embedded in browser raster outputs."],
     recommendedAction: "Use exported report/preflight notes for handoff limitations.",
     testCoverage: "e2e",
   },
@@ -814,7 +814,7 @@ export function capabilityWarningsForDocument(doc: CapabilityDocumentSnapshot | 
   warnings.push(warning(
     getCapability("export.browser-raster"),
     "Raster export",
-    "Browser encoders cannot embed metadata, ICC profiles, progressive JPEG scan settings, or interlaced PNG chunks.",
+    "Raster export embeds PNG/JPEG metadata and supports progressive/interlaced controls, but ICC profiles and content credentials remain handoff limitations.",
   ))
 
   return warnings

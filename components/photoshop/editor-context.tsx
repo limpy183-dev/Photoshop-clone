@@ -995,6 +995,11 @@ interface ClosedDocumentRecord {
   closedAt: number
 }
 
+export interface ActiveSmartFilterMaskTarget {
+  layerId: string
+  filterId: string
+}
+
 interface EditorState {
   documents: PsDocument[]
   activeDocId: string | null
@@ -1026,6 +1031,8 @@ interface EditorState {
   closedDocuments: ClosedDocumentRecord[]
   /** per-document dirty/saved identity and browser storage state */
   documentLifecycle: Record<string, DocumentLifecycleState>
+  /** Canvas painting target when editing a smart-filter mask in place. */
+  activeSmartFilterMaskTarget: ActiveSmartFilterMaskTarget | null
 }
 
 function changedLayerIdsForHistoryLog(changedLayerIds: ChangedLayerIds | undefined): string[] | undefined {
@@ -1079,6 +1086,7 @@ export type Action =
   | { type: "set-symmetry"; symmetry: Partial<SymmetrySettings> }
   | { type: "set-transform"; transform: TransformState }
   | { type: "clear-transform" }
+  | { type: "set-active-smart-filter-mask"; target: ActiveSmartFilterMaskTarget | null }
   | { type: "apply-brush-preset"; preset: BrushPreset }
   | { type: "add-brush-preset"; preset: BrushPreset }
   | { type: "remove-brush-preset"; id: string }
@@ -1473,6 +1481,8 @@ export function reducer(state: EditorState, action: Action): EditorState {
       return { ...state, ...action.settings }
     case "set-tool":
       return { ...state, tool: action.tool }
+    case "set-active-smart-filter-mask":
+      return { ...state, activeSmartFilterMaskTarget: action.target }
     case "set-foreground":
       return { ...state, foreground: action.color }
     case "set-background":
@@ -1773,18 +1783,30 @@ export function reducer(state: EditorState, action: Action): EditorState {
           selectedLayerIds: [copy.id],
         }
       })
-    case "set-active-layer":
-      return mutateActiveDoc(state, (d) => ({
+    case "set-active-layer": {
+      const next = mutateActiveDoc(state, (d) => ({
         ...d,
         activeLayerId: action.id,
         selectedLayerIds: [action.id],
       }))
-    case "set-selected-layers":
-      return mutateActiveDoc(state, (d) => ({
+      return {
+        ...next,
+        activeSmartFilterMaskTarget:
+          state.activeSmartFilterMaskTarget?.layerId === action.id ? state.activeSmartFilterMaskTarget : null,
+      }
+    }
+    case "set-selected-layers": {
+      const next = mutateActiveDoc(state, (d) => ({
         ...d,
         activeLayerId: action.activeId,
         selectedLayerIds: action.ids.length ? action.ids : [action.activeId],
       }))
+      return {
+        ...next,
+        activeSmartFilterMaskTarget:
+          state.activeSmartFilterMaskTarget?.layerId === action.activeId ? state.activeSmartFilterMaskTarget : null,
+      }
+    }
     case "toggle-layer-visibility":
       return mutateActiveDoc(state, (d) => ({
         ...d,
@@ -2472,11 +2494,22 @@ export function reducer(state: EditorState, action: Action): EditorState {
         ...d,
         layers: d.layers.map((l) => (l.id === action.id && !isLayerLocked(l) ? { ...l, adjustment: action.adjustment } : l)),
       }))
-    case "set-layer-smart-filters":
-      return mutateActiveDoc(state, (d) => ({
+    case "set-layer-smart-filters": {
+      const next = mutateActiveDoc(state, (d) => ({
         ...d,
         layers: d.layers.map((l) => (l.id === action.id && !isLayerLocked(l) ? { ...l, smartFilters: action.smartFilters } : l)),
       }))
+      const target = state.activeSmartFilterMaskTarget
+      return {
+        ...next,
+        activeSmartFilterMaskTarget:
+          target?.layerId === action.id && action.smartFilters.some((filter) => filter.id === target.filterId)
+            ? target
+            : target?.layerId === action.id
+              ? null
+              : target,
+      }
+    }
     case "update-smart-filter":
       return mutateActiveDoc(state, (d) => ({
         ...d,
@@ -3411,6 +3444,7 @@ interface EditorContextValue {
   actions: MacroAction[]
   recordingActionId: string | null
   isPlayingAction: boolean
+  activeSmartFilterMaskTarget: ActiveSmartFilterMaskTarget | null
   activeDoc: PsDocument | null
   activeLayer: Layer | null
   selectedLayers: Layer[]
@@ -3526,6 +3560,7 @@ const initialState: EditorState = {
   documentLifecycle: {
     [initialDoc.id]: makeDocumentLifecycle(initialDoc, 0),
   },
+  activeSmartFilterMaskTarget: null,
   transform: null,
   /** Current selection options for selection tools */
   selectionOptions: {
@@ -3535,6 +3570,9 @@ const initialState: EditorState = {
     tolerance: 32,
     contiguous: true,
     sampleAllLayers: false,
+    sampleSize: "point",
+    magneticWidth: 12,
+    magneticContrast: 24,
   },
   histories: {
     [initialDoc.id]: {
@@ -4604,6 +4642,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     actions: state.actions,
     recordingActionId: state.recordingActionId,
     isPlayingAction: state.isPlayingAction,
+    activeSmartFilterMaskTarget: state.activeSmartFilterMaskTarget,
     activeDoc,
     activeLayer,
     selectedLayers,
@@ -4745,7 +4784,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     state.documents, state.activeDocId, state.tool, state.foreground, state.background,
     state.brush, state.gradient, state.paintBucket, state.eraser, state.cloneSource, state.symmetry, state.selectionOptions,
     state.transform, state.brushPresets, state.clipboard, state.styleClipboard, state.closedDocuments,
-    state.actions, state.recordingActionId, state.isPlayingAction, documentStatuses, documentHistoryVersions,
+    state.actions, state.recordingActionId, state.isPlayingAction, state.activeSmartFilterMaskTarget, documentStatuses, documentHistoryVersions,
     docHistory.entries, docHistory.index, docSnapshots,
     activeDoc, activeLayer, selectedLayers,
     dispatch, commit, requestRender, subscribeRender,

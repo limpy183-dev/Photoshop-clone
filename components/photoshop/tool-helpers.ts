@@ -1,6 +1,6 @@
 import type { CustomShapeId, PathProps, Selection, ShapeProps, TextProps, WarpStyle } from "./types"
 import { buildCanvasFont, buildTypographyRenderPlan } from "./typography-engine"
-import { appendPathToCanvas, createDefaultShapeAppearance, shapeToEditablePath } from "./vector-path-operations"
+import { appendPathToCanvas, createDefaultShapeAppearance, drawSmoothPolygon, drawStar, shapeToEditablePath } from "./vector-path-operations"
 import { makeCanvas } from "./canvas-utils"
 import { hexToRgb } from "./color-utils"
 import {
@@ -261,6 +261,10 @@ function appendShapePath(ctx: CanvasRenderingContext2D, s: ShapeProps) {
   ctx.beginPath()
   if (s.type === "custom") {
     customShapePath(ctx, (s.customId ?? "star5") as CustomShapeId, s.x, s.y, s.w, s.h)
+  } else if (s.type === "polygon") {
+    drawSmoothPolygon(ctx, s)
+  } else if (s.type === "star") {
+    drawStar(ctx, s)
   } else {
     appendPathToCanvas(ctx, shapeToEditablePath(s))
   }
@@ -334,6 +338,7 @@ function renderVerticalText(
   const columnGap = lineHeight
   const direction = t.verticalWritingMode === "lr" ? 1 : -1
   const punctuationTighten = t.mojikumi === "compact" ? -size * 0.08 : t.mojikumi === "loose" ? size * 0.08 : 0
+  const orientation = t.textOrientation ?? (t.tateChuYoko ? "mixed" : "upright")
   ctx.save()
   ctx.textAlign = "center"
   ctx.textBaseline = "middle"
@@ -341,27 +346,56 @@ function renderVerticalText(
   for (let col = 0; col < columns.length; col++) {
     const column = columns[col]
     const x = t.x + col * columnGap * direction
-    let y = t.y
-    const units = t.tateChuYoko ? column.match(/[A-Za-z0-9]{1,4}|[^A-Za-z0-9]/g) ?? [] : [...column]
+    const units = verticalTextUnits(column, orientation, t.tateChuYoko === true)
+    const columnHeight = units.reduce((sum, unit) => sum + verticalUnitAdvance(ctx, unit, size, spacing, punctuationTighten), 0)
+    let y = t.y + verticalFlowOffset(t, columnHeight)
     for (const unit of units) {
-      if (t.tateChuYoko && /^[A-Za-z0-9]{2,4}$/.test(unit)) {
-        ctx.fillText(unit, x, y + size / 2 + baselineOffset)
-        y += size + spacing + 2 + punctuationTighten
-      } else if (/^[A-Za-z0-9]$/.test(unit)) {
+      const advance = verticalUnitAdvance(ctx, unit, size, spacing, punctuationTighten)
+      if (verticalUnitIsSideways(unit, orientation)) {
         ctx.save()
         ctx.translate(x, y + size / 2 + baselineOffset)
         ctx.rotate(Math.PI / 2)
         ctx.fillText(unit, 0, 0)
         ctx.restore()
-        y += Math.max(size, ctx.measureText(unit).width) + spacing + 2
       } else {
         ctx.fillText(unit, x, y + size / 2 + baselineOffset)
-        y += Math.max(size, ctx.measureText(unit).width) + spacing + 2 + punctuationTighten
       }
+      y += advance
       if (t.boxHeight && y > t.y + t.boxHeight) break
     }
   }
   ctx.restore()
+}
+
+function verticalTextUnits(column: string, orientation: NonNullable<TextProps["textOrientation"]>, tateChuYoko: boolean) {
+  if (orientation !== "mixed") return [...column]
+  return tateChuYoko ? column.match(/[A-Za-z0-9]{1,4}|[^A-Za-z0-9]/g) ?? [] : [...column]
+}
+
+function verticalUnitIsSideways(unit: string, orientation: NonNullable<TextProps["textOrientation"]>) {
+  if (orientation === "sideways") return true
+  if (orientation === "upright") return false
+  return /^[A-Za-z0-9]$/.test(unit)
+}
+
+function verticalUnitAdvance(
+  ctx: CanvasRenderingContext2D,
+  unit: string,
+  size: number,
+  spacing: number,
+  punctuationTighten: number,
+) {
+  const measured = typeof ctx.measureText === "function" ? ctx.measureText(unit).width : size
+  const tighten = /^[A-Za-z0-9]$/.test(unit) ? 0 : punctuationTighten
+  return Math.max(size, measured) + spacing + 2 + tighten
+}
+
+function verticalFlowOffset(t: TextProps, contentHeight: number) {
+  if (!t.boxHeight) return 0
+  const align = t.verticalAlign ?? t.textShapeVerticalAlign ?? "top"
+  if (align === "top") return 0
+  const free = Math.max(0, t.boxHeight - contentHeight)
+  return align === "middle" ? free / 2 : free
 }
 
 function renderTextOnPath(
@@ -3210,27 +3244,30 @@ export function liquifyWarp(
    Magnetic Lasso — Sobel edge-detection snapping
    ========================================================================= */
 
+export interface MagneticLassoSnapOptions {
+  searchWidth?: number
+  contrastThreshold?: number
+  hysteresisRatio?: number
+}
+
 /**
- * Given cursor position and a canvas, compute the Sobel gradient magnitude
- * in a search region and return the position snapped to the highest-gradient pixel.
- *
- * @param canvas - The source layer canvas to compute gradients from
- * @param cx - Cursor X in canvas space
- * @param cy - Cursor Y in canvas space
- * @param searchWidth - Half-size of the square search region (default 10px)
- * @returns The snapped {x, y} position
+ * Given cursor position and a canvas, compute edge strength in a search region
+ * and return the position snapped to the strongest hysteresis-linked edge pixel.
  */
 export function magneticLassoSnap(
   canvas: HTMLCanvasElement,
   cx: number,
   cy: number,
-  searchWidth: number = 10,
+  options: number | MagneticLassoSnapOptions = 10,
 ): { x: number; y: number } {
   const ctx = canvas.getContext("2d")
   if (!ctx) return { x: Math.round(cx), y: Math.round(cy) }
 
   const w = canvas.width
   const h = canvas.height
+  const searchWidth = typeof options === "number" ? options : options.searchWidth ?? 10
+  const highThreshold = typeof options === "number" ? 8 : Math.max(1, options.contrastThreshold ?? 8)
+  const lowThreshold = highThreshold * (typeof options === "number" ? 0.45 : Math.max(0.1, Math.min(0.95, options.hysteresisRatio ?? 0.45)))
 
   // Clamp the search region
   const x0 = Math.max(1, Math.floor(cx - searchWidth))
@@ -3253,10 +3290,12 @@ export function magneticLassoSnap(
     gray[i] = 0.299 * data[j] + 0.587 * data[j + 1] + 0.114 * data[j + 2]
   }
 
-  // Sobel operator
-  let maxGrad = 0
-  let bestX = Math.round(cx)
-  let bestY = Math.round(cy)
+  // Scharr kernels provide better rotational precision than the basic Sobel
+  // weights while keeping this pure 3x3 pixel math.
+  const gradients = new Float32Array(rw * rh)
+  const strong = new Uint8Array(rw * rh)
+  const linked = new Uint8Array(rw * rh)
+  const queue: number[] = []
 
   for (let ry = 1; ry < rh - 1; ry++) {
     for (let rx = 1; rx < rw - 1; rx++) {
@@ -3269,19 +3308,56 @@ export function magneticLassoSnap(
       const b = gray[(ry + 1) * rw + rx]
       const br = gray[(ry + 1) * rw + (rx + 1)]
 
-      const gx = -tl + tr - 2 * l + 2 * r - bl + br
-      const gy = -tl - 2 * t - tr + bl + 2 * b + br
-      const grad = Math.sqrt(gx * gx + gy * gy)
-
-      if (grad > maxGrad) {
-        maxGrad = grad
-        bestX = x0 + rx - 1
-        bestY = y0 + ry - 1
+      const gx = -3 * tl + 3 * tr - 10 * l + 10 * r - 3 * bl + 3 * br
+      const gy = -3 * tl - 10 * t - 3 * tr + 3 * bl + 10 * b + 3 * br
+      const grad = Math.sqrt(gx * gx + gy * gy) / 16
+      const idx = ry * rw + rx
+      gradients[idx] = grad
+      if (grad >= highThreshold) {
+        strong[idx] = 1
+        linked[idx] = 1
+        queue.push(idx)
       }
     }
   }
 
-  // only snap if gradient is meaningful (not flat area)
-  if (maxGrad < 8) return { x: Math.round(cx), y: Math.round(cy) }
+  for (let head = 0; head < queue.length; head++) {
+    const p = queue[head]
+    const px = p % rw
+    const py = (p - px) / rw
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue
+        const nx = px + dx
+        const ny = py + dy
+        if (nx <= 0 || ny <= 0 || nx >= rw - 1 || ny >= rh - 1) continue
+        const ni = ny * rw + nx
+        if (linked[ni] || gradients[ni] < lowThreshold) continue
+        linked[ni] = 1
+        queue.push(ni)
+      }
+    }
+  }
+
+  let bestScore = -Infinity
+  let bestX = Math.round(cx)
+  let bestY = Math.round(cy)
+  for (let ry = 1; ry < rh - 1; ry++) {
+    for (let rx = 1; rx < rw - 1; rx++) {
+      const idx = ry * rw + rx
+      if (!linked[idx]) continue
+      const docX = x0 + rx - 1
+      const docY = y0 + ry - 1
+      const distancePenalty = Math.hypot(docX - cx, docY - cy) * highThreshold * 0.08
+      const score = gradients[idx] - distancePenalty
+      if (score > bestScore) {
+        bestScore = score
+        bestX = docX
+        bestY = docY
+      }
+    }
+  }
+
+  if (bestScore === -Infinity) return { x: Math.round(cx), y: Math.round(cy) }
   return { x: bestX, y: bestY }
 }

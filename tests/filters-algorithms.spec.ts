@@ -5,17 +5,22 @@ import {
   buildEdgeAwareQuickSelectionMaskData,
 } from "../components/photoshop/algorithmic-operations"
 import {
+  FILTERS,
   compositeFilterImageData,
   getFilter,
 } from "../components/photoshop/filters"
 import {
+  applyFilterBatch,
   applyFilterAsync,
+  getFilterWorkerAudit,
   getFilterWorkerSupport,
   isFilterWorkerSupported,
+  type FilterBatchOperation,
 } from "../components/photoshop/filter-worker"
 import {
   sampleImageDataBilinear,
 } from "../components/photoshop/warp-transform"
+import { magneticLassoSnap } from "../components/photoshop/tool-helpers"
 
 class TestImageData {
   data: Uint8ClampedArray
@@ -117,6 +122,22 @@ test("filter worker capability reports real off-main-thread coverage", () => {
   expect(isFilterWorkerSupported("noise")).toBe(true)
   expect(isFilterWorkerSupported("ripple")).toBe(true)
   expect(isFilterWorkerSupported("clouds")).toBe(true)
+  expect(isFilterWorkerSupported("field-blur")).toBe(true)
+  expect(isFilterWorkerSupported("iris-blur")).toBe(true)
+  expect(isFilterWorkerSupported("tilt-shift")).toBe(true)
+  expect(isFilterWorkerSupported("path-blur")).toBe(true)
+  expect(isFilterWorkerSupported("spin-blur")).toBe(true)
+})
+
+test("filter worker audit covers the full registry and classifies fallback reasons", () => {
+  const audit = getFilterWorkerAudit()
+  const registryIds = Object.keys(FILTERS).sort()
+
+  expect(audit.totalFilters).toBe(registryIds.length)
+  expect(audit.entries.map((entry) => entry.filterId).sort()).toEqual(registryIds)
+  expect(audit.workerSupportedCount).toBeGreaterThan(25)
+  expect(audit.entries.find((entry) => entry.filterId === "field-blur")?.strategy).toBe("worker")
+  expect(audit.entries.find((entry) => entry.filterId === "match-color")?.strategy).toBe("main-thread-context")
 })
 
 test("worker-backed deterministic filters match registry output", async () => {
@@ -139,6 +160,11 @@ test("worker-backed deterministic filters match registry output", async () => {
     ["clouds", { scale: 50, seed: 3 }],
     ["difference-clouds", { scale: 50, seed: 3 }],
     ["fibers", { variance: 16, strength: 4, seed: 5 }],
+    ["field-blur", { blur: 8, pins: "0,50,2;100,50,16" }],
+    ["iris-blur", { blur: 8, centerX: 50, centerY: 50, radius: 40, feather: 25 }],
+    ["tilt-shift", { blur: 8, centerX: 50, centerY: 50, angle: 0, radius: 30, feather: 25 }],
+    ["path-blur", { distance: 5, angle: 0, taper: 20, path: "0,50;100,50" }],
+    ["spin-blur", { amount: 18, centerX: 50, centerY: 50, radius: 60 }],
   ]
 
   for (const [filterId, params] of cases) {
@@ -148,6 +174,32 @@ test("worker-backed deterministic filters match registry output", async () => {
     const actual = await applyFilterAsync(filterId, src, params)
     expect(Array.from(actual.data)).toEqual(Array.from(expected.data))
   }
+})
+
+test("batched filter execution runs sequentially and reports progress", async () => {
+  const src = imageData(2, 1, [
+    40, 80, 120, 255,
+    160, 120, 80, 255,
+  ])
+  const operations: FilterBatchOperation[] = [
+    { filterId: "brightness-contrast", params: { brightness: 15, contrast: 20, useLegacy: false } },
+    { filterId: "invert", params: {} },
+  ]
+  const progress: Array<{ completed: number; total: number; filterId: string }> = []
+
+  const expected = getFilter("invert")!.apply(
+    getFilter("brightness-contrast")!.apply(src, operations[0].params),
+    operations[1].params,
+  )
+  const actual = await applyFilterBatch(src, operations, {
+    onProgress: (event) => progress.push({ completed: event.completed, total: event.total, filterId: event.filterId }),
+  })
+
+  expect(Array.from(actual.data)).toEqual(Array.from(expected.data))
+  expect(progress).toEqual([
+    { completed: 1, total: 2, filterId: "brightness-contrast" },
+    { completed: 2, total: 2, filterId: "invert" },
+  ])
 })
 
 test("content-aware scale analysis uses an explicit fallback plan for large reductions", () => {
@@ -175,6 +227,73 @@ test("edge-aware quick selection grows locally and stops at strong color edges",
 
   expect(result.bounds).toEqual({ x: 0, y: 0, w: 2, h: 1 })
   expect(Array.from(result.maskData)).toEqual([255, 255, 0, 0, 0])
+})
+
+test("quick selection supports sample size and non-contiguous matching", () => {
+  const src = imageData(7, 3, [
+    10, 10, 220, 255,  218, 22, 20, 255,  220, 20, 20, 255,  218, 22, 20, 255,  10, 10, 220, 255,  10, 10, 220, 255,  220, 20, 20, 255,
+    10, 10, 220, 255,  220, 20, 20, 255,  20, 220, 20, 255,  220, 20, 20, 255,  10, 10, 220, 255,  10, 10, 220, 255,  220, 20, 20, 255,
+    10, 10, 220, 255,  218, 22, 20, 255,  220, 20, 20, 255,  218, 22, 20, 255,  10, 10, 220, 255,  10, 10, 220, 255,  220, 20, 20, 255,
+  ])
+
+  const contiguous = buildEdgeAwareQuickSelectionMaskData(src, {
+    seed: { x: 1, y: 1 },
+    tolerance: 34,
+    sampleSize: "3x3",
+    contiguous: true,
+  })
+  const nonContiguous = buildEdgeAwareQuickSelectionMaskData(src, {
+    seed: { x: 1, y: 1 },
+    tolerance: 34,
+    sampleSize: "3x3",
+    contiguous: false,
+  })
+
+  expect(Array.from(contiguous.maskData)).toEqual([
+    0, 255, 255, 255, 0, 0, 0,
+    0, 255, 0, 255, 0, 0, 0,
+    0, 255, 255, 255, 0, 0, 0,
+  ])
+  expect(nonContiguous.bounds).toEqual({ x: 1, y: 0, w: 6, h: 3 })
+  expect(nonContiguous.maskData[6]).toBe(255)
+})
+
+test("magnetic lasso snap honors width and contrast threshold options", () => {
+  const src = imageData(9, 5, Array.from({ length: 9 * 5 }, (_, index) => {
+    const x = index % 9
+    return x < 4
+      ? [20, 20, 20, 255]
+      : [230, 230, 230, 255]
+  }).flat())
+  const canvas = {
+    width: src.width,
+    height: src.height,
+    getContext: () => ({
+      getImageData: (x: number, y: number, w: number, h: number) => {
+        const out = new ImageData(w, h)
+        for (let yy = 0; yy < h; yy++) {
+          for (let xx = 0; xx < w; xx++) {
+            const sx = Math.max(0, Math.min(src.width - 1, x + xx))
+            const sy = Math.max(0, Math.min(src.height - 1, y + yy))
+            const si = (sy * src.width + sx) * 4
+            const di = (yy * w + xx) * 4
+            out.data[di] = src.data[si]
+            out.data[di + 1] = src.data[si + 1]
+            out.data[di + 2] = src.data[si + 2]
+            out.data[di + 3] = src.data[si + 3]
+          }
+        }
+        return out
+      },
+    }),
+  } as unknown as HTMLCanvasElement
+
+  const snapped = magneticLassoSnap(canvas, 2, 2, { searchWidth: 4, contrastThreshold: 24 })
+  const rejected = magneticLassoSnap(canvas, 2, 2, { searchWidth: 4, contrastThreshold: 900 })
+
+  expect(snapped.x).toBeGreaterThanOrEqual(3)
+  expect(snapped.x).toBeLessThanOrEqual(4)
+  expect(rejected).toEqual({ x: 2, y: 2 })
 })
 
 test("warp transform bilinear sampling interpolates source pixels", () => {

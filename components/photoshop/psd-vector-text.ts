@@ -447,6 +447,7 @@ export function appTextToPsd(text: TextProps, layerLeft: number, layerTop: numbe
   if (text.antiAliasMode && text.antiAliasMode !== "smooth") markerPayload.antiAliasMode = text.antiAliasMode
   if (text.variableAxes) markerPayload.variableAxes = text.variableAxes
   if (text.variableAxisDefinitions) markerPayload.variableAxisDefinitions = text.variableAxisDefinitions
+  if (text.variableNamedInstance) markerPayload.variableNamedInstance = text.variableNamedInstance
   if (text.characterStyles && text.characterStyles.length > 0) markerPayload.characterStyles = text.characterStyles
   if (text.openType) markerPayload.openType = text.openType
   if (text.contextualAlternates != null) markerPayload.contextualAlternates = text.contextualAlternates
@@ -454,6 +455,7 @@ export function appTextToPsd(text: TextProps, layerLeft: number, layerTop: numbe
   if (text.swash != null) markerPayload.swash = text.swash
   if (text.ordinals != null) markerPayload.ordinals = text.ordinals
   if (text.fractions != null) markerPayload.fractions = text.fractions
+  if (text.slashedZero != null) markerPayload.slashedZero = text.slashedZero
   if (text.oldstyleFigures != null) markerPayload.oldstyleFigures = text.oldstyleFigures
   if (text.tabularFigures != null) markerPayload.tabularFigures = text.tabularFigures
   if (text.superscript) markerPayload.superscript = true
@@ -467,6 +469,8 @@ export function appTextToPsd(text: TextProps, layerLeft: number, layerTop: numbe
   if (text.textShapeVerticalAlign) markerPayload.textShapeVerticalAlign = text.textShapeVerticalAlign
   if (text.verticalWritingMode) markerPayload.verticalWritingMode = text.verticalWritingMode
   if (text.tateChuYoko != null) markerPayload.tateChuYoko = text.tateChuYoko
+  if (text.textOrientation) markerPayload.textOrientation = text.textOrientation
+  if (text.verticalAlign) markerPayload.verticalAlign = text.verticalAlign
   if (text.mojikumi) markerPayload.mojikumi = text.mojikumi
   if (text.missingFontOriginal) markerPayload.missingFontOriginal = text.missingFontOriginal
   if (text.fontSubstitution) markerPayload.fontSubstitution = text.fontSubstitution
@@ -631,6 +635,7 @@ export function psdTextToApp(
         "swash",
         "ordinals",
         "fractions",
+        "slashedZero",
         "oldstyleFigures",
         "tabularFigures",
         "superscript",
@@ -658,6 +663,13 @@ export function psdTextToApp(
       }
       if (extras.verticalWritingMode === "rl" || extras.verticalWritingMode === "lr") text.verticalWritingMode = extras.verticalWritingMode
       if (typeof extras.tateChuYoko === "boolean") text.tateChuYoko = extras.tateChuYoko
+      if (extras.textOrientation === "mixed" || extras.textOrientation === "upright" || extras.textOrientation === "sideways") {
+        text.textOrientation = extras.textOrientation
+      }
+      if (extras.verticalAlign === "top" || extras.verticalAlign === "middle" || extras.verticalAlign === "bottom") {
+        text.verticalAlign = extras.verticalAlign
+      }
+      if (typeof extras.variableNamedInstance === "string") text.variableNamedInstance = extras.variableNamedInstance
       if (extras.mojikumi === "default" || extras.mojikumi === "loose" || extras.mojikumi === "compact" || extras.mojikumi === "none") {
         text.mojikumi = extras.mojikumi
       }

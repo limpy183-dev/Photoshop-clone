@@ -31,7 +31,8 @@ async function exportSlice(source: HTMLCanvasElement, slice: Slice, filename: st
   const crop = makeCanvas(exportW, exportH)
   crop.getContext("2d")!.drawImage(source, slice.x, slice.y, slice.w, slice.h, 0, 0, exportW, exportH)
   const format = slice.format ?? "png"
-  const blob = await new Promise<Blob | null>((resolve) => crop.toBlob(resolve, rasterMime(format), 0.92))
+  const quality = Math.max(0, Math.min(1, slice.quality ?? 0.92))
+  const blob = await new Promise<Blob | null>((resolve) => crop.toBlob(resolve, rasterMime(format), quality))
   if (!blob) throw new Error(`Could not export ${slice.name}`)
   downloadBlob(blob, `${filename}.${format === "jpeg" ? "jpg" : format}`)
 }
@@ -89,7 +90,10 @@ export function SlicesPanel() {
       const exportable = slices.filter((slice) => slice.visible !== false)
       for (const slice of exportable) {
         const normalized = normalizeSlice(slice, activeDoc.width, activeDoc.height)
-        await exportSlice(composite, normalized, `${safeName(activeDoc.name)}-${safeName(prefix)}-${safeName(slice.name)}`)
+        const baseName = normalized.filename?.trim()
+          ? safeName(normalized.filename)
+          : `${safeName(activeDoc.name)}-${safeName(prefix)}-${safeName(slice.name)}`
+        await exportSlice(composite, normalized, baseName)
       }
       toast.success(`Exported ${exportable.length} slice${exportable.length === 1 ? "" : "s"}`)
       window.setTimeout(() => commit("Export Slices", []), 0)
@@ -189,9 +193,14 @@ export function SlicesPanel() {
                   <NumberField label="H" value={normalized.h} disabled={!!slice.locked} onChange={(value) => updateSlice(slice.id, { h: clamp(value, 1, activeDoc.height - normalized.y) })} />
                 </div>
                 <div className="grid grid-cols-[1fr_64px_74px] gap-1">
-                  <TextField label="URL" value={slice.url ?? ""} disabled={!!slice.locked} onChange={(value) => updateSlice(slice.id, { url: value })} />
+                  <TextField label="Filename" value={slice.filename ?? ""} disabled={!!slice.locked} onChange={(value) => updateSlice(slice.id, { filename: value })} />
                   <SelectField label="Format" value={slice.format ?? "png"} disabled={!!slice.locked} onChange={(value) => updateSlice(slice.id, { format: value as Slice["format"] })} />
                   <NumberField label="Scale" value={slice.scale ?? 1} step={0.1} disabled={!!slice.locked} onChange={(value) => updateSlice(slice.id, { scale: Math.max(0.1, Math.min(10, value || 1)) })} />
+                </div>
+                <div className="grid grid-cols-3 gap-1">
+                  <NumberField label="Quality" value={Math.round((slice.quality ?? 0.92) * 100)} disabled={!!slice.locked} onChange={(value) => updateSlice(slice.id, { quality: Math.max(0, Math.min(100, value)) / 100 })} />
+                  <NumberField label="Compression" value={slice.compression ?? 6} disabled={!!slice.locked} onChange={(value) => updateSlice(slice.id, { compression: Math.max(0, Math.min(9, Math.round(value))) })} />
+                  <TextField label="URL" value={slice.url ?? ""} disabled={!!slice.locked} onChange={(value) => updateSlice(slice.id, { url: value })} />
                 </div>
                 <div className="grid grid-cols-2 gap-1">
                   <TextField label="Target" value={slice.target ?? ""} disabled={!!slice.locked} onChange={(value) => updateSlice(slice.id, { target: value })} />
@@ -249,6 +258,7 @@ function SelectField({ label, value, disabled, onChange }: { label: string; valu
         <option value="png">PNG</option>
         <option value="jpeg">JPEG</option>
         <option value="webp">WebP</option>
+        <option value="gif">GIF</option>
         <option value="avif">AVIF</option>
       </select>
     </label>

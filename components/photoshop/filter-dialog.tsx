@@ -8,6 +8,7 @@ import { compositeLayer } from "./blend-modes"
 import { useEditor } from "./editor-context"
 import { applyPlannedFilterFinal, applyPlannedFilterPreview } from "./filter-preview"
 import { getFilter, type FilterContext, type FilterDef } from "./filters"
+import { isBlurGalleryFilterId, normalizeBlurGalleryParams, type BlurGalleryParams } from "./blur-gallery-controls"
 import type { Layer, PsDocument } from "./types"
 
 interface FilterDialogProps {
@@ -43,6 +44,7 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
   const [params, setParams] = React.useState<ParamMap>({})
   const [applying, setApplying] = React.useState(false)
   const isAdvancedAdjustment = !!filter && ADVANCED_ADJUSTMENTS.has(filter.id)
+  const isBlurGallery = !!filter && isBlurGalleryFilterId(filter.id)
   const smartTarget =
     selectedLayers.length === 1 &&
     (selectedLayers[0].smartObject || selectedLayers[0].kind === "smart-object")
@@ -58,6 +60,34 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
         return { id: l.id, data: ctx.getImageData(0, 0, l.canvas.width, l.canvas.height) }
       })
   }, [filterId, filter, activeDoc, selectedLayers, documents])
+
+  React.useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ filterId?: string; params?: BlurGalleryParams }>).detail
+      if (!filter || !isBlurGalleryFilterId(filter.id) || detail?.filterId !== filter.id || !detail.params) return
+      setParams((cur) => ({ ...cur, ...detail.params! }))
+    }
+    window.addEventListener("ps-blur-gallery-overlay-change", handler)
+    return () => window.removeEventListener("ps-blur-gallery-overlay-change", handler)
+  }, [filter])
+
+  React.useEffect(() => {
+    if (!filter || !activeDoc || !isBlurGalleryFilterId(filter.id)) {
+      window.dispatchEvent(new CustomEvent("ps-blur-gallery-overlay-state", { detail: null }))
+      return
+    }
+    const normalized = normalizeBlurGalleryParams(filter.id, params)
+    window.dispatchEvent(new CustomEvent("ps-blur-gallery-overlay-state", {
+      detail: {
+        filterId: filter.id,
+        params: normalized,
+        docId: activeDoc.id,
+      },
+    }))
+    return () => {
+      window.dispatchEvent(new CustomEvent("ps-blur-gallery-overlay-state", { detail: null }))
+    }
+  }, [filter, params, activeDoc])
 
   const context = React.useMemo<FilterContext>(() => {
     if (!filter) return {}
@@ -166,6 +196,10 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
           filterId: filter.id,
           name: filter.name,
           enabled: true,
+          opacity: 1,
+          blendMode: "normal" as const,
+          maskDensity: 1,
+          maskFeather: 0,
           params,
         },
       ]
@@ -207,15 +241,29 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
   const update = (key: string, value: ParamValue) => setParams((cur) => ({ ...cur, [key]: value }))
 
   if (!filter) return null
+  const visibleParams = isBlurGallery
+    ? filter.params.filter((param) => param.key !== "pins" && param.key !== "path")
+    : filter.params
 
   return (
     <Dialog
       open={!!filterId}
+      modal={!isBlurGallery}
       onOpenChange={(open) => {
         if (!open) handleCancel()
       }}
     >
-      <DialogContent className={isAdvancedAdjustment ? "sm:max-w-[860px] overflow-hidden" : "sm:max-w-2xl overflow-hidden"}>
+      <DialogContent
+        showOverlay={!isBlurGallery}
+        onInteractOutside={isBlurGallery ? (event) => event.preventDefault() : undefined}
+        className={
+          isBlurGallery
+            ? "sm:max-w-[560px] overflow-hidden fixed left-auto right-6 top-20 translate-x-0 translate-y-0"
+            : isAdvancedAdjustment
+              ? "sm:max-w-[860px] overflow-hidden"
+              : "sm:max-w-2xl overflow-hidden"
+        }
+      >
         <DialogHeader>
           <DialogTitle>{filter.name}</DialogTitle>
         </DialogHeader>
@@ -229,10 +277,10 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
                 originals={originalsRef.current.map((o) => o.data)}
                 documents={documents}
               />
-            ) : filter.params.length === 0 ? (
+            ) : visibleParams.length === 0 ? (
               <p className="text-sm text-muted-foreground">No parameters. Click Apply.</p>
             ) : (
-              filter.params.map((p) => (
+              visibleParams.map((p) => (
                 <FilterParamRow
                   key={p.key}
                   param={p}
@@ -277,6 +325,7 @@ function defaultParams(filter: FilterDef, activeDoc: PsDocument, selectedLayers:
   if (filter.id === "curves") out.points = "0,0;255,255"
   if (filter.id === "gradient-map") out.gradient = "0,#000000;1,#ffffff"
   if (filter.id === "match-color") out.matchSource = defaultMatchSource(activeDoc, selectedLayers, documents)
+  if (isBlurGalleryFilterId(filter.id)) return normalizeBlurGalleryParams(filter.id, out)
   return out
 }
 

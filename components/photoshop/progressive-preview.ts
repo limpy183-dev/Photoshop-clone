@@ -191,7 +191,62 @@ export function createProgressivePreviewRunner(options: ProgressivePreviewRunOpt
  * for the low-res draft because the higher-quality stage replaces it
  * within a few hundred ms.
  */
-export function downsampleImageData(src: ImageData, scale: number): ImageData {
+export type PreviewResamplingQuality = "nearest" | "bilinear" | "bicubic"
+
+function sampleNearest(src: ImageData, x: number, y: number, channel: number) {
+  const sx = Math.max(0, Math.min(src.width - 1, Math.round(x)))
+  const sy = Math.max(0, Math.min(src.height - 1, Math.round(y)))
+  return src.data[(sy * src.width + sx) * 4 + channel]
+}
+
+function sampleBilinear(src: ImageData, x: number, y: number, channel: number) {
+  const x0 = Math.max(0, Math.min(src.width - 1, Math.floor(x)))
+  const y0 = Math.max(0, Math.min(src.height - 1, Math.floor(y)))
+  const x1 = Math.max(0, Math.min(src.width - 1, x0 + 1))
+  const y1 = Math.max(0, Math.min(src.height - 1, y0 + 1))
+  const tx = x - x0
+  const ty = y - y0
+  const i00 = (y0 * src.width + x0) * 4 + channel
+  const i10 = (y0 * src.width + x1) * 4 + channel
+  const i01 = (y1 * src.width + x0) * 4 + channel
+  const i11 = (y1 * src.width + x1) * 4 + channel
+  const top = src.data[i00] * (1 - tx) + src.data[i10] * tx
+  const bottom = src.data[i01] * (1 - tx) + src.data[i11] * tx
+  return top * (1 - ty) + bottom * ty
+}
+
+function cubicWeight(t: number) {
+  const a = -0.5
+  const x = Math.abs(t)
+  if (x <= 1) return (a + 2) * x * x * x - (a + 3) * x * x + 1
+  if (x < 2) return a * x * x * x - 5 * a * x * x + 8 * a * x - 4 * a
+  return 0
+}
+
+function sampleBicubic(src: ImageData, x: number, y: number, channel: number) {
+  const baseX = Math.floor(x)
+  const baseY = Math.floor(y)
+  let value = 0
+  let totalWeight = 0
+  for (let yy = -1; yy <= 2; yy++) {
+    const sy = Math.max(0, Math.min(src.height - 1, baseY + yy))
+    const wy = cubicWeight(y - (baseY + yy))
+    for (let xx = -1; xx <= 2; xx++) {
+      const sx = Math.max(0, Math.min(src.width - 1, baseX + xx))
+      const wx = cubicWeight(x - (baseX + xx))
+      const weight = wx * wy
+      value += src.data[(sy * src.width + sx) * 4 + channel] * weight
+      totalWeight += weight
+    }
+  }
+  return totalWeight ? value / totalWeight : sampleBilinear(src, x, y, channel)
+}
+
+export function downsampleImageData(
+  src: ImageData,
+  scale: number,
+  quality: PreviewResamplingQuality = "bilinear",
+): ImageData {
   if (scale >= 1) return src
   const safeScale = Math.max(0.01, scale)
   const dstW = Math.max(1, Math.round(src.width * safeScale))
@@ -199,16 +254,16 @@ export function downsampleImageData(src: ImageData, scale: number): ImageData {
   const out = new ImageData(dstW, dstH)
   const xRatio = src.width / dstW
   const yRatio = src.height / dstH
+  const sampler = quality === "nearest" ? sampleNearest : quality === "bicubic" ? sampleBicubic : sampleBilinear
   for (let y = 0; y < dstH; y++) {
-    const srcY = Math.min(src.height - 1, Math.floor(y * yRatio))
+    const srcY = Math.max(0, Math.min(src.height - 1, (y + 0.5) * yRatio - 0.5))
     for (let x = 0; x < dstW; x++) {
-      const srcX = Math.min(src.width - 1, Math.floor(x * xRatio))
-      const si = (srcY * src.width + srcX) * 4
+      const srcX = Math.max(0, Math.min(src.width - 1, (x + 0.5) * xRatio - 0.5))
       const di = (y * dstW + x) * 4
-      out.data[di] = src.data[si]
-      out.data[di + 1] = src.data[si + 1]
-      out.data[di + 2] = src.data[si + 2]
-      out.data[di + 3] = src.data[si + 3]
+      out.data[di] = Math.round(sampler(src, srcX, srcY, 0))
+      out.data[di + 1] = Math.round(sampler(src, srcX, srcY, 1))
+      out.data[di + 2] = Math.round(sampler(src, srcX, srcY, 2))
+      out.data[di + 3] = Math.round(sampler(src, srcX, srcY, 3))
     }
   }
   return out

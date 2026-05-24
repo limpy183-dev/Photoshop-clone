@@ -87,3 +87,101 @@ export function planProgressiveRender(input: ProgressiveRenderPlanInput): Progre
     pixelCount: preview.pixelCount,
   }
 }
+
+export interface ProgressiveTileRefinementStage {
+  tileKey: string
+  index: number
+  remaining: number
+  signal: AbortSignal
+}
+
+export interface ProgressiveTileRefinerOptions {
+  tileKeys: string[]
+  renderTile: (tileKey: string, stage: ProgressiveTileRefinementStage) => void | Promise<void>
+  onTileRefined?: (tileKey: string) => void
+  requestFrame?: (callback: FrameRequestCallback) => number
+  cancelFrame?: (id: number) => void
+  frameBudgetMs?: number
+}
+
+export interface ProgressiveTileRefiner {
+  start(tileKeys?: string[]): void
+  cancel(): void
+  readonly isRunning: boolean
+  readonly pendingFrameId: number | null
+}
+
+export function createProgressiveTileRefiner(options: ProgressiveTileRefinerOptions): ProgressiveTileRefiner {
+  const requestFrame = options.requestFrame ?? ((callback) => requestAnimationFrame(callback))
+  const cancelFrame =
+    options.cancelFrame ??
+    ((id) => {
+      if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(id)
+    })
+  const frameBudgetMs = Math.max(1, options.frameBudgetMs ?? 8)
+  let frameId: number | null = null
+  let queue: string[] = []
+  let running = false
+  let generation = 0
+  let controller: AbortController | null = null
+
+  const refiner: ProgressiveTileRefiner = {
+    get isRunning() {
+      return running
+    },
+    get pendingFrameId() {
+      return frameId
+    },
+    start(tileKeys = options.tileKeys) {
+      refiner.cancel()
+      generation += 1
+      controller = new AbortController()
+      queue = [...tileKeys]
+      running = queue.length > 0
+      if (running) scheduleNext(generation)
+    },
+    cancel() {
+      if (frameId !== null) {
+        cancelFrame(frameId)
+        frameId = null
+      }
+      controller?.abort()
+      controller = null
+      queue = []
+      running = false
+      generation += 1
+    },
+  }
+
+  function scheduleNext(activeGeneration: number) {
+    frameId = requestFrame(async (timestamp) => {
+      const signal = controller?.signal
+      frameId = null
+      if (!signal || signal.aborted || activeGeneration !== generation) return
+      const start = timestamp || (typeof performance !== "undefined" ? performance.now() : Date.now())
+      let renderedInFrame = 0
+      while (queue.length && !signal.aborted && activeGeneration === generation) {
+        const tileKey = queue.shift() as string
+        await options.renderTile(tileKey, {
+          tileKey,
+          index: renderedInFrame,
+          remaining: queue.length,
+          signal,
+        })
+        if (signal.aborted || activeGeneration !== generation) return
+        options.onTileRefined?.(tileKey)
+        renderedInFrame += 1
+        const now = typeof performance !== "undefined" ? performance.now() : Date.now()
+        if (renderedInFrame > 0 && now - start >= frameBudgetMs) break
+      }
+      if (queue.length && !signal.aborted && activeGeneration === generation) {
+        scheduleNext(activeGeneration)
+      } else if (activeGeneration === generation) {
+        running = false
+        controller = null
+      }
+    })
+  }
+
+  return refiner
+}

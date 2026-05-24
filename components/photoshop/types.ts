@@ -84,6 +84,9 @@ export interface SelectionOptions {
   tolerance: number
   contiguous: boolean
   sampleAllLayers?: boolean
+  sampleSize?: "point" | "3x3" | "5x5"
+  magneticWidth?: number
+  magneticContrast?: number
 }
 
 export interface TextOptions {
@@ -194,6 +197,11 @@ export interface TypographyAxisDefinition {
   defaultValue: number
 }
 
+export interface TypographyNamedInstance {
+  name: string
+  coordinates: Record<string, number>
+}
+
 export interface OpenTypeControls {
   ligatures?: boolean
   discretionaryLigatures?: boolean
@@ -202,6 +210,9 @@ export interface OpenTypeControls {
   swash?: boolean
   ordinals?: boolean
   fractions?: boolean
+  superscript?: boolean
+  subscript?: boolean
+  slashedZero?: boolean
   smallCaps?: boolean
   oldstyleFigures?: boolean
   tabularFigures?: boolean
@@ -246,6 +257,10 @@ export interface TextProps {
   verticalWritingMode?: "rl" | "lr"
   /** Tate-chu-yoko: render runs of Latin chars upright inside vertical lines. */
   tateChuYoko?: boolean
+  /** CSS text-orientation behavior for vertical type. */
+  textOrientation?: "mixed" | "upright" | "sideways"
+  /** Vertical flow alignment within an area text box. */
+  verticalAlign?: "top" | "middle" | "bottom"
   /** Mojikumi (Japanese punctuation spacing) setting name. */
   mojikumi?: "default" | "loose" | "compact" | "none"
   /** Per-character overrides stored as editable metadata. */
@@ -258,6 +273,8 @@ export interface TextProps {
   variableAxes?: Record<string, number>
   /** Optional axis definitions discovered from a loaded font. */
   variableAxisDefinitions?: TypographyAxisDefinition[]
+  /** Name of the last applied variable-font preset/instance. */
+  variableNamedInstance?: string
 
   /* --- Character properties --- */
   /** Character spacing in 1/1000 em units (-200 to 500). */
@@ -300,6 +317,7 @@ export interface TextProps {
   swash?: boolean
   ordinals?: boolean
   fractions?: boolean
+  slashedZero?: boolean
   oldstyleFigures?: boolean
   tabularFigures?: boolean
   openType?: OpenTypeControls
@@ -359,6 +377,10 @@ export interface ShapeProps {
   rotation?: number
   /** Corner rounding (0..1) applied to polygon vertices. */
   vertexRoundness?: number
+  /** Rounds polygon vertices and star outer points when vertexRoundness is set. */
+  smoothCorners?: boolean
+  /** Rounds star inner points when vertexRoundness is set. */
+  smoothIndent?: boolean
   /** Number of points for star type (alias for sides on stars). */
   starPoints?: number
   /** Editable compound shape components rendered with per-component boolean operations. */
@@ -564,6 +586,10 @@ export interface SmartFilter {
   params: Record<string, number | string | boolean>
   mask?: HTMLCanvasElement | null
   maskEnabled?: boolean
+  /** 0 disables the mask influence; 1 applies mask pixels fully. */
+  maskDensity?: number
+  /** Feather radius in document pixels for the smart filter mask. */
+  maskFeather?: number
 }
 
 export interface SmartObjectEditPackage {
@@ -789,6 +815,8 @@ export interface AudioTrack {
 
 export interface VideoLayerProps {
   sourceName: string
+  /** Serializable source media used for browser video seeking, thumbnails, and frame extraction. */
+  sourceDataUrl?: string
   durationMs: number
   currentTimeMs: number
   playbackRate: number
@@ -1001,7 +1029,10 @@ export interface Slice {
   url?: string
   target?: string
   altText?: string
-  format?: "png" | "jpeg" | "webp" | "avif"
+  format?: "png" | "jpeg" | "webp" | "gif" | "avif"
+  quality?: number
+  compression?: number
+  filename?: string
   scale?: number
   locked?: boolean
   visible?: boolean
@@ -1166,6 +1197,21 @@ export interface DocumentMetadata {
   modifiedAt?: string
   /** Local, browser-generated provenance manifests inspired by Content Credentials. */
   contentCredentials?: ContentCredential[]
+  /** Browser-safe overview plus full-resolution tile access for oversized PSB files. */
+  largeDocumentTileView?: LargeDocumentTileViewMetadata
+}
+
+export interface LargeDocumentTileViewMetadata {
+  mode: "psb-tile-view"
+  sourceName: string
+  originalWidth: number
+  originalHeight: number
+  overviewScale: number
+  tileSize: number
+  tileColumns: number
+  tileRows: number
+  tileCount: number
+  selectedTile?: { col: number; row: number }
 }
 
 export interface ContentCredential {
@@ -1570,6 +1616,9 @@ declare global {
       sides: number
       innerRadiusRatio: number
       vertexRoundness: number
+      polygonStarMode: boolean
+      smoothCorners: boolean
+      smoothIndent: boolean
       rotation: number
       cornerRadiusTL: number
       cornerRadiusTR: number

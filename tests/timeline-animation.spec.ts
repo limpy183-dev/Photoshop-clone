@@ -8,6 +8,7 @@ import {
   renderOnionSkinOverlay,
 } from "../components/photoshop/timeline-engine"
 import {
+  collectAnimationFramesAtFps,
   encodeAnimatedGif,
   encodeAnimatedWebP,
   encodeApngFromFrames,
@@ -222,6 +223,24 @@ test("animation export encoders emit animated GIF, APNG, and WebP containers", a
   expect(webpText).toContain("VP8X")
   expect(webpText).toContain("ANIM")
   expect(webpText).toContain("ANMF")
+})
+
+test("timeline frame extraction samples document frames at a requested FPS", () => {
+  const doc = makeDoc({
+    timelineFrames: [
+      frame("one", { durationMs: 500 }),
+      frame("two", { durationMs: 250, layerOpacity: { layer_a: 1, layer_b: 0 } }),
+    ],
+  })
+
+  const sampled = collectAnimationFramesAtFps(doc, { fps: 4, transparent: true })
+
+  expect(sampled).toHaveLength(3)
+  expect(sampled.map((item) => item.durationMs)).toEqual([250, 250, 250])
+  expect(sampled[0].sourceFrameId).toBe("one")
+  expect(sampled[1].sourceFrameId).toBe("one")
+  expect(sampled[2].sourceFrameId).toBe("two")
+  expect(sampled.every((item) => (item.timeMs ?? 0) % 250 === 0)).toBe(true)
 })
 
 test("animation export reports describe native APNG and RIFF animated WebP output", () => {

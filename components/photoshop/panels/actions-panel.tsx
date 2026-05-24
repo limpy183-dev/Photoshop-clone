@@ -106,7 +106,7 @@ const LAYER_KEYS = new Set([
   "metadata",
 ])
 const CANVAS_PATCH_KEYS = new Set(["x", "y", "w", "h", "canvasDataUrl"])
-const SMART_FILTER_KEYS = new Set(["id", "filterId", "name", "enabled", "opacity", "blendMode", "params", "maskDataUrl", "maskEnabled"])
+const SMART_FILTER_KEYS = new Set(["id", "filterId", "name", "enabled", "opacity", "blendMode", "params", "maskDataUrl", "maskEnabled", "maskDensity", "maskFeather"])
 const FRAME_KEYS = new Set(["shape", "x", "y", "w", "h", "imageDataUrl", "imageCanvas"])
 const SMART_SOURCE_KEYS = new Set([
   "width",

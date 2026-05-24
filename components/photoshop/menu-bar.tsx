@@ -191,7 +191,7 @@ const WorkspaceManagerDialog = lazyDialog<{
   }> })),
 )
 const ContactSheetDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./workspace-dialogs").then((m) => ({ default: m.ContactSheetDialog })),
+  () => import("./contact-sheet-dialog").then((m) => ({ default: m.ContactSheetDialog })),
 )
 const GridSettingsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
   () => import("./workspace-dialogs").then((m) => ({ default: m.GridSettingsDialog })),
@@ -244,7 +244,7 @@ import {
   diagnoseDocumentFonts,
   matchFontForLayer,
 } from "./typography-engine"
-import { requestCanvasZoom } from "./zoom-events"
+import { requestCanvasZoom, requestPrintSizeView } from "./zoom-events"
 import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop } from "./adjustment-layers"
 import { createSmartObjectSource } from "./smart-objects"
 
@@ -2697,6 +2697,17 @@ export function MenuBar({
                 <DropdownMenuItem onSelect={() => openFilterDialog("lens-blur")}>
                   Lens Blur…
                 </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>Blur Gallery</DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    <DropdownMenuItem onSelect={() => openFilterDialog("field-blur")}>Field Blur...</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => openFilterDialog("iris-blur")}>Iris Blur...</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => openFilterDialog("tilt-shift")}>Tilt-Shift...</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => openFilterDialog("path-blur")}>Path Blur...</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => openFilterDialog("spin-blur")}>Spin Blur...</DropdownMenuItem>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
             <DropdownMenuSub>
@@ -2868,6 +2879,9 @@ export function MenuBar({
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => requestCanvasZoom({ zoom: 0.5 })}>
               Fit on Screen <DropdownMenuShortcut>⌘0</DropdownMenuShortcut>
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => requestPrintSizeView()} disabled={!activeDoc}>
+              Print Size
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => openAdvancedTab("preview")} disabled={!activeDoc}>
               Device Preview...

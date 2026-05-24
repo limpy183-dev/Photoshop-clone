@@ -12,6 +12,15 @@ export interface AnchorEditResult {
   distance: number
 }
 
+export type RoundedRectCorner = "tl" | "tr" | "br" | "bl"
+
+export interface RoundedRectCornerRadiusHandle {
+  corner: RoundedRectCorner
+  x: number
+  y: number
+  radius: number
+}
+
 const kappa = 0.5522847498
 
 function distance(a: { x: number; y: number }, b: { x: number; y: number }) {
@@ -126,6 +135,42 @@ export function normalizeCornerRadii(shape: ShapeProps): [number, number, number
   return source.map((value) => roundCoord(Math.max(0, Math.min(maxRadius, Number(value) || 0)))) as [number, number, number, number]
 }
 
+export function getRoundedRectCornerRadiusHandles(shape: ShapeProps): RoundedRectCornerRadiusHandle[] {
+  const [tl, tr, br, bl] = normalizeCornerRadii(shape)
+  const x1 = shape.x
+  const y1 = shape.y
+  const x2 = shape.x + shape.w
+  const y2 = shape.y + shape.h
+  return [
+    { corner: "tl", x: roundCoord(x1 + tl), y: roundCoord(y1 + tl), radius: tl },
+    { corner: "tr", x: roundCoord(x2 - tr), y: roundCoord(y1 + tr), radius: tr },
+    { corner: "br", x: roundCoord(x2 - br), y: roundCoord(y2 - br), radius: br },
+    { corner: "bl", x: roundCoord(x1 + bl), y: roundCoord(y2 - bl), radius: bl },
+  ]
+}
+
+export function updateRoundedRectCornerRadius(
+  shape: ShapeProps,
+  corner: RoundedRectCorner,
+  point: { x: number; y: number },
+): ShapeProps {
+  const maxRadius = Math.max(0, Math.min(Math.abs(shape.w) / 2, Math.abs(shape.h) / 2))
+  const x1 = shape.x
+  const y1 = shape.y
+  const x2 = shape.x + shape.w
+  const y2 = shape.y + shape.h
+  const cornerPoint =
+    corner === "tl" ? { x: x1, y: y1 } :
+      corner === "tr" ? { x: x2, y: y1 } :
+        corner === "br" ? { x: x2, y: y2 } :
+          { x: x1, y: y2 }
+  const radius = roundCoord(Math.max(0, Math.min(maxRadius, Math.min(Math.abs(point.x - cornerPoint.x), Math.abs(point.y - cornerPoint.y)))))
+  const next = normalizeCornerRadii(shape)
+  const index = corner === "tl" ? 0 : corner === "tr" ? 1 : corner === "br" ? 2 : 3
+  next[index] = radius
+  return { ...shape, radius, cornerRadii: next }
+}
+
 export function movePathHandle(
   path: PathProps,
   index: number,
@@ -214,10 +259,11 @@ export function applyShapeBooleanOperation(
   }
 }
 
-function applyVertexRoundness(points: PathPoint[], amount: number): PathPoint[] {
+function applyVertexRoundness(points: PathPoint[], amount: number, shouldRound: (index: number) => boolean = () => true): PathPoint[] {
   const roundness = Math.max(0, Math.min(1, amount))
   if (roundness <= 0 || points.length < 3) return points
   return points.map((point, index) => {
+    if (!shouldRound(index)) return point
     const prev = points[(index - 1 + points.length) % points.length]
     const next = points[(index + 1) % points.length]
     const vx = next.x - prev.x
@@ -251,7 +297,13 @@ function polygonLikePath(shape: ShapeProps): PathProps {
     const angle = -Math.PI / 2 + rotation + (Math.PI * 2 * i) / pointCount
     return roundPoint({ x: cx + Math.cos(angle) * rx * ratio, y: cy + Math.sin(angle) * ry * ratio })
   })
-  return { closed: true, points: applyVertexRoundness(points, shape.vertexRoundness ?? 0) }
+  const hasExplicitStarSmoothing = isStar && (shape.smoothCorners !== undefined || shape.smoothIndent !== undefined)
+  const shouldRound = (index: number) => {
+    if (!isStar) return shape.smoothCorners !== false
+    if (!hasExplicitStarSmoothing) return true
+    return index % 2 === 0 ? shape.smoothCorners === true : shape.smoothIndent === true
+  }
+  return { closed: true, points: applyVertexRoundness(points, shape.vertexRoundness ?? 0, shouldRound) }
 }
 
 function roundedRectPath(shape: ShapeProps): PathProps {
@@ -312,6 +364,14 @@ export function shapeToEditablePath(shape: ShapeProps): PathProps {
   }
 
   return roundedRectPath(shape)
+}
+
+export function drawSmoothPolygon(ctx: CanvasRenderingContext2D, shape: ShapeProps) {
+  appendPathToCanvas(ctx, shapeToEditablePath({ ...shape, type: "polygon" }))
+}
+
+export function drawStar(ctx: CanvasRenderingContext2D, shape: ShapeProps) {
+  appendPathToCanvas(ctx, shapeToEditablePath({ ...shape, type: "star" }))
 }
 
 export function appendPathToCanvas(ctx: CanvasRenderingContext2D, path: PathProps) {

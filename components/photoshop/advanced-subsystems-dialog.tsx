@@ -67,13 +67,15 @@ import {
   importAdvancedThreeDScene,
   paintThreeDSurface,
   rayTraceScene,
+  renderAudioMixToWavBlob,
   resolveVideoExportPreset,
   splitVideoLayer,
   trimVideoClip,
   updateThreeDMaterial,
 } from "./three-d-video-engine"
 import { describeColorPipeline } from "./color-pipeline"
-import { decodeAdvancedRasterBufferAsync, decodedRasterToCanvas, encodeOpenExrImageData, encodeTiffImageData } from "./raster-codecs"
+import { decodeAdvancedRasterBufferAsync, decodedRasterToCanvas, encodeOpenExrImageData, encodeTiffImageDataAsync, type TiffCompression } from "./raster-codecs"
+import { getPsbTileViewMetadata, hasPsbTileViewStore, readPsbTileViewCanvas } from "./psb-tile-view"
 import {
   PLUGIN_MANIFEST_FORMAT,
   buildPluginExportPayload,
@@ -611,6 +613,7 @@ function VideoWorkspace() {
   const { activeDoc, activeLayer, selectedLayers, dispatch, commit, requestRender } = useEditor()
   const [timeMs, setTimeMs] = React.useState(0)
   const [rendering, setRendering] = React.useState(false)
+  const [audioRendering, setAudioRendering] = React.useState(false)
   const [progress, setProgress] = React.useState("")
   const [presetId, setPresetId] = React.useState("social-1080p")
   const [frameConversion, setFrameConversion] = React.useState("")
@@ -627,9 +630,11 @@ function VideoWorkspace() {
 
   const importVideo = async (file: File) => {
     try {
+      const sourceDataUrl = await fileToDataUrl(file)
       const capture = await captureVideoFrame(file, timeMs, activeDoc.width, activeDoc.height)
       const video: VideoLayerProps = {
         sourceName: file.name,
+        sourceDataUrl,
         durationMs: capture.durationMs,
         currentTimeMs: timeMs,
         playbackRate: 1,
@@ -737,6 +742,29 @@ function VideoWorkspace() {
     toast.success("Timeline converted to frame animation metadata")
   }
 
+  const exportAudioMix = async () => {
+    if (!audioTracks.length) {
+      toast.error("No audio tracks to mix")
+      return
+    }
+    setAudioRendering(true)
+    try {
+      const timelineDuration = frames.reduce((sum, frame) => sum + Math.max(0, frame.durationMs), 0)
+      const audioDuration = audioTracks.reduce((max, track) => Math.max(max, track.startMs + track.durationMs), 0)
+      const blob = await renderAudioMixToWavBlob(audioTracks, {
+        durationMs: Math.max(timelineDuration, audioDuration, 1),
+        sampleRate: 48_000,
+        masterVolume: 1,
+      })
+      downloadBlob(blob, `${activeDoc.name}-audio-mix.wav`)
+      toast.success("Exported WAV audio mix")
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not export audio mix")
+    } finally {
+      setAudioRendering(false)
+    }
+  }
+
   const renderVideo = async () => {
     const preset = resolveVideoExportPreset(presetId)
     const timeline = frames.length ? frames : [{
@@ -827,6 +855,9 @@ function VideoWorkspace() {
         <SelectField label="Preset" value={presetId} onChange={setPresetId} options={VIDEO_EXPORT_PRESETS.map((preset) => preset.id)} />
         <Button disabled={rendering} onClick={renderVideo}>{rendering ? "Rendering..." : "Render Video"}</Button>
         <Button className="mt-2" size="sm" variant="secondary" disabled={!frames.length} onClick={convertFrames}>Convert to Frame Animation</Button>
+        <Button className="mt-2" size="sm" variant="secondary" disabled={!audioTracks.length || audioRendering} onClick={exportAudioMix}>
+          {audioRendering ? "Mixing Audio..." : "Export WAV Mix"}
+        </Button>
         <p className="mt-2 text-[11px] text-[var(--ps-text-dim)]">{progress || "Uses H.264 MP4 when the browser exposes it, otherwise WebM."}</p>
         {frameConversion ? <p className="mt-2 text-[11px] text-[var(--ps-text-dim)]">{frameConversion}</p> : null}
         <p className="mt-4 text-[11px]">Video layers: {activeDoc.layers.filter((layer) => layer.kind === "video").length}</p>
@@ -2122,6 +2153,14 @@ function ColorWorkspace() {
 function FormatsWorkspace() {
   const { activeDoc, dispatch, commit, createDocument } = useEditor()
   const [log, setLog] = React.useState<string[]>([])
+  const [tiffCompression, setTiffCompression] = React.useState<TiffCompression>("none")
+  const [tileCol, setTileCol] = React.useState(0)
+  const [tileRow, setTileRow] = React.useState(0)
+  const tileView = getPsbTileViewMetadata(activeDoc)
+  React.useEffect(() => {
+    setTileCol(0)
+    setTileRow(0)
+  }, [tileView?.sourceName, tileView?.tileColumns, tileView?.tileRows])
   const addCanvas = (canvas: HTMLCanvasElement, name: string) => {
     if (activeDoc) {
       dispatch({ type: "add-layer", layer: createLayerFromCanvas(activeDoc, name, canvas) })
@@ -2233,7 +2272,7 @@ function FormatsWorkspace() {
       if (!composite) return
       const base = activeDoc.name.replace(/[\\/:*?"<>|]+/g, "-") || "document"
       if (format === "tiff") {
-        downloadBlob(new Blob([encodeTiffImageData(composite.imageData)], { type: "image/tiff" }), `${base}.tiff`)
+        downloadBlob(new Blob([await encodeTiffImageDataAsync(composite.imageData, { compression: tiffCompression })], { type: "image/tiff" }), `${base}.tiff`)
       } else if (format === "exr") {
         downloadBlob(new Blob([encodeOpenExrImageData(composite.imageData)], { type: "image/x-exr" }), `${base}.exr`)
       } else if (format === "hdr") {
@@ -2251,13 +2290,132 @@ function FormatsWorkspace() {
       toast.error(message)
     }
   }
+  const importPsbLargeDocument = async (file: File, mode: "downscale-50" | "tile-view") => {
+    const notes = [`Opened ${file.name}`]
+    try {
+      assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.rasterBytes, "Advanced import file")
+      const doc = await deserializePsdFile(file, { psbLargeDocumentMode: mode })
+      createDocument(doc, mode === "downscale-50" ? "Open PSB 50%" : "Open PSB Tile View")
+      notes.push(mode === "downscale-50"
+        ? "Opened oversized PSB at 50% scale for browser-safe editing"
+        : "Opened oversized PSB tile overview with full-resolution tile plan metadata")
+      setLog(notes)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "PSB large-document import failed"
+      notes.push(`Import failed: ${message}`)
+      setLog(notes)
+      toast.error(message)
+    }
+  }
+  const openSelectedPsbTile = async () => {
+    if (!activeDoc || !tileView) {
+      toast.error("Open a PSB tile overview first")
+      return
+    }
+    if (!hasPsbTileViewStore(activeDoc.id)) {
+      toast.error("Full-resolution PSB tile cache is no longer available; reopen the PSB tile view")
+      return
+    }
+    const col = Math.max(0, Math.min(tileView.tileColumns - 1, Math.round(tileCol)))
+    const row = Math.max(0, Math.min(tileView.tileRows - 1, Math.round(tileRow)))
+    const canvas = await readPsbTileViewCanvas(activeDoc.id, col, row)
+    if (!canvas) {
+      toast.error("Could not read that PSB tile")
+      return
+    }
+    const layer: Layer = {
+      id: uid("layer"),
+      name: `Tile ${col},${row}`,
+      kind: "raster",
+      visible: true,
+      locked: false,
+      opacity: 1,
+      blendMode: "normal",
+      canvas,
+      metadata: {
+        description: `${tileView.sourceName} tile ${col},${row}`,
+        tags: ["psb", "tile-view"],
+        custom: {
+          sourceName: tileView.sourceName,
+          tileCol: col,
+          tileRow: row,
+          sourceX: col * tileView.tileSize,
+          sourceY: row * tileView.tileSize,
+          originalWidth: tileView.originalWidth,
+          originalHeight: tileView.originalHeight,
+        },
+      },
+    }
+    const tileDoc: PsDocument = {
+      id: uid("doc"),
+      name: `${tileView.sourceName} tile ${col},${row}`,
+      width: canvas.width,
+      height: canvas.height,
+      zoom: 1,
+      layers: [layer],
+      activeLayerId: layer.id,
+      selectedLayerIds: [layer.id],
+      background: "#ffffff",
+      colorMode: "RGB",
+      bitDepth: 8,
+      selection: { bounds: null, shape: "rect" },
+      metadata: {
+        title: `${tileView.sourceName} tile ${col},${row}`,
+        description: `Full-resolution PSB tile at ${col * tileView.tileSize},${row * tileView.tileSize}.`,
+        source: tileView.sourceName,
+        createdAt: new Date().toISOString(),
+      },
+    }
+    createDocument(tileDoc, "Open PSB Tile")
+    setLog([`Opened full-resolution tile ${col},${row} (${canvas.width} x ${canvas.height}px) from ${tileView.sourceName}`])
+  }
   return (
     <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
       <Panel title="Advanced Import">
         <FileButton accept="image/*,.tif,.tiff,.tga,.vda,.icb,.vst,.pbm,.pgm,.ppm,.pnm,.raw,.dng,.cr2,.nef,.arw,.dcm,.dicom,.exr,.hdr,.rgbe,.pdf,.eps,.ps,.heif,.heic,.hif,.jp2,.j2k,.jpf,.jpx,.jpm,.psb" label="Import Advanced Raster/RAW/DICOM/EXR/HDR/PDF/EPS/PSB" onFile={importAdvanced} />
-        <div className="mt-3 rounded-sm border border-[var(--ps-divider)] p-3 text-[11px] text-[var(--ps-text-dim)]">
-          Imports create browser 8-bit RGBA layers when a decoder path is available. TIFF/EXR/HEIC/JPEG 2000 use bundled decoders, RAW/DNG uses LibRaw or embedded previews, DICOM/HDR/PDF/EPS render flattened previews, and PSB opens through the Photoshop document path within browser limits.
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          <FileButton accept=".psb,image/vnd.adobe.photoshop" label="Open PSB 50%" onFile={(file) => importPsbLargeDocument(file, "downscale-50")} />
+          <FileButton accept=".psb,image/vnd.adobe.photoshop" label="PSB Tile View" onFile={(file) => importPsbLargeDocument(file, "tile-view")} />
         </div>
+        <div className="mt-3 rounded-sm border border-[var(--ps-divider)] p-3 text-[11px] text-[var(--ps-text-dim)]">
+          Imports create browser 8-bit RGBA layers when a decoder path is available. TIFF/EXR/HEIC/JPEG 2000 use bundled decoders, RAW/DNG uses LibRaw or embedded previews, DICOM/HDR/PDF/EPS render flattened previews, and oversized PSB files can be opened as a 50% composite or tile overview when the full canvas exceeds browser limits.
+        </div>
+      </Panel>
+      <Panel title="PSB Tile View">
+        <div className="grid grid-cols-2 gap-2">
+          <label className="text-[11px] text-[var(--ps-text-dim)]">
+            Column
+            <Input
+              type="number"
+              min={0}
+              max={Math.max(0, (tileView?.tileColumns ?? 1) - 1)}
+              value={tileCol}
+              onChange={(event) => setTileCol(Number(event.target.value) || 0)}
+              className="mt-1 h-8 bg-[var(--ps-panel-2)] text-[11px]"
+              disabled={!tileView}
+            />
+          </label>
+          <label className="text-[11px] text-[var(--ps-text-dim)]">
+            Row
+            <Input
+              type="number"
+              min={0}
+              max={Math.max(0, (tileView?.tileRows ?? 1) - 1)}
+              value={tileRow}
+              onChange={(event) => setTileRow(Number(event.target.value) || 0)}
+              className="mt-1 h-8 bg-[var(--ps-panel-2)] text-[11px]"
+              disabled={!tileView}
+            />
+          </label>
+        </div>
+        <Button className="mt-2 w-full" size="sm" variant="secondary" disabled={!tileView} onClick={() => void openSelectedPsbTile()}>
+          Open Full-Resolution Tile
+        </Button>
+        <p className="mt-2 text-[11px] text-[var(--ps-text-dim)]">
+          {tileView
+            ? `${tileView.originalWidth} x ${tileView.originalHeight}px source, ${tileView.tileColumns} x ${tileView.tileRows} tiles`
+            : "Open a PSB tile overview to inspect source tiles."}
+        </p>
       </Panel>
       <Panel title="Format Capability Matrix">
         <div className="overflow-hidden rounded-sm border border-[var(--ps-divider)] text-[11px]">
@@ -2274,6 +2432,16 @@ function FormatsWorkspace() {
         <div className="grid grid-cols-2 gap-2">
           <Button size="sm" variant="secondary" disabled={!activeDoc} onClick={exportMetadata}>Export JSON</Button>
           <Button size="sm" variant="secondary" disabled={!activeDoc} onClick={exportXmp}>Export XMP</Button>
+          <select
+            aria-label="TIFF compression"
+            value={tiffCompression}
+            onChange={(event) => setTiffCompression(event.target.value as TiffCompression)}
+            className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px]"
+          >
+            <option value="none">TIFF none</option>
+            <option value="lzw">TIFF LZW</option>
+            <option value="deflate">TIFF Deflate</option>
+          </select>
           <Button size="sm" variant="secondary" disabled={!activeDoc} onClick={() => void exportAdvancedRaster("tiff")}>Export TIFF</Button>
           <Button size="sm" variant="secondary" disabled={!activeDoc} onClick={() => void exportAdvancedRaster("exr")}>Export EXR</Button>
           <Button size="sm" variant="secondary" disabled={!activeDoc} onClick={() => void exportAdvancedRaster("hdr")}>Export HDR</Button>

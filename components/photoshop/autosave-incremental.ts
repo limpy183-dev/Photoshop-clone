@@ -219,6 +219,21 @@ export interface IncrementalAutosavePersistence {
   clear(documentId: string): Promise<void>
 }
 
+export interface NearIdenticalDeltaOptions {
+  similarityThreshold?: number
+}
+
+export interface AutosaveCompactionOptions extends NearIdenticalDeltaOptions {
+  maxDeltas?: number
+}
+
+export interface AutosaveCompactionResult {
+  compacted: boolean
+  reason: "already-compact" | "near-identical-deltas" | "chain-too-long"
+  base: IncrementalAutosaveBase
+  deltas: IncrementalAutosaveDelta[]
+}
+
 const BASE_KEY_PREFIX = "autosave-base-"
 const DELTA_KEY_PREFIX = "autosave-delta-"
 
@@ -230,6 +245,166 @@ function deltaKey(documentId: string, sequence: number) {
   return `${DELTA_KEY_PREFIX}${documentId}-${String(sequence).padStart(6, "0")}`
 }
 
+function stringSimilarity(a: string, b: string) {
+  if (a === b) return 1
+  const max = Math.max(a.length, b.length)
+  if (!max) return 1
+  const min = Math.min(a.length, b.length)
+  let same = 0
+  for (let i = 0; i < min; i++) {
+    if (a.charCodeAt(i) === b.charCodeAt(i)) same += 1
+  }
+  return same / max
+}
+
+function sameRemovedIds(a: readonly string[], b: readonly string[]) {
+  if (a.length !== b.length) return false
+  const sortedA = [...a].sort()
+  const sortedB = [...b].sort()
+  return sortedA.every((item, index) => item === sortedB[index])
+}
+
+function nearIdenticalLayers(
+  a: readonly IncrementalLayerSnapshot[],
+  b: readonly IncrementalLayerSnapshot[],
+  threshold: number,
+) {
+  if (a.length !== b.length) return false
+  const byId = new Map(a.map((layer) => [layer.id, layer]))
+  for (const next of b) {
+    const previous = byId.get(next.id)
+    if (!previous) return false
+    if (previous.fingerprint && next.fingerprint && previous.fingerprint === next.fingerprint) continue
+    if (stringSimilarity(previous.serialized, next.serialized) < threshold) return false
+  }
+  return true
+}
+
+export function mergeNearIdenticalDeltas(
+  deltas: readonly IncrementalAutosaveDelta[],
+  options: NearIdenticalDeltaOptions = {},
+): IncrementalAutosaveDelta[] {
+  const threshold = Math.max(0, Math.min(1, options.similarityThreshold ?? 0.96))
+  const merged: IncrementalAutosaveDelta[] = []
+  for (const delta of deltas) {
+    const previous = merged[merged.length - 1]
+    if (
+      previous &&
+      previous.documentId === delta.documentId &&
+      sameRemovedIds(previous.removedLayerIds, delta.removedLayerIds) &&
+      nearIdenticalLayers(previous.changedLayers, delta.changedLayers, threshold)
+    ) {
+      merged[merged.length - 1] = delta
+    } else {
+      merged.push(delta)
+    }
+  }
+  return merged
+}
+
+export function compactIncrementalAutosaveChain(
+  base: IncrementalAutosaveBase,
+  deltas: readonly IncrementalAutosaveDelta[],
+  options: AutosaveCompactionOptions = {},
+): AutosaveCompactionResult {
+  const maxDeltas = Math.max(1, Math.round(options.maxDeltas ?? 4))
+  const merged = mergeNearIdenticalDeltas(deltas, options)
+  const shouldCompact = merged.length !== deltas.length || merged.length > maxDeltas
+  if (!shouldCompact) {
+    return { compacted: false, reason: "already-compact", base, deltas: [...merged] }
+  }
+  const last = deltas[deltas.length - 1]
+  const nextBase: IncrementalAutosaveBase = {
+    ...base,
+    documentVersion: last?.documentVersion ?? base.documentVersion,
+    createdAt: Date.now(),
+    layers: applyIncrementalDeltas(base, deltas),
+  }
+  return {
+    compacted: true,
+    reason: merged.length !== deltas.length ? "near-identical-deltas" : "chain-too-long",
+    base: nextBase,
+    deltas: [],
+  }
+}
+
+async function blobToJson<T>(blob: Blob): Promise<T> {
+  if (blob.type === "application/json+gzip" && typeof DecompressionStream !== "undefined") {
+    const stream = blob.stream().pipeThrough(new DecompressionStream("gzip"))
+    return JSON.parse(await new Response(stream).text()) as T
+  }
+  return JSON.parse(await blob.text()) as T
+}
+
+export async function compressAutosaveDelta(delta: IncrementalAutosaveDelta): Promise<Blob> {
+  const json = JSON.stringify(delta)
+  if (typeof CompressionStream !== "undefined") {
+    const stream = new Blob([json], { type: "application/json" }).stream().pipeThrough(new CompressionStream("gzip"))
+    const compressed = await new Response(stream).arrayBuffer()
+    return new Blob([compressed], { type: "application/json+gzip" })
+  }
+  return new Blob([json], { type: "application/json" })
+}
+
+export async function runIncrementalAutosaveCompaction(
+  persistence: IncrementalAutosavePersistence,
+  documentId: string,
+  options: AutosaveCompactionOptions = {},
+): Promise<AutosaveCompactionResult | null> {
+  const loaded = await persistence.load(documentId)
+  if (!loaded.base) return null
+  const compacted = compactIncrementalAutosaveChain(loaded.base, loaded.deltas, options)
+  if (!compacted.compacted) return compacted
+  await persistence.clear(documentId)
+  await persistence.saveBase(compacted.base)
+  for (const delta of compacted.deltas) await persistence.saveDelta(delta)
+  return compacted
+}
+
+export interface ScheduledAutosaveCompaction<T> {
+  result: Promise<T | "cancelled">
+  cancel(): void
+}
+
+export function scheduleIncrementalAutosaveCompaction<T>(
+  task: () => T | Promise<T>,
+  options: {
+    requestIdle?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number
+    cancelIdle?: (id: number) => void
+    timeoutMs?: number
+  } = {},
+): ScheduledAutosaveCompaction<T> {
+  const requestIdle =
+    options.requestIdle ??
+    ((callback: IdleRequestCallback) => {
+      const id = setTimeout(() => callback({ didTimeout: true, timeRemaining: () => 0 }), 0)
+      return Number(id)
+    })
+  const cancelIdle = options.cancelIdle ?? ((id: number) => clearTimeout(id))
+  let pending = true
+  let idleId: number | null = null
+  let resolveResult: (value: T | "cancelled") => void = () => {}
+  const result = new Promise<T | "cancelled">((resolve) => {
+    resolveResult = resolve
+  })
+  idleId = requestIdle(async () => {
+    pending = false
+    idleId = null
+    resolveResult(await task())
+  }, { timeout: options.timeoutMs ?? 2_000 })
+
+  return {
+    result,
+    cancel() {
+      if (!pending) return
+      pending = false
+      if (idleId !== null) cancelIdle(idleId)
+      idleId = null
+      resolveResult("cancelled")
+    },
+  }
+}
+
 export function createOPFSAutosavePersistence(): IncrementalAutosavePersistence {
   return {
     async saveBase(base) {
@@ -237,7 +412,7 @@ export function createOPFSAutosavePersistence(): IncrementalAutosavePersistence 
       await writeScratchBlob(baseKey(base.documentId), blob)
     },
     async saveDelta(delta) {
-      const blob = new Blob([JSON.stringify(delta)], { type: "application/json" })
+      const blob = await compressAutosaveDelta(delta)
       await writeScratchBlob(deltaKey(delta.documentId, delta.sequence), blob)
     },
     async load(documentId) {
@@ -249,7 +424,7 @@ export function createOPFSAutosavePersistence(): IncrementalAutosavePersistence 
         for (let sequence = 1; sequence < 1000; sequence++) {
           const blob = await readScratchBlob(deltaKey(documentId, sequence))
           if (!blob) break
-          deltas.push(JSON.parse(await blob.text()) as IncrementalAutosaveDelta)
+          deltas.push(await blobToJson<IncrementalAutosaveDelta>(blob))
         }
       }
       return { base, deltas }

@@ -150,6 +150,81 @@ export function shouldUsePartialRedraw(rect: DirtyRect, bounds: CanvasBounds, th
   return dirtyCoverageRatio(rect, bounds) < threshold
 }
 
+export function adaptiveDirtyRedrawThreshold(bounds: CanvasBounds): number {
+  const pixels = Math.max(1, Math.round(bounds.width) * Math.round(bounds.height))
+  if (pixels >= 64_000_000) return 0.42
+  if (pixels >= 24_000_000) return 0.5
+  if (pixels >= 8_000_000) return 0.56
+  if (pixels <= 1_500_000) return 0.72
+  return COALESCE_AREA_RATIO
+}
+
+export interface LayerDirtyRectPlanInput {
+  dirtyByLayer: Readonly<Record<string, readonly DirtyRect[]>>
+  bounds: CanvasBounds
+  fullRedrawThreshold?: number
+}
+
+export interface LayerDirtyRectEntry {
+  rects: DirtyRect[]
+  unionRect: DirtyRect
+  coverage: number
+  partial: boolean
+}
+
+export interface LayerDirtyRectPlan {
+  layers: Record<string, LayerDirtyRectEntry>
+  compositeRect: DirtyRect
+  coverage: number
+  threshold: number
+  fullFrame: boolean
+  strategy: "none" | "layer-isolated" | "full-frame"
+}
+
+export function planLayerDirtyRects(input: LayerDirtyRectPlanInput): LayerDirtyRectPlan {
+  const threshold = input.fullRedrawThreshold ?? adaptiveDirtyRedrawThreshold(input.bounds)
+  const layers: Record<string, LayerDirtyRectEntry> = {}
+  const compositeRects: DirtyRect[] = []
+
+  for (const [layerId, rects] of Object.entries(input.dirtyByLayer)) {
+    const merged: DirtyRect[] = []
+    for (const rect of rects) addDirtyRect(merged, rect, input.bounds)
+    if (!merged.length) continue
+    const unionRect = unionDirtyRects(merged)
+    const coverage = dirtyCoverageRatio(unionRect, input.bounds)
+    layers[layerId] = {
+      rects: merged,
+      unionRect,
+      coverage,
+      partial: coverage < threshold,
+    }
+    addDirtyRect(compositeRects, unionRect, input.bounds)
+  }
+
+  if (!Object.keys(layers).length) {
+    return {
+      layers: {},
+      compositeRect: emptyDirtyRect(),
+      coverage: 0,
+      threshold,
+      fullFrame: false,
+      strategy: "none",
+    }
+  }
+
+  const compositeRect = unionDirtyRects(compositeRects)
+  const coverage = dirtyCoverageRatio(compositeRect, input.bounds)
+  const fullFrame = coverage >= threshold || Object.values(layers).some((layer) => !layer.partial)
+  return {
+    layers,
+    compositeRect,
+    coverage,
+    threshold,
+    fullFrame,
+    strategy: fullFrame ? "full-frame" : "layer-isolated",
+  }
+}
+
 export interface DirtyRectPlanInput {
   rects: readonly DirtyRect[]
   bounds: CanvasBounds

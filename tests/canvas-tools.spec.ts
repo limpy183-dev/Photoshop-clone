@@ -105,6 +105,32 @@ test("new first-class tools commit local editable state", async ({ page }) => {
   await expect(page.getByText("Selected slice: Slice 1")).toBeVisible()
 })
 
+test("advanced tool options expose polygon, magnetic, quick selection, and slice export controls", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await page.goto("/")
+  await expect(page.locator("[data-canvas-stage]")).toBeVisible()
+
+  await openCommand(page, "Polygon Tool")
+  await expect(page.getByText("Star")).toBeVisible()
+  await expect(page.getByText("Smooth corners")).toBeVisible()
+
+  await openCommand(page, "Quick Selection Tool")
+  await expect(page.getByText("Sample:")).toBeVisible()
+  await expect(page.getByTitle("Grow selection")).toBeVisible()
+  await expect(page.getByTitle("Shrink selection")).toBeVisible()
+
+  await selectToolFromGroup(page, /Lasso Tool|Polygonal Lasso|Magnetic Lasso/, "Magnetic Lasso")
+  await expect(page.getByText("Width:")).toBeVisible()
+  await expect(page.getByText("Contrast:")).toBeVisible()
+
+  await openCommand(page, "Slice Tool")
+  await dragOnCanvas(page, { x: 620, y: 180 }, { x: 760, y: 260 })
+  await openCommand(page, "Slice Manager Panel")
+  await expect(page.getByText("Filename")).toBeVisible()
+  await expect(page.getByText("Quality")).toBeVisible()
+  await expect(page.getByText("Compression")).toBeVisible()
+})
+
 test("lock image pixels blocks gradient strokes on the active layer", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
   await page.goto("/")

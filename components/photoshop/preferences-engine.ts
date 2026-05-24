@@ -1,12 +1,14 @@
 import type { PsDocument } from "./types"
 
 export const PREFERENCES_STORAGE_KEY = "ps-preferences"
-export const PREFERENCES_SCHEMA_VERSION = 2
+export const PREFERENCES_SCHEMA_VERSION = 3
 export const MAX_PREFERENCES_IMPORT_BYTES = 1024 * 1024
 export const MAX_IMPORTED_SCRATCH_DISKS = 32
 export const MAX_IMPORTED_HISTORY_ENTRIES = 10000
 export const MAX_IMPORTED_HISTORY_LAYER_IDS = 500
 export const MAX_IMPORTED_HISTORY_TOOL_SETTINGS_BYTES = 64 * 1024
+export const DEFAULT_CALIBRATION_LINE_MM = 100
+export const DEFAULT_CALIBRATION_CSS_PIXELS = (DEFAULT_CALIBRATION_LINE_MM / 25.4) * 96
 
 export type CursorStylePreference = "standard" | "precise" | "brush-size"
 export type LegacyUnitPreference = "pixels" | "inches" | "cm" | "mm" | "pt" | "pc"
@@ -27,6 +29,28 @@ export type PreferenceSection =
   | "historyLog"
   | "toolBehavior"
   | "rulerGrid"
+
+export const PREFERENCE_IMPORT_SECTIONS: PreferenceSection[] = [
+  "general",
+  "memory",
+  "scratchDisks",
+  "gpu",
+  "fileHandling",
+  "historyLog",
+  "toolBehavior",
+  "rulerGrid",
+]
+
+export const PREFERENCE_SECTION_LABELS: Record<PreferenceSection, string> = {
+  general: "General",
+  memory: "Performance",
+  scratchDisks: "Scratch Disks",
+  gpu: "GPU",
+  fileHandling: "File Handling",
+  historyLog: "History Log",
+  toolBehavior: "Cursors & Tools",
+  rulerGrid: "Units & Rulers",
+}
 
 export interface MemoryPreferences {
   ramPercent: number
@@ -90,6 +114,7 @@ export interface HistoryLogPreferences {
 export interface ToolBehaviorPreferences {
   cursorStyle: CursorStylePreference
   showBrushPreview: boolean
+  showBrushSizeCrosshair: boolean
   precisePicking: boolean
   shiftCyclesTools: boolean
   showTooltips: boolean
@@ -100,10 +125,18 @@ export interface ToolBehaviorPreferences {
   animatedZoom: boolean
 }
 
+export interface ScreenCalibrationPreferences {
+  cssPixelLength: number
+  measuredMm: number
+  calibratedAt?: string
+}
+
 export interface RulerGridPreferences {
   rulerUnits: RulerUnitPreference
   typeUnits: TypeUnitPreference
   printResolution: number
+  screenDpi: number
+  screenCalibration: ScreenCalibrationPreferences | null
   gridSize: number
   gridSubdivisions: number
   gridColor: string
@@ -241,6 +274,7 @@ export const DEFAULT_PREFERENCES: PhotoshopPreferences = {
   toolBehavior: {
     cursorStyle: "standard",
     showBrushPreview: true,
+    showBrushSizeCrosshair: true,
     precisePicking: false,
     shiftCyclesTools: true,
     showTooltips: true,
@@ -254,6 +288,8 @@ export const DEFAULT_PREFERENCES: PhotoshopPreferences = {
     rulerUnits: "px",
     typeUnits: "pt",
     printResolution: 72,
+    screenDpi: 96,
+    screenCalibration: null,
     gridSize: 20,
     gridSubdivisions: 4,
     gridColor: "#5dade2",
@@ -269,6 +305,15 @@ export const DEFAULT_PREFERENCES: PhotoshopPreferences = {
 }
 
 const TILE_SIZES = [64, 128, 256, 512, 1024]
+const CURSOR_STYLES = ["standard", "precise", "brush-size"] as const
+const RULER_UNITS = ["px", "in", "cm", "mm", "pt", "pc"] as const
+const TYPE_UNITS = ["px", "pt"] as const
+const SCRATCH_DISK_KINDS = ["browser-storage", "download-folder", "opfs", "custom"] as const
+const GPU_MODES = ["auto", "basic", "advanced"] as const
+const GPU_COMPOSITING_MODES = ["cpu", "worker", "gpu-preferred"] as const
+const MISSING_FONT_POLICIES = ["warn", "substitute", "rasterize"] as const
+const LARGE_FILE_POLICIES = ["ask", "downsample-preview", "block"] as const
+const HISTORY_LOG_DESTINATIONS = ["metadata", "text-file", "both"] as const
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value)
@@ -298,6 +343,156 @@ function boolValue(value: unknown, fallback: boolean) {
   return typeof value === "boolean" ? value : fallback
 }
 
+function importedPreferenceRoot(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error("Preference file root must be an object.")
+  if ("preferences" in value) {
+    if (!isRecord(value.preferences)) throw new Error("preferences must be an object.")
+    return value.preferences
+  }
+  return value
+}
+
+function validateObjectSection(root: Record<string, unknown>, key: PreferenceSection) {
+  if (key in root && !isRecord(root[key])) throw new Error(`${key} must be an object.`)
+}
+
+function validateArraySection(root: Record<string, unknown>, key: PreferenceSection) {
+  if (key in root && !Array.isArray(root[key])) throw new Error(`${key} must be an array.`)
+}
+
+function validateNumberField(record: Record<string, unknown>, path: string, displayPath = path) {
+  const value = path.split(".").reduce<unknown>((current, key) => (isRecord(current) ? current[key] : undefined), record)
+  if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value))) {
+    throw new Error(`${displayPath} must be a number.`)
+  }
+}
+
+function validateBooleanField(record: Record<string, unknown>, path: string, displayPath = path) {
+  const value = path.split(".").reduce<unknown>((current, key) => (isRecord(current) ? current[key] : undefined), record)
+  if (value !== undefined && typeof value !== "boolean") throw new Error(`${displayPath} must be a boolean.`)
+}
+
+function validateStringField(record: Record<string, unknown>, path: string, displayPath = path) {
+  const value = path.split(".").reduce<unknown>((current, key) => (isRecord(current) ? current[key] : undefined), record)
+  if (value !== undefined && typeof value !== "string") throw new Error(`${displayPath} must be a string.`)
+}
+
+function validateEnumField<T extends string>(
+  record: Record<string, unknown>,
+  path: string,
+  options: readonly T[],
+  displayPath = path,
+) {
+  const value = path.split(".").reduce<unknown>((current, key) => (isRecord(current) ? current[key] : undefined), record)
+  if (value !== undefined && (typeof value !== "string" || !(options as readonly string[]).includes(value))) {
+    throw new Error(`${displayPath} must be one of: ${options.join(", ")}.`)
+  }
+}
+
+function validatePreferenceImportShape(value: unknown) {
+  const root = importedPreferenceRoot(value)
+
+  validateNumberField(root, "schemaVersion")
+  validateNumberField(root, "gridSize")
+  validateNumberField(root, "undoLimit")
+  validateStringField(root, "cursorStyle")
+  validateStringField(root, "units")
+  validateStringField(root, "defaultBackground")
+  validateBooleanField(root, "showTooltips")
+  validateBooleanField(root, "autoSave")
+  validateNumberField(root, "smoothing")
+
+  validateObjectSection(root, "general")
+  validateObjectSection(root, "memory")
+  validateArraySection(root, "scratchDisks")
+  validateObjectSection(root, "gpu")
+  validateObjectSection(root, "fileHandling")
+  validateObjectSection(root, "historyLog")
+  validateObjectSection(root, "toolBehavior")
+  validateObjectSection(root, "rulerGrid")
+
+  const memory = asRecord(root.memory)
+  ;["ramPercent", "maxCacheMB", "cacheLevels", "tileSize", "historyStates"].forEach((key) =>
+    validateNumberField(memory, key, `memory.${key}`),
+  )
+  validateBooleanField(memory, "historyCompression", "memory.historyCompression")
+
+  if (Array.isArray(root.scratchDisks)) {
+    root.scratchDisks.forEach((disk, index) => {
+      if (!isRecord(disk)) throw new Error(`scratchDisks[${index}] must be an object.`)
+      validateStringField(disk, "id", `scratchDisks[${index}].id`)
+      validateStringField(disk, "label", `scratchDisks[${index}].label`)
+      validateBooleanField(disk, "enabled", `scratchDisks[${index}].enabled`)
+      validateNumberField(disk, "priority", `scratchDisks[${index}].priority`)
+      validateNumberField(disk, "quotaMB", `scratchDisks[${index}].quotaMB`)
+      validateEnumField(disk, "kind", SCRATCH_DISK_KINDS, `scratchDisks[${index}].kind`)
+      validateStringField(disk, "path", `scratchDisks[${index}].path`)
+    })
+  }
+
+  const gpu = asRecord(root.gpu)
+  validateBooleanField(gpu, "enabled", "gpu.enabled")
+  validateEnumField(gpu, "mode", GPU_MODES, "gpu.mode")
+  validateBooleanField(gpu, "useWebGL", "gpu.useWebGL")
+  validateBooleanField(gpu, "useWorkers", "gpu.useWorkers")
+  validateEnumField(gpu, "compositing", GPU_COMPOSITING_MODES, "gpu.compositing")
+  validateBooleanField(gpu, "rayTracingPreview", "gpu.rayTracingPreview")
+
+  const fileHandling = asRecord(root.fileHandling)
+  ;["autoSave", "askBeforeClosing", "preferProjectFormat", "appendCompatibilityWarnings", "preserveMetadata"].forEach((key) =>
+    validateBooleanField(fileHandling, key, `fileHandling.${key}`),
+  )
+  ;["recentFilesLimit", "autosaveIntervalSec"].forEach((key) => validateNumberField(fileHandling, key, `fileHandling.${key}`))
+  validateEnumField(fileHandling, "missingFontPolicy", MISSING_FONT_POLICIES, "fileHandling.missingFontPolicy")
+  validateEnumField(fileHandling, "largeFilePolicy", LARGE_FILE_POLICIES, "fileHandling.largeFilePolicy")
+
+  const historyLog = asRecord(root.historyLog)
+  validateBooleanField(historyLog, "enabled", "historyLog.enabled")
+  validateEnumField(historyLog, "destination", HISTORY_LOG_DESTINATIONS, "historyLog.destination")
+  validateBooleanField(historyLog, "includeTimestamps", "historyLog.includeTimestamps")
+  validateBooleanField(historyLog, "includeToolSettings", "historyLog.includeToolSettings")
+  validateNumberField(historyLog, "maxEntries", "historyLog.maxEntries")
+  if ("entries" in historyLog && !Array.isArray(historyLog.entries)) throw new Error("historyLog.entries must be an array.")
+
+  const toolBehavior = asRecord(root.toolBehavior)
+  validateEnumField(toolBehavior, "cursorStyle", CURSOR_STYLES, "toolBehavior.cursorStyle")
+  validateBooleanField(toolBehavior, "showBrushPreview", "toolBehavior.showBrushPreview")
+  validateBooleanField(toolBehavior, "showBrushSizeCrosshair", "toolBehavior.showBrushSizeCrosshair")
+  validateBooleanField(toolBehavior, "precisePicking", "toolBehavior.precisePicking")
+  validateBooleanField(toolBehavior, "shiftCyclesTools", "toolBehavior.shiftCyclesTools")
+  validateBooleanField(toolBehavior, "showTooltips", "toolBehavior.showTooltips")
+  validateBooleanField(toolBehavior, "springLoadedTools", "toolBehavior.springLoadedTools")
+  validateBooleanField(toolBehavior, "autoSelectLayer", "toolBehavior.autoSelectLayer")
+  validateNumberField(toolBehavior, "brushSmoothing", "toolBehavior.brushSmoothing")
+  validateBooleanField(toolBehavior, "wheelZooms", "toolBehavior.wheelZooms")
+  validateBooleanField(toolBehavior, "animatedZoom", "toolBehavior.animatedZoom")
+
+  const rulerGrid = asRecord(root.rulerGrid)
+  validateEnumField(rulerGrid, "rulerUnits", RULER_UNITS, "rulerGrid.rulerUnits")
+  validateEnumField(rulerGrid, "typeUnits", TYPE_UNITS, "rulerGrid.typeUnits")
+  ;["printResolution", "screenDpi", "gridSize", "gridSubdivisions", "gridOpacity"].forEach((key) =>
+    validateNumberField(rulerGrid, key, `rulerGrid.${key}`),
+  )
+  validateStringField(rulerGrid, "gridColor", "rulerGrid.gridColor")
+  validateStringField(rulerGrid, "guidesColor", "rulerGrid.guidesColor")
+  ;["showGrid", "showPixelGrid", "snapToGrid", "snapToGuides", "smartGuides"].forEach((key) =>
+    validateBooleanField(rulerGrid, key, `rulerGrid.${key}`),
+  )
+  if ("rulerOrigin" in rulerGrid && !isRecord(rulerGrid.rulerOrigin)) throw new Error("rulerGrid.rulerOrigin must be an object.")
+  if (isRecord(rulerGrid.rulerOrigin)) {
+    validateNumberField(rulerGrid.rulerOrigin, "x", "rulerGrid.rulerOrigin.x")
+    validateNumberField(rulerGrid.rulerOrigin, "y", "rulerGrid.rulerOrigin.y")
+  }
+  if ("screenCalibration" in rulerGrid && rulerGrid.screenCalibration !== null && !isRecord(rulerGrid.screenCalibration)) {
+    throw new Error("rulerGrid.screenCalibration must be an object or null.")
+  }
+  if (isRecord(rulerGrid.screenCalibration)) {
+    validateNumberField(rulerGrid.screenCalibration, "cssPixelLength", "rulerGrid.screenCalibration.cssPixelLength")
+    validateNumberField(rulerGrid.screenCalibration, "measuredMm", "rulerGrid.screenCalibration.measuredMm")
+    validateStringField(rulerGrid.screenCalibration, "calibratedAt", "rulerGrid.screenCalibration.calibratedAt")
+  }
+}
+
 function assertBoundedArray(value: unknown, max: number, label: string) {
   if (Array.isArray(value) && value.length > max) {
     throw new Error(`Preference imports are limited to ${max} ${label}.`)
@@ -313,8 +508,7 @@ function jsonByteLength(value: unknown) {
 }
 
 function assertPreferenceImportBounds(value: unknown) {
-  const root = isRecord(value) && isRecord(value.preferences) ? value.preferences : value
-  if (!isRecord(root)) throw new Error("Preference set must be a JSON object.")
+  const root = importedPreferenceRoot(value)
 
   assertBoundedArray(root.scratchDisks, MAX_IMPORTED_SCRATCH_DISKS, "scratch disks.")
 
@@ -360,7 +554,7 @@ function unitToRuler(value: unknown, fallback: RulerUnitPreference): RulerUnitPr
   if (value === "pixels") return "px"
   if (value === "inches") return "in"
   if (value === "cm") return "cm"
-  return optionValue(value, ["px", "in", "cm", "mm", "pt", "pc"] as const, fallback)
+  return optionValue(value, RULER_UNITS, fallback)
 }
 
 function rulerToLegacy(unit: RulerUnitPreference): LegacyUnitPreference {
@@ -397,7 +591,7 @@ function normalizeScratchDisks(value: unknown): ScratchDiskPreference[] {
       enabled: boolValue(record.enabled, fallback.enabled),
       priority: clampNumber(record.priority, fallback.priority, 1, 99),
       quotaMB: clampNumber(record.quotaMB, fallback.quotaMB, 128, 1048576),
-      kind: optionValue(record.kind, ["browser-storage", "download-folder", "opfs", "custom"] as const, fallback.kind),
+      kind: optionValue(record.kind, SCRATCH_DISK_KINDS, fallback.kind),
       ...(path ? { path } : {}),
     }
   })
@@ -407,10 +601,10 @@ function normalizeGpu(input: Record<string, unknown>): GpuPreferences {
   const defaults = DEFAULT_PREFERENCES.gpu
   return {
     enabled: boolValue(input.enabled, defaults.enabled),
-    mode: optionValue(input.mode, ["auto", "basic", "advanced"] as const, defaults.mode),
+    mode: optionValue(input.mode, GPU_MODES, defaults.mode),
     useWebGL: boolValue(input.useWebGL, defaults.useWebGL),
     useWorkers: boolValue(input.useWorkers, defaults.useWorkers),
-    compositing: optionValue(input.compositing, ["cpu", "worker", "gpu-preferred"] as const, defaults.compositing),
+    compositing: optionValue(input.compositing, GPU_COMPOSITING_MODES, defaults.compositing),
     rayTracingPreview: boolValue(input.rayTracingPreview, defaults.rayTracingPreview),
   }
 }
@@ -425,8 +619,8 @@ function normalizeFileHandling(input: Record<string, unknown>, legacyAutoSave: u
     recentFilesLimit: clampNumber(input.recentFilesLimit, defaults.recentFilesLimit, 0, 100),
     autosaveIntervalSec: clampNumber(input.autosaveIntervalSec, defaults.autosaveIntervalSec, 15, 3600),
     preserveMetadata: boolValue(input.preserveMetadata, defaults.preserveMetadata),
-    missingFontPolicy: optionValue(input.missingFontPolicy, ["warn", "substitute", "rasterize"] as const, defaults.missingFontPolicy),
-    largeFilePolicy: optionValue(input.largeFilePolicy, ["ask", "downsample-preview", "block"] as const, defaults.largeFilePolicy),
+    missingFontPolicy: optionValue(input.missingFontPolicy, MISSING_FONT_POLICIES, defaults.missingFontPolicy),
+    largeFilePolicy: optionValue(input.largeFilePolicy, LARGE_FILE_POLICIES, defaults.largeFilePolicy),
   }
 }
 
@@ -460,7 +654,7 @@ function normalizeHistoryLog(input: Record<string, unknown>): HistoryLogPreferen
   const maxEntries = clampNumber(input.maxEntries, defaults.maxEntries, 1, 10000)
   return {
     enabled: boolValue(input.enabled, defaults.enabled),
-    destination: optionValue(input.destination, ["metadata", "text-file", "both"] as const, defaults.destination),
+    destination: optionValue(input.destination, HISTORY_LOG_DESTINATIONS, defaults.destination),
     includeTimestamps: boolValue(input.includeTimestamps, defaults.includeTimestamps),
     includeToolSettings: boolValue(input.includeToolSettings, defaults.includeToolSettings),
     maxEntries,
@@ -476,8 +670,9 @@ function normalizeToolBehavior(
 ): ToolBehaviorPreferences {
   const defaults = DEFAULT_PREFERENCES.toolBehavior
   return {
-    cursorStyle: optionValue(input.cursorStyle ?? legacyCursorStyle, ["standard", "precise", "brush-size"] as const, defaults.cursorStyle),
+    cursorStyle: optionValue(input.cursorStyle ?? legacyCursorStyle, CURSOR_STYLES, defaults.cursorStyle),
     showBrushPreview: boolValue(input.showBrushPreview, defaults.showBrushPreview),
+    showBrushSizeCrosshair: boolValue(input.showBrushSizeCrosshair, defaults.showBrushSizeCrosshair),
     precisePicking: boolValue(input.precisePicking, defaults.precisePicking),
     shiftCyclesTools: boolValue(input.shiftCyclesTools, defaults.shiftCyclesTools),
     showTooltips: boolValue(input.showTooltips ?? legacyShowTooltips, defaults.showTooltips),
@@ -489,13 +684,28 @@ function normalizeToolBehavior(
   }
 }
 
+function normalizeScreenCalibration(value: unknown): ScreenCalibrationPreferences | null {
+  if (value === null) return null
+  const record = asRecord(value)
+  if (!Object.keys(record).length) return null
+  const cssPixelLength = clampNumber(record.cssPixelLength, DEFAULT_CALIBRATION_CSS_PIXELS, 32, 2000, false)
+  const measuredMm = clampNumber(record.measuredMm, DEFAULT_CALIBRATION_LINE_MM, 1, 1000, false)
+  return {
+    cssPixelLength,
+    measuredMm,
+    ...(typeof record.calibratedAt === "string" ? { calibratedAt: record.calibratedAt } : {}),
+  }
+}
+
 function normalizeRulerGrid(input: Record<string, unknown>, legacyGridSize: unknown, legacyUnits: unknown): RulerGridPreferences {
   const defaults = DEFAULT_PREFERENCES.rulerGrid
   const origin = asRecord(input.rulerOrigin)
   return {
     rulerUnits: unitToRuler(input.rulerUnits ?? legacyUnits, defaults.rulerUnits),
-    typeUnits: optionValue(input.typeUnits, ["px", "pt"] as const, defaults.typeUnits),
+    typeUnits: optionValue(input.typeUnits, TYPE_UNITS, defaults.typeUnits),
     printResolution: clampNumber(input.printResolution, defaults.printResolution, 1, 2400),
+    screenDpi: clampNumber(input.screenDpi, defaults.screenDpi, 30, 600, false),
+    screenCalibration: normalizeScreenCalibration(input.screenCalibration),
     gridSize: clampNumber(input.gridSize ?? legacyGridSize, defaults.gridSize, 4, 1000),
     gridSubdivisions: clampNumber(input.gridSubdivisions, defaults.gridSubdivisions, 1, 16),
     gridColor: colorValue(input.gridColor, defaults.gridColor),
@@ -562,15 +772,75 @@ export function serializePreferences(prefs: unknown): string {
   return JSON.stringify(normalizePreferences(prefs), null, 2)
 }
 
+export function calculateScreenDpiFromCalibration({
+  cssPixelLength,
+  measuredMm,
+}: {
+  cssPixelLength: number
+  measuredMm: number
+}): number {
+  if (!Number.isFinite(cssPixelLength) || cssPixelLength <= 0) {
+    throw new Error("Calibration line length must be greater than 0 CSS pixels.")
+  }
+  if (!Number.isFinite(measuredMm) || measuredMm <= 0) {
+    throw new Error("Measured length must be greater than 0 mm.")
+  }
+  return Number((cssPixelLength / (measuredMm / 25.4)).toFixed(4))
+}
+
+export function calculatePrintSizeZoom({
+  screenDpi,
+  documentDpi,
+}: {
+  screenDpi: number
+  documentDpi: number
+}): number {
+  if (!Number.isFinite(screenDpi) || screenDpi <= 0) throw new Error("Screen DPI must be greater than 0.")
+  if (!Number.isFinite(documentDpi) || documentDpi <= 0) throw new Error("Document DPI must be greater than 0.")
+  return Math.max(0.05, Math.min(32, screenDpi / documentDpi))
+}
+
+export function importPreferenceSections(
+  currentInput: unknown,
+  importedInput: unknown,
+  sections: readonly PreferenceSection[],
+): PhotoshopPreferences {
+  const current = normalizePreferences(currentInput)
+  const imported = normalizePreferences(importedInput)
+  const next = clone(current)
+  const selected = new Set(sections)
+
+  if (selected.has("general")) {
+    next.defaultBackground = imported.defaultBackground
+  }
+  if (selected.has("memory")) next.memory = clone(imported.memory)
+  if (selected.has("scratchDisks")) next.scratchDisks = clone(imported.scratchDisks)
+  if (selected.has("gpu")) next.gpu = clone(imported.gpu)
+  if (selected.has("fileHandling")) next.fileHandling = clone(imported.fileHandling)
+  if (selected.has("historyLog")) next.historyLog = clone(imported.historyLog)
+  if (selected.has("toolBehavior")) next.toolBehavior = clone(imported.toolBehavior)
+  if (selected.has("rulerGrid")) next.rulerGrid = clone(imported.rulerGrid)
+
+  return syncLegacyFields(next)
+}
+
 export function parsePreferencesSet(value: string | unknown): PhotoshopPreferences {
   if (typeof value === "string") {
     if (value.length > MAX_PREFERENCES_IMPORT_BYTES) {
       throw new Error(`Preference imports are limited to ${Math.round(MAX_PREFERENCES_IMPORT_BYTES / 1024)} KB.`)
     }
-    const parsed = JSON.parse(value)
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(value)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown parse error"
+      throw new Error(`Preference file is not valid JSON: ${message}`)
+    }
+    validatePreferenceImportShape(parsed)
     assertPreferenceImportBounds(parsed)
     return normalizePreferences(isRecord(parsed) && isRecord(parsed.preferences) ? parsed.preferences : parsed)
   }
+  validatePreferenceImportShape(value)
   assertPreferenceImportBounds(value)
   return normalizePreferences(isRecord(value) && isRecord(value.preferences) ? value.preferences : value)
 }

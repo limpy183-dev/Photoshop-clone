@@ -1291,6 +1291,8 @@ interface SerializedSmartFilter {
   params: Record<string, number | string | boolean>
   hasMask: boolean
   maskEnabled: boolean
+  maskDensity: number
+  maskFeather: number
 }
 
 function serializeSmartFilter(filter: SmartFilter): SerializedSmartFilter {
@@ -1304,6 +1306,8 @@ function serializeSmartFilter(filter: SmartFilter): SerializedSmartFilter {
     params: filter.params ?? {},
     hasMask: !!filter.mask,
     maskEnabled: filter.maskEnabled !== false,
+    maskDensity: clamp01(filter.maskDensity, 1),
+    maskFeather: Math.max(0, Math.min(250, Number.isFinite(filter.maskFeather ?? 0) ? filter.maskFeather ?? 0 : 0)),
   }
 }
 
@@ -1373,6 +1377,8 @@ export function psdToAppSmartFilters(psdLayer: PsdLayer): SmartFilter[] | undefi
     params: entry.params ?? {},
     mask: null,
     maskEnabled: entry.maskEnabled !== false,
+    maskDensity: clamp01(entry.maskDensity, 1),
+    maskFeather: Math.max(0, Math.min(250, Number.isFinite(entry.maskFeather ?? 0) ? entry.maskFeather ?? 0 : 0)),
   }))
 }
 

@@ -9,10 +9,12 @@ import type { Layer, BlendMode, ToolId } from "../types"
 import { renderThreeDScene } from "../advanced-subsystems"
 import {
   applyTextInsideShape,
+  buildFontSubstitutionComparison,
   buildFontPreview,
   convertTextToEditablePath,
   createTextExtrusionScene,
   DEFAULT_VARIABLE_AXIS_DEFINITIONS,
+  detectOpenTypeFeatureSupport,
   diagnoseDocumentFonts,
   listOpenTypeFeatureToggles,
   matchFontForLayer,
@@ -28,7 +30,7 @@ const BLEND_MODES: BlendMode[] = [
 ]
 
 export function PropertiesPanel() {
-  const { activeDoc, activeLayer, tool, brush, eraser, cloneSource, dispatch, foreground, background, commit, requestRender } = useEditor()
+  const { activeDoc, activeLayer, tool, brush, eraser, cloneSource, dispatch, foreground, background, commit, requestRender, activeSmartFilterMaskTarget } = useEditor()
   if (!activeDoc) return <EmptyState text="No document open" />
   const globalLight = activeDoc.globalLight ?? { angle: 120, altitude: 30 }
   const setGlobalLight = (patch: Partial<typeof globalLight>) => {
@@ -62,7 +64,7 @@ export function PropertiesPanel() {
 
       {/* Layer Section (when layer selected) */}
       {activeLayer && (
-        <LayerSection layer={activeLayer} doc={activeDoc} dispatch={dispatch} commit={commit} requestRender={requestRender} />
+        <LayerSection layer={activeLayer} doc={activeDoc} dispatch={dispatch} commit={commit} requestRender={requestRender} activeSmartFilterMaskTarget={activeSmartFilterMaskTarget} />
       )}
 
       {/* Tool-specific sections */}
@@ -150,21 +152,55 @@ function LayerSection({
   dispatch,
   commit,
   requestRender,
+  activeSmartFilterMaskTarget,
 }: {
   layer: Layer
   doc: NonNullable<ReturnType<typeof useEditor>["activeDoc"]>
   dispatch: (a: import("../editor-context").Action) => void
   commit: (label: string, changedLayerIds?: string[]) => void
   requestRender: () => void
+  activeSmartFilterMaskTarget: ReturnType<typeof useEditor>["activeSmartFilterMaskTarget"]
 }) {
+  const [draggedSmartFilterId, setDraggedSmartFilterId] = React.useState<string | null>(null)
   const commitLayerChange = (label: string) => {
     requestRender()
     window.setTimeout(() => commit(label, [layer.id]), 0)
   }
-  const setSmartFilters = (next: NonNullable<Layer["smartFilters"]>, label: string) => {
+  const previewSmartFilters = (next: NonNullable<Layer["smartFilters"]>) => {
     dispatch({ type: "set-layer-smart-filters", id: layer.id, smartFilters: next })
     requestRender()
+  }
+  const commitSmartFilters = (label: string) => {
     window.setTimeout(() => commit(label, [layer.id]), 0)
+  }
+  const setSmartFilters = (next: NonNullable<Layer["smartFilters"]>, label: string) => {
+    previewSmartFilters(next)
+    commitSmartFilters(label)
+  }
+  const moveSmartFilterByDrop = (fromId: string | null, toId: string) => {
+    if (!fromId || fromId === toId) return
+    const filters = layer.smartFilters ?? []
+    const from = filters.findIndex((filter) => filter.id === fromId)
+    const to = filters.findIndex((filter) => filter.id === toId)
+    if (from < 0 || to < 0 || from === to) return
+    const next = [...filters]
+    const [entry] = next.splice(from, 1)
+    next.splice(to, 0, entry)
+    setSmartFilters(next, "Reorder Smart Filter")
+  }
+  const editSmartFilterMask = (filterId: string) => {
+    const filter = layer.smartFilters?.find((sf) => sf.id === filterId)
+    if (!filter) return
+    if (!filter.mask) {
+      dispatch({ type: "set-smart-filter-mask", layerId: layer.id, filterId, mask: makeCanvas(doc.width, doc.height, "#ffffff"), enabled: true })
+      commitSmartFilters("Reveal Smart Filter Mask")
+    } else if (filter.maskEnabled === false) {
+      previewSmartFilters((layer.smartFilters ?? []).map((sf) => sf.id === filterId ? { ...sf, maskEnabled: true } : sf))
+      commitSmartFilters("Enable Smart Filter Mask")
+    }
+    dispatch({ type: "set-active-smart-filter-mask", target: { layerId: layer.id, filterId } })
+    dispatch({ type: "set-tool", tool: "brush" })
+    requestRender()
   }
   const addSmartFilterMask = (filterId: string, fill: "#ffffff" | "#000000" = "#ffffff") => {
     setSmartFilters(
@@ -302,7 +338,26 @@ function LayerSection({
               {layer.smartFilters!.map((filter, idx) => (
                 <div
                   key={filter.id}
+                  draggable
+                  data-smart-filter-mask-editing={activeSmartFilterMaskTarget?.layerId === layer.id && activeSmartFilterMaskTarget.filterId === filter.id ? "true" : undefined}
                   className="space-y-1 px-2 py-1.5 text-[10px]"
+                  onDragStart={(e) => {
+                    setDraggedSmartFilterId(filter.id)
+                    e.dataTransfer.setData("application/x-ps-smart-filter-id", filter.id)
+                    e.dataTransfer.effectAllowed = "move"
+                  }}
+                  onDragOver={(e) => {
+                    const sourceId = e.dataTransfer.getData("application/x-ps-smart-filter-id") || draggedSmartFilterId
+                    if (!sourceId || sourceId === filter.id) return
+                    e.preventDefault()
+                    e.dataTransfer.dropEffect = "move"
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault()
+                    moveSmartFilterByDrop(e.dataTransfer.getData("application/x-ps-smart-filter-id") || draggedSmartFilterId, filter.id)
+                    setDraggedSmartFilterId(null)
+                  }}
+                  onDragEnd={() => setDraggedSmartFilterId(null)}
                   onDoubleClick={() => window.dispatchEvent(new CustomEvent("ps-open-filter-gallery"))}
                 >
                   <div className="flex items-center gap-1">
@@ -363,11 +418,11 @@ function LayerSection({
                         max={100}
                         value={[Math.round((filter.opacity ?? 1) * 100)]}
                         onValueChange={(v) =>
-                          setSmartFilters(
+                          previewSmartFilters(
                             layer.smartFilters!.map((sf) => sf.id === filter.id ? { ...sf, opacity: v[0] / 100 } : sf),
-                            "Smart Filter Opacity",
                           )
                         }
+                        onValueCommit={() => commitSmartFilters("Smart Filter Opacity")}
                       />
                     </label>
                     <label className="grid gap-1">
@@ -389,6 +444,13 @@ function LayerSection({
                     </label>
                   </div>
                   <div className="flex flex-wrap gap-1">
+                    <button
+                      type="button"
+                      className="rounded-sm border border-[var(--ps-divider)] px-1.5 py-0.5 hover:bg-[var(--ps-tool-hover)]"
+                      onClick={() => editSmartFilterMask(filter.id)}
+                    >
+                      Edit mask
+                    </button>
                     {filter.mask ? (
                       <>
                         <button
@@ -419,6 +481,38 @@ function LayerSection({
                       </>
                     )}
                   </div>
+                  {filter.mask ? (
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="grid gap-1">
+                        <span className="text-[var(--ps-text-dim)]">Density {Math.round((filter.maskDensity ?? 1) * 100)}%</span>
+                        <Slider
+                          min={0}
+                          max={100}
+                          value={[Math.round((filter.maskDensity ?? 1) * 100)]}
+                          onValueChange={(v) =>
+                            previewSmartFilters(
+                              layer.smartFilters!.map((sf) => sf.id === filter.id ? { ...sf, maskDensity: v[0] / 100 } : sf),
+                            )
+                          }
+                          onValueCommit={() => commitSmartFilters("Smart Filter Mask Density")}
+                        />
+                      </label>
+                      <label className="grid gap-1">
+                        <span className="text-[var(--ps-text-dim)]">Feather {Math.round(filter.maskFeather ?? 0)} px</span>
+                        <Slider
+                          min={0}
+                          max={250}
+                          value={[Math.round(filter.maskFeather ?? 0)]}
+                          onValueChange={(v) =>
+                            previewSmartFilters(
+                              layer.smartFilters!.map((sf) => sf.id === filter.id ? { ...sf, maskFeather: v[0] } : sf),
+                            )
+                          }
+                          onValueCommit={() => commitSmartFilters("Smart Filter Mask Feather")}
+                        />
+                      </label>
+                    </div>
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -580,7 +674,14 @@ function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, reques
     const axisDefinitions = layer.text.variableAxisDefinitions?.length
       ? layer.text.variableAxisDefinitions
       : DEFAULT_VARIABLE_AXIS_DEFINITIONS
-    const openTypeToggles = listOpenTypeFeatureToggles()
+    const featureSupport = detectOpenTypeFeatureSupport(layer.text.font)
+    const openTypeToggles = listOpenTypeFeatureToggles(featureSupport.supportedTags.size ? { supportedTags: featureSupport.supportedTags } : {})
+    const comparison = buildFontSubstitutionComparison(
+      layer.text.missingFontOriginal ?? layer.text.font,
+      fontStatus?.substitute ?? layer.text.fontSubstitution ?? layer.text.font,
+      layer.text.content || "The quick brown fox 123",
+      { color: layer.text.color },
+    )
     const baseShapeInset = layer.text.textShapeInset ?? 8
     const textShapeInsets = layer.text.textShapeInsets ?? {
       top: baseShapeInset,
@@ -765,6 +866,31 @@ function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, reques
             </button>
           </div>
         ) : null}
+        <div className="space-y-1">
+          <div className="grid grid-cols-2 gap-1">
+            {[comparison.original, comparison.fallback].map((item, index) => (
+              <div key={`${item.family}-${index}`} className="min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1.5 py-1">
+                <div className="truncate text-[9px] text-[var(--ps-text-dim)]">{index === 0 ? "Original" : "Fallback"} · {item.family}</div>
+                <div className="truncate text-[15px]" style={item.previewStyle as React.CSSProperties}>{item.sample}</div>
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-1">
+            {comparison.specimens.slice(0, 6).map((specimen) => (
+              <button
+                key={`${specimen.source}-${specimen.family}`}
+                type="button"
+                onClick={() => updateText({ font: specimen.family })}
+                onBlur={() => commit("Type Font Specimen", [layer.id])}
+                className="min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1.5 py-1 text-left hover:bg-[var(--ps-tool-hover)]"
+                title={`${specimen.source}: ${specimen.family}`}
+              >
+                <span className="block truncate text-[9px] text-[var(--ps-text-dim)]">{specimen.family}</span>
+                <span className="block truncate text-[13px]" style={specimen.previewStyle as React.CSSProperties}>Ag 123</span>
+              </button>
+            ))}
+          </div>
+        </div>
         <Row label="AA Mode">
           <select
             value={layer.text.antiAlias === false ? "none" : layer.text.antiAliasMode ?? "smooth"}
@@ -805,6 +931,30 @@ function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, reques
             <option value="horizontal">Horizontal</option>
             <option value="vertical-rl">Vertical RL</option>
             <option value="vertical-lr">Vertical LR</option>
+          </select>
+        </Row>
+        <Row label="Orientation">
+          <select
+            value={layer.text.textOrientation ?? (layer.text.tateChuYoko ? "mixed" : "upright")}
+            onChange={(e) => updateText({ textOrientation: e.target.value as NonNullable<Layer["text"]>["textOrientation"] })}
+            onBlur={() => commit("Type Orientation", [layer.id])}
+            className="h-5 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]"
+          >
+            <option value="mixed">Mixed</option>
+            <option value="upright">Upright</option>
+            <option value="sideways">Sideways</option>
+          </select>
+        </Row>
+        <Row label="Vert Align">
+          <select
+            value={layer.text.verticalAlign ?? "top"}
+            onChange={(e) => updateText({ verticalAlign: e.target.value as NonNullable<Layer["text"]>["verticalAlign"] })}
+            onBlur={() => commit("Type Vertical Align", [layer.id])}
+            className="h-5 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]"
+          >
+            <option value="top">Top</option>
+            <option value="middle">Middle</option>
+            <option value="bottom">Bottom</option>
           </select>
         </Row>
         <Row label="Mojikumi">
@@ -872,14 +1022,14 @@ function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, reques
         </div>
         <div className="grid grid-cols-2 gap-1">
           {openTypeToggles.map((toggle) => {
-            const value = (layer.text! as unknown as Record<string, boolean | undefined>)[toggle.key] ?? layer.text!.openType?.[toggle.key] ?? toggle.defaultEnabled
+            const value = layer.text!.openType?.[toggle.key] ?? (layer.text! as unknown as Record<string, boolean | undefined>)[toggle.key] ?? toggle.defaultEnabled
             return (
               <QuickToggle
                 key={toggle.tag}
                 label={toggle.label}
                 active={!!value}
                 onClick={() => {
-                  updateText({ [toggle.key]: !value } as Partial<NonNullable<Layer["text"]>>)
+                  updateText({ openType: { ...(layer.text!.openType ?? {}), [toggle.key]: !value } })
                   commit(`Type ${toggle.label}`, [layer.id])
                 }}
               />

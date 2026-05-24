@@ -10,6 +10,7 @@ import type {
   ThreeDObject,
   ThreeDScene,
   TypographyAxisDefinition,
+  TypographyNamedInstance,
   Vec3,
 } from "./types"
 import { shapeToEditablePath } from "./vector-path-operations"
@@ -21,6 +22,26 @@ export interface FontCandidate {
   serif?: boolean
   monospace?: boolean
   variableAxes?: TypographyAxisDefinition[]
+}
+
+export interface FontPreviewSpec {
+  family: string
+  sample: string
+  cssFont: string
+  fontVariationSettings: string
+  fontFeatureSettings: string
+  previewStyle: Record<string, string | number | undefined>
+  canvasDataUrl?: string
+}
+
+export interface FontSpecimen extends FontPreviewSpec {
+  source: "system" | "web" | "candidate"
+}
+
+export interface FontSubstitutionComparison {
+  original: FontPreviewSpec
+  fallback: FontPreviewSpec
+  specimens: FontSpecimen[]
 }
 
 export interface MatchFontResult {
@@ -59,6 +80,7 @@ export interface FindReplaceOptions {
   caseSensitive?: boolean
   wholeWord?: boolean
   useRegex?: boolean
+  previewOnly?: boolean
 }
 
 export interface FindReplaceResult {
@@ -72,6 +94,8 @@ export interface FindReplaceResult {
   }>
   changedLayerIds: string[]
   replacements: number
+  matchCountLabel: string
+  error?: string
 }
 
 export interface TypographyRenderPlan {
@@ -84,6 +108,7 @@ export interface TypographyRenderPlan {
   fontVariantLigatures: "normal" | "none"
   writingMode: "horizontal-tb" | "vertical-rl" | "vertical-lr"
   textOrientation: "mixed" | "upright" | "sideways"
+  verticalAlign: "top" | "middle" | "bottom"
   letterSpacing: string
   renderHints: {
     mode: TextAntiAliasMode
@@ -99,6 +124,23 @@ export interface OpenTypeFeatureToggle {
   tag: string
   label: string
   defaultEnabled: boolean
+}
+
+export interface OpenTypeFeatureSupport {
+  fontAvailable: boolean
+  supportedTags: Set<string>
+  browserSupportedTags: Set<string>
+}
+
+export interface VariableFontMetadata {
+  axes: TypographyAxisDefinition[]
+  namedInstances: TypographyNamedInstance[]
+}
+
+export interface VariableFontInspection extends VariableFontMetadata {
+  family: string
+  source: "font-access" | "font-face" | "fallback"
+  error?: string
 }
 
 export interface TextPathGlyphLayout {
@@ -125,10 +167,30 @@ const OPEN_TYPE_FEATURE_TOGGLES: OpenTypeFeatureToggle[] = [
   { key: "swash", tag: "swsh", label: "Swash", defaultEnabled: false },
   { key: "ordinals", tag: "ordn", label: "Ordinals", defaultEnabled: false },
   { key: "fractions", tag: "frac", label: "Fractions", defaultEnabled: false },
+  { key: "superscript", tag: "sups", label: "Superscript", defaultEnabled: false },
+  { key: "subscript", tag: "subs", label: "Subscript", defaultEnabled: false },
+  { key: "slashedZero", tag: "zero", label: "Slashed Zero", defaultEnabled: false },
   { key: "smallCaps", tag: "smcp", label: "Small Caps", defaultEnabled: false },
   { key: "oldstyleFigures", tag: "onum", label: "Oldstyle Figures", defaultEnabled: false },
   { key: "tabularFigures", tag: "tnum", label: "Tabular Figures", defaultEnabled: false },
 ]
+
+const OPEN_TYPE_FEATURE_SAMPLES: Record<string, string> = {
+  liga: "office affinity",
+  clig: "office affinity",
+  dlig: "st ct sp",
+  calt: "contextual",
+  salt: "alphabet",
+  swsh: "Queen",
+  ordn: "1st 2nd",
+  frac: "1/2 3/4",
+  sups: "x2 n3",
+  subs: "H2O CO2",
+  zero: "000 100",
+  smcp: "Small Caps",
+  onum: "0123456789",
+  tnum: "1234567890",
+}
 
 const WEB_SAFE_FONT_CANDIDATES: FontCandidate[] = [
   { family: "Arial", averageGlyphWidth: 0.52, xHeight: 0.52, serif: false },
@@ -154,6 +216,10 @@ function quoteFontFamily(font: string) {
   return /\s|,/.test(safe) ? `"${safe}"` : safe
 }
 
+function fontFamilyList(font: string) {
+  return `${quoteFontFamily(font)}, Arial, sans-serif`
+}
+
 function formatAxisValue(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(3).replace(/0+$/, "").replace(/\.$/, "")
 }
@@ -165,6 +231,33 @@ function compareAxisOrder(a: string, b: string) {
   return a.localeCompare(b)
 }
 
+function renderFontPreviewDataUrl(text: TextProps, width = 360, height = 82) {
+  if (typeof document === "undefined") return undefined
+  try {
+    const canvas = document.createElement("canvas")
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext("2d")
+    if (!ctx || typeof ctx.fillText !== "function" || typeof canvas.toDataURL !== "function") return undefined
+    const plan = buildTypographyRenderPlan(text)
+    ctx.clearRect(0, 0, width, height)
+    ctx.fillStyle = "#15171c"
+    ctx.fillRect(0, 0, width, height)
+    ctx.fillStyle = text.color
+    ctx.font = plan.cssFont
+    ctx.textBaseline = "middle"
+    ctx.fontFeatureSettings = plan.fontFeatureSettings
+    ctx.fontVariationSettings = plan.fontVariationSettings
+    ctx.fontVariantCaps = plan.fontVariantCaps
+    ctx.fontVariantLigatures = plan.fontVariantLigatures
+    ctx.letterSpacing = plan.letterSpacing
+    ctx.fillText(plan.content, 16, height / 2)
+    return canvas.toDataURL("image/png")
+  } catch {
+    return undefined
+  }
+}
+
 function textOpenTypeControls(text: TextProps): OpenTypeControls {
   return {
     ligatures: text.ligatures,
@@ -174,6 +267,9 @@ function textOpenTypeControls(text: TextProps): OpenTypeControls {
     swash: text.swash,
     ordinals: text.ordinals,
     fractions: text.fractions,
+    superscript: text.superscript,
+    subscript: text.subscript,
+    slashedZero: text.slashedZero,
     smallCaps: text.smallCaps,
     oldstyleFigures: text.oldstyleFigures,
     tabularFigures: text.tabularFigures,
@@ -279,6 +375,9 @@ export function buildOpenTypeFeatureSettings(controls: OpenTypeControls = {}) {
     ["swsh", !!controls.swash],
     ["ordn", !!controls.ordinals],
     ["frac", !!controls.fractions],
+    ["sups", !!controls.superscript],
+    ["subs", !!controls.subscript],
+    ["zero", !!controls.slashedZero],
     ["smcp", !!controls.smallCaps],
     ["onum", !!controls.oldstyleFigures],
     ["tnum", !!controls.tabularFigures],
@@ -294,6 +393,64 @@ export function listOpenTypeFeatureToggles(options: { supportedTags?: Set<string
   return OPEN_TYPE_FEATURE_TOGGLES
     .filter((toggle) => supported.has(toggle.tag))
     .map((toggle) => ({ ...toggle }))
+}
+
+function cssSupportsOpenTypeTag(tag: string) {
+  const css = (globalThis as typeof globalThis & { CSS?: { supports?: (property: string, value: string) => boolean } }).CSS
+  if (!css?.supports) return true
+  try {
+    return css.supports("font-feature-settings", `"${tag}" 1`)
+  } catch {
+    return true
+  }
+}
+
+function browserFontCheck(font: string) {
+  if (typeof document === "undefined" || !("fonts" in document)) return true
+  try {
+    return document.fonts.check(`16px ${fontFamilyList(font)}`)
+  } catch {
+    return true
+  }
+}
+
+function canvasFeatureDiffers(font: string, tag: string) {
+  if (typeof document === "undefined") return undefined
+  try {
+    const sample = OPEN_TYPE_FEATURE_SAMPLES[tag] ?? "Hamburgefonts 123"
+    const canvas = document.createElement("canvas")
+    canvas.width = 240
+    canvas.height = 48
+    const ctx = canvas.getContext("2d")
+    if (!ctx || typeof ctx.fillText !== "function" || typeof ctx.getImageData !== "function") return undefined
+    const draw = (feature: string) => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.fillStyle = "#ffffff"
+      ctx.font = `28px ${fontFamilyList(font)}`
+      ctx.fontFeatureSettings = feature
+      ctx.fillText(sample, 6, 34)
+      return ctx.getImageData(0, 0, canvas.width, canvas.height).data
+    }
+    const off = draw("normal")
+    const on = draw(`"${tag}" 1`)
+    for (let i = 0; i < off.length; i += 4) {
+      if (off[i + 3] !== on[i + 3] || off[i] !== on[i] || off[i + 1] !== on[i + 1] || off[i + 2] !== on[i + 2]) return true
+    }
+    return false
+  } catch {
+    return undefined
+  }
+}
+
+export function detectOpenTypeFeatureSupport(font: string): OpenTypeFeatureSupport {
+  const browserSupportedTags = new Set(OPEN_TYPE_FEATURE_TOGGLES.filter((toggle) => cssSupportsOpenTypeTag(toggle.tag)).map((toggle) => toggle.tag))
+  const fontAvailable = browserFontCheck(font)
+  const supportedTags = new Set<string>()
+  for (const tag of browserSupportedTags) {
+    const differs = fontAvailable ? canvasFeatureDiffers(font, tag) : undefined
+    if (differs !== false) supportedTags.add(tag)
+  }
+  return { fontAvailable, supportedTags, browserSupportedTags }
 }
 
 export function buildCanvasFont(text: TextProps) {
@@ -323,7 +480,8 @@ export function buildTypographyRenderPlan(text: TextProps): TypographyRenderPlan
     fontVariantCaps: controls.smallCaps ? "small-caps" : "normal",
     fontVariantLigatures: controls.ligatures === false ? "none" : "normal",
     writingMode: text.vertical ? (text.verticalWritingMode === "lr" ? "vertical-lr" : "vertical-rl") : "horizontal-tb",
-    textOrientation: text.vertical ? (text.tateChuYoko ? "mixed" : "upright") : "mixed",
+    textOrientation: text.vertical ? text.textOrientation ?? (text.tateChuYoko ? "mixed" : "upright") : "mixed",
+    verticalAlign: text.verticalAlign ?? text.textShapeVerticalAlign ?? "top",
     letterSpacing: `${formatAxisValue(trackingPx)}px`,
     renderHints: antiAliasRenderHints(mode),
   }
@@ -361,13 +519,265 @@ export function buildFontPreview(
     cssFont: plan.cssFont,
     fontVariationSettings: plan.fontVariationSettings,
     fontFeatureSettings: plan.fontFeatureSettings,
+    canvasDataUrl: renderFontPreviewDataUrl(text),
     previewStyle: {
-      fontFamily: quoteFontFamily(font),
+      fontFamily: fontFamilyList(font),
       fontSize: `${text.size}px`,
       fontVariationSettings: plan.fontVariationSettings,
       fontFeatureSettings: plan.fontFeatureSettings,
       color: text.color,
     },
+  }
+}
+
+function uniqueFonts(fonts: readonly string[]) {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const font of fonts) {
+    const name = font.trim()
+    if (!name || seen.has(name.toLowerCase())) continue
+    seen.add(name.toLowerCase())
+    result.push(name)
+  }
+  return result
+}
+
+export function buildFontSpecimens(
+  options: {
+    sample?: string
+    size?: number
+    color?: string
+    systemFonts?: readonly string[]
+    webFonts?: readonly FontCandidate[]
+    candidateFonts?: readonly FontCandidate[]
+  } = {},
+): FontSpecimen[] {
+  const sample = options.sample ?? "The quick brown fox 12345"
+  const systemFonts = uniqueFonts(options.systemFonts ?? ["Arial", "Helvetica", "Georgia", "Times New Roman", "Courier New", "Verdana"])
+  const webFonts = options.webFonts ?? WEB_SAFE_FONT_CANDIDATES.filter((font) => font.variableAxes?.length)
+  const candidateFonts = options.candidateFonts ?? []
+  const specimens: FontSpecimen[] = []
+
+  for (const family of systemFonts) {
+    specimens.push({ ...buildFontPreview(family, sample, { size: options.size ?? 20, color: options.color }), source: "system" })
+  }
+  for (const candidate of webFonts) {
+    specimens.push({
+      ...buildFontPreview(candidate.family, sample, {
+        size: options.size ?? 20,
+        color: options.color,
+        variableAxes: candidate.variableAxes?.length
+          ? Object.fromEntries(candidate.variableAxes.map((axis) => [axis.tag, axis.defaultValue]))
+          : undefined,
+        variableAxisDefinitions: candidate.variableAxes,
+      }),
+      source: "web",
+    })
+  }
+  for (const candidate of candidateFonts) {
+    specimens.push({
+      ...buildFontPreview(candidate.family, sample, {
+        size: options.size ?? 20,
+        color: options.color,
+        variableAxisDefinitions: candidate.variableAxes,
+      }),
+      source: "candidate",
+    })
+  }
+
+  return specimens
+}
+
+export function buildFontSubstitutionComparison(
+  originalFont: string,
+  fallbackFont: string,
+  sample = "The quick brown fox 12345",
+  options: {
+    size?: number
+    color?: string
+    systemFonts?: readonly string[]
+    webFonts?: readonly FontCandidate[]
+    candidateFonts?: readonly FontCandidate[]
+  } = {},
+): FontSubstitutionComparison {
+  return {
+    original: buildFontPreview(originalFont, sample, { size: options.size ?? 24, color: options.color }),
+    fallback: buildFontPreview(fallbackFont, sample, { size: options.size ?? 24, color: options.color }),
+    specimens: buildFontSpecimens({ ...options, sample, size: options.size ?? 18 }),
+  }
+}
+
+function readTag(data: Uint8Array, offset: number) {
+  if (offset < 0 || offset + 4 > data.length) return ""
+  return String.fromCharCode(data[offset], data[offset + 1], data[offset + 2], data[offset + 3])
+}
+
+function fixed16(view: DataView, offset: number) {
+  return view.getInt32(offset, false) / 65536
+}
+
+function decodeNameString(bytes: Uint8Array, platformId: number, offset: number, length: number) {
+  if (offset < 0 || length <= 0 || offset + length > bytes.length) return ""
+  const slice = bytes.subarray(offset, offset + length)
+  if (platformId === 0 || platformId === 3) {
+    let value = ""
+    for (let i = 0; i + 1 < slice.length; i += 2) {
+      const code = (slice[i] << 8) | slice[i + 1]
+      if (code) value += String.fromCharCode(code)
+    }
+    return value.trim()
+  }
+  return Array.from(slice, (code) => String.fromCharCode(code)).join("").trim()
+}
+
+function parseNameTable(data: Uint8Array, view: DataView, offset: number, length: number) {
+  const names = new Map<number, string>()
+  const tableEnd = offset + length
+  if (offset < 0 || tableEnd > data.length || length < 6) return names
+  const count = view.getUint16(offset + 2, false)
+  const stringOffset = view.getUint16(offset + 4, false)
+  const recordsEnd = offset + 6 + count * 12
+  if (recordsEnd > tableEnd) return names
+  const scores = new Map<number, number>()
+  for (let i = 0; i < count; i++) {
+    const record = offset + 6 + i * 12
+    const platformId = view.getUint16(record, false)
+    const languageId = view.getUint16(record + 4, false)
+    const nameId = view.getUint16(record + 6, false)
+    const stringLength = view.getUint16(record + 8, false)
+    const localOffset = view.getUint16(record + 10, false)
+    const absoluteOffset = offset + stringOffset + localOffset
+    const value = decodeNameString(data, platformId, absoluteOffset, stringLength)
+    if (!value) continue
+    const score = platformId === 3 && languageId === 0x0409 ? 0 : platformId === 3 ? 1 : 2
+    if (!names.has(nameId) || score < (scores.get(nameId) ?? 99)) {
+      names.set(nameId, value)
+      scores.set(nameId, score)
+    }
+  }
+  return names
+}
+
+export function parseVariableFontMetadata(buffer: ArrayBuffer): VariableFontMetadata {
+  const data = new Uint8Array(buffer)
+  const view = new DataView(buffer)
+  if (data.length < 12) return { axes: [], namedInstances: [] }
+  const tableCount = view.getUint16(4, false)
+  const tables = new Map<string, { offset: number; length: number }>()
+  for (let i = 0; i < tableCount; i++) {
+    const record = 12 + i * 16
+    if (record + 16 > data.length) break
+    const tag = readTag(data, record)
+    const offset = view.getUint32(record + 8, false)
+    const length = view.getUint32(record + 12, false)
+    if (offset + length <= data.length) tables.set(tag, { offset, length })
+  }
+
+  const fvar = tables.get("fvar")
+  if (!fvar || fvar.length < 16) return { axes: [], namedInstances: [] }
+  const name = tables.get("name")
+  const names = name ? parseNameTable(data, view, name.offset, name.length) : new Map<number, string>()
+  const axisOffset = fvar.offset + view.getUint16(fvar.offset + 4, false)
+  const axisCount = view.getUint16(fvar.offset + 8, false)
+  const axisSize = view.getUint16(fvar.offset + 10, false)
+  const instanceCount = view.getUint16(fvar.offset + 12, false)
+  const instanceSize = view.getUint16(fvar.offset + 14, false)
+  if (axisSize < 20 || axisOffset + axisCount * axisSize > fvar.offset + fvar.length) {
+    return { axes: [], namedInstances: [] }
+  }
+
+  const axes: TypographyAxisDefinition[] = []
+  for (let i = 0; i < axisCount; i++) {
+    const record = axisOffset + i * axisSize
+    const tag = readTag(data, record)
+    if (!tag.trim()) continue
+    const nameId = view.getUint16(record + 18, false)
+    axes.push({
+      tag,
+      name: names.get(nameId) ?? tag.toUpperCase(),
+      min: fixed16(view, record + 4),
+      defaultValue: fixed16(view, record + 8),
+      max: fixed16(view, record + 12),
+    })
+  }
+
+  const namedInstances: TypographyNamedInstance[] = []
+  const instanceOffset = axisOffset + axisCount * axisSize
+  for (let i = 0; i < instanceCount; i++) {
+    const record = instanceOffset + i * instanceSize
+    if (record + 4 + axes.length * 4 > fvar.offset + fvar.length) break
+    const nameId = view.getUint16(record, false)
+    const coordinates: Record<string, number> = {}
+    axes.forEach((axis, axisIndex) => {
+      coordinates[axis.tag] = fixed16(view, record + 4 + axisIndex * 4)
+    })
+    namedInstances.push({ name: names.get(nameId) ?? `Instance ${i + 1}`, coordinates })
+  }
+
+  return { axes, namedInstances }
+}
+
+interface LocalFontAccessData {
+  family: string
+  fullName?: string
+  postscriptName?: string
+  style?: string
+  blob?: () => Promise<Blob>
+}
+
+type QueryLocalFonts = (options?: { postscriptNames?: string[] }) => Promise<LocalFontAccessData[]>
+
+export async function inspectVariableFont(
+  fontFamily: string,
+  options: { allowLocalFontAccess?: boolean } = {},
+): Promise<VariableFontInspection> {
+  const fallback = WEB_SAFE_FONT_CANDIDATES.find((candidate) => candidate.family.toLowerCase() === fontFamily.toLowerCase())
+  const fallbackAxes = fallback?.variableAxes ?? []
+  if (options.allowLocalFontAccess) {
+    const root = globalThis as typeof globalThis & { queryLocalFonts?: QueryLocalFonts }
+    try {
+      const localFonts = root.queryLocalFonts ? await root.queryLocalFonts() : []
+      const match = localFonts.find((font) =>
+        [font.family, font.fullName, font.postscriptName]
+          .filter(Boolean)
+          .some((name) => String(name).toLowerCase() === fontFamily.toLowerCase()),
+      )
+      if (match?.blob) {
+        const blob = await match.blob()
+        const metadata = parseVariableFontMetadata(await blob.arrayBuffer())
+        if (metadata.axes.length || metadata.namedInstances.length) {
+          return { family: fontFamily, source: "font-access", ...metadata }
+        }
+      }
+    } catch (error) {
+      return {
+        family: fontFamily,
+        source: "fallback",
+        axes: fallbackAxes,
+        namedInstances: [],
+        error: error instanceof Error ? error.message : "Unable to inspect local font",
+      }
+    }
+  }
+
+  return {
+    family: fontFamily,
+    source: fallbackAxes.length ? "font-face" : "fallback",
+    axes: fallbackAxes,
+    namedInstances: [],
+  }
+}
+
+export function applyVariableFontNamedInstance(
+  text: TextProps,
+  instance: TypographyNamedInstance,
+  axisDefinitions = text.variableAxisDefinitions,
+): TextProps {
+  return {
+    ...text,
+    variableAxes: normalizeVariableAxes(instance.coordinates, axisDefinitionsFor(instance.coordinates, axisDefinitions)),
+    variableAxisDefinitions: axisDefinitions,
+    variableNamedInstance: instance.name,
   }
 }
 
@@ -487,14 +897,28 @@ export function matchFontForLayer(text: TextProps, candidates: readonly FontCand
 }
 
 export function findReplaceTextLayers(layers: readonly Layer[], options: FindReplaceOptions): FindReplaceResult {
+  const empty = (error?: string): FindReplaceResult => ({
+    layers: [...layers],
+    matches: [],
+    changedLayerIds: [],
+    replacements: 0,
+    matchCountLabel: "0 matches",
+    error,
+  })
   if (!options.find) {
-    return { layers: [...layers], matches: [], changedLayerIds: [], replacements: 0 }
+    return empty()
   }
 
   const flags = options.caseSensitive ? "g" : "gi"
   const source = options.useRegex ? options.find : escapeRegExp(options.find)
   const pattern = options.wholeWord ? `\\b(?:${source})\\b` : source
-  const regex = new RegExp(pattern, flags)
+  let regex: RegExp
+  try {
+    regex = new RegExp(pattern, flags)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid regular expression"
+    return empty(message.startsWith("Invalid regular expression") ? message : `Invalid regular expression: ${message}`)
+  }
   const matches: FindReplaceResult["matches"] = []
   const changedLayerIds: string[] = []
   let replacements = 0
@@ -513,16 +937,21 @@ export function findReplaceTextLayers(layers: readonly Layer[], options: FindRep
         text: match[0],
       })
     }
-    const content = original.replace(regex, () => {
-      replacements += 1
-      return options.replace
-    })
+    if (options.previewOnly) return layer
+    replacements += layerMatches.length
+    const content = options.useRegex
+      ? original.replace(regex, options.replace)
+      : original.replace(regex, () => options.replace)
     if (content === original) return layer
     changedLayerIds.push(layer.id)
     return { ...layer, text: { ...layer.text, content } }
   })
 
-  return { layers: nextLayers, matches, changedLayerIds, replacements }
+  const layerCount = new Set(matches.map((match) => match.layerId)).size
+  const matchWord = matches.length === 1 ? "match" : "matches"
+  const layerWord = layerCount === 1 ? "layer" : "layers"
+  const matchCountLabel = matches.length ? `${matches.length} ${matchWord} in ${layerCount} ${layerWord}` : "0 matches"
+  return { layers: nextLayers, matches, changedLayerIds, replacements, matchCountLabel }
 }
 
 export function applyTextInsideShape(

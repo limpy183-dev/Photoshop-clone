@@ -13,11 +13,13 @@ import {
   Play,
   Plus,
   RefreshCcw,
+  Scissors,
   Square,
   Trash2,
 } from "lucide-react"
 import { useEditor } from "../editor-context"
 import {
+  downloadBlob,
   downloadDataUrl,
   downloadText,
   renderDocumentComposite,
@@ -39,14 +41,24 @@ import {
 } from "../timeline-engine"
 import {
   bytesToDataUrl,
-  collectAnimationFrames,
+  collectAnimationFramesAtFps,
   encodeAnimatedGif,
   encodeAnimatedWebP,
   encodeApngFromFrames,
   exportTimelineFrameAsPngBlob,
   resolveTimelineSettings,
 } from "../animation-encoding"
+import {
+  buildVideoThumbnailPlan,
+  extractVideoThumbnailStrip,
+  renderAudioMixToWavBlob,
+  renderVideoTransitionPreview,
+  splitVideoLayerAtPlayhead,
+  trimVideoClipToFrame,
+  updateVideoTransitionDuration,
+} from "../three-d-video-engine"
 import type {
+  AudioTrack,
   FrameEasing,
   FrameLayerTransform,
   Layer,
@@ -54,10 +66,12 @@ import type {
   PsDocument,
   TimelineFrame,
   TimelineSettings,
+  VideoLayerProps,
 } from "../types"
 import { uid } from "../uid"
 
 type AnimationFormat = "gif" | "apng" | "animated-webp"
+type VideoThumbnail = { index: number; timeMs: number; label: string; dataUrl: string }
 
 const EASINGS: FrameEasing[] = ["hold", "linear", "ease-in", "ease-out", "ease-in-out"]
 const TINTS: NonNullable<OnionSkinSettings["tint"]>[] = ["none", "red-cyan", "red-blue", "green-red", "mono"]
@@ -70,11 +84,41 @@ export function TimelinePanel() {
   const [tweenOpen, setTweenOpen] = React.useState(false)
   const [exportBusy, setExportBusy] = React.useState<AnimationFormat | null>(null)
   const [showTransform, setShowTransform] = React.useState(false)
+  const [videoPlayheadMs, setVideoPlayheadMs] = React.useState(0)
+  const [videoThumbnails, setVideoThumbnails] = React.useState<VideoThumbnail[]>([])
+  const [audioBusy, setAudioBusy] = React.useState(false)
+  const transitionPreviewRef = React.useRef<HTMLCanvasElement | null>(null)
 
   const frames = React.useMemo(() => activeDoc?.timelineFrames ?? [], [activeDoc?.timelineFrames])
   const settings = React.useMemo<TimelineSettings>(
     () => activeDoc?.timelineSettings ?? DEFAULT_TIMELINE_SETTINGS,
     [activeDoc?.timelineSettings],
+  )
+  const timelineFps = Math.max(1, Math.round(settings.fps || DEFAULT_TIMELINE_SETTINGS.fps))
+  const videoLayers = React.useMemo(
+    () => activeDoc?.layers.filter((layer) => layer.kind === "video" && layer.video) ?? [],
+    [activeDoc?.layers],
+  )
+  const activeVideoLayer = React.useMemo(
+    () => (activeLayer?.kind === "video" && activeLayer.video ? activeLayer : videoLayers[0] ?? null),
+    [activeLayer, videoLayers],
+  )
+  const activeVideo = activeVideoLayer?.video ?? null
+  const activeTransition = activeVideo?.transitions?.[0] ?? null
+  const targetTransitionLayer = React.useMemo(() => {
+    if (!activeDoc || !activeVideoLayer) return null
+    if (activeTransition?.targetLayerId) {
+      return activeDoc.layers.find((layer) => layer.id === activeTransition.targetLayerId && layer.canvas) ?? null
+    }
+    const start = activeDoc.layers.findIndex((layer) => layer.id === activeVideoLayer.id)
+    return activeDoc.layers.slice(start + 1).find((layer) => layer.kind === "video" && layer.canvas) ?? null
+  }, [activeDoc, activeTransition?.targetLayerId, activeVideoLayer])
+  const audioTracks = React.useMemo<AudioTrack[]>(
+    () => [
+      ...frames.flatMap((frame) => frame.audioTracks ?? []),
+      ...(activeDoc?.layers.flatMap((layer) => layer.video?.audioTracks ?? []) ?? []),
+    ],
+    [activeDoc?.layers, frames],
   )
 
   const selectedIndex = React.useMemo(() => {
@@ -130,6 +174,154 @@ export function TimelinePanel() {
       cancelled = true
     }
   }, [playing, activeDoc, frames, effectiveIndex, applyFrame])
+
+  React.useEffect(() => {
+    if (!activeVideo) {
+      setVideoPlayheadMs(0)
+      setVideoThumbnails([])
+      return
+    }
+    setVideoPlayheadMs(activeVideo.currentTimeMs)
+  }, [activeVideo, activeVideoLayer?.id])
+
+  const setActiveVideo = React.useCallback(
+    (video: VideoLayerProps, label?: string) => {
+      if (!activeVideoLayer) return
+      dispatch({ type: "set-layer-video", id: activeVideoLayer.id, video })
+      requestRender()
+      if (label) window.setTimeout(() => commit(label, [activeVideoLayer.id]), 0)
+    },
+    [activeVideoLayer, commit, dispatch, requestRender],
+  )
+
+  const setVideoPlayhead = React.useCallback(
+    (timeMs: number, record = false) => {
+      if (!activeVideo) return
+      const snapped = Math.max(activeVideo.inPointMs, Math.min(activeVideo.outPointMs, Math.round(timeMs)))
+      setVideoPlayheadMs(snapped)
+      setActiveVideo({ ...activeVideo, currentTimeMs: snapped }, record ? "Set Video Playhead" : undefined)
+    },
+    [activeVideo, setActiveVideo],
+  )
+
+  const trimActiveVideo = React.useCallback(
+    (inPointMs: number, outPointMs: number, label = "Trim Video Clip") => {
+      if (!activeVideo) return
+      setActiveVideo(trimVideoClipToFrame(activeVideo, inPointMs, outPointMs, timelineFps), label)
+    },
+    [activeVideo, setActiveVideo, timelineFps],
+  )
+
+  const setVideoInPoint = React.useCallback(() => {
+    if (!activeVideo) return
+    trimActiveVideo(videoPlayheadMs, activeVideo.outPointMs, "Set Video In Point")
+  }, [activeVideo, trimActiveVideo, videoPlayheadMs])
+
+  const setVideoOutPoint = React.useCallback(() => {
+    if (!activeVideo) return
+    trimActiveVideo(activeVideo.inPointMs, videoPlayheadMs, "Set Video Out Point")
+  }, [activeVideo, trimActiveVideo, videoPlayheadMs])
+
+  const splitActiveVideo = React.useCallback(() => {
+    if (!activeVideoLayer?.video) return
+    const [left, right] = splitVideoLayerAtPlayhead(activeVideoLayer, videoPlayheadMs, timelineFps)
+    dispatch({ type: "set-layer-video", id: activeVideoLayer.id, video: left.video })
+    dispatch({ type: "add-layer", layer: right })
+    window.setTimeout(() => commit("Split Video Clip", [activeVideoLayer.id, right.id]), 0)
+    toast.success(`Split "${activeVideoLayer.name}" at ${(right.video?.inPointMs ?? videoPlayheadMs) / 1000}s`)
+  }, [activeVideoLayer, commit, dispatch, timelineFps, videoPlayheadMs])
+
+  const changeTransitionDuration = React.useCallback(
+    (durationMs: number) => {
+      if (!activeVideo) return
+      setActiveVideo(updateVideoTransitionDuration(activeVideo, activeTransition?.id, durationMs), "Set Video Transition Duration")
+    },
+    [activeTransition?.id, activeVideo, setActiveVideo],
+  )
+
+  React.useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!activeVideo) return
+      const target = event.target as HTMLElement | null
+      const tag = target?.tagName
+      if (target?.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return
+      const key = event.key.toLowerCase()
+      if ((event.ctrlKey || event.metaKey) && key === "k") {
+        event.preventDefault()
+        splitActiveVideo()
+        return
+      }
+      if (event.ctrlKey || event.metaKey || event.altKey) return
+      if (key === "i") {
+        event.preventDefault()
+        setVideoInPoint()
+      } else if (key === "o") {
+        event.preventDefault()
+        setVideoOutPoint()
+      }
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [activeVideo, setVideoInPoint, setVideoOutPoint, splitActiveVideo])
+
+  React.useEffect(() => {
+    let cancelled = false
+    if (!activeVideo || !activeVideoLayer) {
+      setVideoThumbnails([])
+      return
+    }
+    const width = 96
+    const height = Math.max(1, Math.round((width / Math.max(1, activeDoc?.width ?? width)) * Math.max(1, activeDoc?.height ?? 54)))
+    const fallbackPlan = buildVideoThumbnailPlan(activeVideo, { count: 8, fps: timelineFps })
+    const fallbackDataUrl = (() => {
+      try {
+        return activeVideo.posterDataUrl ?? activeVideoLayer.canvas.toDataURL("image/jpeg", 0.72)
+      } catch {
+        return activeVideo.posterDataUrl ?? ""
+      }
+    })()
+    setVideoThumbnails(fallbackPlan.map((item) => ({ ...item, dataUrl: fallbackDataUrl })))
+    if (!activeVideo.sourceDataUrl) return
+    extractVideoThumbnailStrip(activeVideo.sourceDataUrl, activeVideo, { count: 8, fps: timelineFps, width, height })
+      .then((items) => {
+        if (!cancelled) setVideoThumbnails(items.map(({ canvas: _canvas, ...item }) => item))
+      })
+      .catch(() => {
+        if (!cancelled) toast.error("Could not extract video thumbnails from the source media")
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [
+    activeDoc?.height,
+    activeDoc?.width,
+    activeVideo?.durationMs,
+    activeVideo?.inPointMs,
+    activeVideo?.outPointMs,
+    activeVideo?.posterDataUrl,
+    activeVideo?.sourceDataUrl,
+    activeVideo?.trimHandles?.inMs,
+    activeVideo?.trimHandles?.outMs,
+    activeVideo,
+    activeVideoLayer,
+    timelineFps,
+  ])
+
+  React.useEffect(() => {
+    const canvas = transitionPreviewRef.current
+    if (!canvas || !activeVideoLayer?.canvas) return
+    const transition = activeTransition ?? { kind: "cross-dissolve" as const, durationMs: Math.min(1000, Math.max(1, (activeVideo?.outPointMs ?? 1000) - (activeVideo?.inPointMs ?? 0))) }
+    const preview = renderVideoTransitionPreview(
+      activeVideoLayer.canvas,
+      targetTransitionLayer?.canvas,
+      transition,
+      Math.min(transition.durationMs, Math.max(0, videoPlayheadMs - (activeVideo?.inPointMs ?? 0))),
+      { width: 160, height: 90 },
+    )
+    canvas.width = preview.width
+    canvas.height = preview.height
+    canvas.getContext("2d")?.drawImage(preview, 0, 0)
+  }, [activeTransition, activeVideo, activeVideoLayer, targetTransitionLayer, videoPlayheadMs])
 
   if (!activeDoc) return <PanelEmpty text="No document open" />
   const doc = activeDoc
@@ -277,7 +469,7 @@ export function TimelinePanel() {
     }
     setExportBusy(format)
     try {
-      const animFrames = collectAnimationFrames(doc, { transparent: true })
+      const animFrames = collectAnimationFramesAtFps(doc, { transparent: true, fps: settings.fps })
       const loopCount = resolveTimelineSettings(doc).loopCount
       let bytes: Uint8Array
       let mime: string
@@ -296,11 +488,34 @@ export function TimelinePanel() {
         ext = "webp"
       }
       downloadDataUrl(bytesToDataUrl(bytes, mime), `${doc.name}.${ext}`)
-      toast.success(`${format.toUpperCase()} exported (${frames.length} frames)`)
+      toast.success(`${format.toUpperCase()} exported (${animFrames.length} sampled frames at ${settings.fps}fps)`)
     } catch (err) {
       toast.error(`${format} export failed: ${(err as Error).message}`)
     } finally {
       setExportBusy(null)
+    }
+  }
+
+  const exportAudioMix = async () => {
+    if (!audioTracks.length) {
+      toast.error("No audio tracks to mix")
+      return
+    }
+    setAudioBusy(true)
+    try {
+      const timelineDuration = frames.reduce((sum, frame) => sum + Math.max(0, frame.durationMs), 0)
+      const audioDuration = audioTracks.reduce((max, track) => Math.max(max, track.startMs + track.durationMs), 0)
+      const blob = await renderAudioMixToWavBlob(audioTracks, {
+        sampleRate: 48_000,
+        durationMs: Math.max(timelineDuration, audioDuration, 1),
+        masterVolume: 1,
+      })
+      downloadBlob(blob, `${doc.name}-mix.wav`)
+      toast.success("Exported WAV audio mix")
+    } catch (err) {
+      toast.error(`Audio mix export failed: ${(err as Error).message}`)
+    } finally {
+      setAudioBusy(false)
     }
   }
 
@@ -490,6 +705,112 @@ export function TimelinePanel() {
           <FilmIcon className="mr-1 inline h-3 w-3" />Poster
         </TextBtn>
       </div>
+
+      {activeVideoLayer && activeVideo ? (
+        <div className="border-b border-[var(--ps-divider)] px-2 py-2">
+          <div className="mb-1 flex flex-wrap items-center gap-1">
+            <span className="mr-1 max-w-[11rem] truncate text-[10px] text-[var(--ps-text-dim)]" title={activeVideoLayer.name}>
+              Video: {activeVideoLayer.name}
+            </span>
+            <ToolButton title="Split at playhead (Ctrl+K)" onClick={splitActiveVideo}>
+              <Scissors className="h-3.5 w-3.5" />
+            </ToolButton>
+            <TextBtn onClick={setVideoInPoint}>I</TextBtn>
+            <TextBtn onClick={setVideoOutPoint}>O</TextBtn>
+            <span className="text-[10px] text-[var(--ps-text-dim)]">
+              {(activeVideo.inPointMs / 1000).toFixed(2)}s - {(activeVideo.outPointMs / 1000).toFixed(2)}s
+            </span>
+            <span className="ml-auto text-[10px] text-[var(--ps-text-dim)]">
+              playhead {(videoPlayheadMs / 1000).toFixed(2)}s
+            </span>
+          </div>
+          <div className="grid gap-1">
+            <input
+              type="range"
+              min={activeVideo.inPointMs}
+              max={activeVideo.outPointMs}
+              step={Math.max(1, Math.round(1000 / timelineFps))}
+              value={videoPlayheadMs}
+              onChange={(e) => setVideoPlayhead(Number(e.target.value))}
+              onBlur={() => setVideoPlayhead(videoPlayheadMs, true)}
+              className="h-5 w-full"
+              aria-label="Video playhead"
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <label className="grid gap-0.5 text-[10px] text-[var(--ps-text-dim)]">
+                In
+                <input
+                  type="range"
+                  min={0}
+                  max={activeVideo.durationMs}
+                  step={Math.max(1, Math.round(1000 / timelineFps))}
+                  value={activeVideo.inPointMs}
+                  onChange={(e) => trimActiveVideo(Number(e.target.value), activeVideo.outPointMs)}
+                  className="h-4 w-full"
+                  aria-label="Video trim in handle"
+                />
+              </label>
+              <label className="grid gap-0.5 text-[10px] text-[var(--ps-text-dim)]">
+                Out
+                <input
+                  type="range"
+                  min={0}
+                  max={activeVideo.durationMs}
+                  step={Math.max(1, Math.round(1000 / timelineFps))}
+                  value={activeVideo.outPointMs}
+                  onChange={(e) => trimActiveVideo(activeVideo.inPointMs, Number(e.target.value))}
+                  className="h-4 w-full"
+                  aria-label="Video trim out handle"
+                />
+              </label>
+            </div>
+          </div>
+          <div className="mt-2 flex min-h-[42px] gap-1 overflow-x-auto">
+            {videoThumbnails.map((thumb) => (
+              <button
+                key={`${thumb.index}-${thumb.timeMs}`}
+                type="button"
+                title={thumb.label}
+                onClick={() => setVideoPlayhead(thumb.timeMs, true)}
+                className={`relative h-10 w-16 shrink-0 overflow-hidden rounded-sm border bg-black ${
+                  Math.abs(videoPlayheadMs - thumb.timeMs) <= Math.max(1, 1000 / timelineFps)
+                    ? "border-[var(--ps-accent)]"
+                    : "border-[var(--ps-divider)]"
+                }`}
+              >
+                {thumb.dataUrl ? <img src={thumb.dataUrl} alt="" className="h-full w-full object-cover" /> : null}
+                <span className="absolute bottom-0 right-0 bg-black/70 px-0.5 text-[8px] text-white">{(thumb.timeMs / 1000).toFixed(1)}</span>
+              </button>
+            ))}
+          </div>
+          <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_168px]">
+            <div className="grid gap-1">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-[var(--ps-text-dim)]">Transition</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={5000}
+                  step={Math.max(1, Math.round(1000 / timelineFps))}
+                  value={activeTransition?.durationMs ?? 0}
+                  onChange={(e) => changeTransitionDuration(Number(e.target.value))}
+                  className="h-4 flex-1"
+                  aria-label="Video transition duration"
+                />
+                <span className="w-12 text-right text-[10px] text-[var(--ps-text-dim)]">{activeTransition?.durationMs ?? 0}ms</span>
+              </div>
+              <TextBtn disabled={!audioTracks.length || audioBusy} onClick={exportAudioMix}>
+                {audioBusy ? "Mixing WAV..." : "Export WAV mix"}
+              </TextBtn>
+            </div>
+            <canvas
+              ref={transitionPreviewRef}
+              className="h-[90px] w-[160px] rounded-sm border border-[var(--ps-divider)] bg-black"
+              aria-label="Video transition preview"
+            />
+          </div>
+        </div>
+      ) : null}
 
       {/* Bulk-edit bar (multi-select) */}
       {selection.size > 0 ? (

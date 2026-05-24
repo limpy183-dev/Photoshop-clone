@@ -36,6 +36,37 @@ export interface TileRecord {
   storage: "memory" | "opfs"
 }
 
+export type LayerTileKind = "raster" | "smart-object" | "3d"
+
+export interface LayerTileAddressInput {
+  layerId: string
+  layerKind: LayerTileKind
+  col: number
+  row: number
+  sourceVersion?: string | number
+  cameraKey?: string
+}
+
+export interface LayerTileAddress extends LayerTileAddressInput {
+  key: string
+}
+
+export interface LayerTileRecord extends TileRecord {
+  layerId: string
+  layerKind: LayerTileKind
+  sourceVersion?: string | number
+  cameraKey?: string
+}
+
+export interface LayerTileInvalidation {
+  layerId: string
+  layerKind?: LayerTileKind
+  rect?: DirtyRect
+  sourceVersion?: string | number
+  cameraKey?: string
+  reason?: "source-changed" | "camera-changed" | "layer-edited" | "manual"
+}
+
 function positiveInt(value: unknown, fallback: number) {
   const next = typeof value === "number" ? value : Number(value)
   if (!Number.isFinite(next)) return fallback
@@ -44,6 +75,28 @@ function positiveInt(value: unknown, fallback: number) {
 
 export function tileKey(col: number, row: number) {
   return `${col}:${row}`
+}
+
+function sanitizeKeyPart(value: string | number | undefined, fallback: string) {
+  const raw = value === undefined || value === null ? fallback : String(value)
+  return raw.replace(/[^a-zA-Z0-9_.-]+/g, "_")
+}
+
+export function createLayerTileAddress(input: LayerTileAddressInput): LayerTileAddress {
+  const colValue = Number(input.col)
+  const rowValue = Number(input.row)
+  const col = Number.isFinite(colValue) ? Math.max(0, Math.round(colValue)) : 0
+  const row = Number.isFinite(rowValue) ? Math.max(0, Math.round(rowValue)) : 0
+  const versionOrCamera =
+    input.layerKind === "3d"
+      ? sanitizeKeyPart(input.cameraKey, "default-camera")
+      : sanitizeKeyPart(input.sourceVersion, "unversioned")
+  return {
+    ...input,
+    col,
+    row,
+    key: `${input.layerKind}:${sanitizeKeyPart(input.layerId, "layer")}:${versionOrCamera}:${col}:${row}`,
+  }
 }
 
 export function planTiledBackingStore(input: TiledBackingStorePlanInput): TiledBackingStorePlan {
@@ -83,6 +136,25 @@ export function dirtyRectToTileKeys(rect: DirtyRect, plan: TiledBackingStorePlan
   return keys
 }
 
+function rectsIntersect(a: DirtyRect, b: DirtyRect) {
+  const ax1 = a.x + a.w
+  const ay1 = a.y + a.h
+  const bx1 = b.x + b.w
+  const by1 = b.y + b.h
+  return a.w > 0 && a.h > 0 && b.w > 0 && b.h > 0 && a.x < bx1 && ax1 > b.x && a.y < by1 && ay1 > b.y
+}
+
+function tileRectForAddress(address: LayerTileAddress, plan: TiledBackingStorePlan): DirtyRect {
+  const x = address.col * plan.tileSize
+  const y = address.row * plan.tileSize
+  return {
+    x,
+    y,
+    w: Math.max(0, Math.min(plan.tileSize, plan.width - x)),
+    h: Math.max(0, Math.min(plan.tileSize, plan.height - y)),
+  }
+}
+
 export function tileRecordsForPlan(plan: TiledBackingStorePlan): TileRecord[] {
   const records: TileRecord[] = []
   for (let row = 0; row < plan.tileRows; row++) {
@@ -110,6 +182,8 @@ export class TiledBackingStore {
   readonly plan: TiledBackingStorePlan
   private readonly tiles = new Map<string, TileRecord>()
   private readonly memory = new Map<string, Blob>()
+  private readonly layerTiles = new Map<string, LayerTileRecord>()
+  private readonly layerMemory = new Map<string, Blob>()
 
   constructor(input: TiledBackingStorePlanInput) {
     this.plan = planTiledBackingStore(input)
@@ -157,5 +231,71 @@ export class TiledBackingStore {
     await deleteScratchKey(`tile-${key.replace(":", "-")}`)
     this.tiles.delete(key)
   }
-}
 
+  async writeLayerTile(addressInput: LayerTileAddressInput | LayerTileAddress, blob: Blob): Promise<"memory" | "opfs"> {
+    const address = "key" in addressInput ? addressInput : createLayerTileAddress(addressInput)
+    const rect = tileRectForAddress(address, this.plan)
+    const record: LayerTileRecord = {
+      key: address.key,
+      x: rect.x,
+      y: rect.y,
+      w: rect.w,
+      h: rect.h,
+      dirty: false,
+      bytes: Math.max(0, rect.w * rect.h * BYTES_PER_PIXEL),
+      storage: "memory",
+      layerId: address.layerId,
+      layerKind: address.layerKind,
+      sourceVersion: address.sourceVersion,
+      cameraKey: address.cameraKey,
+    }
+    this.layerTiles.set(address.key, record)
+    if (this.plan.strategy === "spill-to-opfs") {
+      const result = await writeScratchBlob(`layer-tile-${address.key.replace(/[^a-zA-Z0-9_.-]+/g, "-")}`, blob)
+      record.storage = result === "persisted" ? "opfs" : "memory"
+      if (record.storage === "memory") this.layerMemory.set(address.key, blob)
+      return record.storage
+    }
+    this.layerMemory.set(address.key, blob)
+    return "memory"
+  }
+
+  async readLayerTile(addressInput: LayerTileAddressInput | LayerTileAddress): Promise<Blob | null> {
+    const address = "key" in addressInput ? addressInput : createLayerTileAddress(addressInput)
+    const tile = this.layerTiles.get(address.key)
+    if (!tile || tile.dirty) return null
+    if (tile.storage === "opfs") return readScratchBlob(`layer-tile-${address.key.replace(/[^a-zA-Z0-9_.-]+/g, "-")}`)
+    return this.layerMemory.get(address.key) ?? null
+  }
+
+  async getOrRenderLayerTile(
+    addressInput: LayerTileAddressInput | LayerTileAddress,
+    render: (address: LayerTileAddress) => Blob | Promise<Blob>,
+  ): Promise<Blob> {
+    const address = "key" in addressInput ? addressInput : createLayerTileAddress(addressInput)
+    const cached = await this.readLayerTile(address)
+    if (cached) return cached
+    const rendered = await render(address)
+    await this.writeLayerTile(address, rendered)
+    return rendered
+  }
+
+  invalidateLayerTiles(invalidation: LayerTileInvalidation): string[] {
+    const dirtied: string[] = []
+    for (const record of this.layerTiles.values()) {
+      if (record.layerId !== invalidation.layerId) continue
+      if (invalidation.layerKind && record.layerKind !== invalidation.layerKind) continue
+      if (invalidation.sourceVersion !== undefined && record.sourceVersion === invalidation.sourceVersion) continue
+      if (invalidation.cameraKey !== undefined && record.cameraKey === invalidation.cameraKey) continue
+      if (invalidation.rect && !rectsIntersect(record, invalidation.rect)) continue
+      record.dirty = true
+      this.layerMemory.delete(record.key)
+      dirtied.push(record.key)
+    }
+    return dirtied.sort()
+  }
+
+  dirtyLayerTiles(layerId?: string): LayerTileRecord[] {
+    return [...this.layerTiles.values()].filter((tile) => tile.dirty && (!layerId || tile.layerId === layerId))
+  }
+}
