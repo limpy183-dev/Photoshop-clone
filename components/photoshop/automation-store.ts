@@ -1,0 +1,345 @@
+"use client"
+
+// Session-persistent store for command macros + droplets. Each macro
+// is a saved DSL script; each droplet is a saved chain that can run an
+// existing recorded Action plus an optional pre/post DSL script.
+//
+// We use localStorage rather than the document's history because these
+// records belong to the user, not any one document, and should outlive
+// document close/reopen. Storage is bounded and we sanitise on read so a
+// tampered string can't expand into arbitrary editor state.
+
+import * as React from "react"
+import { validateDsl } from "./command-dsl"
+
+const MACROS_KEY = "ps-command-macros"
+const DROPLETS_KEY = "ps-droplets"
+
+const MAX_MACROS = 64
+const MAX_DROPLETS = 64
+const MAX_NAME_LENGTH = 80
+const MAX_SCRIPT_LENGTH = 8_000
+
+export interface CommandMacro {
+  id: string
+  name: string
+  source: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface Droplet {
+  id: string
+  name: string
+  actionId?: string
+  preScript?: string
+  postScript?: string
+  condition?: "always" | "has-selection" | "has-active-layer" | "multi-layer" | "rgb"
+  exportFormat?: "none" | "png" | "jpeg" | "webp"
+  exportName?: string
+  createdAt: number
+  updatedAt: number
+}
+
+function safeId(prefix: string) {
+  return `${prefix}_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
+}
+
+function cleanName(value: unknown, fallback: string, max = MAX_NAME_LENGTH) {
+  if (typeof value !== "string") return fallback
+  const cleaned = value
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/[\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, max)
+  return cleaned || fallback
+}
+
+function cleanScript(value: unknown): string {
+  if (typeof value !== "string") return ""
+  return value.length > MAX_SCRIPT_LENGTH ? value.slice(0, MAX_SCRIPT_LENGTH) : value
+}
+
+function cleanCondition(value: unknown): Droplet["condition"] {
+  if (typeof value !== "string") return "always"
+  return (["always", "has-selection", "has-active-layer", "multi-layer", "rgb"] as const).includes(
+    value as Droplet["condition"] & string,
+  )
+    ? (value as Droplet["condition"])
+    : "always"
+}
+
+function cleanExportFormat(value: unknown): Droplet["exportFormat"] {
+  if (typeof value !== "string") return "png"
+  return (["none", "png", "jpeg", "webp"] as const).includes(value as Droplet["exportFormat"] & string)
+    ? (value as Droplet["exportFormat"])
+    : "png"
+}
+
+function cleanFiniteNumber(value: unknown, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback
+}
+
+function sanitizeMacro(value: unknown): CommandMacro | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  const source = cleanScript(record.source)
+  if (!source) return null
+  const id = typeof record.id === "string" && record.id ? record.id.slice(0, 64) : safeId("macro")
+  const createdAt = cleanFiniteNumber(record.createdAt, Date.now())
+  const updatedAt = cleanFiniteNumber(record.updatedAt, createdAt)
+  return {
+    id,
+    name: cleanName(record.name, "Macro"),
+    source,
+    createdAt,
+    updatedAt,
+  }
+}
+
+function sanitizeDroplet(value: unknown): Droplet | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  const id = typeof record.id === "string" && record.id ? record.id.slice(0, 64) : safeId("droplet")
+  const createdAt = cleanFiniteNumber(record.createdAt, Date.now())
+  const updatedAt = cleanFiniteNumber(record.updatedAt, createdAt)
+  return {
+    id,
+    name: cleanName(record.name, "Droplet"),
+    actionId: typeof record.actionId === "string" && record.actionId ? record.actionId.slice(0, 64) : undefined,
+    preScript: cleanScript(record.preScript) || undefined,
+    postScript: cleanScript(record.postScript) || undefined,
+    condition: cleanCondition(record.condition),
+    exportFormat: cleanExportFormat(record.exportFormat),
+    exportName: typeof record.exportName === "string" ? cleanName(record.exportName, "", 120) || undefined : undefined,
+    createdAt,
+    updatedAt,
+  }
+}
+
+function readStore<T>(key: string, sanitize: (value: unknown) => T | null, max: number): T[] {
+  if (typeof window === "undefined") return []
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (!raw) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    const out: T[] = []
+    for (const entry of parsed.slice(0, max)) {
+      const cleaned = sanitize(entry)
+      if (cleaned) out.push(cleaned)
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+function writeStore<T>(key: string, values: T[]) {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(key, JSON.stringify(values))
+  } catch {
+    /* quota errors swallowed */
+  }
+}
+
+export function loadMacros(): CommandMacro[] {
+  return readStore(MACROS_KEY, sanitizeMacro, MAX_MACROS)
+}
+
+export function loadDroplets(): Droplet[] {
+  return readStore(DROPLETS_KEY, sanitizeDroplet, MAX_DROPLETS)
+}
+
+export function saveMacros(macros: CommandMacro[]) {
+  writeStore(MACROS_KEY, macros.slice(0, MAX_MACROS))
+}
+
+export function saveDroplets(droplets: Droplet[]) {
+  writeStore(DROPLETS_KEY, droplets.slice(0, MAX_DROPLETS))
+}
+
+const MACRO_EVENT = "ps-command-macros-changed"
+const DROPLET_EVENT = "ps-droplets-changed"
+
+function notify(event: string) {
+  if (typeof window === "undefined") return
+  window.dispatchEvent(new CustomEvent(event))
+}
+
+export interface CommandMacrosApi {
+  macros: CommandMacro[]
+  createMacro: (name: string, source: string) => CommandMacro | null
+  updateMacro: (id: string, patch: Partial<Pick<CommandMacro, "name" | "source">>) => void
+  deleteMacro: (id: string) => void
+  importMacros: (entries: unknown[]) => number
+}
+
+export function useCommandMacros(): CommandMacrosApi {
+  const [macros, setMacros] = React.useState<CommandMacro[]>(() => loadMacros())
+
+  React.useEffect(() => {
+    const handler = () => setMacros(loadMacros())
+    window.addEventListener(MACRO_EVENT, handler)
+    window.addEventListener("storage", (event) => {
+      if (event.key === MACROS_KEY) handler()
+    })
+    return () => window.removeEventListener(MACRO_EVENT, handler)
+  }, [])
+
+  const persist = React.useCallback((next: CommandMacro[]) => {
+    setMacros(next)
+    saveMacros(next)
+    notify(MACRO_EVENT)
+  }, [])
+
+  const createMacro = React.useCallback(
+    (name: string, source: string): CommandMacro | null => {
+      const cleanedSource = cleanScript(source)
+      const validation = validateDsl(cleanedSource)
+      if (!validation.ok) return null
+      const now = Date.now()
+      const macro: CommandMacro = {
+        id: safeId("macro"),
+        name: cleanName(name, `Macro ${now}`),
+        source: cleanedSource,
+        createdAt: now,
+        updatedAt: now,
+      }
+      persist([macro, ...macros].slice(0, MAX_MACROS))
+      return macro
+    },
+    [macros, persist],
+  )
+
+  const updateMacro = React.useCallback(
+    (id: string, patch: Partial<Pick<CommandMacro, "name" | "source">>) => {
+      const now = Date.now()
+      const next = macros.map((macro) =>
+        macro.id === id
+          ? {
+              ...macro,
+              ...(patch.name !== undefined ? { name: cleanName(patch.name, macro.name) } : {}),
+              ...(patch.source !== undefined ? { source: cleanScript(patch.source) } : {}),
+              updatedAt: now,
+            }
+          : macro,
+      )
+      persist(next)
+    },
+    [macros, persist],
+  )
+
+  const deleteMacro = React.useCallback(
+    (id: string) => persist(macros.filter((macro) => macro.id !== id)),
+    [macros, persist],
+  )
+
+  const importMacros = React.useCallback(
+    (entries: unknown[]): number => {
+      const cleaned = entries
+        .map(sanitizeMacro)
+        .filter((macro): macro is CommandMacro => Boolean(macro))
+        .map((macro) => ({ ...macro, id: safeId("macro"), name: `${macro.name} (imported)` }))
+      if (!cleaned.length) return 0
+      persist([...cleaned, ...macros].slice(0, MAX_MACROS))
+      return cleaned.length
+    },
+    [macros, persist],
+  )
+
+  return { macros, createMacro, updateMacro, deleteMacro, importMacros }
+}
+
+export interface DropletsApi {
+  droplets: Droplet[]
+  createDroplet: (input: Omit<Droplet, "id" | "createdAt" | "updatedAt">) => Droplet
+  updateDroplet: (id: string, patch: Partial<Omit<Droplet, "id" | "createdAt">>) => void
+  deleteDroplet: (id: string) => void
+  importDroplets: (entries: unknown[]) => number
+}
+
+export function useDroplets(): DropletsApi {
+  const [droplets, setDroplets] = React.useState<Droplet[]>(() => loadDroplets())
+
+  React.useEffect(() => {
+    const handler = () => setDroplets(loadDroplets())
+    window.addEventListener(DROPLET_EVENT, handler)
+    window.addEventListener("storage", (event) => {
+      if (event.key === DROPLETS_KEY) handler()
+    })
+    return () => window.removeEventListener(DROPLET_EVENT, handler)
+  }, [])
+
+  const persist = React.useCallback((next: Droplet[]) => {
+    setDroplets(next)
+    saveDroplets(next)
+    notify(DROPLET_EVENT)
+  }, [])
+
+  const createDroplet = React.useCallback(
+    (input: Omit<Droplet, "id" | "createdAt" | "updatedAt">) => {
+      const now = Date.now()
+      const droplet: Droplet = {
+        id: safeId("droplet"),
+        createdAt: now,
+        updatedAt: now,
+        name: cleanName(input.name, "Droplet"),
+        actionId: input.actionId,
+        preScript: input.preScript ? cleanScript(input.preScript) : undefined,
+        postScript: input.postScript ? cleanScript(input.postScript) : undefined,
+        condition: cleanCondition(input.condition),
+        exportFormat: cleanExportFormat(input.exportFormat),
+        exportName: input.exportName ? cleanName(input.exportName, "", 120) : undefined,
+      }
+      persist([droplet, ...droplets].slice(0, MAX_DROPLETS))
+      return droplet
+    },
+    [droplets, persist],
+  )
+
+  const updateDroplet = React.useCallback(
+    (id: string, patch: Partial<Omit<Droplet, "id" | "createdAt">>) => {
+      const now = Date.now()
+      const next = droplets.map((droplet) =>
+        droplet.id === id
+          ? {
+              ...droplet,
+              ...(patch.name !== undefined ? { name: cleanName(patch.name, droplet.name) } : {}),
+              ...(patch.actionId !== undefined ? { actionId: patch.actionId || undefined } : {}),
+              ...(patch.preScript !== undefined ? { preScript: patch.preScript ? cleanScript(patch.preScript) : undefined } : {}),
+              ...(patch.postScript !== undefined ? { postScript: patch.postScript ? cleanScript(patch.postScript) : undefined } : {}),
+              ...(patch.condition !== undefined ? { condition: cleanCondition(patch.condition) } : {}),
+              ...(patch.exportFormat !== undefined ? { exportFormat: cleanExportFormat(patch.exportFormat) } : {}),
+              ...(patch.exportName !== undefined ? { exportName: patch.exportName ? cleanName(patch.exportName, "", 120) : undefined } : {}),
+              updatedAt: now,
+            }
+          : droplet,
+      )
+      persist(next)
+    },
+    [droplets, persist],
+  )
+
+  const deleteDroplet = React.useCallback(
+    (id: string) => persist(droplets.filter((droplet) => droplet.id !== id)),
+    [droplets, persist],
+  )
+
+  const importDroplets = React.useCallback(
+    (entries: unknown[]): number => {
+      const cleaned = entries
+        .map(sanitizeDroplet)
+        .filter((droplet): droplet is Droplet => Boolean(droplet))
+        .map((droplet) => ({ ...droplet, id: safeId("droplet"), name: `${droplet.name} (imported)` }))
+      if (!cleaned.length) return 0
+      persist([...cleaned, ...droplets].slice(0, MAX_DROPLETS))
+      return cleaned.length
+    },
+    [droplets, persist],
+  )
+
+  return { droplets, createDroplet, updateDroplet, deleteDroplet, importDroplets }
+}

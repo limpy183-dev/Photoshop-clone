@@ -20,6 +20,10 @@ export interface LabColor {
   b: number
 }
 
+export interface GrayscaleColor {
+  gray: number
+}
+
 export interface CmykConversionOptions {
   blackGeneration?: "none" | "light" | "medium" | "heavy"
   totalInkLimit?: number
@@ -92,6 +96,37 @@ export interface DocumentColorHonestyInput {
 const clamp = (value: number, min = 0, max = 1) => Math.max(min, Math.min(max, value))
 const clamp8 = (value: number) => Math.max(0, Math.min(255, Math.round(value)))
 
+export type RgbConvertibleMode = "RGB" | "CMYK" | "Lab" | "Grayscale"
+export type RgbConvertedColor = RgbColor | CmykColor | LabColor | GrayscaleColor
+
+export interface HighBitAdjustment {
+  type:
+    | "brightness-contrast"
+    | "levels"
+    | "exposure"
+    | "invert"
+    | "channel-mixer"
+    | "grayscale"
+    | "desaturate"
+    | "posterize"
+    | "threshold"
+  params?: Record<string, number | string | boolean>
+}
+
+export interface FloatPixelBuffer {
+  width: number
+  height: number
+  channels: 4
+  bitDepth: 32
+  colorMode: PipelineColorMode
+  profile?: string
+  storage: "float32"
+  data: Float32Array
+  warnings: string[]
+}
+
+export type FloatFilterKind = "exposure" | "box-blur" | "sharpen"
+
 function srgbToLinear(value: number) {
   const v = clamp(value / 255)
   return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4
@@ -109,6 +144,34 @@ function labPivot(value: number) {
 function labPivotInverse(value: number) {
   const cubed = value ** 3
   return cubed > 0.008856 ? cubed : (value - 16 / 116) / 7.787
+}
+
+export function rgbToGrayscale(rgb: RgbColor): GrayscaleColor {
+  return { gray: clamp8(0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) }
+}
+
+export function grayscaleToRgb(gray: GrayscaleColor | number): RgbColor {
+  const value = clamp8(typeof gray === "number" ? gray : gray.gray)
+  return { r: value, g: value, b: value }
+}
+
+export function convertRgbToColorMode(
+  rgb: RgbColor,
+  mode: RgbConvertibleMode,
+  options: CmykConversionOptions = {},
+): RgbConvertedColor {
+  if (mode === "CMYK") return rgbToCmyk(rgb, options)
+  if (mode === "Lab") return rgbToLab(rgb)
+  if (mode === "Grayscale") return rgbToGrayscale(rgb)
+  return { r: clamp8(rgb.r), g: clamp8(rgb.g), b: clamp8(rgb.b) }
+}
+
+export function convertColorToRgb(color: RgbConvertedColor, mode: RgbConvertibleMode): RgbColor {
+  if (mode === "CMYK") return cmykToRgb(color as CmykColor)
+  if (mode === "Lab") return labToRgb(color as LabColor)
+  if (mode === "Grayscale") return grayscaleToRgb(color as GrayscaleColor)
+  const rgb = color as RgbColor
+  return { r: clamp8(rgb.r), g: clamp8(rgb.g), b: clamp8(rgb.b) }
 }
 
 export function createHighBitImageFromImageData(source: ImageData, options: HighBitImageOptions = {}): HighBitImage {
@@ -175,6 +238,261 @@ export function toneMapHighBitImageToImageData(source: HighBitImage): ImageData 
     out.set(source.data as Uint8ClampedArray)
   }
   return new ImageData(out, source.width, source.height)
+}
+
+function cloneHighBitWithData(source: HighBitImage, data: HighBitImage["data"]): HighBitImage {
+  return {
+    ...source,
+    data,
+    warnings: [...source.warnings],
+  }
+}
+
+function highBitMax(storage: HighBitImage["storage"]) {
+  return storage === "uint16" ? 65535 : storage === "uint8" ? 255 : 1
+}
+
+function readHighBitUnit(data: HighBitImage["data"], storage: HighBitImage["storage"], index: number) {
+  return Number(data[index]) / highBitMax(storage)
+}
+
+function writeHighBitUnit(data: HighBitImage["data"], storage: HighBitImage["storage"], index: number, value: number) {
+  const v = clamp(value)
+  if (storage === "uint16") data[index] = Math.round(v * 65535)
+  else if (storage === "uint8") data[index] = clamp8(v * 255)
+  else data[index] = v
+}
+
+function highBitParam(params: Record<string, number | string | boolean>, key: string, fallback: number) {
+  const value = Number(params[key])
+  return Number.isFinite(value) ? value : fallback
+}
+
+function highBitBool(params: Record<string, number | string | boolean>, key: string, fallback = false) {
+  const value = params[key]
+  return typeof value === "boolean" ? value : fallback
+}
+
+function highBitChannelMixer(
+  r: number,
+  g: number,
+  b: number,
+  params: Record<string, number | string | boolean>,
+) {
+  if (highBitBool(params, "monochrome")) {
+    const gray =
+      r * (highBitParam(params, "grayR", 40) / 100) +
+      g * (highBitParam(params, "grayG", 40) / 100) +
+      b * (highBitParam(params, "grayB", 20) / 100) +
+      highBitParam(params, "constantGray", 0) / 100
+    return { r: gray, g: gray, b: gray }
+  }
+  return {
+    r:
+      r * (highBitParam(params, "rR", 100) / 100) +
+      g * (highBitParam(params, "rG", 0) / 100) +
+      b * (highBitParam(params, "rB", 0) / 100) +
+      highBitParam(params, "constantR", 0) / 100,
+    g:
+      r * (highBitParam(params, "gR", 0) / 100) +
+      g * (highBitParam(params, "gG", 100) / 100) +
+      b * (highBitParam(params, "gB", 0) / 100) +
+      highBitParam(params, "constantG", 0) / 100,
+    b:
+      r * (highBitParam(params, "bR", 0) / 100) +
+      g * (highBitParam(params, "bG", 0) / 100) +
+      b * (highBitParam(params, "bB", 100) / 100) +
+      highBitParam(params, "constantB", 0) / 100,
+  }
+}
+
+export function applyHighBitAdjustment(source: HighBitImage, adjustment: HighBitAdjustment): HighBitImage {
+  const storage = source.storage
+  const Ctor = storage === "uint16" ? Uint16Array : storage === "float32" ? Float32Array : Uint8ClampedArray
+  const out = new Ctor(source.data.length) as HighBitImage["data"]
+  const params = adjustment.params ?? {}
+  for (let i = 0; i < source.data.length; i += 4) {
+    let r = readHighBitUnit(source.data, storage, i)
+    let g = readHighBitUnit(source.data, storage, i + 1)
+    let b = readHighBitUnit(source.data, storage, i + 2)
+
+    if (adjustment.type === "brightness-contrast") {
+      const brightness = highBitParam(params, "brightness", 0) / 150
+      const contrast = highBitParam(params, "contrast", 0) / 100
+      const pivot = 0.5 + brightness * 0.12
+      const adjust = (v: number) => {
+        let next = brightness >= 0 ? v + (1 - v) * brightness : v * (1 + brightness)
+        if (contrast !== 0) {
+          const slope = contrast >= 0 ? 1 + contrast * 2.2 : 1 + contrast * 0.85
+          next = (next - pivot) * slope + pivot
+        }
+        return next
+      }
+      r = adjust(r)
+      g = adjust(g)
+      b = adjust(b)
+    } else if (adjustment.type === "levels") {
+      const inputBlack = clamp(highBitParam(params, "inputBlack", 0) / 255)
+      const inputWhite = clamp(highBitParam(params, "inputWhite", 255) / 255)
+      const outputBlack = clamp(highBitParam(params, "outputBlack", 0) / 255)
+      const outputWhite = clamp(highBitParam(params, "outputWhite", 255) / 255)
+      const gamma = Math.max(0.01, highBitParam(params, "gamma", 1))
+      const range = Math.max(0.000001, inputWhite - inputBlack)
+      const apply = (v: number) => {
+        const normalized = clamp((v - inputBlack) / range)
+        return Math.pow(normalized, 1 / gamma) * (outputWhite - outputBlack) + outputBlack
+      }
+      const channel = String(params.channel ?? "rgb")
+      if (channel === "red" || channel === "rgb") r = apply(r)
+      if (channel === "green" || channel === "rgb") g = apply(g)
+      if (channel === "blue" || channel === "rgb") b = apply(b)
+    } else if (adjustment.type === "exposure") {
+      const factor = 2 ** highBitParam(params, "ev", 0)
+      r *= factor
+      g *= factor
+      b *= factor
+    } else if (adjustment.type === "invert") {
+      r = 1 - r
+      g = 1 - g
+      b = 1 - b
+    } else if (adjustment.type === "channel-mixer") {
+      const mixed = highBitChannelMixer(r, g, b, params)
+      r = mixed.r
+      g = mixed.g
+      b = mixed.b
+    } else if (adjustment.type === "grayscale" || adjustment.type === "desaturate") {
+      r = g = b = 0.299 * r + 0.587 * g + 0.114 * b
+    } else if (adjustment.type === "posterize") {
+      const levels = Math.max(2, Math.round(highBitParam(params, "levels", 4)))
+      const posterize = (v: number) => Math.round(v * (levels - 1)) / (levels - 1)
+      r = posterize(r)
+      g = posterize(g)
+      b = posterize(b)
+    } else if (adjustment.type === "threshold") {
+      const threshold = clamp(highBitParam(params, "level", 128) / 255)
+      const value = 0.299 * r + 0.587 * g + 0.114 * b >= threshold ? 1 : 0
+      r = g = b = value
+    }
+
+    writeHighBitUnit(out, storage, i, r)
+    writeHighBitUnit(out, storage, i + 1, g)
+    writeHighBitUnit(out, storage, i + 2, b)
+    out[i + 3] = source.data[i + 3]
+  }
+  return cloneHighBitWithData(source, out)
+}
+
+export function createFloatBufferFromImageData(source: ImageData, options: HighBitImageOptions = {}): FloatPixelBuffer {
+  const data = new Float32Array(source.data.length)
+  for (let i = 0; i < source.data.length; i++) data[i] = source.data[i] / 255
+  return {
+    width: source.width,
+    height: source.height,
+    channels: 4,
+    bitDepth: 32,
+    colorMode: options.colorMode ?? "RGB",
+    profile: options.profile,
+    storage: "float32",
+    data,
+    warnings: [
+      "Float filter buffers are local processing surfaces; browser canvas display remains tone-mapped 8-bit RGBA.",
+    ],
+  }
+}
+
+export function toneMapFloatBufferToImageData(source: FloatPixelBuffer): ImageData {
+  return toneMapHighBitImageToImageData(source)
+}
+
+function cloneFloatBuffer(source: FloatPixelBuffer, data = new Float32Array(source.data)): FloatPixelBuffer {
+  return {
+    ...source,
+    data,
+    warnings: [...source.warnings],
+  }
+}
+
+function floatParam(params: Record<string, number | string | boolean>, key: string, fallback: number) {
+  const value = Number(params[key])
+  return Number.isFinite(value) ? value : fallback
+}
+
+function applyFloatBoxBlur(source: FloatPixelBuffer, radius: number): FloatPixelBuffer {
+  const r = Math.max(0, Math.floor(radius))
+  if (r <= 0) return cloneFloatBuffer(source)
+  const { width, height } = source
+  const tmp = new Float32Array(source.data.length)
+  const out = new Float32Array(source.data.length)
+  const span = 2 * r + 1
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const sums = [0, 0, 0, 0]
+      for (let ox = -r; ox <= r; ox++) {
+        const sx = Math.max(0, Math.min(width - 1, x + ox))
+        const i = (y * width + sx) * 4
+        for (let c = 0; c < 4; c++) sums[c] += source.data[i + c]
+      }
+      const o = (y * width + x) * 4
+      for (let c = 0; c < 4; c++) tmp[o + c] = sums[c] / span
+    }
+  }
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const sums = [0, 0, 0, 0]
+      for (let oy = -r; oy <= r; oy++) {
+        const sy = Math.max(0, Math.min(height - 1, y + oy))
+        const i = (sy * width + x) * 4
+        for (let c = 0; c < 4; c++) sums[c] += tmp[i + c]
+      }
+      const o = (y * width + x) * 4
+      for (let c = 0; c < 4; c++) out[o + c] = sums[c] / span
+    }
+  }
+  return cloneFloatBuffer(source, out)
+}
+
+function applyFloatSharpen(source: FloatPixelBuffer, amount: number): FloatPixelBuffer {
+  const { width, height } = source
+  const a = amount / 100
+  const kernel = [0, -a, 0, -a, 1 + 4 * a, -a, 0, -a, 0]
+  const out = new Float32Array(source.data.length)
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const o = (y * width + x) * 4
+      for (let c = 0; c < 3; c++) {
+        let value = 0
+        for (let ky = 0; ky < 3; ky++) {
+          for (let kx = 0; kx < 3; kx++) {
+            const sx = Math.max(0, Math.min(width - 1, x + kx - 1))
+            const sy = Math.max(0, Math.min(height - 1, y + ky - 1))
+            value += source.data[(sy * width + sx) * 4 + c] * kernel[ky * 3 + kx]
+          }
+        }
+        out[o + c] = value
+      }
+      out[o + 3] = source.data[o + 3]
+    }
+  }
+  return cloneFloatBuffer(source, out)
+}
+
+export function applyFloatBufferFilter(
+  source: FloatPixelBuffer,
+  filter: FloatFilterKind,
+  params: Record<string, number | string | boolean> = {},
+): FloatPixelBuffer {
+  if (filter === "box-blur") return applyFloatBoxBlur(source, floatParam(params, "radius", 1))
+  if (filter === "sharpen") return applyFloatSharpen(source, floatParam(params, "amount", 50))
+  const factor = 2 ** floatParam(params, "ev", 0)
+  const out = new Float32Array(source.data)
+  for (let i = 0; i < out.length; i += 4) {
+    out[i] *= factor
+    out[i + 1] *= factor
+    out[i + 2] *= factor
+  }
+  return cloneFloatBuffer(source, out)
 }
 
 export function rgbToCmyk(rgb: RgbColor, options: CmykConversionOptions = {}): CmykColor {

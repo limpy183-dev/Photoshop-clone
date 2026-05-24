@@ -1,12 +1,20 @@
 import { expect, test } from "@playwright/test"
 
 import {
+  applyFloatBufferFilter,
+  applyHighBitAdjustment,
   cmykToRgb,
+  convertColorToRgb,
+  convertRgbToColorMode,
   createHighBitImageFromImageData,
+  createFloatBufferFromImageData,
   describeColorPipeline,
+  grayscaleToRgb,
   labToRgb,
+  rgbToGrayscale,
   rgbToCmyk,
   rgbToLab,
+  toneMapFloatBufferToImageData,
   toneMapHighBitImageToImageData,
 } from "../components/photoshop/color-pipeline"
 
@@ -81,4 +89,83 @@ test("color pipeline descriptor distinguishes typed local depth from unsupported
   expect(report.supportsHighBitMath).toBe(true)
   expect(report.supportsIccTransforms).toBe(false)
   expect(report.warnings.join(" ")).toContain("not a full ICC transform engine")
+})
+
+test("RGB conversion helpers cover grayscale, CMYK, Lab, and RGB round trips", () => {
+  const rgb = { r: 48, g: 128, b: 220 }
+  const gray = rgbToGrayscale(rgb)
+  const cmyk = convertRgbToColorMode(rgb, "CMYK")
+  const lab = convertRgbToColorMode(rgb, "Lab")
+  const same = convertRgbToColorMode(rgb, "RGB")
+
+  expect(gray.gray).toBeGreaterThan(110)
+  expect(gray.gray).toBeLessThan(135)
+  expect(grayscaleToRgb(gray)).toEqual({ r: gray.gray, g: gray.gray, b: gray.gray })
+  expect(convertColorToRgb(cmyk, "CMYK").r).toBeGreaterThan(40)
+  expect(convertColorToRgb(lab, "Lab").b).toBeGreaterThan(210)
+  expect(same).toEqual(rgb)
+})
+
+test("selected adjustments run directly on 16-bit integer buffers without first flattening to 8-bit", () => {
+  const highBit = {
+    width: 2,
+    height: 1,
+    channels: 4 as const,
+    bitDepth: 16 as const,
+    colorMode: "RGB" as const,
+    storage: "uint16" as const,
+    data: new Uint16Array([
+      32768, 32769, 12000, 65535,
+      32769, 32770, 12001, 65535,
+    ]),
+    warnings: [],
+  }
+
+  const adjusted = applyHighBitAdjustment(highBit, {
+    type: "exposure",
+    params: { ev: 0.1 },
+  })
+
+  expect(adjusted.storage).toBe("uint16")
+  expect(adjusted.data).toBeInstanceOf(Uint16Array)
+  expect(adjusted.data[0]).toBeGreaterThan(32768)
+  expect(adjusted.data[1] - adjusted.data[0]).toBeGreaterThanOrEqual(1)
+  expect(adjusted.data[3]).toBe(65535)
+})
+
+test("16-bit channel mixer uses high-range constants and channel math", () => {
+  const source = createHighBitImageFromImageData(
+    imageData(1, 1, [64, 128, 192, 255]),
+    { bitDepth: 16, colorMode: "RGB" },
+  )
+
+  const mixed = applyHighBitAdjustment(source, {
+    type: "channel-mixer",
+    params: {
+      rR: 0, rG: 100, rB: 0, constantR: 5,
+      gR: 0, gG: 100, gB: 0, constantG: 0,
+      bR: 0, bG: 0, bB: 100, constantB: 0,
+    },
+  })
+
+  expect(mixed.storage).toBe("uint16")
+  expect(mixed.data[0]).toBeGreaterThan(source.data[1])
+  expect(mixed.data[0]).toBeLessThanOrEqual(65535)
+  expect(mixed.data[2]).toBe(source.data[2])
+})
+
+test("selected filters can process float buffers before tone-mapping to canvas ImageData", () => {
+  const source = imageData(3, 1, [
+    0, 0, 0, 255,
+    255, 255, 255, 255,
+    0, 0, 0, 255,
+  ])
+
+  const floatBuffer = createFloatBufferFromImageData(source)
+  const blurred = applyFloatBufferFilter(floatBuffer, "box-blur", { radius: 1 })
+  const preview = toneMapFloatBufferToImageData(blurred)
+
+  expect(blurred.storage).toBe("float32")
+  expect(blurred.data[4]).toBeCloseTo(1 / 3, 4)
+  expect(Array.from(preview.data.slice(4, 8))).toEqual([85, 85, 85, 255])
 })

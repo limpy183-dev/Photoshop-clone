@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Clock, FolderOpen, LayoutPanelLeft, Save, Search, Trash2 } from "lucide-react"
+import { Clock, Download, FolderOpen, LayoutPanelLeft, RotateCcw, Save, Search, Trash2, Upload } from "lucide-react"
 import { toast } from "sonner"
 import {
   Dialog,
@@ -17,6 +17,14 @@ import { Label } from "@/components/ui/label"
 import { useEditor } from "./editor-context"
 import { WORKSPACE_PRESET_OPTIONS, type WorkspacePresetId } from "./panel-registry"
 import type { RecentDocument } from "./recent-documents"
+import { downloadText } from "./document-io"
+import {
+  mergeWorkspaceLibraries,
+  normalizeWorkspaceLibrary,
+  readWorkspaceLibrary,
+  serializeWorkspaceLibrary,
+  writeWorkspaceLibrary,
+} from "./workspace-layouts"
 
 type WorkspaceSummary = { name: string; savedAt?: number }
 export type SelectionOperation = "expand" | "contract" | "similar" | "feather" | "border" | "smooth"
@@ -135,6 +143,7 @@ export function WorkspaceManagerDialog({
   onRefresh: () => void
 }) {
   const [name, setName] = React.useState("My Workspace")
+  const importRef = React.useRef<HTMLInputElement>(null)
 
   const refreshSoon = () => window.setTimeout(onRefresh, 0)
   const save = () => {
@@ -155,10 +164,43 @@ export function WorkspaceManagerDialog({
     toast.success("Workspace deleted")
     refreshSoon()
   }
+  const exportWorkspaces = () => {
+    const workspaces = readWorkspaceLibrary()
+    downloadText(serializeWorkspaceLibrary(workspaces), "photoshop-workspaces.psworkspaces.json")
+  }
+  const importWorkspaces = async (file: File) => {
+    try {
+      if (file.size > 512 * 1024) throw new Error("Workspace files are limited to 512 KB.")
+      const incoming = normalizeWorkspaceLibrary(JSON.parse(await file.text()))
+      if (!incoming.length) throw new Error("Workspace file does not contain valid workspaces.")
+      writeWorkspaceLibrary(mergeWorkspaceLibraries(readWorkspaceLibrary(), incoming))
+      toast.success(`Imported ${incoming.length} workspace${incoming.length === 1 ? "" : "s"}`)
+      refreshSoon()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not import workspaces")
+    } finally {
+      if (importRef.current) importRef.current.value = ""
+    }
+  }
+  const clearSaved = () => {
+    writeWorkspaceLibrary([])
+    toast.success("Saved workspaces cleared")
+    refreshSoon()
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[620px] border-[var(--ps-divider)] bg-[var(--ps-panel)] text-[var(--ps-text)]">
+        <input
+          ref={importRef}
+          type="file"
+          accept=".json,.psworkspaces,.psworkspaces.json,application/json"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0]
+            if (file) void importWorkspaces(file)
+          }}
+        />
         <DialogHeader>
           <DialogTitle>Workspace Manager</DialogTitle>
           <DialogDescription className="sr-only">Save, apply, delete, or reset panel workspace layouts.</DialogDescription>
@@ -185,6 +227,20 @@ export function WorkspaceManagerDialog({
                 {preset.label}
               </Button>
             ))}
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <Button variant="outline" size="sm" onClick={() => importRef.current?.click()}>
+              <Upload className="h-3.5 w-3.5" />
+              Import
+            </Button>
+            <Button variant="outline" size="sm" onClick={exportWorkspaces} disabled={!savedWorkspaces.length}>
+              <Download className="h-3.5 w-3.5" />
+              Export
+            </Button>
+            <Button variant="outline" size="sm" onClick={clearSaved} disabled={!savedWorkspaces.length}>
+              <RotateCcw className="h-3.5 w-3.5" />
+              Clear Saved
+            </Button>
           </div>
           <div className="max-h-[300px] overflow-y-auto rounded-sm border border-[var(--ps-divider)]">
             {savedWorkspaces.length ? (

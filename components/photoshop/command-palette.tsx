@@ -11,6 +11,15 @@ import { toast } from "sonner"
 import { PANEL_DEFINITIONS } from "./panel-registry"
 import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop, isAdjustmentType } from "./adjustment-layers"
 import { dispatchPhotoshopEvent } from "./events"
+import { canPluginUsePermission } from "./plugin-system"
+import type { PluginCommandDescriptor, PluginDescriptor, PluginPermission } from "./types"
+import {
+  loadCommandPaletteUsage,
+  rankCommandPaletteItems,
+  recordCommandPaletteUsage,
+  saveCommandPaletteUsage,
+  type CommandUsageMap,
+} from "./command-ranking"
 
 interface CommandPaletteProps {
   open: boolean
@@ -82,15 +91,62 @@ const PANEL_COMMAND_TITLES: Record<string, string> = {
   "tool-presets": "Tool Presets Panel",
 }
 
+function permissionsForPluginCommand(command: PluginCommandDescriptor): PluginPermission[] {
+  if (command.requiredPermissions?.length) return command.requiredPermissions
+  if (command.action.type === "apply-filter") return ["filters:write"]
+  if (command.action.type === "post-message") return ["commands"]
+  return []
+}
+
+const RECENT_COMMANDS_KEY = "ps-command-palette-recent"
+const RECENT_COMMANDS_LIMIT = 24
+
+function loadRecentCommands(): string[] {
+  if (typeof window === "undefined") return []
+  try {
+    const raw = localStorage.getItem(RECENT_COMMANDS_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((id): id is string => typeof id === "string").slice(0, RECENT_COMMANDS_LIMIT)
+  } catch {
+    return []
+  }
+}
+
+function recordRecentCommand(id: string) {
+  if (typeof window === "undefined") return
+  try {
+    const current = loadRecentCommands().filter((existing) => existing !== id)
+    current.unshift(id)
+    localStorage.setItem(RECENT_COMMANDS_KEY, JSON.stringify(current.slice(0, RECENT_COMMANDS_LIMIT)))
+  } catch {
+    /* ignore quota errors */
+  }
+}
+
+function runPluginCommandFromPalette(plugin: PluginDescriptor, command: PluginCommandDescriptor) {
+  window.dispatchEvent(new CustomEvent("ps-open-plugin-manager"))
+  window.setTimeout(() => {
+    window.dispatchEvent(new CustomEvent("ps-run-plugin-command", {
+      detail: { pluginId: plugin.id, commandId: command.id },
+    }))
+  }, 80)
+}
+
 export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPaletteProps) {
   const { activeDoc, activeLayer, closedDocuments, dispatch, newLayer, newGroup, duplicateDocument, closeOtherDocuments, reopenClosedDocument, commit, requestRender } = useEditor()
   const [query, setQuery] = React.useState("")
   const [activeIndex, setActiveIndex] = React.useState(0)
+  const [recent, setRecent] = React.useState<string[]>(() => loadRecentCommands())
+  const [usage, setUsage] = React.useState<CommandUsageMap>({})
 
   React.useEffect(() => {
     if (open) {
       setQuery("")
       setActiveIndex(0)
+      setRecent(loadRecentCommands())
+      setUsage(loadCommandPaletteUsage())
     }
   }, [open])
 
@@ -668,6 +724,29 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
       })
     }
 
+    for (const plugin of activeDoc?.plugins ?? []) {
+      for (const command of plugin.commands ?? []) {
+        const missing = permissionsForPluginCommand(command).filter((permission) => !canPluginUsePermission(plugin, permission))
+        items.push({
+          id: `plugin-${plugin.id}-${command.id}`,
+          group: "Plugins",
+          title: `${plugin.name}: ${command.title}`,
+          hint: command.group ?? plugin.kind,
+          searchText: `${plugin.name} ${command.title} ${command.description ?? ""} ${(plugin.permissions ?? []).join(" ")}`,
+          disabled: plugin.enabled === false || missing.length > 0,
+          disabledReason: plugin.enabled === false
+            ? "Plugin is disabled"
+            : missing.length
+              ? `Missing ${missing[0]} permission`
+              : undefined,
+          run: () => {
+            runPluginCommandFromPalette(plugin, command)
+            close()
+          },
+        })
+      }
+    }
+
     for (const tool of TOOL_COMMANDS) {
       items.push({
         id: `tool-${tool.tool}`,
@@ -715,14 +794,9 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
   }, [activeDoc, activeLayer, close, closedDocuments, dispatch, duplicateDocument, closeOtherDocuments, reopenClosedDocument, newGroup, newLayer, onOpenNew, commit, requestRender])
 
   const filtered = React.useMemo(() => {
-    const q = query.trim().toLowerCase()
-    if (!q) return commands.slice(0, 60)
-    return commands
-      .filter((command) =>
-        `${command.group} ${command.title} ${command.hint ?? ""} ${command.searchText ?? ""}`.toLowerCase().includes(q),
-      )
-      .slice(0, 80)
-  }, [commands, query])
+    const q = query.trim()
+    return rankCommandPaletteItems(commands, q, usage, { limit: q ? 80 : 80 })
+  }, [commands, query, usage])
 
   React.useEffect(() => {
     setActiveIndex(0)
@@ -738,6 +812,13 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
       toast.info(command.disabledReason ?? "Command unavailable")
       return
     }
+    recordRecentCommand(command.id)
+    setRecent((current) => [command.id, ...current.filter((id) => id !== command.id)].slice(0, RECENT_COMMANDS_LIMIT))
+    setUsage((current) => {
+      const next = recordCommandPaletteUsage(current, command.id)
+      saveCommandPaletteUsage(next)
+      return next
+    })
     command.run()
   }, [])
 
@@ -795,9 +876,15 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
             }}
             placeholder="Search tools, filters, panels, and commands"
             className="h-9"
+            role="combobox"
+            aria-expanded={true}
+            aria-controls="command-palette-listbox"
+            aria-autocomplete="list"
+            aria-activedescendant={filtered.length > 0 ? `command-palette-option-${filtered[activeIndex]?.id ?? filtered[0]?.id}` : undefined}
           />
         </div>
         <div
+          id="command-palette-listbox"
           role="listbox"
           aria-label="Command palette results"
           className="max-h-[420px] overflow-y-auto border-t border-[var(--ps-divider)] py-1"
@@ -807,9 +894,11 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
           ) : (
             filtered.map((command, index) => {
               const active = index === activeIndex
+              const isRecent = !query.trim() && recent.includes(command.id)
               return (
               <button
                 key={command.id}
+                id={`command-palette-option-${command.id}`}
                 type="button"
                 role="option"
                 disabled={command.disabled}
@@ -824,7 +913,9 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
                       : "hover:bg-[var(--ps-tool-hover)]"
                 }`}
               >
-                <span className="text-[10px] uppercase tracking-wide text-[var(--ps-text-dim)]">{command.group}</span>
+                <span className="text-[10px] uppercase tracking-wide text-[var(--ps-text-dim)]">
+                  {isRecent ? "Recent" : command.group}
+                </span>
                 <span className="min-w-0">
                   <span className="block truncate">{command.title}</span>
                   {command.disabledReason ? (

@@ -6,10 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useEditor } from "../editor-context"
 import type { CloneSourcePreset } from "../types"
-
-function uid(prefix = "clone") {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
-}
+import { uid } from "../uid"
 
 export function CloneSourcePanel() {
   const { activeDoc, activeLayer, cloneSource, dispatch, commit } = useEditor()
@@ -24,7 +21,7 @@ export function CloneSourcePanel() {
   const savePreset = () => {
     if (!activeLayer) return
     const preset: CloneSourcePreset = {
-      id: uid(),
+      id: uid("clone"),
       name: name.trim() || `Source ${cloneSource.presets.length + 1}`,
       layerId: activeLayer.id,
       sourceX: activeDoc.width / 2,

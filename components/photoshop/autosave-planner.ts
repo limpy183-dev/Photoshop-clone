@@ -17,6 +17,43 @@ export interface AutosavePlan {
   nextSavedVersions: Record<string, number>
 }
 
+export interface IncrementalAutosaveDocument extends AutosavePlanDocument {
+  serializedLength: number
+  changedLayerIds?: string[]
+}
+
+export interface IncrementalAutosaveManifestEntry {
+  version: number
+  storage: "inline" | "scratch"
+  bytes: number
+  changedLayerIds?: string[]
+}
+
+export interface IncrementalAutosaveManifest {
+  entries: Record<string, IncrementalAutosaveManifestEntry>
+}
+
+export interface IncrementalAutosaveWrite {
+  id: string
+  name: string
+  version: number
+  storage: "inline" | "scratch"
+  serializedLength: number
+  changedLayerIds?: string[]
+}
+
+export interface IncrementalAutosavePlanInput {
+  documents: readonly IncrementalAutosaveDocument[]
+  previousManifest?: IncrementalAutosaveManifest
+  maxInlineChars?: number
+}
+
+export interface IncrementalAutosavePlan {
+  documentsToWrite: IncrementalAutosaveWrite[]
+  nextManifest: IncrementalAutosaveManifest
+  prunedDocumentIds: string[]
+}
+
 export function planAutosaveDocuments(input: AutosavePlanInput): AutosavePlan {
   const nextSavedVersions = { ...input.lastSavedVersions }
   const documentsToSerialize: AutosavePlanDocument[] = []
@@ -37,4 +74,43 @@ export function shouldMirrorAutosaveToLocalStorage(
   maxChars = DEFAULT_AUTOSAVE_LOCAL_STORAGE_LIMIT,
 ) {
   return serializedLength <= maxChars
+}
+
+export function planIncrementalAutosave(input: IncrementalAutosavePlanInput): IncrementalAutosavePlan {
+  const maxInlineChars = Math.max(1, Math.round(input.maxInlineChars ?? DEFAULT_AUTOSAVE_LOCAL_STORAGE_LIMIT))
+  const previousEntries = input.previousManifest?.entries ?? {}
+  const currentIds = new Set(input.documents.map((doc) => doc.id))
+  const prunedDocumentIds = Object.keys(previousEntries).filter((id) => !currentIds.has(id)).sort()
+  const nextManifest: IncrementalAutosaveManifest = { entries: {} }
+  const documentsToWrite: IncrementalAutosaveWrite[] = []
+
+  for (const doc of input.documents) {
+    const previous = previousEntries[doc.id]
+    const storage: "inline" | "scratch" = shouldMirrorAutosaveToLocalStorage(doc.serializedLength, maxInlineChars)
+      ? "inline"
+      : "scratch"
+    const unchanged = previous && previous.version === doc.version && !doc.dirty
+    if (unchanged) {
+      nextManifest.entries[doc.id] = previous
+      continue
+    }
+
+    const write: IncrementalAutosaveWrite = {
+      id: doc.id,
+      name: doc.name,
+      version: doc.version,
+      storage,
+      serializedLength: doc.serializedLength,
+      changedLayerIds: doc.changedLayerIds,
+    }
+    documentsToWrite.push(write)
+    nextManifest.entries[doc.id] = {
+      version: doc.version,
+      storage,
+      bytes: doc.serializedLength,
+      changedLayerIds: doc.changedLayerIds,
+    }
+  }
+
+  return { documentsToWrite, nextManifest, prunedDocumentIds }
 }

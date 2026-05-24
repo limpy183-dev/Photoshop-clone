@@ -15,6 +15,8 @@ import type {
   VideoLayerProps,
   VideoTransition,
 } from "./types"
+import { hexToRgb } from "./color-utils"
+import { uid } from "./uid"
 
 export type AdvancedThreeDFormat = "3ds" | "kmz" | "u3d"
 
@@ -70,10 +72,6 @@ export const VIDEO_EXPORT_PRESETS: VideoExportPreset[] = [
   { id: "png-sequence", label: "PNG Sequence", width: 1920, height: 1080, fps: 24, codec: "png-sequence", bitrateKbps: 0, audioKbps: 0, container: "zip" },
 ]
 
-function uid(prefix = "av") {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
-}
-
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value))
 }
@@ -125,13 +123,6 @@ function rotate(v: Vec3, rotation: Vec3): Vec3 {
 function transformVertex(vertex: Vec3, object: ThreeDObject): Vec3 {
   const scaled = vec(vertex.x * object.scale.x, vertex.y * object.scale.y, vertex.z * object.scale.z)
   return add(rotate(scaled, object.rotation), object.position)
-}
-
-function hexToRgb(hex: string) {
-  const clean = hex.replace("#", "").trim()
-  const value = clean.length === 3 ? clean.split("").map((item) => item + item).join("") : clean.padEnd(6, "0").slice(0, 6)
-  const n = Number.parseInt(value, 16)
-  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 }
 }
 
 function _rgbToHex(r: number, g: number, b: number) {

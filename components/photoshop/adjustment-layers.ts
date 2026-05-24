@@ -67,8 +67,10 @@ export function adjustmentParamsWithDefaults(
       out[param.key] = Math.max(param.min, Math.min(param.max, Number.isFinite(numeric) ? numeric : param.default))
     } else if (param.type === "checkbox") {
       out[param.key] = raw === true
-    } else {
+    } else if (param.type === "select") {
       out[param.key] = param.options.some((option) => option.value === raw) ? raw : param.default
+    } else {
+      out[param.key] = typeof raw === "string" ? raw : param.default
     }
   }
   return out

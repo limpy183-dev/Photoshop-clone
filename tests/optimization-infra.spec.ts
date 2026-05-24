@@ -32,6 +32,9 @@ test("render bus merges layer-specific invalidations into one animation frame", 
     {
       layerIds: ["layer-a", "layer-b"],
       reasons: ["paint", "visibility"],
+      dirtyRects: [],
+      dirtyByLayer: {},
+      fullFrame: false,
     },
   ])
 })
@@ -43,6 +46,9 @@ test("render bus escalates mixed full and partial invalidations to full render",
   )).toEqual({
     layerIds: "all",
     reasons: ["thumbnail", "composite"],
+    dirtyRects: [],
+    dirtyByLayer: {},
+    fullFrame: true,
   })
 })
 

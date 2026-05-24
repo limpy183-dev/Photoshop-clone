@@ -4,10 +4,17 @@ import * as React from "react"
 import { toast } from "sonner"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { compositeLayer } from "./blend-modes"
+import {
+  applyImageData,
+  calculateChannelImageData,
+  type ApplyImageTargetChannel,
+  type PixelChannel,
+} from "./color-channel-ops"
 import { makeCanvas, makeDocument, useEditor } from "./editor-context"
 import { downloadText, loadImageFromFile } from "./document-io"
+import { focusStackImageData, mergeHdrImageStack, photomergeImageStack } from "./photo-workflow-engine"
 import type { AlphaChannel, BlendMode, Layer } from "./types"
+import { uid } from "./uid"
 
 export type GapWorkflowKind =
   | "apply-image"
@@ -22,10 +29,9 @@ export type GapWorkflowKind =
   | "image-assets"
 
 const blendModes: BlendMode[] = ["normal", "multiply", "screen", "overlay", "soft-light", "difference", "darken", "lighten"]
+const sourceChannels: PixelChannel[] = ["rgb", "gray", "red", "green", "blue", "alpha"]
+const targetChannels: ApplyImageTargetChannel[] = ["rgb", "red", "green", "blue", "alpha"]
 
-function uid(prefix: string) {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
-}
 
 export function GapWorkflowDialog({
   workflow,
@@ -37,6 +43,11 @@ export function GapWorkflowDialog({
   const { activeDoc, activeLayer, dispatch, commit, createDocument } = useEditor()
   const [sourceId, setSourceId] = React.useState("")
   const [sourceId2, setSourceId2] = React.useState("")
+  const [sourceChannel, setSourceChannel] = React.useState<PixelChannel>("rgb")
+  const [sourceChannel2, setSourceChannel2] = React.useState<PixelChannel>("gray")
+  const [targetChannel, setTargetChannel] = React.useState<ApplyImageTargetChannel>("rgb")
+  const [invertSource, setInvertSource] = React.useState(false)
+  const [invertSource2, setInvertSource2] = React.useState(false)
   const [blend, setBlend] = React.useState<BlendMode>("normal")
   const [opacity, setOpacity] = React.useState(100)
   const [files, setFiles] = React.useState<File[]>([])
@@ -57,11 +68,17 @@ export function GapWorkflowDialog({
     if (!activeLayer || !activeDoc || activeLayer.locked) return
     const src = activeDoc.layers.find((layer) => layer.id === sourceId)
     if (!src || typeof src.canvas.getContext !== "function") return
-    const tmp = makeCanvas(activeDoc.width, activeDoc.height)
-    tmp.getContext("2d")!.drawImage(activeLayer.canvas, 0, 0)
-    compositeLayer(tmp.getContext("2d")!, src.canvas, blend, opacity / 100, 1)
-    activeLayer.canvas.getContext("2d")!.clearRect(0, 0, activeDoc.width, activeDoc.height)
-    activeLayer.canvas.getContext("2d")!.drawImage(tmp, 0, 0)
+    const targetCtx = activeLayer.canvas.getContext("2d")!
+    const srcCtx = src.canvas.getContext("2d")!
+    const target = targetCtx.getImageData(0, 0, activeDoc.width, activeDoc.height)
+    const source = srcCtx.getImageData(0, 0, activeDoc.width, activeDoc.height)
+    targetCtx.putImageData(applyImageData(target, source, {
+      sourceChannel,
+      targetChannel,
+      blendMode: blend,
+      opacity: opacity / 100,
+      invertSource,
+    }), 0, 0)
     commit("Apply Image", [activeLayer.id])
     close()
   }
@@ -74,13 +91,18 @@ export function GapWorkflowDialog({
     const imgA = a.canvas.getContext("2d")!.getImageData(0, 0, activeDoc.width, activeDoc.height)
     const imgB = b.canvas.getContext("2d")!.getImageData(0, 0, activeDoc.width, activeDoc.height)
     const mask = makeCanvas(activeDoc.width, activeDoc.height)
-    const out = mask.getContext("2d")!.createImageData(activeDoc.width, activeDoc.height)
+    const out = calculateChannelImageData(imgA, imgB, {
+      sourceChannelA: sourceChannel === "rgb" ? "gray" : sourceChannel,
+      sourceChannelB: sourceChannel2 === "rgb" ? "gray" : sourceChannel2,
+      blendMode: blend,
+      opacity: opacity / 100,
+      invertA: invertSource,
+      invertB: invertSource2,
+    })
     for (let i = 0; i < out.data.length; i += 4) {
-      const va = (imgA.data[i] + imgA.data[i + 1] + imgA.data[i + 2]) / 3
-      const vb = (imgB.data[i] + imgB.data[i + 1] + imgB.data[i + 2]) / 3
-      const value = blend === "multiply" ? (va * vb) / 255 : blend === "screen" ? 255 - ((255 - va) * (255 - vb)) / 255 : (va + vb) / 2
-      out.data[i] = out.data[i + 1] = out.data[i + 2] = value
-      out.data[i + 3] = 255
+      const value = out.data[i]
+      out.data[i] = out.data[i + 1] = out.data[i + 2] = 255
+      out.data[i + 3] = value
     }
     mask.getContext("2d")!.putImageData(out, 0, 0)
     const channel: AlphaChannel = { id: uid("alpha"), name: `Calculation ${(activeDoc.channels?.length ?? 0) + 1}`, canvas: mask }
@@ -114,7 +136,7 @@ export function GapWorkflowDialog({
       const result = workflow === "photomerge"
         ? photomerge(loaded)
         : workflow === "hdr-merge"
-          ? mergeStack(loaded, "mean")
+          ? mergeHdr(loaded)
           : workflow === "focus-stack"
             ? focusStack(loaded)
             : workflow === "stack-statistics"
@@ -169,15 +191,44 @@ export function GapWorkflowDialog({
             <Field label="Source Layer">
               <select value={sourceId} onChange={(event) => setSourceId(event.target.value)} className={selectClass}>{layers.map((layer) => <option key={layer.id} value={layer.id}>{layer.name}</option>)}</select>
             </Field>
+            <Field label="Source Channel">
+              <select value={sourceChannel} onChange={(event) => setSourceChannel(event.target.value as PixelChannel)} className={selectClass}>
+                {sourceChannels.map((channel) => <option key={channel} value={channel}>{channelLabel(channel)}</option>)}
+              </select>
+            </Field>
             {workflow === "calculations" ? (
-              <Field label="Second Source">
-                <select value={sourceId2} onChange={(event) => setSourceId2(event.target.value)} className={selectClass}>{layers.map((layer) => <option key={layer.id} value={layer.id}>{layer.name}</option>)}</select>
+              <>
+                <Field label="Second Source">
+                  <select value={sourceId2} onChange={(event) => setSourceId2(event.target.value)} className={selectClass}>{layers.map((layer) => <option key={layer.id} value={layer.id}>{layer.name}</option>)}</select>
+                </Field>
+                <Field label="Second Channel">
+                  <select value={sourceChannel2} onChange={(event) => setSourceChannel2(event.target.value as PixelChannel)} className={selectClass}>
+                    {sourceChannels.filter((channel) => channel !== "rgb").map((channel) => <option key={channel} value={channel}>{channelLabel(channel)}</option>)}
+                  </select>
+                </Field>
+              </>
+            ) : null}
+            {workflow === "apply-image" ? (
+              <Field label="Target Channel">
+                <select value={targetChannel} onChange={(event) => setTargetChannel(event.target.value as ApplyImageTargetChannel)} className={selectClass}>
+                  {targetChannels.map((channel) => <option key={channel} value={channel}>{channelLabel(channel)}</option>)}
+                </select>
               </Field>
             ) : null}
             <Field label="Blend">
               <select value={blend} onChange={(event) => setBlend(event.target.value as BlendMode)} className={selectClass}>{blendModes.map((mode) => <option key={mode} value={mode}>{mode}</option>)}</select>
             </Field>
-            {workflow === "apply-image" ? <Field label="Opacity"><input type="number" min={0} max={100} value={opacity} onChange={(event) => setOpacity(Number(event.target.value) || 0)} className={inputClass} /></Field> : null}
+            <Field label="Opacity"><input type="number" min={0} max={100} value={opacity} onChange={(event) => setOpacity(Number(event.target.value) || 0)} className={inputClass} /></Field>
+            <label className="flex items-center gap-2 text-[11px] text-[var(--ps-text-dim)]">
+              <input type="checkbox" checked={invertSource} onChange={(event) => setInvertSource(event.target.checked)} />
+              Invert source channel
+            </label>
+            {workflow === "calculations" ? (
+              <label className="flex items-center gap-2 text-[11px] text-[var(--ps-text-dim)]">
+                <input type="checkbox" checked={invertSource2} onChange={(event) => setInvertSource2(event.target.checked)} />
+                Invert second channel
+              </label>
+            ) : null}
           </div>
         ) : workflow === "scripted-pattern" ? (
           <Field label="Pattern">
@@ -250,19 +301,18 @@ function titleForWorkflow(workflow: GapWorkflowKind) {
   return labels[workflow]
 }
 
+function channelLabel(channel: PixelChannel | ApplyImageTargetChannel) {
+  if (channel === "rgb") return "RGB composite"
+  if (channel === "gray") return "Gray/luminance"
+  if (channel === "alpha") return "Alpha"
+  return `${channel[0].toUpperCase()}${channel.slice(1)}`
+}
+
 function photomerge(items: { name: string; canvas: HTMLCanvasElement }[]) {
-  const overlap = 0.18
-  const height = Math.max(...items.map((item) => item.canvas.height))
-  const width = Math.round(items.reduce((sum, item, index) => sum + item.canvas.width * (index === 0 ? 1 : 1 - overlap), 0))
-  const out = makeCanvas(width, height)
-  const ctx = out.getContext("2d")!
-  let x = 0
-  for (const [index, item] of items.entries()) {
-    ctx.globalAlpha = 1
-    ctx.drawImage(item.canvas, x, (height - item.canvas.height) / 2)
-    x += Math.round(item.canvas.width * (index === 0 ? 1 : 1 - overlap))
-  }
-  return out
+  const images = items.map((item) => canvasImageData(item.canvas))
+  const radius = workflowSearchRadius(items)
+  const result = photomergeImageStack(images, { searchRadius: radius, maxFeatures: 120 })
+  return imageDataCanvas(result.image)
 }
 
 function mergeStack(items: { canvas: HTMLCanvasElement }[], mode: "mean" | "median" | "min" | "max") {
@@ -289,28 +339,7 @@ function focusStack(items: { canvas: HTMLCanvasElement }[]) {
   const width = Math.max(...items.map((item) => item.canvas.width))
   const height = Math.max(...items.map((item) => item.canvas.height))
   const data = items.map((item) => imageDataCentered(item.canvas, width, height))
-  const out = makeCanvas(width, height)
-  const img = out.getContext("2d")!.createImageData(width, height)
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      let best = 0
-      let bestScore = -1
-      for (let s = 0; s < data.length; s++) {
-        const score = localContrast(data[s], x, y)
-        if (score > bestScore) {
-          best = s
-          bestScore = score
-        }
-      }
-      const i = (y * width + x) * 4
-      img.data[i] = data[best].data[i]
-      img.data[i + 1] = data[best].data[i + 1]
-      img.data[i + 2] = data[best].data[i + 2]
-      img.data[i + 3] = data[best].data[i + 3]
-    }
-  }
-  out.getContext("2d")!.putImageData(img, 0, 0)
-  return out
+  return imageDataCanvas(focusStackImageData(data).image)
 }
 
 function imageDataCentered(canvas: HTMLCanvasElement, width: number, height: number) {
@@ -319,16 +348,29 @@ function imageDataCentered(canvas: HTMLCanvasElement, width: number, height: num
   return tmp.getContext("2d")!.getImageData(0, 0, width, height)
 }
 
-function localContrast(img: ImageData, x: number, y: number) {
-  const center = luminanceAt(img, x, y)
-  return Math.abs(center - luminanceAt(img, x - 1, y)) + Math.abs(center - luminanceAt(img, x + 1, y)) + Math.abs(center - luminanceAt(img, x, y - 1)) + Math.abs(center - luminanceAt(img, x, y + 1))
+function mergeHdr(items: { canvas: HTMLCanvasElement }[]) {
+  const width = Math.max(...items.map((item) => item.canvas.width))
+  const height = Math.max(...items.map((item) => item.canvas.height))
+  const data = items.map((item) => imageDataCentered(item.canvas, width, height))
+  const midpoint = (items.length - 1) / 2
+  const exposures = items.map((_, index) => ({ ev: index - midpoint }))
+  const radius = workflowSearchRadius(items)
+  return imageDataCanvas(mergeHdrImageStack(data, exposures, { align: true, searchRadius: radius, maxFeatures: 120 }).image)
 }
 
-function luminanceAt(img: ImageData, x: number, y: number) {
-  const sx = Math.max(0, Math.min(img.width - 1, x))
-  const sy = Math.max(0, Math.min(img.height - 1, y))
-  const i = (sy * img.width + sx) * 4
-  return 0.299 * img.data[i] + 0.587 * img.data[i + 1] + 0.114 * img.data[i + 2]
+function canvasImageData(canvas: HTMLCanvasElement) {
+  return canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height)
+}
+
+function imageDataCanvas(image: ImageData) {
+  const canvas = makeCanvas(image.width, image.height)
+  canvas.getContext("2d")!.putImageData(image, 0, 0)
+  return canvas
+}
+
+function workflowSearchRadius(items: { canvas: HTMLCanvasElement }[]) {
+  const longest = Math.max(...items.map((item) => Math.max(item.canvas.width, item.canvas.height)), 1)
+  return Math.max(8, Math.min(96, Math.round(longest * 0.12)))
 }
 
 function drawScriptedPattern(canvas: HTMLCanvasElement, pattern: "brick" | "cross-weave" | "random-fill") {

@@ -57,6 +57,7 @@ export type ToolId =
   | "shape-rounded-rect"
   | "shape-ellipse"
   | "shape-polygon"
+  | "shape-star"
   | "shape-triangle"
   | "shape-line"
   | "custom-shape"
@@ -229,8 +230,24 @@ export interface TextProps {
   boxHeight?: number
   /** Basic editable text path control points for path-bound type tools. */
   textPath?: { x: number; y: number }[]
+  /** Treat textPath as a closed loop (text wraps around the path). */
+  textPathClosed?: boolean
+  /** Flip glyph orientation along the path (read upside-down). */
+  textPathFlip?: boolean
+  /** Distance from the path to lift glyph baseline (px). Negative drops below. */
+  textPathBaselineOffset?: number
+  /** Start offset along the path in px (lets text begin partway in). */
+  textPathStartOffset?: number
+  /** Align text along the path: start, center, end. */
+  textPathAlign?: "start" | "center" | "end"
   /** Render glyphs top-to-bottom for vertical type layers. */
   vertical?: boolean
+  /** Vertical writing mode: rl (right-to-left columns) or lr. */
+  verticalWritingMode?: "rl" | "lr"
+  /** Tate-chu-yoko: render runs of Latin chars upright inside vertical lines. */
+  tateChuYoko?: boolean
+  /** Mojikumi (Japanese punctuation spacing) setting name. */
+  mojikumi?: "default" | "loose" | "compact" | "none"
   /** Per-character overrides stored as editable metadata. */
   characterStyles?: { start: number; end: number; style: Partial<Pick<TextProps, "font" | "size" | "weight" | "italic" | "color" | "tracking">> }[]
   /** Anti-alias rendering on/off. Defaults true. */
@@ -290,6 +307,14 @@ export interface TextProps {
   /** Shape metadata used as an editable area-text container and clipping path. */
   textShape?: ShapeProps
   textShapeInset?: number
+  /** Per-side inset for text inside shape. Overrides textShapeInset when present. */
+  textShapeInsets?: { top: number; right: number; bottom: number; left: number }
+  /** Vertical alignment inside a shape text container. */
+  textShapeVerticalAlign?: "top" | "middle" | "bottom"
+  /** Original missing font family after a substitution has been applied. */
+  missingFontOriginal?: string
+  /** User-selected substitute font for the original missing family. */
+  fontSubstitution?: string
 
   /** Optional warp transformation. */
   warp?: { style: WarpStyle; bend: number; horizontal: number; vertical: number }
@@ -314,7 +339,7 @@ export type CustomShapeId =
   | "diamond"
 
 export interface ShapeProps {
-  type: "rect" | "ellipse" | "custom" | "polygon"
+  type: "rect" | "ellipse" | "custom" | "polygon" | "star"
   x: number
   y: number
   w: number
@@ -322,11 +347,59 @@ export interface ShapeProps {
   fill: string
   stroke: { color: string; width: number } | null
   radius?: number
+  /** Per-corner radii [topLeft, topRight, bottomRight, bottomLeft] for rectangles. */
+  cornerRadii?: [number, number, number, number]
   /** When type === "custom", which library glyph. */
   customId?: CustomShapeId
-  /** When type === "polygon", how many sides. */
+  /** When type === "polygon" or "star", how many sides/points. */
   sides?: number
+  /** Inner radius ratio (0..1) for star type. */
+  innerRadiusRatio?: number
+  /** Rotation in degrees (around the shape center). */
+  rotation?: number
+  /** Corner rounding (0..1) applied to polygon vertices. */
+  vertexRoundness?: number
+  /** Number of points for star type (alias for sides on stars). */
+  starPoints?: number
+  /** Editable compound shape components rendered with per-component boolean operations. */
+  components?: ShapeComponent[]
+  /** Multiple fill/stroke entries rendered in stack order. */
+  appearance?: ShapeAppearance
   booleanOperation?: "new" | "unite" | "subtract" | "intersect" | "exclude"
+}
+
+export type ShapeBooleanOperation = "new" | "unite" | "subtract" | "intersect" | "exclude"
+
+export interface ShapeComponent {
+  id: string
+  operation: Exclude<ShapeBooleanOperation, "new">
+  shape: ShapeProps
+}
+
+export interface ShapeFillAppearance {
+  id: string
+  enabled: boolean
+  color: string
+  opacity: number
+  blendMode?: BlendMode
+}
+
+export interface ShapeStrokeAppearance {
+  id: string
+  enabled: boolean
+  color: string
+  width: number
+  opacity: number
+  alignment?: "inside" | "center" | "outside"
+  blendMode?: BlendMode
+  lineCap?: CanvasLineCap
+  lineJoin?: CanvasLineJoin
+  dash?: number[]
+}
+
+export interface ShapeAppearance {
+  fills: ShapeFillAppearance[]
+  strokes: ShapeStrokeAppearance[]
 }
 
 export interface PathPoint {
@@ -339,6 +412,8 @@ export interface PathPoint {
 export interface PathProps {
   points: PathPoint[]
   closed: boolean
+  /** Optional additional subpaths for compound paths or approximated glyph outlines. */
+  subpaths?: PathProps[]
 }
 
 export interface GradientStop {
@@ -428,6 +503,7 @@ export interface LayerStyle {
     size: number
     opacity: number
     blendMode?: BlendMode
+    invert?: boolean
   }
   colorOverlay?: { enabled: boolean; color: string; opacity: number; blendMode?: BlendMode }
   gradientOverlay?: {
@@ -438,11 +514,13 @@ export interface LayerStyle {
   }
   patternOverlay?: {
     enabled: boolean
-    pattern: "checker" | "dots" | "lines" | "noise"
+    pattern: "checker" | "dots" | "lines" | "noise" | string
     scale: number
     opacity: number
-    color: string
+    color?: string
     blendMode?: BlendMode
+    align?: boolean
+    phase?: { x: number; y: number }
   }
   dropShadow?: {
     enabled: boolean
@@ -488,6 +566,17 @@ export interface SmartFilter {
   maskEnabled?: boolean
 }
 
+export interface SmartObjectEditPackage {
+  id: string
+  name: string
+  version: number
+  createdAt: number
+  updatedAt: number
+  documentId?: string
+  layerCount?: number
+  sourceHash?: string
+}
+
 export interface SmartObjectSource {
   width: number
   height: number
@@ -500,6 +589,14 @@ export interface SmartObjectSource {
   status?: "current" | "missing" | "modified" | "embedded"
   embedded?: boolean
   updatedAt?: number
+  fileHandle?: FileSystemFileHandle
+  fileHandleName?: string
+  handlePermission?: PermissionState | "unsupported"
+  lastKnownModified?: number
+  sourceHash?: string
+  editPackage?: SmartObjectEditPackage
+  exportedAt?: number
+  relinkedAt?: number
 }
 
 export type AdjustmentType =
@@ -725,6 +822,29 @@ export interface VideoExportPreset {
   container: "mp4" | "webm" | "gif" | "zip"
 }
 
+export type PluginPermission =
+  | "document:read"
+  | "layers:read"
+  | "layers:write"
+  | "filters:write"
+  | "commands"
+  | "storage"
+  | "ui"
+
+export type PluginCommandAction =
+  | { type: "open-panel" }
+  | { type: "apply-filter" }
+  | { type: "post-message"; message?: unknown }
+
+export interface PluginCommandDescriptor {
+  id: string
+  title: string
+  group?: string
+  description?: string
+  requiredPermissions?: PluginPermission[]
+  action: PluginCommandAction
+}
+
 export interface PluginDescriptor {
   id: string
   name: string
@@ -732,8 +852,10 @@ export interface PluginDescriptor {
   enabled: boolean
   version?: string
   author?: string
-  permissions?: string[]
+  permissions?: PluginPermission[]
   panelHtml?: string
+  commands?: PluginCommandDescriptor[]
+  storageDefaults?: Record<string, unknown>
   filterKernel?: number[]
   filterBias?: number
   filterDivisor?: number
@@ -811,6 +933,10 @@ export interface Layer {
   videoGroup?: VideoGroupProps
   /** User-controlled color tag for organization. */
   colorLabel?: "none" | "red" | "orange" | "yellow" | "green" | "blue" | "violet" | "gray"
+  /** App-only notes attached directly to this layer. */
+  notes?: LayerNote[]
+  /** App-only searchable metadata attached directly to this layer. */
+  metadata?: LayerMetadata
   smartFilters?: SmartFilter[]
   smartSource?: SmartObjectSource
 }
@@ -822,11 +948,19 @@ export interface Selection {
   feather?: number
 }
 
+export type QuickMaskPaintMode = "add" | "subtract" | "auto"
+
 /** Saved alpha channel for selection save/load */
 export interface AlphaChannel {
   id: string
   name: string
   canvas: HTMLCanvasElement
+  /** Alpha channels store selections; spot channels additionally carry ink preview metadata. */
+  kind?: "alpha" | "spot"
+  /** Spot ink preview color. PSD export also preserves this through the encoded channel name convention. */
+  spotColor?: string
+  /** Spot ink preview opacity, 0..100. */
+  spotOpacity?: number
 }
 
 export interface Guide {
@@ -834,6 +968,18 @@ export interface Guide {
   orientation: "horizontal" | "vertical"
   position: number
   color?: string
+  name?: string
+  locked?: boolean
+  visible?: boolean
+}
+
+export interface LayerNote {
+  id: string
+  text: string
+  author?: string
+  color?: string
+  createdAt: number
+  updatedAt?: number
 }
 
 export interface Note {
@@ -852,6 +998,22 @@ export interface Slice {
   w: number
   h: number
   name: string
+  url?: string
+  target?: string
+  altText?: string
+  format?: "png" | "jpeg" | "webp" | "avif"
+  scale?: number
+  locked?: boolean
+  visible?: boolean
+}
+
+export interface LayerMetadata {
+  title?: string
+  description?: string
+  tags?: string[]
+  custom?: Record<string, string | number | boolean>
+  createdAt?: number
+  modifiedAt?: number
 }
 
 export interface CountMarker {
@@ -892,6 +1054,8 @@ export interface LayerComp {
       adjustment?: AdjustmentProps
       smartFilters?: SmartFilter[]
       colorLabel?: Layer["colorLabel"]
+      notes?: LayerNote[]
+      metadata?: LayerMetadata
     }
   >
   activeLayerId?: string
@@ -924,17 +1088,62 @@ export interface AssetLibraryItem {
   createdAt: number
 }
 
+export interface FrameLayerTransform {
+  /** Translation in document pixels. */
+  tx: number
+  ty: number
+  /** 1.0 = no scale. */
+  scaleX: number
+  scaleY: number
+  /** Rotation in degrees, around the layer center. */
+  rotation: number
+}
+
+export type FrameEasing = "hold" | "linear" | "ease-in" | "ease-out" | "ease-in-out"
+
 export interface TimelineFrame {
   id: string
   name: string
   durationMs: number
   layerVisibility: Record<string, boolean>
   layerOpacity?: Record<string, number>
+  /** Fill opacity overrides keyed by layer id. */
+  layerFillOpacity?: Record<string, number>
+  /** Layer style overrides keyed by layer id. Use null to clear style. */
+  layerStyle?: Record<string, LayerStyle | null>
+  /** Blend-mode overrides keyed by layer id. */
+  layerBlend?: Record<string, BlendMode>
+  /** Per-layer transform keyframes (position, scale, rotation). */
+  layerTransform?: Record<string, FrameLayerTransform>
   transition?: "hold" | "dissolve" | VideoTransition["kind"]
+  /** Easing applied when interpolating tween properties into the next frame. */
+  easing?: FrameEasing
   audioLabel?: string
   compId?: string
   keyframes?: VideoKeyframe[]
   audioTracks?: AudioTrack[]
+  /** Optional thumbnail dataURL cached at capture time. */
+  thumbnail?: string
+}
+
+export interface OnionSkinSettings {
+  enabled: boolean
+  /** Number of frames before the current frame to ghost. */
+  before: number
+  /** Number of frames after the current frame to ghost. */
+  after: number
+  /** Maximum overlay opacity (0..1) for adjacent frames. */
+  opacity: number
+  /** Tint color applied to before/after ghosts ("none" leaves originals untinted). */
+  tint?: "none" | "red-cyan" | "red-blue" | "green-red" | "mono"
+}
+
+export interface TimelineSettings {
+  /** Frame-rate hint used by exporters and tween density. */
+  fps: number
+  /** 0 = infinite loop. */
+  loopCount: number
+  onionSkin?: OnionSkinSettings
 }
 
 export interface DocumentReport {
@@ -1023,6 +1232,7 @@ export interface PsDocument {
   snapToGuides?: boolean
   quickMask?: boolean
   quickMaskCanvas?: HTMLCanvasElement | null
+  quickMaskPaintMode?: QuickMaskPaintMode
   /** Collaborative notes attached to the doc. */
   notes?: Note[]
   /** Web export slices. */
@@ -1059,7 +1269,9 @@ export interface PsDocument {
   paragraphStyles?: Record<string, Record<string, number | string | boolean>>
   assetLibrary?: AssetLibraryItem[]
   timelineFrames?: TimelineFrame[]
+  timelineSettings?: TimelineSettings
   plugins?: PluginDescriptor[]
+  pluginStorage?: Record<string, Record<string, unknown>>
   variableDataSets?: VariableDataSet[]
   modeSettings?: DocumentModeSettings
   reports?: DocumentReport[]
@@ -1117,6 +1329,8 @@ export interface LayerSnapshot {
   colorLabel?: Layer["colorLabel"]
   smartFilters?: SmartFilter[]
   smartSource?: Layer["smartSource"]
+  notes?: LayerNote[]
+  metadata?: LayerMetadata
 }
 
 export interface HistoryEntry {
@@ -1138,6 +1352,7 @@ export interface HistoryEntry {
   channels?: AlphaChannel[]
   quickMask?: boolean
   quickMaskCanvas?: HTMLCanvasElement | null
+  quickMaskPaintMode?: QuickMaskPaintMode
   colorMode?: PsDocument["colorMode"]
   modeSettings?: DocumentModeSettings
   variableDataSets?: VariableDataSet[]
@@ -1348,6 +1563,19 @@ declare global {
   interface Window {
     /** Internal: current custom shape selection */
     __psCustomShape?: string
+    /** Internal: current shape tool options */
+    __psShapeOptions?: Partial<{
+      strokeWidth: number
+      radius: number
+      sides: number
+      innerRadiusRatio: number
+      vertexRoundness: number
+      rotation: number
+      cornerRadiusTL: number
+      cornerRadiusTR: number
+      cornerRadiusBR: number
+      cornerRadiusBL: number
+    }>
   }
   interface CanvasRenderingContext2D {
     /** Non-standard: typographic kerning control (tool-helpers.ts) */

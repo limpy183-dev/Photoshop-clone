@@ -11,15 +11,17 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Download, Search, RotateCcw, Upload } from "lucide-react"
+import { AlertTriangle, Download, Search, RotateCcw, Upload, X } from "lucide-react"
 import { toast } from "sonner"
 import { downloadText } from "./document-io"
 import {
   DEFAULT_SHORTCUTS,
+  buildShortcutOverrideUpdate,
   eventToShortcut,
   isShortcutAssigned,
   loadCustomShortcuts,
   saveCustomShortcuts,
+  shortcutConflictMap,
   validShortcutOverrides,
 } from "./shortcuts"
 
@@ -31,6 +33,8 @@ export function KeyboardShortcutsDialog({
   onOpenChange: (v: boolean) => void
 }) {
   const [filter, setFilter] = React.useState("")
+  const [categoryFilter, setCategoryFilter] = React.useState("All")
+  const [viewFilter, setViewFilter] = React.useState<"all" | "modified" | "conflicts" | "unassigned">("all")
   const [overrides, setOverrides] = React.useState<Record<string, string>>(loadCustomShortcuts)
   const [editingId, setEditingId] = React.useState<string | null>(null)
   const [pendingKeys, setPendingKeys] = React.useState<string | null>(null)
@@ -43,32 +47,25 @@ export function KeyboardShortcutsDialog({
     [overrides],
   )
 
+  const conflicts = React.useMemo(() => shortcutConflictMap(shortcuts), [shortcuts])
+  const conflictIds = React.useMemo(() => new Set(conflicts.flatMap((conflict) => conflict.shortcutIds)), [conflicts])
+  const allCategories = React.useMemo(() => ["All", ...new Set(shortcuts.map((s) => s.category))], [shortcuts])
+  const isModified = React.useCallback((id: string) => id in overrides, [overrides])
   const lowerFilter = filter.toLowerCase()
-  const filtered = lowerFilter
-    ? shortcuts.filter(
-        (s) =>
-          s.action.toLowerCase().includes(lowerFilter) ||
-          s.keys.toLowerCase().includes(lowerFilter) ||
-          s.category.toLowerCase().includes(lowerFilter),
-      )
-    : shortcuts
+  const filtered = shortcuts.filter((s) => {
+    if (categoryFilter !== "All" && s.category !== categoryFilter) return false
+    if (viewFilter === "modified" && !isModified(s.id)) return false
+    if (viewFilter === "conflicts" && !conflictIds.has(s.id)) return false
+    if (viewFilter === "unassigned" && isShortcutAssigned(s.keys)) return false
+    return (
+      !lowerFilter ||
+      s.action.toLowerCase().includes(lowerFilter) ||
+      s.keys.toLowerCase().includes(lowerFilter) ||
+      s.category.toLowerCase().includes(lowerFilter)
+    )
+  })
 
   const categories = [...new Set(filtered.map((s) => s.category))]
-
-  // Check for duplicate key bindings
-  const duplicateKeys = React.useMemo(() => {
-    const seen = new Map<string, string>()
-    const dupes = new Set<string>()
-    for (const s of shortcuts) {
-      if (!isShortcutAssigned(s.keys)) continue
-      const norm = s.keys.toLowerCase()
-      if (seen.has(norm) && seen.get(norm) !== s.id) {
-        dupes.add(norm)
-      }
-      seen.set(norm, s.id)
-    }
-    return dupes
-  }, [shortcuts])
 
   // Handle key capture when editing
   React.useEffect(() => {
@@ -93,12 +90,12 @@ export function KeyboardShortcutsDialog({
   const confirmEdit = () => {
     if (!editingId || !pendingKeys) return
     const defaultEntry = DEFAULT_SHORTCUTS.find((s) => s.id === editingId)
-    const newOverrides = { ...overrides }
-    if (defaultEntry && pendingKeys === defaultEntry.keys) {
-      // Same as default — remove override
+    let newOverrides = buildShortcutOverrideUpdate(shortcuts, overrides, editingId, pendingKeys, {
+      clearConflicts: true,
+    })
+    if (defaultEntry && pendingKeys === defaultEntry.keys && newOverrides[editingId] === pendingKeys) {
+      newOverrides = { ...newOverrides }
       delete newOverrides[editingId]
-    } else {
-      newOverrides[editingId] = pendingKeys
     }
     setOverrides(newOverrides)
     saveCustomShortcuts(newOverrides)
@@ -123,6 +120,15 @@ export function KeyboardShortcutsDialog({
     saveCustomShortcuts({})
     setEditingId(null)
     setPendingKeys(null)
+  }
+
+  const resetCategory = () => {
+    if (categoryFilter === "All") return
+    const ids = new Set(DEFAULT_SHORTCUTS.filter((shortcut) => shortcut.category === categoryFilter).map((shortcut) => shortcut.id))
+    const next = { ...overrides }
+    for (const id of ids) delete next[id]
+    setOverrides(next)
+    saveCustomShortcuts(next)
   }
 
   const exportShortcuts = () => {
@@ -158,7 +164,6 @@ export function KeyboardShortcutsDialog({
     }
   }
 
-  const isModified = (id: string) => id in overrides
   const modifiedCount = Object.keys(overrides).length
 
   return (
@@ -184,12 +189,36 @@ export function KeyboardShortcutsDialog({
         <div className="relative">
           <Search className="absolute left-2 top-2 w-3.5 h-3.5 text-[var(--ps-text-dim)]" />
           <Input
-            placeholder="Search shortcuts…"
+            placeholder="Search shortcuts..."
             aria-label="Search shortcuts"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             className="pl-7 h-8 text-[11px] bg-[var(--ps-panel-2)] border-[var(--ps-divider)]"
           />
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <select
+            value={categoryFilter}
+            onChange={(event) => setCategoryFilter(event.target.value)}
+            aria-label="Shortcut category"
+            className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px]"
+          >
+            {allCategories.map((category) => (
+              <option key={category} value={category}>{category}</option>
+            ))}
+          </select>
+          <select
+            value={viewFilter}
+            onChange={(event) => setViewFilter(event.target.value as typeof viewFilter)}
+            aria-label="Shortcut view"
+            className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px]"
+          >
+            <option value="all">All shortcuts</option>
+            <option value="modified">Modified only</option>
+            <option value="conflicts">Conflicts only</option>
+            <option value="unassigned">Unassigned only</option>
+          </select>
         </div>
 
         <div className="flex items-center gap-2">
@@ -202,9 +231,25 @@ export function KeyboardShortcutsDialog({
             Export
           </Button>
           <span className="ml-auto text-[10px] text-[var(--ps-text-dim)]">
-            {duplicateKeys.size ? `${duplicateKeys.size} conflict${duplicateKeys.size === 1 ? "" : "s"}` : "No conflicts"}
+            {conflicts.length ? `${conflicts.length} conflict${conflicts.length === 1 ? "" : "s"}` : "No conflicts"}
           </span>
         </div>
+
+        {conflicts.length > 0 && (
+          <div className="rounded-sm border border-amber-500/35 bg-amber-500/10 p-2 text-[10px] text-amber-100">
+            <div className="mb-1 flex items-center gap-1 font-medium">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              Conflicting assignments
+            </div>
+            <div className="space-y-0.5">
+              {conflicts.slice(0, 3).map((conflict) => (
+                <div key={conflict.keys}>
+                  {conflict.keys}: {conflict.actions.join(" / ")}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Editing banner */}
         {editingId && (
@@ -212,11 +257,15 @@ export function KeyboardShortcutsDialog({
             <span className="flex-1">
               Press new shortcut for <strong>{shortcuts.find((s) => s.id === editingId)?.action}</strong>:
               <span className="ml-2 font-mono font-semibold text-[var(--ps-accent)]">
-                {pendingKeys ?? "waiting…"}
+                {pendingKeys ?? "waiting..."}
               </span>
             </span>
             <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" onClick={cancelEdit}>
               Cancel
+            </Button>
+            <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" onClick={() => setPendingKeys("None")}>
+              <X className="h-3 w-3" />
+              Clear
             </Button>
             <Button size="sm" className="h-6 text-[10px] px-2" disabled={!pendingKeys} onClick={confirmEdit}>
               Accept
@@ -234,7 +283,7 @@ export function KeyboardShortcutsDialog({
                 .filter((s) => s.category === cat)
                 .map((s) => {
                   const isEditing = editingId === s.id
-                  const isDupe = duplicateKeys.has(s.keys.toLowerCase())
+                  const isDupe = conflictIds.has(s.id)
                   const modified = isModified(s.id)
                   return (
                     <div
@@ -296,6 +345,9 @@ export function KeyboardShortcutsDialog({
             <Button variant="outline" size="sm" onClick={resetAll} disabled={modifiedCount === 0}>
               <RotateCcw className="w-3.5 h-3.5" />
               Restore Defaults
+            </Button>
+            <Button variant="outline" size="sm" onClick={resetCategory} disabled={categoryFilter === "All"}>
+              Reset Category
             </Button>
             <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Close</Button>
           </div>

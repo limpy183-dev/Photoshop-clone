@@ -142,6 +142,38 @@ export function isShortcutAssigned(keys: string) {
   return normalized !== "" && normalized !== "none" && normalized !== "unassigned"
 }
 
+function titleCaseShortcutPart(part: string) {
+  const normalized = part.trim().toLowerCase()
+  if (normalized === "ctrl" || normalized === "control" || normalized === "cmd" || normalized === "command" || normalized === "meta") return "Ctrl"
+  if (normalized === "alt" || normalized === "option") return "Alt"
+  if (normalized === "shift") return "Shift"
+  if (normalized === "esc" || normalized === "escape") return "Esc"
+  if (normalized === "del" || normalized === "delete") return "Del"
+  if (normalized === "space") return "Space"
+  if (normalized === "up" || normalized === "arrowup") return "Up"
+  if (normalized === "down" || normalized === "arrowdown") return "Down"
+  if (normalized === "left" || normalized === "arrowleft") return "Left"
+  if (normalized === "right" || normalized === "arrowright") return "Right"
+  if (/^f\d{1,2}$/.test(normalized)) return normalized.toUpperCase()
+  return part.length === 1 ? part.toUpperCase() : part.trim()
+}
+
+export function normalizeShortcutKeys(keys: string) {
+  if (!isShortcutAssigned(keys)) return "None"
+  return keys
+    .split(/\s*(\/|,)\s*/)
+    .map((part) => {
+      if (part === "/" || part === ",") return part === "/" ? " / " : ", "
+      return part
+        .split("+")
+        .map(titleCaseShortcutPart)
+        .filter(Boolean)
+        .join("+")
+    })
+    .join("")
+    .trim()
+}
+
 /** Convert a KeyboardEvent into a readable shortcut string like "Ctrl+Shift+A". */
 export function eventToShortcut(e: KeyboardEvent | React.KeyboardEvent): string | null {
   const key = e.key
@@ -173,6 +205,71 @@ function shortcutAlternates(keys: string) {
     .split(/\s*(?:\/|,)\s*/)
     .map((part) => part.trim())
     .filter(isShortcutAssigned)
+}
+
+function shortcutCanonical(alternate: string) {
+  const parts = alternate.split("+").map((part) => keyAlias(part.trim())).filter(Boolean)
+  if (!parts.length) return ""
+  const key = parts[parts.length - 1]
+  const modifiers = new Set(parts.slice(0, -1))
+  const ordered = [
+    modifiers.has("ctrl") || modifiers.has("control") || modifiers.has("cmd") || modifiers.has("command") || modifiers.has("meta") ? "ctrl" : "",
+    modifiers.has("alt") || modifiers.has("option") ? "alt" : "",
+    modifiers.has("shift") ? "shift" : "",
+  ].filter(Boolean)
+  return [...ordered, key].join("+")
+}
+
+function shortcutCanonicalSet(keys: string) {
+  return new Set(shortcutAlternates(keys).map(shortcutCanonical).filter(Boolean))
+}
+
+export interface ShortcutConflict {
+  keys: string
+  canonicalKeys: string[]
+  shortcutIds: string[]
+  actions: string[]
+}
+
+export function shortcutConflictMap(shortcuts: readonly Shortcut[]): ShortcutConflict[] {
+  const byKey = new Map<string, { display: string; shortcuts: Shortcut[] }>()
+  for (const shortcut of shortcuts) {
+    for (const alternate of shortcutAlternates(shortcut.keys)) {
+      const canonical = shortcutCanonical(alternate)
+      if (!canonical) continue
+      const current = byKey.get(canonical) ?? { display: normalizeShortcutKeys(alternate), shortcuts: [] }
+      current.shortcuts.push(shortcut)
+      byKey.set(canonical, current)
+    }
+  }
+  return [...byKey.entries()]
+    .filter(([, entry]) => entry.shortcuts.length > 1)
+    .map(([canonical, entry]) => ({
+      keys: entry.display,
+      canonicalKeys: [canonical],
+      shortcutIds: entry.shortcuts.map((shortcut) => shortcut.id),
+      actions: entry.shortcuts.map((shortcut) => shortcut.action),
+    }))
+}
+
+export function buildShortcutOverrideUpdate(
+  shortcuts: readonly Shortcut[],
+  overrides: Record<string, string>,
+  id: string,
+  keys: string,
+  options: { clearConflicts?: boolean } = {},
+) {
+  const normalized = normalizeShortcutKeys(keys)
+  const next = { ...overrides, [id]: normalized }
+  if (!options.clearConflicts || !isShortcutAssigned(normalized)) return next
+
+  const desired = shortcutCanonicalSet(normalized)
+  for (const shortcut of shortcuts) {
+    if (shortcut.id === id) continue
+    const hasConflict = [...shortcutCanonicalSet(shortcut.keys)].some((key) => desired.has(key))
+    if (hasConflict) next[shortcut.id] = "None"
+  }
+  return next
 }
 
 function keyAlias(key: string) {

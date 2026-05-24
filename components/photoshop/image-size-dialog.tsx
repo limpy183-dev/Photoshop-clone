@@ -78,8 +78,9 @@ export function ImageSizeDialog({
           </div>
           <div className="grid grid-cols-[1fr_24px_1fr] items-end gap-2">
             <div className="grid gap-1.5">
-              <Label className="text-[11px]">Width</Label>
+              <Label htmlFor="image-size-width" className="text-[11px]">Width</Label>
               <Input
+                id="image-size-width"
                 type="number"
                 value={width}
                 min={1}
@@ -96,8 +97,9 @@ export function ImageSizeDialog({
               {linked ? <Link2 className="w-4 h-4" /> : <Link2Off className="w-4 h-4" />}
             </button>
             <div className="grid gap-1.5">
-              <Label className="text-[11px]">Height</Label>
+              <Label htmlFor="image-size-height" className="text-[11px]">Height</Label>
               <Input
+                id="image-size-height"
                 type="number"
                 value={height}
                 min={1}
@@ -112,8 +114,9 @@ export function ImageSizeDialog({
             </div>
           )}
           <div className="grid gap-1.5">
-            <Label className="text-[11px]">Resample</Label>
+            <Label htmlFor="image-size-resample" className="text-[11px]">Resample</Label>
             <select
+              id="image-size-resample"
               value={resample}
               onChange={(e) => setResample(e.target.value as typeof resample)}
               className="h-8 bg-[var(--ps-panel-2)] border border-[var(--ps-divider)] rounded-sm px-2 text-[11px]"

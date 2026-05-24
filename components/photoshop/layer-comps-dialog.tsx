@@ -13,45 +13,15 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Copy, Play, Plus, RefreshCw, Save, Trash2 } from "lucide-react"
 import { useEditor } from "./editor-context"
-import type { LayerComp, PsDocument } from "./types"
-
-function uid(prefix: string) {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
-}
-
-function captureCompState(doc: PsDocument): LayerComp["state"] {
-  return Object.fromEntries(
-    doc.layers.map((layer) => [
-      layer.id,
-      {
-        visible: layer.visible,
-        opacity: layer.opacity,
-        blendMode: layer.blendMode,
-        clipped: layer.clipped,
-      },
-    ]),
-  )
-}
+import type { LayerComp } from "./types"
+import { captureLayerCompState, createLayerCompFromDocument, summarizeLayerComp } from "./layer-workflows"
+import { uid } from "./uid"
 
 function uniqueCompName(comps: LayerComp[]) {
   let index = comps.length + 1
   const names = new Set(comps.map((comp) => comp.name.toLowerCase()))
   while (names.has(`layer comp ${index}`.toLowerCase())) index++
   return `Layer Comp ${index}`
-}
-
-function compStats(comp: LayerComp, doc: PsDocument) {
-  const layerIds = new Set(doc.layers.map((layer) => layer.id))
-  const states = Object.entries(comp.state)
-  const matched = states.filter(([id]) => layerIds.has(id))
-  return {
-    layers: matched.length,
-    visible: matched.filter(([, state]) => state.visible).length,
-    hidden: matched.filter(([, state]) => !state.visible).length,
-    faded: matched.filter(([, state]) => state.opacity < 1).length,
-    blended: matched.filter(([, state]) => state.blendMode !== "normal").length,
-    missing: states.length - matched.length,
-  }
 }
 
 export function LayerCompsDialog({
@@ -73,25 +43,14 @@ export function LayerCompsDialog({
   }
 
   const newComp = () => {
-    saveComp(
-      {
-        id: uid("comp"),
-        name: uniqueCompName(comps),
-        state: captureCompState(activeDoc),
-        activeLayerId: activeDoc.activeLayerId,
-        selectedLayerIds: activeDoc.selectedLayerIds,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      },
-      "New Layer Comp",
-    )
+    saveComp(createLayerCompFromDocument(activeDoc, uniqueCompName(comps)), "New Layer Comp")
   }
 
   const updateComp = (comp: LayerComp) => {
     saveComp(
       {
         ...comp,
-        state: captureCompState(activeDoc),
+        state: captureLayerCompState(activeDoc),
         activeLayerId: activeDoc.activeLayerId,
         selectedLayerIds: activeDoc.selectedLayerIds,
       },
@@ -150,7 +109,7 @@ export function LayerCompsDialog({
               New From Current
             </Button>
             <span className="text-[11px] text-[var(--ps-text-dim)]">
-              Captures visibility, opacity, blend mode, clipping, active layer, and selected layers.
+              Captures visibility, opacity, fill, blend mode, clipping, masks, styles, editable layer props, notes, metadata, active layer, and selected layers.
             </span>
           </div>
 
@@ -161,7 +120,7 @@ export function LayerCompsDialog({
               </div>
             ) : (
               comps.map((comp) => {
-                const stats = compStats(comp, activeDoc)
+                const stats = summarizeLayerComp(comp, activeDoc)
                 return (
                   <div key={comp.id} className="border-b border-[var(--ps-divider)] p-2 last:border-b-0">
                     <div className="grid grid-cols-[1fr_auto] gap-2">
@@ -186,11 +145,13 @@ export function LayerCompsDialog({
                         </IconButton>
                       </div>
                     </div>
-                    <div className="mt-2 grid grid-cols-5 gap-1 text-[10px] text-[var(--ps-text-dim)]">
+                    <div className="mt-2 grid grid-cols-7 gap-1 text-[10px] text-[var(--ps-text-dim)]">
                       <MiniStat label="Layers" value={stats.layers} />
                       <MiniStat label="Visible" value={stats.visible} />
                       <MiniStat label="Hidden" value={stats.hidden} />
                       <MiniStat label="Faded" value={stats.faded} />
+                      <MiniStat label="Filters" value={stats.smartFiltered} />
+                      <MiniStat label="Notes" value={stats.annotated} />
                       <MiniStat label="Missing" value={stats.missing} />
                     </div>
                   </div>

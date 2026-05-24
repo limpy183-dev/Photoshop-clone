@@ -15,6 +15,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { makeDocument, useEditor } from "./editor-context"
 import { decontaminateImageDataWithMask, edgeAwareQuickSelectionMask, refineSelectionMaskData } from "./algorithmic-operations"
+import { extractMarchingAntsPaths, refineEdgeBrushMask } from "./tool-helpers"
 import {
   SELECT_AND_MASK_OUTPUT_TARGETS,
   SELECT_AND_MASK_VIEW_MODES,
@@ -144,27 +145,28 @@ export function SelectAndMaskDialog({
     // Marching ants border
     if (viewMode === "marching" || viewMode === "onion") {
       ctx.save()
-      ctx.strokeStyle = "#fff"
-      ctx.lineWidth = 1
+      ctx.scale(scale, scale)
+      ctx.lineWidth = 1 / Math.max(scale, 0.01)
+      ctx.lineJoin = "miter"
       ctx.setLineDash([4, 4])
-      const mImg = mask.getContext("2d")!.getImageData(0, 0, mask.width, mask.height)
-      // Draw simplified edge outline
-      for (let y = 0; y < mask.height; y += 2) {
-        for (let x = 0; x < mask.width; x += 2) {
-          const a = mImg.data[(y * mask.width + x) * 4 + 3]
-          if (a > 127) {
-            const hasEdge =
-              (x > 0 && mImg.data[(y * mask.width + x - 1) * 4 + 3] <= 127) ||
-              (x < mask.width - 1 && mImg.data[(y * mask.width + x + 1) * 4 + 3] <= 127) ||
-              (y > 0 && mImg.data[((y - 1) * mask.width + x) * 4 + 3] <= 127) ||
-              (y < mask.height - 1 && mImg.data[((y + 1) * mask.width + x) * 4 + 3] <= 127)
-            if (hasEdge) {
-              ctx.fillStyle = "#fff"
-              ctx.fillRect(x * scale, y * scale, 1, 1)
-            }
-          }
+      const paths = extractMarchingAntsPaths(mask, { simplifyTolerance: 0.35 })
+      const tracePaths = () => {
+        for (const path of paths) {
+          const first = path.points[0]
+          if (!first) continue
+          ctx.beginPath()
+          ctx.moveTo(first.x, first.y)
+          for (let i = 1; i < path.points.length; i++) ctx.lineTo(path.points[i].x, path.points[i].y)
+          if (path.closed) ctx.closePath()
+          ctx.stroke()
         }
       }
+      ctx.strokeStyle = "rgba(0,0,0,0.95)"
+      ctx.lineDashOffset = 0
+      tracePaths()
+      ctx.strokeStyle = "rgba(255,255,255,0.95)"
+      ctx.lineDashOffset = 4
+      tracePaths()
       ctx.restore()
     }
   }, [activeDoc, activeLayer, viewMode, opacity])
@@ -249,12 +251,20 @@ export function SelectAndMaskDialog({
     const mask = maskRef.current
     if (!mask) return
     const mctx = mask.getContext("2d")!
+    if (activeTool === "refine-edge" && activeLayer) {
+      const points = lastPtRef.current ? [lastPtRef.current, pt] : [pt]
+      const refined = refineEdgeBrushMask(activeLayer.canvas, mask, points, brushSize, erase ? "subtract" : "expand")
+      mctx.clearRect(0, 0, mask.width, mask.height)
+      mctx.drawImage(refined, 0, 0)
+      return
+    }
     if (activeTool === "quick-select" && !erase && activeLayer) {
       const grown = edgeAwareQuickSelectionMask(activeLayer.canvas, {
         seed: pt,
         tolerance: 52 + Math.round(edgeRadius / 6),
         adaptive: smartRadius,
         includeDiagonals: true,
+        edgeSensitivity: smartRadius ? Math.max(1.25, Math.min(3.2, 1.5 + edgeRadius / 110)) : 1.35,
         maxPixels: Math.max(64, Math.round(Math.PI * brushSize * brushSize * 2)),
       })
       mctx.drawImage(grown, 0, 0)

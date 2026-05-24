@@ -17,13 +17,14 @@ import {
 } from "@/components/ui/menubar"
 import { useEditor, makeDocument, makeCanvas, type DocumentLifecycleState, type FileSystemFileHandleLike } from "./editor-context"
 import { compositeLayer } from "./blend-modes"
-import { FILTERS } from "./filters"
+import { FILTER_META, getFilterName } from "./filters-meta"
 import { renderThreeDScene } from "./advanced-subsystems"
 import type { AdvancedSubsystemTab } from "./advanced-subsystems-dialog"
 import type { GapWorkflowKind } from "./gap-workflow-dialog"
 import type { SelectionOperation } from "./management-dialogs"
 import { lazyDialog } from "./lazy-dialog"
 import { dispatchPhotoshopEvent } from "./events"
+import { canPluginUsePermission } from "./plugin-system"
 
 // All dialogs below are lazy-mounted: the JS chunk is fetched only the first
 // time the user opens the dialog, and the component returns null until then.
@@ -215,6 +216,7 @@ import {
   downloadText,
   generateDocumentThumbnail,
   loadImageFromFile,
+  serializePsb,
   serializePsd,
   serializeProject,
 } from "./document-io"
@@ -234,7 +236,7 @@ import {
   selectionToMaskCanvas,
 } from "./tool-helpers"
 import { MAX_PROJECT_FILE_BYTES, assertFileSize } from "./canvas-limits"
-import type { AdjustmentType, DocumentModeSettings, Layer, LayerStyle, TextAntiAliasMode } from "./types"
+import type { AdjustmentType, DocumentModeSettings, Layer, LayerStyle, PluginCommandDescriptor, PluginDescriptor, PluginPermission, TextAntiAliasMode } from "./types"
 import {
   applyTextInsideShape,
   convertTextToEditablePath,
@@ -244,9 +246,23 @@ import {
 } from "./typography-engine"
 import { requestCanvasZoom } from "./zoom-events"
 import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop } from "./adjustment-layers"
+import { createSmartObjectSource } from "./smart-objects"
 
 const menuClass =
   "h-7 px-2 inline-flex items-center text-[12px] text-[var(--ps-text)] hover:bg-[var(--ps-tool-hover)] data-[state=open]:bg-[var(--ps-tool-active)] rounded-none outline-none cursor-default"
+
+function permissionsForPluginCommand(command: PluginCommandDescriptor): PluginPermission[] {
+  if (command.requiredPermissions?.length) return command.requiredPermissions
+  if (command.action.type === "apply-filter") return ["filters:write"]
+  if (command.action.type === "post-message") return ["commands"]
+  return []
+}
+
+function pluginCommandUnavailable(plugin: PluginDescriptor, command: PluginCommandDescriptor) {
+  if (plugin.enabled === false) return "Plugin is disabled"
+  const missing = permissionsForPluginCommand(command).filter((permission) => !canPluginUsePermission(plugin, permission))
+  return missing[0] ? `Missing ${missing[0]} permission` : undefined
+}
 
 function cloneLayerStyle(style: LayerStyle): LayerStyle {
   if (typeof structuredClone === "function") return structuredClone(style)
@@ -260,6 +276,19 @@ type SavePickerWindow = Window & {
     suggestedName?: string
     types?: Array<{ description: string; accept: Record<string, string[]> }>
   }) => Promise<FileSystemFileHandleLike>
+}
+
+type ReadableFileHandle = FileSystemFileHandle & {
+  getFile: () => Promise<File>
+  queryPermission?: (descriptor?: { mode?: "read" | "readwrite" }) => Promise<PermissionState>
+  requestPermission?: (descriptor?: { mode?: "read" | "readwrite" }) => Promise<PermissionState>
+}
+
+type OpenPickerWindow = Window & {
+  showOpenFilePicker?: (options: {
+    multiple?: boolean
+    types?: Array<{ description: string; accept: Record<string, string[]> }>
+  }) => Promise<ReadableFileHandle[]>
 }
 
 interface MenuBarProps {
@@ -670,6 +699,19 @@ export function MenuBar({
       toast.info("Convert the active layer to a smart object before editing its contents.")
       return
     }
+    dispatch({
+      type: "set-smart-object-edit-package",
+      id: activeLayer.id,
+      editPackage: {
+        id: activeLayer.smartSource?.editPackage?.id ?? `pkg_${Math.random().toString(36).slice(2, 9)}`,
+        name: activeLayer.smartSource?.name ?? `${activeLayer.name} Contents`,
+        version: (activeLayer.smartSource?.editPackage?.version ?? 0) + 1,
+        createdAt: activeLayer.smartSource?.editPackage?.createdAt ?? Date.now(),
+        updatedAt: Date.now(),
+        layerCount: 1,
+        sourceHash: activeLayer.smartSource?.sourceHash,
+      },
+    })
     editSmartObject(activeLayer)
   }
 
@@ -679,6 +721,162 @@ export function MenuBar({
       return
     }
     updateSmartObjectParent()
+  }
+
+  const requestReadPermission = async (handle?: ReadableFileHandle): Promise<PermissionState | "unsupported"> => {
+    if (!handle?.queryPermission && !handle?.requestPermission) return "unsupported"
+    try {
+      const current = await handle.queryPermission?.({ mode: "read" })
+      if (current === "granted") return current
+      return (await handle.requestPermission?.({ mode: "read" })) ?? current ?? "unsupported"
+    } catch {
+      return "unsupported"
+    }
+  }
+
+  const fileHash = async (file: File) => {
+    if (!crypto?.subtle) return undefined
+    try {
+      const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer())
+      return Array.from(new Uint8Array(digest)).map((value) => value.toString(16).padStart(2, "0")).join("")
+    } catch {
+      return undefined
+    }
+  }
+
+  const canvasFromImageFile = async (file: File) => {
+    const image = await loadImageFromFile(file)
+    const canvas = makeCanvas(image.naturalWidth, image.naturalHeight)
+    canvas.getContext("2d")!.drawImage(image, 0, 0)
+    return canvas
+  }
+
+  const pickSmartObjectImage = async (): Promise<{ file: File; handle?: ReadableFileHandle; permission: PermissionState | "unsupported" }> => {
+    const picker = (window as OpenPickerWindow).showOpenFilePicker
+    if (picker) {
+      const [handle] = await picker({
+        multiple: false,
+        types: [{ description: "Images", accept: { "image/*": [".png", ".jpg", ".jpeg", ".webp", ".avif", ".gif"] } }],
+      })
+      const permission = await requestReadPermission(handle)
+      return { file: await handle.getFile(), handle, permission }
+    }
+    return new Promise((resolve, reject) => {
+      const input = document.createElement("input")
+      input.type = "file"
+      input.accept = "image/*"
+      input.onchange = () => {
+        const file = input.files?.[0]
+        if (file) resolve({ file, permission: "unsupported" })
+        else reject(new Error("No file selected"))
+      }
+      input.addEventListener("cancel", () => reject(new Error("No file selected")), { once: true })
+      input.click()
+    })
+  }
+
+  const replaceSmartObjectFromFile = async (linkType: "embedded" | "linked") => {
+    const layer = activeLayer
+    if (!layer || (!layer.smartObject && layer.kind !== "smart-object")) {
+      toast.info("Select a smart object layer first.")
+      return
+    }
+    try {
+      const picked = await pickSmartObjectImage()
+      const sourceCanvas = await canvasFromImageFile(picked.file)
+      dispatch({
+        type: "replace-smart-object-contents",
+        id: layer.id,
+        canvas: sourceCanvas,
+        source: {
+          ...(layer.smartSource ?? {}),
+          fileName: picked.file.name,
+          relativePath: picked.file.name,
+          linkType,
+          embedded: linkType === "embedded",
+          status: linkType === "embedded" ? "embedded" : "current",
+          fileHandle: linkType === "linked" ? picked.handle : undefined,
+          fileHandleName: linkType === "linked" ? picked.handle?.name ?? picked.file.name : undefined,
+          handlePermission: linkType === "linked" ? picked.permission : undefined,
+          lastKnownModified: picked.file.lastModified,
+          sourceHash: await fileHash(picked.file),
+          relinkedAt: linkType === "linked" ? Date.now() : layer.smartSource?.relinkedAt,
+          updatedAt: Date.now(),
+        },
+      })
+      requestRender()
+      window.setTimeout(() => commit(linkType === "linked" ? "Relink Smart Object" : "Replace Smart Object Contents", [layer.id]), 0)
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return
+      toast.error(err instanceof Error ? err.message : "Could not replace smart object contents")
+    }
+  }
+
+  const updateLinkedSmartObjectFromMenu = async () => {
+    const layer = activeLayer
+    const handle = layer?.smartSource?.fileHandle as ReadableFileHandle | undefined
+    if (!layer || (!layer.smartObject && layer.kind !== "smart-object")) {
+      toast.info("Select a linked smart object layer first.")
+      return
+    }
+    if (!handle?.getFile) {
+      await replaceSmartObjectFromFile("linked")
+      return
+    }
+    try {
+      const permission = await requestReadPermission(handle)
+      const file = await handle.getFile()
+      const sourceCanvas = await canvasFromImageFile(file)
+      dispatch({
+        type: "replace-smart-object-contents",
+        id: layer.id,
+        canvas: sourceCanvas,
+        source: {
+          ...(layer.smartSource ?? {}),
+          fileName: file.name,
+          relativePath: layer.smartSource?.relativePath ?? file.name,
+          linkType: "linked",
+          embedded: false,
+          status: "current",
+          fileHandle: handle,
+          fileHandleName: handle.name ?? file.name,
+          handlePermission: permission,
+          lastKnownModified: file.lastModified,
+          sourceHash: await fileHash(file),
+          updatedAt: Date.now(),
+        },
+      })
+      requestRender()
+      window.setTimeout(() => commit("Update Linked Smart Object", [layer.id]), 0)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not update linked smart object")
+    }
+  }
+
+  const exportSmartObjectContentsFromMenu = async () => {
+    const layer = activeLayer
+    if (!layer || (!layer.smartObject && layer.kind !== "smart-object")) {
+      toast.info("Select a smart object layer first.")
+      return
+    }
+    const sourceCanvas = layer.smartSource?.canvas ?? layer.canvas
+    const blob = await new Promise<Blob | null>((resolve) => sourceCanvas.toBlob(resolve, "image/png"))
+    if (!blob) {
+      toast.error("Could not export smart object contents")
+      return
+    }
+    downloadBlob(blob, `${safeNameFor(layer.smartSource?.fileName ?? layer.smartSource?.name ?? layer.name)}.png`)
+    dispatch({
+      type: "replace-smart-object-contents",
+      id: layer.id,
+      canvas: sourceCanvas,
+      source: {
+        ...(layer.smartSource ?? {}),
+        exportedAt: Date.now(),
+        status: layer.smartSource?.status ?? (layer.smartSource?.linkType === "embedded" ? "embedded" : "current"),
+      },
+    })
+    window.setTimeout(() => commit("Export Smart Object Contents", [layer.id]), 0)
   }
 
   const fillForeground = (with_: "fg" | "bg" | "white" | "black" | "transparent") => {
@@ -726,8 +924,9 @@ export function MenuBar({
   }
 
   /** Apply a "no-param" filter immediately to all unlocked selected layers. */
-  const applyInstant = (filterId: string) => {
+  const applyInstant = async (filterId: string) => {
     if (!activeDoc) return
+    const { FILTERS } = await import("./filters")
     const f = FILTERS[filterId]
     if (!f) return
     let count = 0
@@ -761,7 +960,7 @@ export function MenuBar({
       toast.info("Open a document before adding an adjustment layer.")
       return
     }
-    const filter = FILTERS[filterId]
+    const filter = FILTER_META[filterId]
     if (!filter) return
     const layer = createAdjustmentLayerModel({
       filterId,
@@ -1189,14 +1388,16 @@ export function MenuBar({
   const openImageOrPsd = () => {
     const input = document.createElement("input")
     input.type = "file"
-    input.accept = "image/*,.psd,image/vnd.adobe.photoshop,application/octet-stream"
+    input.accept = "image/*,.psd,.psb,image/vnd.adobe.photoshop,application/octet-stream"
     input.onchange = async () => {
       const file = input.files?.[0]
       if (!file) return
       try {
-        if (/\.psd$/i.test(file.name) || file.type === "image/vnd.adobe.photoshop") {
+        const photoshopFamily = /\.(?:psd|psb)$/i.test(file.name) || file.type === "image/vnd.adobe.photoshop"
+        if (photoshopFamily) {
           const doc = await deserializePsdFile(file)
-          createDocument(doc, "Open PSD")
+          const kind = /\.psb$/i.test(file.name) ? "PSB" : "PSD"
+          createDocument(doc, `Open ${kind}`)
           dispatch({ type: "add-document-report", report: createDocumentReport(doc, "PSD Import") })
           rememberDoc(doc, "psd")
           return
@@ -1234,6 +1435,19 @@ export function MenuBar({
     }
   }
 
+  const savePsb = async () => {
+    if (!activeDoc) return
+    try {
+      const report = createDocumentReport(activeDoc, "PSD Export")
+      downloadBlob(await serializePsb(activeDoc), `${safeDocName()}.psb`)
+      dispatch({ type: "add-document-report", report })
+      rememberDoc(activeDoc, "psd")
+      toast.success("PSB exported. Browser canvas and memory limits still apply to reopen.")
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not save PSB")
+    }
+  }
+
   const openProject = () => {
     const input = document.createElement("input")
     input.type = "file"
@@ -1264,6 +1478,8 @@ export function MenuBar({
       if (!file || !activeDoc) return
       try {
         const img = await loadImageFromFile(file)
+        const sourceCanvas = makeCanvas(img.naturalWidth, img.naturalHeight)
+        sourceCanvas.getContext("2d")!.drawImage(img, 0, 0)
         const canvas = makeCanvas(activeDoc.width, activeDoc.height)
         const ctx = canvas.getContext("2d")!
         const maxW = activeDoc.width * 0.9
@@ -1284,6 +1500,15 @@ export function MenuBar({
           opacity: 1,
           blendMode: "normal",
           canvas,
+          smartSource: createSmartObjectSource(sourceCanvas, {
+            name: file.name,
+            fileName: file.name,
+            linkType: "embedded",
+            status: "embedded",
+            embedded: true,
+            lastKnownModified: file.lastModified,
+            sourceHash: await fileHash(file),
+          }),
         }
         dispatch({ type: "add-layer", layer })
         setTimeout(() => commit("Place Embedded", [layer.id]), 0)
@@ -1300,6 +1525,23 @@ export function MenuBar({
 
   const openPanel = (id: string) => {
     dispatchPhotoshopEvent("ps-open-panel", id)
+  }
+
+  const pluginCommandItems = (activeDoc?.plugins ?? []).flatMap((plugin) =>
+    (plugin.commands ?? []).map((command) => ({
+      plugin,
+      command,
+      disabledReason: pluginCommandUnavailable(plugin, command),
+    })),
+  )
+
+  const runPluginCommandFromMenu = (plugin: PluginDescriptor, command: PluginCommandDescriptor) => {
+    openAdvancedTab("plugins")
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent("ps-run-plugin-command", {
+        detail: { pluginId: plugin.id, commandId: command.id },
+      }))
+    }, 80)
   }
 
   const saveCurrentWorkspace = () => {
@@ -1408,6 +1650,9 @@ export function MenuBar({
             <DropdownMenuItem onSelect={savePsd} disabled={!activeDoc}>
               Save As PSD...
             </DropdownMenuItem>
+            <DropdownMenuItem onSelect={savePsb} disabled={!activeDoc}>
+              Save As PSB...
+            </DropdownMenuItem>
             <DropdownMenuItem onSelect={placeEmbedded} disabled={!activeDoc}>
               Place Embedded…
             </DropdownMenuItem>
@@ -1513,7 +1758,7 @@ export function MenuBar({
                   if (!l.visible || typeof l.canvas.getContext !== "function") continue
                   compositeLayer(fctx, l.canvas, l.blendMode, l.opacity, l.fillOpacity ?? 1)
                 }
-                const win = window.open("", "_blank", "noopener=no,noreferrer")
+                const win = window.open("about:blank", "_blank")
                 if (!win) return
                 // Even though the popup inherits about:blank as its origin,
                 // we still null out the opener to defend against future
@@ -1956,6 +2201,30 @@ export function MenuBar({
               Edit Smart Object Contents
             </DropdownMenuItem>
             <DropdownMenuItem
+              onSelect={() => void replaceSmartObjectFromFile("embedded")}
+              disabled={!activeLayer || (!activeLayer.smartObject && activeLayer.kind !== "smart-object")}
+            >
+              Replace Contents...
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={() => void replaceSmartObjectFromFile("linked")}
+              disabled={!activeLayer || (!activeLayer.smartObject && activeLayer.kind !== "smart-object")}
+            >
+              Relink to File...
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={() => void updateLinkedSmartObjectFromMenu()}
+              disabled={!activeLayer || (!activeLayer.smartObject && activeLayer.kind !== "smart-object")}
+            >
+              Update Linked Smart Object
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={() => void exportSmartObjectContentsFromMenu()}
+              disabled={!activeLayer || (!activeLayer.smartObject && activeLayer.kind !== "smart-object")}
+            >
+              Export Contents...
+            </DropdownMenuItem>
+            <DropdownMenuItem
               onSelect={updateSmartObjectParentFromMenu}
             >
               Update Parent Smart Object
@@ -2342,14 +2611,27 @@ export function MenuBar({
               <DropdownMenuSubTrigger>Load Selection</DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
                 {(activeDoc?.channels ?? []).map((ch) => (
-                  <DropdownMenuItem
-                    key={ch.id}
-                    onSelect={() => {
-                      dispatch({ type: "load-selection", channelId: ch.id })
-                    }}
-                  >
-                    {ch.name}
-                  </DropdownMenuItem>
+                  <DropdownMenuSub key={ch.id}>
+                    <DropdownMenuSubTrigger>{ch.name}</DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      {([
+                        ["replace", "Replace"],
+                        ["add", "Add"],
+                        ["subtract", "Subtract"],
+                        ["intersect", "Intersect"],
+                      ] as const).map(([mode, label]) => (
+                        <DropdownMenuItem
+                          key={mode}
+                          onSelect={() => {
+                            dispatch({ type: "load-selection", channelId: ch.id, mode })
+                            commit("Load Selection", [])
+                          }}
+                        >
+                          {label}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
                 ))}
                 {!(activeDoc?.channels?.length) && (
                   <DropdownMenuItem disabled>No saved channels</DropdownMenuItem>
@@ -2367,7 +2649,7 @@ export function MenuBar({
               onSelect={() => lastFilter && openFilterDialog(lastFilter)}
             >
               Last Filter
-              {lastFilter ? `: ${FILTERS[lastFilter]?.name}` : ""}
+              {lastFilter ? `: ${getFilterName(lastFilter)}` : ""}
               <DropdownMenuShortcut>⌘F</DropdownMenuShortcut>
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => setFilterGalleryOpen(true)} disabled={!activeLayer}>
@@ -2483,7 +2765,7 @@ export function MenuBar({
               <DropdownMenuSubTrigger>Artistic</DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
                 {["colored-pencil", "cutout", "dry-brush", "film-grain", "fresco", "neon-glow", "paint-daubs", "palette-knife", "plastic-wrap", "poster-edges", "rough-pastels", "smudge-stick", "sponge-filter", "underpainting", "watercolor"].map((id) => (
-                  <DropdownMenuItem key={id} onSelect={() => openFilterDialog(id)}>{FILTERS[id]?.name ?? id}</DropdownMenuItem>
+                  <DropdownMenuItem key={id} onSelect={() => openFilterDialog(id)}>{getFilterName(id)}</DropdownMenuItem>
                 ))}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
@@ -2491,7 +2773,7 @@ export function MenuBar({
               <DropdownMenuSubTrigger>Brush Strokes</DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
                 {["accented-edges", "angled-strokes", "crosshatch", "dark-strokes", "ink-outlines", "spatter", "sprayed-strokes", "sumi-e"].map((id) => (
-                  <DropdownMenuItem key={id} onSelect={() => openFilterDialog(id)}>{FILTERS[id]?.name ?? id}</DropdownMenuItem>
+                  <DropdownMenuItem key={id} onSelect={() => openFilterDialog(id)}>{getFilterName(id)}</DropdownMenuItem>
                 ))}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
@@ -2499,7 +2781,7 @@ export function MenuBar({
               <DropdownMenuSubTrigger>Sketch</DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
                 {["bas-relief", "chalk-charcoal", "charcoal", "chrome", "conte-crayon", "graphic-pen", "halftone-pattern", "note-paper", "photocopy", "plaster", "reticulation", "stamp-filter", "torn-edges", "water-paper"].map((id) => (
-                  <DropdownMenuItem key={id} onSelect={() => openFilterDialog(id)}>{FILTERS[id]?.name ?? id}</DropdownMenuItem>
+                  <DropdownMenuItem key={id} onSelect={() => openFilterDialog(id)}>{getFilterName(id)}</DropdownMenuItem>
                 ))}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
@@ -2507,7 +2789,7 @@ export function MenuBar({
               <DropdownMenuSubTrigger>Texture</DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
                 {["craquelure", "grain", "mosaic-tiles", "patchwork", "stained-glass", "texturizer"].map((id) => (
-                  <DropdownMenuItem key={id} onSelect={() => openFilterDialog(id)}>{FILTERS[id]?.name ?? id}</DropdownMenuItem>
+                  <DropdownMenuItem key={id} onSelect={() => openFilterDialog(id)}>{getFilterName(id)}</DropdownMenuItem>
                 ))}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
@@ -2663,6 +2945,23 @@ export function MenuBar({
           <DropdownMenuTrigger className={menuClass}>Plugins</DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-72">
             <DropdownMenuItem onSelect={() => openAdvancedTab("plugins")} disabled={!activeDoc}>Plugin Manager...</DropdownMenuItem>
+            {pluginCommandItems.length ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Installed Commands</DropdownMenuLabel>
+                {pluginCommandItems.slice(0, 12).map(({ plugin, command, disabledReason }) => (
+                  <DropdownMenuItem
+                    key={`${plugin.id}-${command.id}`}
+                    disabled={!!disabledReason}
+                    onSelect={() => runPluginCommandFromMenu(plugin, command)}
+                  >
+                    {command.title}
+                    <DropdownMenuShortcut className="max-w-32 truncate">{plugin.name}</DropdownMenuShortcut>
+                  </DropdownMenuItem>
+                ))}
+              </>
+            ) : null}
+            <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => openAdvancedTab("libraries")} disabled={!activeDoc}>Creative Cloud Libraries...</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => openAdvancedTab("libraries")} disabled={!activeDoc}>Adobe Stock / Fonts...</DropdownMenuItem>
           </DropdownMenuContent>

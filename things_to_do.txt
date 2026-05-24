@@ -1,0 +1,84 @@
+  Dependency cleanup — ~5 dead deps, smaller bundle
+  - claude-adapter@2.1.1 (zero imports), autoprefixer@10.4.20 (Tailwind 4 internalizes it), date-fns, react-day-picker, recharts,
+  embla-carousel-react, vaul, input-otp (only consumed by unused shadcn stubs in components/ui/{chart,carousel,drawer,input-otp,calendar}.tsx).
+  The fast-uri override in package.json is also redundant — latest stable matches the pin.
+
+  Dedupe scattered helpers — kills drift bugs
+  - hexToRgb reimplemented 8+ times with subtly different alpha behavior (tool-helpers.ts:18, layer-styles.ts:21, algorithmic-operations.ts:1123,
+  advanced-subsystems.ts:328, three-d-video-engine.ts:130, panels/color-panel.tsx:6, plus three hexToRgba variants). Consolidate to one
+  color-utils.ts.
+  - makeCanvas duplicated 5× including SSR-unsafe variants (tool-helpers.ts:5 throws on server, editor-context.tsx:317 is safe). 21 files import
+  each — a wrong import path crashes SSR.
+  - uid("...") reimplemented 6+ times (editor-context.tsx:126, document-io.ts, advanced-subsystems.ts, advanced-subsystems-dialog.tsx:106,
+  panels/channels-panel.tsx, workspace-dialogs.tsx).
+
+  Dead code
+  - LayerSourceCapture type + preCaptured plumbing (editor-context.tsx:380-393, :2862, :3049) — author already marked "Currently unused".
+  - _materializeLayerSnapshotCanvas (editor-context.tsx:410-428) — zero callers, underscore-prefixed.
+
+  Silent perf wins
+  - useRenderSubscription resubscribes on every callback identity change (editor-context.tsx:4620-4625) — store cb in a ref, subscribe stable
+  wrapper once.
+  - documentStatuses memo depends on [state] (editor-context.tsx:3696-3711) — re-runs for every slider tick. Depend on [state.documents,
+  state.documentLifecycle, state.histories].
+  - polygonBounds recomputed per pointermove on lassos (tool-helpers.ts:1993, canvas-view.tsx:3533/3703/4305) — maintain incremental min/max as
+  points are pushed.
+  - cloneStamp reads the entire source canvas per dab (tool-helpers.ts:1113) — ~64MB pixel traffic per dab on a 4K source. Read only the
+  transformed bbox, or stroke-scope cache.
+
+  🔧 Medium-effort, high-payoff
+
+  Performance
+  - dispatch runs the reducer twice per action (editor-context.tsx:3547-3574) — once for stateRef mirror, once for React. With mark-document-dirty
+   follow-ups, up to 4× per high-frequency action. Consider useSyncExternalStore to unify.
+  - blurStamp/sharpenStamp allocate a full Uint8ClampedArray copy + double-pass per dab (tool-helpers.ts:1693, :1764) — fold the circle test into
+  the first pass, write back in-place.
+  - lensBlur (filters.ts:2086) and radialBlur (filters.ts:2204) not in WORKER_SUPPORTED_FILTERS — main-thread block. surfaceBlur (filters.ts:2166)
+   is O(w·h·r²) without tiling — multi-second pause on 4K.
+  - menu-bar.tsx:20 eagerly imports the full 170KB FILTERS registry just to render submenu names. Split into filters-meta.ts (id/name/category)
+  and filters.ts (kernels); await import() kernels on invocation.
+  - Filter algorithms duplicated between filters.ts and the worker source string (filter-worker.ts:191+ has copies of boxBlur, brightnessContrast,
+   etc.) — extract a shared no-DOM kernel module the worker can importScripts.
+
+  Architecture
+  - Layer is a fat optional bag (types.ts:770-819) with text?, shape?, path?, adjustment?, etc. all optional — drives most of the as unknown as
+  and ! calls. Split into a discriminated union on kind. (Large change but pays off everywhere.)
+  - Field-by-field layer-clone ladder duplicated in 4 places (editor-context.tsx:600-629, :632-663, :2580-2606, :2920-2998) — every new optional
+  field breaks one of duplicate/history/comp until you patch all four. Extract cloneLayerFields.
+  - commit() wrapped in setTimeout(0) at 145 call sites across 33 files (e.g. advanced-subsystems-dialog.tsx:903/1440/1448/1458) — comment at
+  editor-context.tsx:3801 says the defer isn't needed. Race window for input on the next tick.
+  - 102 places call layer.canvas.getContext().drawImage(...) then dispatch later — state mutation outside the reducer with React unaware. Add a
+  mutate-layer-canvas action that runs draw + history snapshot atomically.
+  - AdvancedSubsystemsDialog is 1796 lines, eagerly imports 3D/video/color-pipeline engines (advanced-subsystems-dialog.tsx) — split workspaces
+  into per-tab lazy chunks.
+
+  Accessibility
+  - Canvas stage has no role/aria-label/tabIndex/aria-live (canvas-view.tsx:4863) — SR users can't perceive the document at all.
+  - Command palette <Input> lacks role="combobox", aria-expanded, aria-controls, aria-activedescendant (command-palette.tsx:771-803) — highlighted
+   commands aren't announced.
+  - ImageSizeDialog and similar (image-size-dialog.tsx:80-127) — <Label> without htmlFor, bare <select> unlabeled. Pattern repeats across
+  canvas-size/stroke/new-document dialogs.
+
+  🧪 Test coverage gaps
+
+  - Layer-style rasterizer has zero pixel tests (layer-styles.ts:754, 978 LOC) — PSD spec only round-trips serialization shape, never the rendered
+   output of drop-shadow / inner-shadow / outer-glow / bevel / satin / stroke.
+  - ~70 of 135 filters lack any golden (filter-fidelity-golden.spec.ts pins ~12). Parameterize the existing 3×3 fixture loop over the full
+  registry — small change, broad coverage. Especially missing: motion-blur, iris-blur, tilt-shift, path-blur, oil-paint, glass, wave, ripple,
+  polar-coordinates, displace, wind, ocean-ripple, custom-convolution, equalize, replace-color, selective-color, shadows-highlights,
+  color-halftone, mezzotint.
+  - Painting/healing stamps untested — blurStamp, sharpenStamp, dodgeBurnStamp, healStamp, transformedCloneStamp, paintBucketFill,
+  magneticLassoSnap, customShapePath, perspectiveUnwarp, liquifyWarp.
+  - No persistence migration tests — PREFERENCES_SCHEMA_VERSION = 2 exists but no v1→v2 upgrade fixture, no malformed-localStorage recovery, no
+  recent-documents cap-eviction test.
+
+  ⚠️  Lower priority / nits
+
+  - lazyDialog constraint P extends Record<string, unknown> forces 7 as unknown as double-casts (menu-bar.tsx:74/85/120/136/159/173/185) — loosen
+  to P extends object.
+  - Typed event bus exists (events.ts:1-37) but only 14% of call sites use it — 185 raw window.dispatchEvent(new CustomEvent("ps-...")) calls in
+  20 files. Migration is mechanical.
+  - dispatch({ type: "set-layer-path", path: undefined as unknown as PathProps }) (panels/paths-panel.tsx:105) — split into set-layer-path /
+  clear-layer-path or accept null.
+  - menu-bar.tsx:434-540 registers 27 window listeners with paired teardown — extract useEventListeners(handlers) helper.
+  - PSD marker decode uses deprecated unescape(encodeURIComponent(...)) (psd-vector-text.ts:115-126) — switch to TextEncoder/TextDecoder.

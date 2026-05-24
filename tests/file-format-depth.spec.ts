@@ -3,17 +3,26 @@ import { expect, test } from "@playwright/test"
 import {
   capabilityForAdvancedFormat,
   decodeDicomPreview,
+  decodeEpsPreview,
+  encodeDicomImageData,
+  encodeEpsCanvas,
+  encodePdfCanvas,
+  encodeRadianceHdrImageData,
   decodeRadianceHdrPreview,
   extractEmbeddedJpegDataUrl,
   extractMetadataFromFile,
   inspectAdvancedFormatFile,
 } from "../components/photoshop/advanced-subsystems"
+import { serializePsd } from "../components/photoshop/document-io"
 import { getCapability } from "../components/photoshop/capabilities"
 import {
   decodeAdvancedRasterBuffer,
+  decodeAdvancedRasterBufferAsync,
   decodePnmBuffer,
   decodeTgaBuffer,
   decodeTiffBuffer,
+  encodeOpenExrImageData,
+  encodeTiffImageData,
   inspectExrHeader,
 } from "../components/photoshop/raster-codecs"
 import { installFixtureDom } from "./photoshop-fixtures"
@@ -175,19 +184,148 @@ test("TIFF decoder reads baseline uncompressed RGB strips without browser image 
   ])
 })
 
-test("advanced raster dispatcher covers local non-browser formats and keeps unsupported EXR honest", () => {
+test("advanced raster dispatcher covers sync local non-browser formats", () => {
   const tiff = decodeAdvancedRasterBuffer(makeBaselineRgbTiff(), "fixture.tif")
   expect(tiff?.format).toBe("TIFF")
-
-  const exr = new Uint8Array([0x76, 0x2f, 0x31, 0x01, 2, 0, 0, 0]).buffer
-  const info = inspectExrHeader(exr)
-
-  expect(info.magic).toBe(true)
-  expect(info.pixelDecoded).toBe(false)
-  expect(info.warnings.join(" ")).toContain("dedicated OpenEXR codec")
 })
 
-test("PSB strategy reports Photoshop header version, large-document limits, and metadata-only import", async () => {
+test("OpenEXR encoder and async decoder round-trip scene-linear pixels into an editable preview", async () => {
+  installFixtureDom()
+  const source = new ImageData(new Uint8ClampedArray([
+    255, 0, 0, 255,
+    0, 128, 255, 128,
+  ]), 2, 1)
+
+  const exr = encodeOpenExrImageData(source)
+  const info = inspectExrHeader(exr)
+  const decoded = await decodeAdvancedRasterBufferAsync(exr, "fixture.exr")
+
+  expect(info.magic).toBe(true)
+  expect(info.pixelDecoded).toBe(true)
+  expect(decoded?.format).toBe("OpenEXR")
+  expect(decoded?.width).toBe(2)
+  expect(decoded?.height).toBe(1)
+  expect(decoded?.bitDepth).toBe(32)
+  expect(decoded?.imageData.data[0]).toBeGreaterThan(240)
+  expect(decoded?.imageData.data[6]).toBeGreaterThan(240)
+})
+
+test("TIFF encoder writes a TIFF that the async decoder imports as editable RGBA pixels", async () => {
+  installFixtureDom()
+  const source = new ImageData(new Uint8ClampedArray([
+    12, 34, 56, 255,
+    200, 180, 160, 100,
+  ]), 2, 1)
+
+  const tiff = encodeTiffImageData(source)
+  const decoded = await decodeAdvancedRasterBufferAsync(tiff, "roundtrip.tiff")
+
+  expect(decoded?.format).toBe("TIFF")
+  expect(decoded?.width).toBe(2)
+  expect(decoded?.height).toBe(1)
+  expect(Array.from(decoded!.imageData.data.slice(0, 8))).toEqual([
+    12, 34, 56, 255,
+    200, 180, 160, 100,
+  ])
+})
+
+test("Radiance HDR export and RLE import produce tone-mapped editable previews", async () => {
+  installFixtureDom()
+  const source = new ImageData(new Uint8ClampedArray([
+    255, 128, 0, 255,
+    10, 20, 30, 255,
+  ]), 2, 1)
+  const exported = encodeRadianceHdrImageData(source)
+  const exportedCanvas = await decodeRadianceHdrPreview(new File([exported], "roundtrip.hdr"))
+
+  expect(exportedCanvas?.width).toBe(2)
+  expect(exportedCanvas?.height).toBe(1)
+
+  const rle = new Uint8Array([
+    ...ascii("#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 8\n"),
+    2, 2, 0, 8,
+    136, 64,
+    136, 128,
+    136, 255,
+    136, 136,
+  ]).buffer
+  const rleCanvas = await decodeRadianceHdrPreview(new File([rle], "rle.hdr"))
+  const pixel = rleCanvas!.getContext("2d")!.getImageData(0, 0, 1, 1).data
+
+  expect(rleCanvas?.width).toBe(8)
+  expect(pixel[2]).toBeGreaterThan(pixel[0])
+})
+
+test("DICOM export writes a secondary-capture file that the preview decoder can import", async () => {
+  installFixtureDom()
+  const source = new ImageData(new Uint8ClampedArray([
+    20, 40, 60, 255,
+    200, 220, 240, 255,
+  ]), 2, 1)
+
+  const dicom = encodeDicomImageData(source, "fixture")
+  const bytes = new Uint8Array(dicom)
+  const canvas = await decodeDicomPreview(new File([dicom], "roundtrip.dcm"))
+
+  expect(String.fromCharCode(...bytes.slice(128, 132))).toBe("DICM")
+  expect(canvas?.width).toBe(2)
+  expect(canvas?.height).toBe(1)
+})
+
+test("PDF and EPS exporters produce importable flattened/vector-subset handoff files", async () => {
+  installFixtureDom()
+  const canvas = document.createElement("canvas")
+  canvas.width = 2
+  canvas.height = 1
+  canvas.getContext("2d")!.fillRect(0, 0, 2, 1)
+
+  const pdf = await encodePdfCanvas(canvas, "fixture")
+  const eps = encodeEpsCanvas(canvas, "fixture")
+  const epsPreview = await decodeEpsPreview(new File([eps], "fixture.eps"))
+
+  expect(new TextDecoder("ascii").decode(pdf.slice(0, 8))).toContain("%PDF-")
+  expect(new TextDecoder("ascii").decode(eps.slice(0, 64))).toContain("%!PS-Adobe")
+  expect(epsPreview?.width).toBe(2)
+  expect(epsPreview?.height).toBe(1)
+})
+
+test("PSB serialization writes Large Document Format while PSD remains version 1", async () => {
+  installFixtureDom()
+  const canvas = document.createElement("canvas")
+  canvas.width = 2
+  canvas.height = 1
+  const doc = {
+    id: "doc_psb",
+    name: "PSB Fixture",
+    width: 2,
+    height: 1,
+    zoom: 1,
+    layers: [{
+      id: "layer_1",
+      name: "Pixels",
+      kind: "raster",
+      visible: true,
+      locked: false,
+      opacity: 1,
+      blendMode: "normal",
+      canvas,
+    }],
+    activeLayerId: "layer_1",
+    selectedLayerIds: ["layer_1"],
+    background: "#ffffff",
+    colorMode: "RGB",
+    bitDepth: 8,
+    selection: { bounds: null, shape: "rect" },
+  } as never
+
+  const psd = new DataView(await (await serializePsd(doc)).arrayBuffer())
+  const psb = new DataView(await (await serializePsd(doc, { psb: true })).arrayBuffer())
+
+  expect(psd.getUint16(4, false)).toBe(1)
+  expect(psb.getUint16(4, false)).toBe(2)
+})
+
+test("PSB strategy reports Photoshop header version, large-document limits, and native-backed import path", async () => {
   const file = new File([photoshopHeader(2, 120000, 90000)], "wall-wrap.psb", {
     type: "image/vnd.adobe.photoshop",
   })
@@ -195,11 +333,11 @@ test("PSB strategy reports Photoshop header version, large-document limits, and 
   const report = await inspectAdvancedFormatFile(file)
 
   expect(report.capability.id).toBe("psb")
-  expect(report.capability.support).toBe("metadata")
-  expect(report.capability.supportLabel).toMatch(/Metadata only/)
+  expect(report.capability.support).toBe("native")
+  expect(report.capability.supportLabel).toMatch(/Browser-limited/)
   expect(report.technical.join("\n")).toContain("PSB Large Document Format header: version 2")
   expect(report.technical.join("\n")).toContain("120000x90000")
-  expect(report.technical.join("\n")).toContain("layer/resource payload is not decoded")
+  expect(report.technical.join("\n")).toContain("ag-psd Large Document mode")
 })
 
 test("advanced subsystem file readers reject oversized files before loading bytes", async () => {
@@ -236,30 +374,30 @@ test("advanced capability matrix models TIFF, PDF, EPS, HEIF, and JPEG 2000 with
   const jp2 = capabilityForAdvancedFormat("archive.jp2", "image/jp2") as AdvancedFormatCapabilityWithExport
 
   expect(tiff.id).toBe("baseline-tiff")
-  expect(tiff.exportPath).toContain("flattened RGB/RGBA preview")
+  expect(tiff.exportPath).toContain("TIFF encoder")
   expect(tiff.limitations).toContain("BigTIFF")
 
   expect(pdf.id).toBe("pdf")
-  expect(pdf.support).toBe("metadata")
-  expect(pdf.exportPath).toContain("composite preview")
-  expect(pdf.layerResult).toContain("Does not create editable PDF vectors")
+  expect(pdf.support).toBe("preview")
+  expect(pdf.exportPath).toContain("single-page flattened PDF")
+  expect(pdf.layerResult).toContain("first page")
 
   expect(eps.id).toBe("eps")
-  expect(eps.support).toBe("metadata")
+  expect(eps.support).toBe("preview")
   expect(eps.limitations).toContain("PostScript")
 
   expect(heif.id).toBe("heif")
-  expect(heif.support).toBe("metadata")
-  expect(heif.decodePath).toContain("No HEIF/HEIC decoder")
-  expect(heif.exportPath).toContain("Unsupported")
+  expect(heif.support).toBe("preview")
+  expect(heif.decodePath).toContain("HEIF/HEIC decoder")
+  expect(heif.exportPath).toContain("No browser-safe HEIF writer")
 
   expect(jp2.id).toBe("jpeg2000")
-  expect(jp2.support).toBe("metadata")
-  expect(jp2.decodePath).toContain("No JPEG 2000 decoder")
-  expect(jp2.exportPath).toContain("Unsupported")
+  expect(jp2.support).toBe("preview")
+  expect(jp2.decodePath).toContain("JPEG 2000 decoder")
+  expect(jp2.exportPath).toContain("No JPEG 2000 writer")
 
   expect(getCapability("format.pdf").status).toBe("approximation")
-  expect(getCapability("format.eps").status).toBe("unsupported")
-  expect(getCapability("format.heif").status).toBe("unsupported")
-  expect(getCapability("format.jpeg2000").status).toBe("unsupported")
+  expect(getCapability("format.eps").status).toBe("approximation")
+  expect(getCapability("format.heif").status).toBe("approximation")
+  expect(getCapability("format.jpeg2000").status).toBe("approximation")
 })

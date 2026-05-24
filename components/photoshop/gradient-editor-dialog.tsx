@@ -14,20 +14,13 @@ import { Slider } from "@/components/ui/slider"
 import { Label } from "@/components/ui/label"
 import { Trash2 } from "lucide-react"
 import type { GradientStop, MultiGradient } from "./types"
+import { hexToRgba } from "./color-utils"
 
 interface GradientEditorProps {
   open: boolean
   onOpenChange: (v: boolean) => void
   gradient: MultiGradient
   onGradientChange: (g: MultiGradient) => void
-}
-
-function hexToRgba(hex: string, opacity: number): string {
-  const raw = hex.replace("#", "").padEnd(6, "0").slice(0, 6)
-  const r = parseInt(raw.slice(0, 2), 16)
-  const g = parseInt(raw.slice(2, 4), 16)
-  const b = parseInt(raw.slice(4, 6), 16)
-  return `rgba(${r},${g},${b},${opacity})`
 }
 
 function gradientToCSS(stops: GradientStop[]): string {

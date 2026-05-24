@@ -183,6 +183,7 @@ const TOOL_GROUPS: ToolGroup[] = [
       { id: "shape-rounded-rect", name: "Rounded Rectangle Tool", shortcut: "U", icon: Square },
       { id: "shape-ellipse", name: "Ellipse Tool", shortcut: "U", icon: Circle },
       { id: "shape-polygon", name: "Polygon Tool", shortcut: "U", icon: Triangle },
+      { id: "shape-star", name: "Star Tool", shortcut: "U", icon: Star },
       { id: "shape-triangle", name: "Triangle Tool", shortcut: "U", icon: Triangle },
       { id: "shape-line", name: "Line Tool", shortcut: "U", icon: Triangle },
       { id: "custom-shape", name: "Custom Shape Tool", shortcut: "U", icon: Star },

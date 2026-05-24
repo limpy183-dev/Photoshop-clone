@@ -12,6 +12,7 @@ import type {
   TypographyAxisDefinition,
   Vec3,
 } from "./types"
+import { shapeToEditablePath } from "./vector-path-operations"
 
 export interface FontCandidate {
   family: string
@@ -46,6 +47,12 @@ export interface FontDiagnostics {
   }>
 }
 
+export interface FontSubstitutionResult {
+  layers: Layer[]
+  changedLayerIds: string[]
+  report: FontDiagnostics
+}
+
 export interface FindReplaceOptions {
   find: string
   replace: string
@@ -75,6 +82,8 @@ export interface TypographyRenderPlan {
   fontKerning: "auto" | "normal" | "none"
   fontVariantCaps: "normal" | "small-caps"
   fontVariantLigatures: "normal" | "none"
+  writingMode: "horizontal-tb" | "vertical-rl" | "vertical-lr"
+  textOrientation: "mixed" | "upright" | "sideways"
   letterSpacing: string
   renderHints: {
     mode: TextAntiAliasMode
@@ -85,11 +94,40 @@ export interface TypographyRenderPlan {
   }
 }
 
+export interface OpenTypeFeatureToggle {
+  key: keyof OpenTypeControls
+  tag: string
+  label: string
+  defaultEnabled: boolean
+}
+
+export interface TextPathGlyphLayout {
+  char: string
+  x: number
+  y: number
+  angle: number
+  advance: number
+  baselineOffset: number
+}
+
 export const DEFAULT_VARIABLE_AXIS_DEFINITIONS: TypographyAxisDefinition[] = [
   { tag: "wght", name: "Weight", min: 100, max: 900, defaultValue: 400 },
   { tag: "wdth", name: "Width", min: 50, max: 200, defaultValue: 100 },
   { tag: "slnt", name: "Slant", min: -15, max: 0, defaultValue: 0 },
   { tag: "opsz", name: "Optical Size", min: 8, max: 72, defaultValue: 14 },
+]
+
+const OPEN_TYPE_FEATURE_TOGGLES: OpenTypeFeatureToggle[] = [
+  { key: "ligatures", tag: "liga", label: "Ligatures", defaultEnabled: true },
+  { key: "discretionaryLigatures", tag: "dlig", label: "Discretionary Ligatures", defaultEnabled: false },
+  { key: "contextualAlternates", tag: "calt", label: "Contextual Alternates", defaultEnabled: true },
+  { key: "stylisticAlternates", tag: "salt", label: "Stylistic Alternates", defaultEnabled: false },
+  { key: "swash", tag: "swsh", label: "Swash", defaultEnabled: false },
+  { key: "ordinals", tag: "ordn", label: "Ordinals", defaultEnabled: false },
+  { key: "fractions", tag: "frac", label: "Fractions", defaultEnabled: false },
+  { key: "smallCaps", tag: "smcp", label: "Small Caps", defaultEnabled: false },
+  { key: "oldstyleFigures", tag: "onum", label: "Oldstyle Figures", defaultEnabled: false },
+  { key: "tabularFigures", tag: "tnum", label: "Tabular Figures", defaultEnabled: false },
 ]
 
 const WEB_SAFE_FONT_CANDIDATES: FontCandidate[] = [
@@ -248,6 +286,16 @@ export function buildOpenTypeFeatureSettings(controls: OpenTypeControls = {}) {
   return features.map(([tag, enabled]) => `"${tag}" ${enabled ? 1 : 0}`).join(", ")
 }
 
+export function listOpenTypeFeatureToggles(options: { supportedTags?: Set<string> | string[] } = {}) {
+  const supported = Array.isArray(options.supportedTags)
+    ? new Set(options.supportedTags)
+    : options.supportedTags
+  if (!supported) return OPEN_TYPE_FEATURE_TOGGLES.map((toggle) => ({ ...toggle }))
+  return OPEN_TYPE_FEATURE_TOGGLES
+    .filter((toggle) => supported.has(toggle.tag))
+    .map((toggle) => ({ ...toggle }))
+}
+
 export function buildCanvasFont(text: TextProps) {
   const axes = normalizeVariableAxes(text.variableAxes, axisDefinitionsFor(text.variableAxes, text.variableAxisDefinitions))
   const axisWeight = axes.wght
@@ -274,6 +322,8 @@ export function buildTypographyRenderPlan(text: TextProps): TypographyRenderPlan
     fontKerning: text.kerning === "optical" ? "normal" : text.kerning === "metrics" || text.kerning === undefined ? "auto" : "none",
     fontVariantCaps: controls.smallCaps ? "small-caps" : "normal",
     fontVariantLigatures: controls.ligatures === false ? "none" : "normal",
+    writingMode: text.vertical ? (text.verticalWritingMode === "lr" ? "vertical-lr" : "vertical-rl") : "horizontal-tb",
+    textOrientation: text.vertical ? (text.tateChuYoko ? "mixed" : "upright") : "mixed",
     letterSpacing: `${formatAxisValue(trackingPx)}px`,
     renderHints: antiAliasRenderHints(mode),
   }
@@ -359,6 +409,50 @@ export function diagnoseDocumentFonts(
   return { missingFonts, availableFonts, layersByFont, substitutions, diagnostics }
 }
 
+export function resolveFontSubstitutions(
+  layers: readonly Layer[],
+  options: {
+    availableFonts?: Set<string>
+    substitutions?: Record<string, string>
+    fallbackFont?: string
+  } = {},
+): FontSubstitutionResult {
+  const fallbackFont = options.fallbackFont ?? "Arial"
+  const report = diagnoseDocumentFonts(layers, { availableFonts: options.availableFonts, fallbackFont })
+  const substitutions = { ...report.substitutions, ...(options.substitutions ?? {}) }
+  const changedLayerIds: string[] = []
+  const nextLayers = layers.map((layer) => {
+    if (!layer.text?.font) return layer
+    const originalFont = layer.text.font
+    const available = options.availableFonts ? options.availableFonts.has(originalFont) : browserFontAvailable(originalFont)
+    if (available) return layer
+    const substitute = substitutions[originalFont] ?? fallbackFont
+    changedLayerIds.push(layer.id)
+    return {
+      ...layer,
+      text: {
+        ...layer.text,
+        font: substitute,
+        missingFontOriginal: originalFont,
+        fontSubstitution: substitute,
+      },
+    }
+  })
+  return {
+    layers: nextLayers,
+    changedLayerIds,
+    report: {
+      ...report,
+      substitutions,
+      diagnostics: report.diagnostics.map((diagnostic) =>
+        diagnostic.status === "missing"
+          ? { ...diagnostic, substitute: substitutions[diagnostic.font] ?? fallbackFont }
+          : diagnostic,
+      ),
+    },
+  }
+}
+
 function inferTargetMetrics(text: TextProps) {
   const visibleChars = [...text.content.replace(/\s/g, "")].length || 1
   const targetWidth = text.boxWidth && text.boxWidth > 0
@@ -431,17 +525,92 @@ export function findReplaceTextLayers(layers: readonly Layer[], options: FindRep
   return { layers: nextLayers, matches, changedLayerIds, replacements }
 }
 
-export function applyTextInsideShape(text: TextProps, shape: ShapeProps, options: { inset?: number } = {}): TextProps {
+export function applyTextInsideShape(
+  text: TextProps,
+  shape: ShapeProps,
+  options: {
+    inset?: number
+    insets?: Partial<{ top: number; right: number; bottom: number; left: number }>
+    verticalAlign?: "top" | "middle" | "bottom"
+  } = {},
+): TextProps {
   const inset = Math.max(0, options.inset ?? text.textShapeInset ?? 0)
+  const previousInsets = text.textShapeInsets
+  const insets = {
+    top: Math.max(0, options.insets?.top ?? previousInsets?.top ?? inset),
+    right: Math.max(0, options.insets?.right ?? previousInsets?.right ?? inset),
+    bottom: Math.max(0, options.insets?.bottom ?? previousInsets?.bottom ?? inset),
+    left: Math.max(0, options.insets?.left ?? previousInsets?.left ?? inset),
+  }
   return {
     ...text,
-    x: shape.x + inset,
-    y: shape.y + inset,
-    boxWidth: Math.max(1, shape.w - inset * 2),
-    boxHeight: Math.max(1, shape.h - inset * 2),
+    x: shape.x + insets.left,
+    y: shape.y + insets.top,
+    boxWidth: Math.max(1, shape.w - insets.left - insets.right),
+    boxHeight: Math.max(1, shape.h - insets.top - insets.bottom),
     textShape: { ...shape, stroke: shape.stroke ? { ...shape.stroke } : null },
     textShapeInset: inset,
+    textShapeInsets: insets,
+    textShapeVerticalAlign: options.verticalAlign ?? text.textShapeVerticalAlign ?? "top",
   }
+}
+
+export function layoutTextOnPath(text: TextProps): TextPathGlyphLayout[] {
+  const points = text.textPath ?? []
+  if (points.length < 2) return []
+  const segments: Array<{ x1: number; y1: number; x2: number; y2: number; len: number; start: number }> = []
+  const pts = text.textPathClosed ? [...points, points[0]] : points
+  let total = 0
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i]
+    const b = pts[i + 1]
+    const len = Math.hypot(b.x - a.x, b.y - a.y)
+    if (len <= 0) continue
+    segments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, len, start: total })
+    total += len
+  }
+  if (!segments.length || total <= 0) return []
+
+  const content = text.allCaps ? text.content.toUpperCase() : text.content
+  const advances = [...content].map((char) => (char === "\n" ? text.size : glyphAdvance(text, char)))
+  const textWidth = advances.reduce((sum, advance) => sum + advance, 0)
+  const align = text.textPathAlign ?? "start"
+  let cursor = align === "center" ? Math.max(0, (total - textWidth) / 2) : align === "end" ? Math.max(0, total - textWidth) : 0
+  cursor += text.textPathStartOffset ?? 0
+  if (text.textPathClosed) cursor = ((cursor % total) + total) % total
+  const baselineOffset = text.textPathBaselineOffset ?? 0
+  const flip = text.textPathFlip === true
+  const glyphs: TextPathGlyphLayout[] = []
+
+  for (let i = 0; i < content.length; i++) {
+    const char = content[i]
+    const advance = advances[i]
+    if (char === "\n") {
+      cursor += advance
+      continue
+    }
+    let mid = cursor + advance / 2
+    if (text.textPathClosed) mid = ((mid % total) + total) % total
+    const segment = segmentAtPathDistance(segments, mid)
+    if (!segment) break
+    const local = (mid - segment.start) / segment.len
+    const x = segment.x1 + (segment.x2 - segment.x1) * local
+    const y = segment.y1 + (segment.y2 - segment.y1) * local
+    let angle = Math.atan2(segment.y2 - segment.y1, segment.x2 - segment.x1)
+    if (flip) angle += Math.PI
+    glyphs.push({ char, x, y, angle, advance, baselineOffset })
+    cursor += advance
+    if (!text.textPathClosed && cursor > total) break
+  }
+
+  return glyphs
+}
+
+function segmentAtPathDistance(
+  segments: Array<{ x1: number; y1: number; x2: number; y2: number; len: number; start: number }>,
+  distance: number,
+) {
+  return segments.find((segment) => distance >= segment.start && distance <= segment.start + segment.len) ?? segments[segments.length - 1]
 }
 
 function glyphAdvance(text: TextProps, char: string) {
@@ -468,6 +637,12 @@ function pushGlyphOutline(points: PathPoint[], x: number, y: number, w: number, 
 
 export function convertTextToEditablePath(text: TextProps): PathProps {
   const points: PathPoint[] = []
+  const subpaths: PathProps[] = []
+  if (text.textShape) {
+    const shapePath = shapeToEditablePath(text.textShape)
+    points.push(...shapePath.points)
+    subpaths.push(shapePath)
+  }
   const lineHeight = text.leading ?? text.size * 1.2
   let x = text.x
   let y = text.y
@@ -481,16 +656,22 @@ export function convertTextToEditablePath(text: TextProps): PathProps {
     }
     const advance = glyphAdvance(text, char)
     if (char.trim()) {
-      pushGlyphOutline(points, x, y, Math.max(2, advance * 0.86), text.size, Math.max(1, text.size * 0.08))
+      const glyphPoints: PathPoint[] = []
+      pushGlyphOutline(glyphPoints, x, y, Math.max(2, advance * 0.86), text.size, Math.max(1, text.size * 0.08))
+      points.push(...glyphPoints)
+      subpaths.push({ points: glyphPoints, closed: true })
     }
     x += advance
   }
 
   if (!points.length) {
-    pushGlyphOutline(points, text.x, text.y, Math.max(4, text.size * 0.4), Math.max(4, text.size), 1)
+    const glyphPoints: PathPoint[] = []
+    pushGlyphOutline(glyphPoints, text.x, text.y, Math.max(4, text.size * 0.4), Math.max(4, text.size), 1)
+    points.push(...glyphPoints)
+    subpaths.push({ points: glyphPoints, closed: true })
   }
 
-  return { points, closed: true }
+  return { points, closed: true, subpaths }
 }
 
 function vec(x: number, y: number, z: number): Vec3 {

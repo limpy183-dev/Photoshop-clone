@@ -57,6 +57,8 @@ import type { AdjustmentType, BlendMode, Layer, LayerKind } from "../types"
 import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop } from "../adjustment-layers"
 import { dispatchPhotoshopEvent } from "../events"
 import type { MergedRenderChange } from "../render-bus"
+import { createLayerMetadata, layerMatchesQuery } from "../layer-workflows"
+import { uid } from "../uid"
 
 const BLENDS: BlendMode[] = [
   "normal",
@@ -226,7 +228,7 @@ export function LayersPanel() {
   })
 
   const visibleLayers = collapseFiltered.filter((l) => {
-    if (search && !l.name.toLowerCase().includes(search.toLowerCase())) return false
+    if (search && !layerMatchesQuery(l, search)) return false
     if (filterKind === "all") return true
     if (filterKind === "locked") return layerLocked(l) || !!l.lockDraw || !!l.lockMove || !!l.lockTransparency
     if (filterKind === "hidden") return !l.visible
@@ -246,6 +248,37 @@ export function LayersPanel() {
     dispatch({ type: "set-layer-color-label", id, label })
     setContextMenu(null)
     setTimeout(() => commit("Layer Color Label", [id]), 0)
+  }
+
+  const addLayerNote = (layer: Layer) => {
+    const text = window.prompt("Layer note", layer.notes?.[0]?.text ?? "")
+    if (!text?.trim()) return
+    dispatch({
+      type: "add-layer-note",
+      id: layer.id,
+      note: {
+        id: uid("layer_note"),
+        text: text.trim(),
+        createdAt: Date.now(),
+      },
+    })
+    setContextMenu(null)
+    setTimeout(() => commit("Layer Note", [layer.id]), 0)
+  }
+
+  const editLayerTags = (layer: Layer) => {
+    const value = window.prompt("Layer tags", (layer.metadata?.tags ?? []).join(", "))
+    if (value === null) return
+    dispatch({
+      type: "set-layer-metadata",
+      id: layer.id,
+      metadata: createLayerMetadata({
+        ...(layer.metadata ?? {}),
+        tags: value.split(",").map((tag) => tag.trim()).filter(Boolean),
+      }),
+    })
+    setContextMenu(null)
+    setTimeout(() => commit("Layer Metadata", [layer.id]), 0)
   }
 
   const commitLayerChange = (label: string, ids: string[] = active ? [active.id] : []) => {
@@ -863,10 +896,31 @@ export function LayersPanel() {
 
       {contextMenu ? (
         <div
-          className="fixed z-50 w-44 border border-[var(--ps-divider)] bg-[var(--ps-panel)] py-1 text-[11px] shadow-xl"
+          className="fixed z-50 w-52 border border-[var(--ps-divider)] bg-[var(--ps-panel)] py-1 text-[11px] shadow-xl"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onPointerDown={(e) => e.stopPropagation()}
         >
+          {(() => {
+            const layer = activeDoc.layers.find((candidate) => candidate.id === contextMenu.layerId)
+            if (!layer) return null
+            return (
+              <>
+                <button
+                  className="flex w-full items-center px-2 py-1 text-left hover:bg-[var(--ps-tool-hover)]"
+                  onClick={() => addLayerNote(layer)}
+                >
+                  Add Layer Note
+                </button>
+                <button
+                  className="flex w-full items-center px-2 py-1 text-left hover:bg-[var(--ps-tool-hover)]"
+                  onClick={() => editLayerTags(layer)}
+                >
+                  Edit Tags/Metadata
+                </button>
+                <div className="my-1 border-t border-[var(--ps-divider)]" />
+              </>
+            )
+          })()}
           <div className="px-2 py-1 text-[10px] text-[var(--ps-text-dim)]">Layer Color</div>
           {COLOR_LABELS.map((label) => (
             <button

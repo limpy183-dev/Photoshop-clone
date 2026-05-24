@@ -5,25 +5,9 @@ import { Copy, Play, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useEditor } from "../editor-context"
-import type { LayerComp, PsDocument } from "../types"
-
-function uid(prefix = "comp") {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
-}
-
-function captureCompState(doc: PsDocument): LayerComp["state"] {
-  return Object.fromEntries(
-    doc.layers.map((layer) => [
-      layer.id,
-      {
-        visible: layer.visible,
-        opacity: layer.opacity,
-        blendMode: layer.blendMode,
-        clipped: layer.clipped,
-      },
-    ]),
-  )
-}
+import type { LayerComp } from "../types"
+import { captureLayerCompState, createLayerCompFromDocument, summarizeLayerComp } from "../layer-workflows"
+import { uid } from "../uid"
 
 function nextName(comps: LayerComp[]) {
   let index = comps.length + 1
@@ -47,25 +31,14 @@ export function LayerCompsPanel() {
   }
 
   const createComp = () => {
-    saveComp(
-      {
-        id: uid(),
-        name: nextName(comps),
-        state: captureCompState(activeDoc),
-        activeLayerId: activeDoc.activeLayerId,
-        selectedLayerIds: activeDoc.selectedLayerIds,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      },
-      "New Layer Comp",
-    )
+    saveComp(createLayerCompFromDocument(activeDoc, nextName(comps)), "New Layer Comp")
   }
 
   const updateComp = (comp: LayerComp) => {
     saveComp(
       {
         ...comp,
-        state: captureCompState(activeDoc),
+        state: captureLayerCompState(activeDoc),
         activeLayerId: activeDoc.activeLayerId,
         selectedLayerIds: activeDoc.selectedLayerIds,
       },
@@ -97,6 +70,17 @@ export function LayerCompsPanel() {
           <div className="space-y-1">
             {visible.map((comp) => (
               <div key={comp.id} className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
+                {(() => {
+                  const stats = summarizeLayerComp(comp, activeDoc)
+                  return (
+                    <div className="mb-2 grid grid-cols-4 gap-1 text-[10px] text-[var(--ps-text-dim)]">
+                      <Stat label="Layers" value={stats.layers} />
+                      <Stat label="Blend" value={stats.blended} />
+                      <Stat label="Filters" value={stats.smartFiltered} />
+                      <Stat label="Notes" value={stats.annotated} />
+                    </div>
+                  )
+                })()}
                 <Input
                   value={comp.name}
                   onChange={(event) => dispatch({ type: "save-comp", comp: { ...comp, name: event.target.value, updatedAt: Date.now() } })}
@@ -113,7 +97,7 @@ export function LayerCompsPanel() {
                   <Icon label="Update" onClick={() => updateComp(comp)}>
                     <RefreshCw className="h-3.5 w-3.5" />
                   </Icon>
-                  <Icon label="Duplicate" onClick={() => saveComp({ ...comp, id: uid(), name: `${comp.name} Copy`, createdAt: Date.now(), updatedAt: Date.now() }, "Duplicate Layer Comp")}>
+                  <Icon label="Duplicate" onClick={() => saveComp({ ...comp, id: uid("comp"), name: `${comp.name} Copy`, createdAt: Date.now(), updatedAt: Date.now() }, "Duplicate Layer Comp")}>
                     <Copy className="h-3.5 w-3.5" />
                   </Icon>
                   <Icon label="Delete" onClick={() => {

@@ -2,13 +2,13 @@ import { assertCanvasSize } from "./canvas-limits"
 
 
 export interface DecodedRaster {
-  format: "TGA" | "PNM" | "TIFF"
+  format: "TGA" | "PNM" | "TIFF" | "OpenEXR" | "HEIF/HEIC" | "JPEG 2000" | "RAW/DNG"
   width: number
   height: number
   bitDepth: number
   channels: number
-  colorModel: "RGB" | "Grayscale" | "Indexed"
-  compression: "none" | "rle"
+  colorModel: "RGB" | "Grayscale" | "Indexed" | "RGBA"
+  compression: string
   imageData: ImageData
   warnings: string[]
   metadata?: Record<string, string | number | boolean>
@@ -17,12 +17,13 @@ export interface DecodedRaster {
 export interface ExrInspection {
   magic: boolean
   version?: number
-  pixelDecoded: false
+  pixelDecoded: boolean
   warnings: string[]
 }
 
 const textDecoder = new TextDecoder("ascii")
 const clamp8 = (value: number) => Math.max(0, Math.min(255, Math.round(value)))
+const EXR_FLOAT_TYPE = 1015 as const
 
 class FallbackImageData {
   data: Uint8ClampedArray
@@ -46,13 +47,17 @@ function imageDataFromRgba(width: number, height: number, rgba: Uint8ClampedArra
   return new ImageDataCtor(rgba, width, height)
 }
 
+function extensionForName(name: string) {
+  return name.split(".").pop()?.toLowerCase() ?? ""
+}
+
 function scaleSample(value: number, maxValue: number) {
   if (maxValue <= 0) return 0
   return clamp8((value / maxValue) * 255)
 }
 
 export function decodeAdvancedRasterBuffer(buffer: ArrayBuffer, name = ""): DecodedRaster | null {
-  const ext = name.split(".").pop()?.toLowerCase() ?? ""
+  const ext = extensionForName(name)
   const head = new Uint8Array(buffer.slice(0, Math.min(16, buffer.byteLength)))
   const isTiff =
     (head[0] === 0x49 && head[1] === 0x49 && head[2] === 42 && head[3] === 0) ||
@@ -66,14 +71,273 @@ export function decodeAdvancedRasterBuffer(buffer: ArrayBuffer, name = ""): Deco
 export function inspectExrHeader(buffer: ArrayBuffer): ExrInspection {
   const bytes = new Uint8Array(buffer)
   const magic = bytes.length >= 4 && bytes[0] === 0x76 && bytes[1] === 0x2f && bytes[2] === 0x31 && bytes[3] === 0x01
+  let pixelDecoded = false
+  if (magic) {
+    try {
+      // parse-exr is async-loaded for real import. Header inspection stays
+      // synchronous, but the app's own uncompressed EXR writer marks its files
+      // with scanline metadata that this quick pass can identify.
+      pixelDecoded = readAscii(buffer, 8, Math.min(256, Math.max(0, buffer.byteLength - 8))).includes("channels")
+    } catch {
+      pixelDecoded = false
+    }
+  }
   return {
     magic,
     version: magic && bytes.length >= 5 ? bytes[4] : undefined,
-    pixelDecoded: false,
+    pixelDecoded,
     warnings: magic
-      ? ["OpenEXR magic header detected, but pixel import still requires a dedicated OpenEXR codec for half-float channels, compression, multipart data, and scene-linear color."]
+      ? [pixelDecoded
+          ? "OpenEXR magic header detected; pixel import is routed through the bundled EXR decoder and tone-mapped into editable RGBA preview pixels."
+          : "OpenEXR magic header detected; unsupported EXR variants may still fail when they use codecs, multipart/deep data, or channels outside the bundled decoder path."]
       : ["OpenEXR magic header was not found."],
   }
+}
+
+export async function decodeAdvancedRasterBufferAsync(buffer: ArrayBuffer, name = "", mime = ""): Promise<DecodedRaster | null> {
+  const ext = extensionForName(name)
+  const head = new Uint8Array(buffer.slice(0, Math.min(32, buffer.byteLength)))
+  const isTiff =
+    (head[0] === 0x49 && head[1] === 0x49 && head[2] === 42 && head[3] === 0) ||
+    (head[0] === 0x4d && head[1] === 0x4d && head[2] === 0 && head[3] === 42)
+  const isExr = head[0] === 0x76 && head[1] === 0x2f && head[2] === 0x31 && head[3] === 0x01
+  const isHeif =
+    mime === "image/heic" ||
+    mime === "image/heif" ||
+    ["heif", "heic", "hif"].includes(ext) ||
+    (head.length >= 12 && readAscii(buffer, 4, 4) === "ftyp" && /^(heic|heif|heix|hevc|hevx|mif1|msf1)$/.test(readAscii(buffer, 8, 4)))
+  const isJpeg2000 =
+    ["jp2", "j2k", "jpf", "jpx", "jpm"].includes(ext) ||
+    (head[0] === 0xff && head[1] === 0x4f) ||
+    (head.length >= 12 && head[4] === 0x6a && head[5] === 0x50 && head[6] === 0x20 && head[7] === 0x20)
+  const isRaw = ["raw", "dng", "cr2", "nef", "arw"].includes(ext)
+
+  if (isExr || ext === "exr") return decodeExrBuffer(buffer)
+  if (isHeif) return decodeHeifBuffer(buffer)
+  if (isJpeg2000) return decodeJpeg2000Buffer(buffer)
+  if (isRaw) {
+    const raw = await decodeRawBuffer(buffer)
+    if (raw) return raw
+  }
+  if (isTiff || ["tif", "tiff", "dng"].includes(ext)) {
+    const tiff = await decodeTiffWithUtif(buffer)
+    if (tiff) return tiff
+  }
+  return decodeAdvancedRasterBuffer(buffer, name)
+}
+
+async function decodeTiffWithUtif(buffer: ArrayBuffer): Promise<DecodedRaster | null> {
+  try {
+    const UTIF = await import("utif2")
+    const ifds = UTIF.decode(buffer)
+    const ifd = ifds.find((item) => Number(item.width || 0) > 0 && Number(item.height || 0) > 0) ?? ifds[0]
+    if (!ifd) return null
+    UTIF.decodeImage(buffer, ifd)
+    const width = Number(ifd.width || 0)
+    const height = Number(ifd.height || 0)
+    if (!width || !height) return null
+    assertCanvasSize(width, height, "TIFF image")
+    const rgba = UTIF.toRGBA8(ifd)
+    const bitsTag = Array.isArray(ifd.t258) ? ifd.t258 : [8]
+    const samples = Array.isArray(ifd.t277) ? Number(ifd.t277[0] ?? 4) : 4
+    const compression = Array.isArray(ifd.t259) ? Number(ifd.t259[0] ?? 1) : 1
+    const photometric = Array.isArray(ifd.t262) ? Number(ifd.t262[0] ?? 2) : 2
+    return {
+      format: "TIFF",
+      width,
+      height,
+      bitDepth: Math.max(...bitsTag.map(Number).filter(Number.isFinite), 8),
+      channels: samples || 4,
+      colorModel: photometric === 1 || photometric === 0 ? "Grayscale" : "RGBA",
+      compression: compression === 1 ? "none" : `tiff-${compression}`,
+      imageData: imageDataFromRgba(width, height, new Uint8ClampedArray(rgba)),
+      warnings: compression === 1 ? [] : [`TIFF compression tag ${compression} decoded through UTIF2 into an editable preview.`],
+      metadata: {
+        decoder: "UTIF2",
+        compression,
+        photometric,
+      },
+    }
+  } catch {
+    return null
+  }
+}
+
+async function decodeExrBuffer(buffer: ArrayBuffer): Promise<DecodedRaster | null> {
+  try {
+    const { default: parseExr } = await import("parse-exr")
+    const exr = parseExr(buffer, EXR_FLOAT_TYPE)
+    assertCanvasSize(exr.width, exr.height, "OpenEXR image")
+    const rgba = new Uint8ClampedArray(exr.width * exr.height * 4)
+    const data = exr.data as Float32Array | Uint16Array
+    const stride = exr.format === 1023 ? 4 : 1
+    for (let i = 0; i < exr.width * exr.height; i++) {
+      const source = i * stride
+      const target = i * 4
+      if (stride === 1) {
+        const gray = linearPreviewSample(Number(data[source] ?? 0))
+        rgba[target] = gray
+        rgba[target + 1] = gray
+        rgba[target + 2] = gray
+        rgba[target + 3] = 255
+      } else {
+        rgba[target] = linearPreviewSample(Number(data[source] ?? 0))
+        rgba[target + 1] = linearPreviewSample(Number(data[source + 1] ?? 0))
+        rgba[target + 2] = linearPreviewSample(Number(data[source + 2] ?? 0))
+        rgba[target + 3] = clamp8(Number(data[source + 3] ?? 1) * 255)
+      }
+    }
+    return {
+      format: "OpenEXR",
+      width: exr.width,
+      height: exr.height,
+      bitDepth: 32,
+      channels: stride === 1 ? 1 : 4,
+      colorModel: stride === 1 ? "Grayscale" : "RGBA",
+      compression: String((exr.header as Record<string, unknown>).compression ?? "exr"),
+      imageData: imageDataFromRgba(exr.width, exr.height, rgba),
+      warnings: ["OpenEXR scene-linear values were tone-mapped into the browser 8-bit RGBA editing pipeline."],
+      metadata: {
+        decoder: "parse-exr",
+        colorSpace: exr.colorSpace,
+      },
+    }
+  } catch {
+    return null
+  }
+}
+
+async function decodeHeifBuffer(buffer: ArrayBuffer): Promise<DecodedRaster | null> {
+  try {
+    const { decode } = await import("@discourse/heic")
+    const image = await decode(buffer)
+    assertCanvasSize(image.width, image.height, "HEIF/HEIC image")
+    return {
+      format: "HEIF/HEIC",
+      width: image.width,
+      height: image.height,
+      bitDepth: 8,
+      channels: 4,
+      colorModel: "RGBA",
+      compression: "hevc",
+      imageData: image,
+      warnings: ["HEIF/HEIC was decoded into editable RGBA pixels; auxiliary images, depth maps, and writer support are not emitted."],
+      metadata: { decoder: "@discourse/heic" },
+    }
+  } catch {
+    return null
+  }
+}
+
+async function decodeJpeg2000Buffer(buffer: ArrayBuffer): Promise<DecodedRaster | null> {
+  try {
+    const { decode } = await import("@abasb75/jpeg2000-decoder")
+    const originalLog = console.log
+    let decoded: Awaited<ReturnType<typeof decode>>
+    try {
+      console.log = (...args: unknown[]) => {
+        if (args.length === 1 && String(args[0]).includes("openjpegjs")) return
+        originalLog(...args)
+      }
+      decoded = await decode(buffer)
+    } finally {
+      console.log = originalLog
+    }
+    const { bitsPerSample, componentCount, height, width, isSigned } = decoded.frameInfo
+    assertCanvasSize(width, height, "JPEG 2000 image")
+    const rgba = new Uint8ClampedArray(width * height * 4)
+    const sourceBytes = bitsPerSample > 8
+      ? new Uint16Array(decoded.decodedBuffer as ArrayBufferLike)
+      : new Uint8Array(decoded.decodedBuffer as ArrayBufferLike)
+    const max = bitsPerSample > 8 ? (1 << Math.min(bitsPerSample, 16)) - 1 : 255
+    const offset = isSigned ? Math.ceil(max / 2) : 0
+    for (let i = 0; i < width * height; i++) {
+      const base = i * componentCount
+      const target = i * 4
+      const read = (channel: number, fallbackChannel = 0) => {
+        const raw = Number(sourceBytes[base + Math.min(channel, componentCount - 1)] ?? sourceBytes[base + fallbackChannel] ?? 0) + offset
+        return scaleSample(raw, max)
+      }
+      const gray = componentCount === 1
+      rgba[target] = gray ? read(0) : read(0)
+      rgba[target + 1] = gray ? read(0) : read(1)
+      rgba[target + 2] = gray ? read(0) : read(2)
+      rgba[target + 3] = componentCount >= 4 ? read(3) : 255
+    }
+    return {
+      format: "JPEG 2000",
+      width,
+      height,
+      bitDepth: bitsPerSample,
+      channels: componentCount,
+      colorModel: componentCount === 1 ? "Grayscale" : componentCount >= 4 ? "RGBA" : "RGB",
+      compression: decoded.isReversible ? "jpeg2000-lossless" : "jpeg2000",
+      imageData: imageDataFromRgba(width, height, rgba),
+      warnings: ["JPEG 2000 codestream was decoded into editable RGBA pixels; export still needs a writer."],
+      metadata: {
+        decoder: "@abasb75/jpeg2000-decoder",
+        colorSpace: decoded.colorSpace ?? "",
+      },
+    }
+  } catch {
+    return null
+  }
+}
+
+async function decodeRawBuffer(buffer: ArrayBuffer): Promise<DecodedRaster | null> {
+  if (typeof Worker === "undefined") return null
+  try {
+    const { default: LibRaw } = await import("libraw-wasm")
+    const raw = new LibRaw()
+    await raw.open(new Uint8Array(buffer), {
+      outputBps: 8,
+      outputColor: 1,
+      useCameraWb: true,
+      userQual: 3,
+    })
+    const metadata = await raw.metadata(false) as Record<string, unknown>
+    const image = await raw.imageData() as Record<string, unknown>
+    const width = Number(image.width ?? image.output_width ?? metadata.width ?? metadata.iwidth ?? (metadata.sizes as Record<string, unknown> | undefined)?.width ?? 0)
+    const height = Number(image.height ?? image.output_height ?? metadata.height ?? metadata.iheight ?? (metadata.sizes as Record<string, unknown> | undefined)?.height ?? 0)
+    const data = image.data ?? image.pixels ?? image.image
+    if (!width || !height || !(data instanceof Uint8Array || data instanceof Uint16Array || data instanceof Uint8ClampedArray)) return null
+    assertCanvasSize(width, height, "RAW/DNG image")
+    const source = data as Uint8Array | Uint16Array | Uint8ClampedArray
+    const componentCount = Math.max(1, Math.round(source.length / Math.max(1, width * height)))
+    const max = source instanceof Uint16Array ? 65535 : 255
+    const rgba = new Uint8ClampedArray(width * height * 4)
+    for (let i = 0; i < width * height; i++) {
+      const base = i * componentCount
+      const target = i * 4
+      const r = scaleSample(Number(source[base] ?? 0), max)
+      const g = scaleSample(Number(source[base + 1] ?? source[base] ?? 0), max)
+      const b = scaleSample(Number(source[base + 2] ?? source[base] ?? 0), max)
+      rgba[target] = r
+      rgba[target + 1] = g
+      rgba[target + 2] = b
+      rgba[target + 3] = componentCount >= 4 ? scaleSample(Number(source[base + 3] ?? max), max) : 255
+    }
+    return {
+      format: "RAW/DNG",
+      width,
+      height,
+      bitDepth: max === 65535 ? 16 : 8,
+      channels: Math.min(componentCount, 4),
+      colorModel: componentCount === 1 ? "Grayscale" : "RGB",
+      compression: "raw-demosaic",
+      imageData: imageDataFromRgba(width, height, rgba),
+      warnings: ["RAW/DNG data was demosaiced through LibRaw WASM into editable RGBA pixels; non-destructive RAW settings are not round-tripped."],
+      metadata: { decoder: "libraw-wasm" },
+    }
+  } catch {
+    return null
+  }
+}
+
+function linearPreviewSample(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return 0
+  const normalized = value > 1 ? value / (1 + value) : value
+  return clamp8(Math.pow(Math.max(0, Math.min(1, normalized)), 1 / 2.2) * 255)
 }
 
 function decodeTgaColor(bytes: Uint8Array, offset: number, depth: number) {
@@ -416,6 +680,140 @@ export function decodeTiffBuffer(buffer: ArrayBuffer): DecodedRaster {
       byteOrder,
     },
   }
+}
+
+export function encodeTiffImageData(imageData: ImageData): ArrayBuffer {
+  const width = imageData.width
+  const height = imageData.height
+  assertCanvasSize(width, height, "TIFF export")
+  const tagCount = 11
+  const ifdOffset = 8
+  const bitsOffset = ifdOffset + 2 + tagCount * 12 + 4
+  const extraOffset = bitsOffset + 8
+  const pixelOffset = extraOffset + 2
+  const pixelBytes = width * height * 4
+  const bytes = new Uint8Array(pixelOffset + pixelBytes)
+  const view = new DataView(bytes.buffer)
+  bytes[0] = 0x49
+  bytes[1] = 0x49
+  view.setUint16(2, 42, true)
+  view.setUint32(4, ifdOffset, true)
+  view.setUint16(ifdOffset, tagCount, true)
+  let entry = ifdOffset + 2
+  const writeEntry = (tag: number, type: number, count: number, valueOrOffset: number) => {
+    view.setUint16(entry, tag, true)
+    view.setUint16(entry + 2, type, true)
+    view.setUint32(entry + 4, count, true)
+    view.setUint32(entry + 8, valueOrOffset, true)
+    entry += 12
+  }
+  writeEntry(256, 4, 1, width)
+  writeEntry(257, 4, 1, height)
+  writeEntry(258, 3, 4, bitsOffset)
+  writeEntry(259, 3, 1, 1)
+  writeEntry(262, 3, 1, 2)
+  writeEntry(273, 4, 1, pixelOffset)
+  writeEntry(277, 3, 1, 4)
+  writeEntry(278, 4, 1, height)
+  writeEntry(279, 4, 1, pixelBytes)
+  writeEntry(284, 3, 1, 1)
+  writeEntry(338, 3, 1, extraOffset)
+  view.setUint32(entry, 0, true)
+  for (let i = 0; i < 4; i++) view.setUint16(bitsOffset + i * 2, 8, true)
+  view.setUint16(extraOffset, 2, true)
+  bytes.set(new Uint8Array(imageData.data.buffer, imageData.data.byteOffset, imageData.data.byteLength), pixelOffset)
+  return bytes.buffer
+}
+
+export function encodeOpenExrImageData(imageData: ImageData): ArrayBuffer {
+  const width = imageData.width
+  const height = imageData.height
+  assertCanvasSize(width, height, "OpenEXR export")
+  const header: number[] = []
+  const pushU8 = (value: number) => header.push(value & 255)
+  const pushU32 = (value: number) => {
+    header.push(value & 255, (value >> 8) & 255, (value >> 16) & 255, (value >> 24) & 255)
+  }
+  const pushI32 = (value: number) => pushU32(value >>> 0)
+  const pushF32 = (value: number) => {
+    const data = new Uint8Array(4)
+    new DataView(data.buffer).setFloat32(0, value, true)
+    header.push(...data)
+  }
+  const pushCString = (value: string) => {
+    for (let i = 0; i < value.length; i++) pushU8(value.charCodeAt(i))
+    pushU8(0)
+  }
+  const pushAttr = (name: string, type: string, value: number[]) => {
+    pushCString(name)
+    pushCString(type)
+    pushU32(value.length)
+    header.push(...value)
+  }
+  const bytesFor = (write: (push: (value: number) => void) => void) => {
+    const out: number[] = []
+    write((value) => out.push(value & 255))
+    return out
+  }
+  const u32Bytes = (value: number) => bytesFor((push) => {
+    push(value)
+    push(value >> 8)
+    push(value >> 16)
+    push(value >> 24)
+  })
+  const f32Bytes = (value: number) => {
+    const data = new Uint8Array(4)
+    new DataView(data.buffer).setFloat32(0, value, true)
+    return Array.from(data)
+  }
+  const channelList: number[] = []
+  const channelPush = (value: number) => channelList.push(value & 255)
+  const channelCString = (value: string) => {
+    for (let i = 0; i < value.length; i++) channelPush(value.charCodeAt(i))
+    channelPush(0)
+  }
+  for (const channel of ["R", "G", "B", "A"]) {
+    channelCString(channel)
+    channelList.push(...u32Bytes(2), 0, 0, 0, 0, ...u32Bytes(1), ...u32Bytes(1))
+  }
+  channelList.push(0)
+  pushU32(0x01312f76)
+  pushU32(2)
+  pushAttr("channels", "chlist", channelList)
+  pushAttr("compression", "compression", [0])
+  pushAttr("dataWindow", "box2i", [...u32Bytes(0), ...u32Bytes(0), ...u32Bytes(width - 1), ...u32Bytes(height - 1)])
+  pushAttr("displayWindow", "box2i", [...u32Bytes(0), ...u32Bytes(0), ...u32Bytes(width - 1), ...u32Bytes(height - 1)])
+  pushAttr("lineOrder", "lineOrder", [0])
+  pushAttr("pixelAspectRatio", "float", f32Bytes(1))
+  pushAttr("screenWindowCenter", "v2f", [...f32Bytes(0), ...f32Bytes(0)])
+  pushAttr("screenWindowWidth", "float", f32Bytes(1))
+  pushU8(0)
+
+  const scanlineBytes = width * 4 * 4
+  const chunkBytes = 8 + scanlineBytes
+  const totalBytes = header.length + height * 8 + height * chunkBytes
+  const out = new Uint8Array(totalBytes)
+  out.set(header, 0)
+  const view = new DataView(out.buffer)
+  let chunkOffset = header.length + height * 8
+  for (let y = 0; y < height; y++) {
+    view.setBigUint64(header.length + y * 8, BigInt(chunkOffset), true)
+    chunkOffset += chunkBytes
+  }
+  let cursor = header.length + height * 8
+  for (let y = 0; y < height; y++) {
+    view.setInt32(cursor, y, true)
+    view.setUint32(cursor + 4, scanlineBytes, true)
+    cursor += 8
+    for (let channel = 0; channel < 4; channel++) {
+      for (let x = 0; x < width; x++) {
+        const sample = imageData.data[(y * width + x) * 4 + channel] / 255
+        view.setFloat32(cursor, sample, true)
+        cursor += 4
+      }
+    }
+  }
+  return out.buffer
 }
 
 export function decodedRasterToCanvas(decoded: DecodedRaster): HTMLCanvasElement {

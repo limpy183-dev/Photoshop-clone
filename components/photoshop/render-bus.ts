@@ -1,14 +1,31 @@
+import {
+  addDirtyRect,
+  emptyDirtyRect,
+  isEmptyDirtyRect,
+  unionDirtyRects,
+  type DirtyRect,
+} from "./dirty-rect"
+
 export type RenderLayerIds = readonly string[] | "all"
 
 export interface RenderChange {
   layerIds?: RenderLayerIds
   reason?: string
   reasons?: readonly string[]
+  /** Optional dirty bounds for the change. When omitted, callers signal a
+   *  full-frame invalidation. When provided, the bus merges bounds across
+   *  same-frame changes so listeners can scissor their redraws. */
+  dirtyRects?: readonly DirtyRect[]
+  /** Per-layer dirty rects in document space. */
+  dirtyByLayer?: Readonly<Record<string, readonly DirtyRect[]>>
 }
 
 export interface MergedRenderChange {
   layerIds: "all" | string[]
   reasons: string[]
+  dirtyRects: DirtyRect[]
+  dirtyByLayer: Record<string, DirtyRect[]>
+  fullFrame: boolean
 }
 
 type RequestFrame = (callback: FrameRequestCallback) => number
@@ -30,6 +47,23 @@ function isFullRender(change?: RenderChange | MergedRenderChange) {
   return !!change && (!change.layerIds || change.layerIds === "all")
 }
 
+function readRects(change?: RenderChange | MergedRenderChange): DirtyRect[] {
+  if (!change) return []
+  const rects = (change as RenderChange | MergedRenderChange).dirtyRects
+  return rects ? [...rects] : []
+}
+
+function readPerLayer(change?: RenderChange | MergedRenderChange): Record<string, DirtyRect[]> {
+  if (!change) return {}
+  const source =
+    (change as MergedRenderChange).dirtyByLayer ?? (change as RenderChange).dirtyByLayer ?? {}
+  const result: Record<string, DirtyRect[]> = {}
+  for (const [id, rects] of Object.entries(source)) {
+    result[id] = rects ? [...rects] : []
+  }
+  return result
+}
+
 export function mergeRenderChanges(
   first?: RenderChange | MergedRenderChange | null,
   second?: RenderChange | MergedRenderChange | null,
@@ -42,12 +76,35 @@ export function mergeRenderChanges(
   const hasFirst = !!first
   const hasSecond = !!second
 
-  if (!hasFirst && !hasSecond) {
-    return { layerIds: "all", reasons }
+  const fullFrame =
+    (!hasFirst && !hasSecond) ||
+    isFullRender(first ?? undefined) ||
+    isFullRender(second ?? undefined)
+
+  // Merge dirty rects (global)
+  const mergedRects: DirtyRect[] = []
+  for (const rect of readRects(first ?? undefined)) addDirtyRect(mergedRects, rect)
+  for (const rect of readRects(second ?? undefined)) addDirtyRect(mergedRects, rect)
+
+  // Merge per-layer rects
+  const perLayer: Record<string, DirtyRect[]> = {}
+  for (const [id, rects] of Object.entries(readPerLayer(first ?? undefined))) {
+    perLayer[id] = []
+    for (const rect of rects) addDirtyRect(perLayer[id], rect)
+  }
+  for (const [id, rects] of Object.entries(readPerLayer(second ?? undefined))) {
+    if (!perLayer[id]) perLayer[id] = []
+    for (const rect of rects) addDirtyRect(perLayer[id], rect)
   }
 
-  if (isFullRender(first ?? undefined) || isFullRender(second ?? undefined)) {
-    return { layerIds: "all", reasons }
+  if (fullFrame) {
+    return {
+      layerIds: "all",
+      reasons,
+      dirtyRects: mergedRects,
+      dirtyByLayer: perLayer,
+      fullFrame: true,
+    }
   }
 
   const ids = new Set<string>()
@@ -57,7 +114,31 @@ export function mergeRenderChanges(
   if (hasSecond) {
     for (const id of second!.layerIds as readonly string[]) ids.add(id)
   }
-  return { layerIds: [...ids], reasons }
+  return {
+    layerIds: [...ids],
+    reasons,
+    dirtyRects: mergedRects,
+    dirtyByLayer: perLayer,
+    fullFrame: false,
+  }
+}
+
+export function getMergedUnion(change: MergedRenderChange): DirtyRect {
+  if (change.dirtyRects.length) return unionDirtyRects(change.dirtyRects)
+  const collected: DirtyRect[] = []
+  for (const rects of Object.values(change.dirtyByLayer)) {
+    for (const rect of rects) addDirtyRect(collected, rect)
+  }
+  return collected.length ? unionDirtyRects(collected) : emptyDirtyRect()
+}
+
+export function hasPartialBounds(change: MergedRenderChange): boolean {
+  if (change.fullFrame) return false
+  if (change.dirtyRects.length) return change.dirtyRects.some((rect) => !isEmptyDirtyRect(rect))
+  for (const rects of Object.values(change.dirtyByLayer)) {
+    if (rects.some((rect) => !isEmptyDirtyRect(rect))) return true
+  }
+  return false
 }
 
 export class RenderBus {
@@ -84,7 +165,13 @@ export class RenderBus {
     if (this.rafId !== null) return
     this.rafId = this.requestFrame(() => {
       this.rafId = null
-      const pending = this.pending ?? { layerIds: "all" as const, reasons: [] }
+      const pending = this.pending ?? {
+        layerIds: "all" as const,
+        reasons: [],
+        dirtyRects: [],
+        dirtyByLayer: {},
+        fullFrame: true,
+      }
       this.pending = null
       this.listeners.forEach((cb) => cb(pending))
     })

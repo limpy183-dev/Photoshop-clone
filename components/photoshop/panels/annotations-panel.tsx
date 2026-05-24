@@ -3,10 +3,7 @@
 import * as React from "react"
 import { useEditor } from "../editor-context"
 import type { CountMarker, Note } from "../types"
-
-function uid(prefix: string) {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
-}
+import { uid } from "../uid"
 
 function clampPoint(value: number, max: number) {
   return Math.max(0, Math.min(max, Math.round(value)))

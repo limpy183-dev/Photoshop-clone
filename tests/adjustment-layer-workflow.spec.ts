@@ -80,7 +80,7 @@ test("ctrl-click clips an adjustment layer to the layer below and Ctrl+I inverts
   await expect(adjustmentRow(page)).toHaveAttribute("data-adjustment-mask", "hidden")
 })
 
-test("double-clicking an adjustment layer opens its settings with controls left and preview right", async ({ page }) => {
+test("double-clicking an adjustment layer opens its settings with controls above preview", async ({ page }) => {
   await page.goto("/")
   await openLowerPanel(page, "layers")
   await openUpperPanel(page, "color")
@@ -94,7 +94,8 @@ test("double-clicking an adjustment layer opens its settings with controls left 
   const previewBox = await page.getByTestId("adjustment-preview-column").boundingBox()
   expect(settingsBox).not.toBeNull()
   expect(previewBox).not.toBeNull()
-  expect(previewBox!.x).toBeGreaterThan(settingsBox!.x)
+  // Controls appear above the preview in the new prominent editor layout.
+  expect(previewBox!.y).toBeGreaterThan(settingsBox!.y)
 })
 
 test("adding a default adjustment layer does not run full-frame pixel adjustment work", async ({ page }) => {
@@ -143,6 +144,85 @@ test("adding a default adjustment layer does not run full-frame pixel adjustment
     return count
   })
   expect(fullFrameReads).toBe(0)
+})
+
+test("rapid adjustment slider edits coalesce full-frame composite work", async ({ page }) => {
+  await page.addInitScript(() => {
+    const win = window as typeof window & {
+      __psFullFrameReads?: number
+      __psFullFrameWrites?: number
+      __psRestoreImageDataHooks?: () => void
+    }
+    const proto = CanvasRenderingContext2D.prototype
+    const originalGet = proto.getImageData
+    const originalPut = proto.putImageData
+    win.__psFullFrameReads = 0
+    win.__psFullFrameWrites = 0
+    proto.getImageData = function (
+      this: CanvasRenderingContext2D,
+      sx: number,
+      sy: number,
+      sw: number,
+      sh: number,
+      settings?: ImageDataSettings,
+    ) {
+      if (sx === 0 && sy === 0 && sw === this.canvas.width && sh === this.canvas.height && sw * sh >= 250_000) {
+        win.__psFullFrameReads = (win.__psFullFrameReads ?? 0) + 1
+      }
+      return originalGet.call(this, sx, sy, sw, sh, settings)
+    } as CanvasRenderingContext2D["getImageData"]
+    proto.putImageData = function (
+      this: CanvasRenderingContext2D,
+      imageData: ImageData,
+      dx: number,
+      dy: number,
+      ...dirtyRect: [] | [number, number, number, number]
+    ) {
+      if (dx === 0 && dy === 0 && imageData.width === this.canvas.width && imageData.height === this.canvas.height && imageData.width * imageData.height >= 250_000) {
+        win.__psFullFrameWrites = (win.__psFullFrameWrites ?? 0) + 1
+      }
+      return dirtyRect.length
+        ? Reflect.apply(originalPut, this, [imageData, dx, dy, ...dirtyRect])
+        : Reflect.apply(originalPut, this, [imageData, dx, dy])
+    } as CanvasRenderingContext2D["putImageData"]
+    win.__psRestoreImageDataHooks = () => {
+      proto.getImageData = originalGet
+      proto.putImageData = originalPut
+    }
+  })
+
+  await page.goto("/")
+  await openLowerPanel(page, "layers")
+  await addBrightnessContrastAdjustmentFromImageMenu(page)
+  await adjustmentThumb(page).dblclick()
+  await expect(page.getByTestId("adjustment-editor")).toBeVisible()
+
+  await page.evaluate(() => {
+    ;(window as typeof window & { __psFullFrameReads?: number; __psFullFrameWrites?: number }).__psFullFrameReads = 0
+    ;(window as typeof window & { __psFullFrameReads?: number; __psFullFrameWrites?: number }).__psFullFrameWrites = 0
+  })
+
+  const brightnessSlider = page.getByTestId("adjustment-settings-column").locator('[role="slider"]').first()
+  await brightnessSlider.focus()
+  for (let i = 0; i < 40; i++) await page.keyboard.press("ArrowRight")
+  await expect(page.getByTestId("adjustment-settings-column")).toContainText("Brightness40")
+  await page.waitForTimeout(450)
+
+  const counts = await page.evaluate(() => {
+    const win = window as typeof window & {
+      __psFullFrameReads?: number
+      __psFullFrameWrites?: number
+      __psRestoreImageDataHooks?: () => void
+    }
+    const result = {
+      reads: win.__psFullFrameReads ?? 0,
+      writes: win.__psFullFrameWrites ?? 0,
+    }
+    win.__psRestoreImageDataHooks?.()
+    return result
+  })
+  expect(counts.reads).toBeLessThanOrEqual(6)
+  expect(counts.writes).toBeLessThanOrEqual(3)
 })
 
 test("brush strokes on an active adjustment layer paint its mask", async ({ page }) => {

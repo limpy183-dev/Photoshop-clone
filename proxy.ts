@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 
 /**
- * Per-request CSP nonce middleware.
+ * Per-request CSP nonce proxy.
  *
  * The static headers in next.config.mjs cover everything except scripts.
  * Scripts need a per-request nonce so Next.js's framework boot scripts
@@ -9,7 +9,7 @@ import { NextRequest, NextResponse } from "next/server"
  * cross-origin / inline-injected scripts are blocked.
  *
  * Flow:
- *   1. Generate a 128-bit nonce in middleware.
+ *   1. Generate a 128-bit nonce in proxy.
  *   2. Forward it to the React tree via the `x-nonce` request header
  *      (Next.js exposes this to <Script nonce> via headers()).
  *   3. Build the CSP with `script-src 'self' 'nonce-...' 'strict-dynamic'
@@ -30,11 +30,12 @@ function generateNonce(): string {
   return Buffer.from(bytes).toString("base64").replace(/=+$/g, "")
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const nonce = generateNonce()
+  const devScriptSource = process.env.NODE_ENV === "production" ? "" : " 'unsafe-eval'"
 
   // Build the CSP. Keep it aligned with the static one in next.config.mjs;
-  // when middleware runs, this header takes effect (Next.js dedupes on
+  // when proxy runs, this header takes effect (Next.js dedupes on
   // header name, last write wins).
   const csp = [
     "default-src 'self'",
@@ -42,7 +43,7 @@ export function middleware(request: NextRequest) {
     // chunks without us having to enumerate every chunk URL. We keep
     // 'self' alongside it for browsers that don't honor strict-dynamic
     // and for non-script subresource loads.
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' https://va.vercel-scripts.com`,
+    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${devScriptSource} https://va.vercel-scripts.com`,
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
     "font-src 'self' data:",
@@ -69,7 +70,7 @@ export function middleware(request: NextRequest) {
   return response
 }
 
-// Skip middleware for static assets and the Next.js internals — those
+// Skip proxy for static assets and the Next.js internals — those
 // paths have no scripts that need nonces and rewriting their headers
 // regresses caching.
 export const config = {

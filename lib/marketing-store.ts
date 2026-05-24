@@ -1,4 +1,5 @@
 import { createReadStream, promises as fs } from "node:fs"
+import { createHash } from "node:crypto"
 import path from "node:path"
 
 /**
@@ -97,7 +98,7 @@ export function getClientIp(request: Request): string {
     process.env.MARKETING_TRUSTED_PROXY === "true" ||
     process.env.MARKETING_TRUSTED_PROXY === "1"
   if (!trustProxy) {
-    return "unknown"
+    return getClientFingerprint(request)
   }
   const cfIp = request.headers.get("cf-connecting-ip")?.trim()
   if (cfIp) return cfIp
@@ -107,7 +108,17 @@ export function getClientIp(request: Request): string {
   if (realIp) return realIp
   const forwarded = request.headers.get("x-forwarded-for")
   const forwardedIp = forwarded?.split(",")[0]?.trim()
-  return forwardedIp || "unknown"
+  return forwardedIp || getClientFingerprint(request)
+}
+
+function getClientFingerprint(request: Request): string {
+  const parts = [
+    request.headers.get("user-agent")?.trim().slice(0, 512) ?? "",
+    request.headers.get("accept-language")?.trim().slice(0, 256) ?? "",
+    request.headers.get("sec-ch-ua-platform")?.trim().slice(0, 128) ?? "",
+  ]
+  const digest = createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 24)
+  return `fingerprint:${digest}`
 }
 
 /**

@@ -5,9 +5,19 @@ import { useEditor } from "./editor-context"
 import { compositeLayer } from "./blend-modes"
 import { getFilter } from "./filters"
 import { applyModeAndColorManagement } from "./advanced-subsystems"
-import { addAnchorPointToPath, convertAnchorPoint, deleteNearestAnchorPoint, nearestAnchorPoint } from "./vector-path-operations"
+import {
+  addAnchorPointToPath,
+  appendPathToCanvas,
+  convertAnchorPoint,
+  deleteNearestAnchorPoint,
+  movePathHandle,
+  nearestAnchorPoint,
+  nearestPathHandle,
+} from "./vector-path-operations"
 import { normalizeBrushPointerSample, type BrushPointerSample } from "./brush-engine"
 import { planCompositeCache } from "./performance-engine"
+import { planMemoryBudget } from "./memory-budget"
+import { planProgressiveRender } from "./progressive-renderer"
 import { createRafCoalescer, type RafCoalescer } from "./raf-coalescer"
 import { containsSelectionPoint, createSelectionHitTester, type SelectionHitTester } from "./selection-hit-testing"
 import { isAdjustmentNoop } from "./adjustment-layers"
@@ -21,6 +31,19 @@ function _assignCanvasId(canvas: HTMLCanvasElement): number {
   const id = _nextCanvasId++
   _canvasIdMap.set(canvas, id)
   return id
+}
+
+// Adjustment-params fingerprint cache. Keyed by the params object identity; the
+// reducer always produces a fresh params object on edit, so misses naturally
+// align with actual parameter changes. Avoids JSON.stringify per layer per frame.
+const _adjustmentParamsFingerprintCache = new WeakMap<object, string>()
+function adjustmentParamsFingerprint(params: unknown): string {
+  if (params == null || typeof params !== "object") return String(params ?? "")
+  const cached = _adjustmentParamsFingerprintCache.get(params as object)
+  if (cached !== undefined) return cached
+  const fp = JSON.stringify(params)
+  _adjustmentParamsFingerprintCache.set(params as object, fp)
+  return fp
 }
 import { cn } from "@/lib/utils"
 import {
@@ -47,9 +70,12 @@ import {
   refineEdgeBrushMask,
   selectionFromMask,
   selectionToMaskCanvas,
+  extractMarchingAntsPaths,
   transformedCloneStamp,
 } from "./tool-helpers"
-import type { BlendMode, CustomShapeId, GradientStop, Layer, PathPoint, PsDocument, Selection, ShapeProps } from "./types"
+import { perspectiveCropImageData } from "./photo-workflow-engine"
+import { hexToRgba } from "./color-utils"
+import type { BlendMode, CustomShapeId, GradientStop, Layer, PathPoint, PathProps, PsDocument, Selection, ShapeProps } from "./types"
 
 interface BrushInput {
   pressure: number
@@ -103,6 +129,14 @@ type MoveToolRuntimeOptions = {
 type ShapeToolRuntimeOptions = {
   strokeWidth: number
   radius: number
+  sides: number
+  innerRadiusRatio: number
+  vertexRoundness: number
+  rotation: number
+  cornerRadiusTL?: number
+  cornerRadiusTR?: number
+  cornerRadiusBR?: number
+  cornerRadiusBL?: number
 }
 
 type FrameToolRuntimeOptions = {
@@ -133,6 +167,14 @@ function getShapeRuntimeOptions(): ShapeToolRuntimeOptions {
   return {
     strokeWidth: Math.max(0, window.__psShapeOptions?.strokeWidth ?? 0),
     radius: Math.max(0, window.__psShapeOptions?.radius ?? 0),
+    sides: Math.max(3, Math.min(64, window.__psShapeOptions?.sides ?? 6)),
+    innerRadiusRatio: Math.max(0.05, Math.min(0.95, window.__psShapeOptions?.innerRadiusRatio ?? 0.45)),
+    vertexRoundness: Math.max(0, Math.min(1, window.__psShapeOptions?.vertexRoundness ?? 0)),
+    rotation: window.__psShapeOptions?.rotation ?? 0,
+    cornerRadiusTL: window.__psShapeOptions?.cornerRadiusTL,
+    cornerRadiusTR: window.__psShapeOptions?.cornerRadiusTR,
+    cornerRadiusBR: window.__psShapeOptions?.cornerRadiusBR,
+    cornerRadiusBL: window.__psShapeOptions?.cornerRadiusBL,
   }
 }
 
@@ -375,12 +417,19 @@ export function CanvasView() {
     height: number
     canvas: HTMLCanvasElement | null
   }>({ fingerprint: "", drawnFingerprint: "", width: 0, height: 0, canvas: null })
+  const progressiveFrameRef = React.useRef<number | null>(null)
+  const progressiveFullPassRef = React.useRef(false)
 
-  const compose = React.useCallback((force = false) => {
+  const compose = React.useCallback((force = false, change?: { layerIds: "all" | string[]; reasons: string[] }) => {
     const cv = compositeRef.current
     if (!cv || !activeDoc) return
     if (cv.width !== activeDoc.width) cv.width = activeDoc.width
     if (cv.height !== activeDoc.height) cv.height = activeDoc.height
+
+    // Forced renders happen when underlying pixels mutated without a fingerprint
+    // change (brush strokes on canvases or masks). Drop the mask alpha cache so
+    // freshly-painted mask pixels propagate through adjustment compositing.
+    if (force) invalidateMaskAlphaCache()
 
     // Build a lightweight fingerprint of the composite inputs.
     // Mutable pixel edits are rendered through requestRender(), which passes
@@ -391,20 +440,14 @@ export function CanvasView() {
       if (layer.kind === "group") continue
       const canvasId = _canvasIdMap.get(layer.canvas) ?? _assignCanvasId(layer.canvas)
       const maskId = layer.mask ? _canvasIdMap.get(layer.mask) ?? _assignCanvasId(layer.mask) : ""
-      fp += [
-        layer.id,
-        layer.kind ?? "raster",
-        canvasId,
-        maskId,
-        layer.maskEnabled === false ? 0 : 1,
-        layer.opacity,
-        layer.fillOpacity ?? 1,
-        layer.blendMode,
-        layer.clipped ? 1 : 0,
-        layer.adjustment ? `${layer.adjustment.type}:${JSON.stringify(layer.adjustment.params)}` : "",
-        layer.style ? JSON.stringify(layer.style) : "",
-        filterPreviews[layer.id] ? _canvasIdMap.get(filterPreviews[layer.id]) ?? _assignCanvasId(filterPreviews[layer.id]) : "",
-      ].join(":") + "|"
+      const adjFp = layer.adjustment ? `${layer.adjustment.type}:${adjustmentParamsFingerprint(layer.adjustment.params)}` : ""
+      const styleFp = layer.style ? layerStyleCacheKey(layer.style) : ""
+      const previewCanvas = filterPreviews[layer.id]
+      const previewId = previewCanvas ? _canvasIdMap.get(previewCanvas) ?? _assignCanvasId(previewCanvas) : ""
+      fp +=
+        `${layer.id}:${layer.kind ?? "raster"}:${canvasId}:${maskId}:` +
+        `${layer.maskEnabled === false ? 0 : 1}:${layer.opacity}:${layer.fillOpacity ?? 1}:` +
+        `${layer.blendMode}:${layer.clipped ? 1 : 0}:${adjFp}:${styleFp}:${previewId}|`
     }
 
     const cache = compositeCacheRef.current
@@ -422,7 +465,36 @@ export function CanvasView() {
     }
 
     const ctx = cv.getContext("2d")!
+
+    const progressivePlan = planProgressiveRender({
+      width: cv.width,
+      height: cv.height,
+      tileSize: 512,
+    })
+    if (
+      force &&
+      cache.canvas &&
+      progressivePlan.mode === "preview-then-full" &&
+      !progressiveFullPassRef.current
+    ) {
+      ctx.clearRect(0, 0, cv.width, cv.height)
+      ctx.imageSmoothingEnabled = true
+      ctx.imageSmoothingQuality = "low"
+      ctx.drawImage(cache.canvas, 0, 0)
+      if (progressiveFrameRef.current !== null) cancelAnimationFrame(progressiveFrameRef.current)
+      progressiveFrameRef.current = requestAnimationFrame(() => {
+        progressiveFrameRef.current = null
+        progressiveFullPassRef.current = true
+        compose(true, change)
+        progressiveFullPassRef.current = false
+      })
+      return
+    }
+
     ctx.clearRect(0, 0, cv.width, cv.height)
+    // Running fingerprint of all layers composited so far. Adjustment layers use
+    // this to decide whether they can reuse a cached filter output.
+    let prefixFp = ""
     for (const layer of activeDoc.layers) {
       if (!layer.visible) continue
       if (layer.kind === "group") continue
@@ -438,10 +510,22 @@ export function CanvasView() {
         }
       }
       if (layer.kind === "adjustment" && layer.adjustment) {
-        applyAdjustmentLayer(ctx, layer, activeDoc.width, activeDoc.height, clipMask)
-        continue
+        applyAdjustmentLayer(ctx, layer, activeDoc.width, activeDoc.height, clipMask, prefixFp)
+      } else {
+        drawLayer(ctx, layer, clipMask, filterPreviews[layer.id])
       }
-      drawLayer(ctx, layer, clipMask, filterPreviews[layer.id])
+      // Extend prefix fingerprint with this layer's contribution so the next
+      // adjustment can key its cache on what came before it.
+      const canvasId = _canvasIdMap.get(layer.canvas) ?? _assignCanvasId(layer.canvas)
+      const maskId = layer.mask ? _canvasIdMap.get(layer.mask) ?? _assignCanvasId(layer.mask) : ""
+      const clipId = clipMask ? _canvasIdMap.get(clipMask) ?? _assignCanvasId(clipMask) : ""
+      const adjFpPrefix = layer.adjustment ? `${layer.adjustment.type}:${adjustmentParamsFingerprint(layer.adjustment.params)}` : ""
+      const previewCanvasPrefix = filterPreviews[layer.id]
+      const previewIdPrefix = previewCanvasPrefix ? _canvasIdMap.get(previewCanvasPrefix) ?? _assignCanvasId(previewCanvasPrefix) : ""
+      prefixFp +=
+        `${layer.id}:${layer.kind ?? "raster"}:${canvasId}:${maskId}:${clipId}:` +
+        `${layer.maskEnabled === false ? 0 : 1}:${layer.opacity}:${layer.fillOpacity ?? 1}:` +
+        `${layer.blendMode}:${layer.clipped ? 1 : 0}:${adjFpPrefix}:${layer.style ? "S" : ""}:${previewIdPrefix}|`
     }
 
     const colorManaged = applyModeAndColorManagement(cv, activeDoc)
@@ -463,7 +547,14 @@ export function CanvasView() {
     }
 
     const cachePlan = planCompositeCache({ width: cv.width, height: cv.height, forcedRender: force })
-    if (cachePlan.storeCache) {
+    const memoryPlan = planMemoryBudget({
+      width: cv.width,
+      height: cv.height,
+      layerCount: activeDoc.layers.length,
+      historyStates: 12,
+      memoryBudgetMB: 1024,
+    })
+    if (cachePlan.storeCache && !memoryPlan.actions.includes("disable-composite-cache")) {
       const cached = makeCanvas(cv.width, cv.height)
       cached.getContext("2d")!.drawImage(cv, 0, 0)
       compositeCacheRef.current = { fingerprint: fp, drawnFingerprint: fp, width: cv.width, height: cv.height, canvas: cached }
@@ -474,8 +565,14 @@ export function CanvasView() {
 
   React.useEffect(() => {
     compose()
-    return subscribeRender(() => compose(true))
+    return subscribeRender((change) => compose(true, change))
   }, [compose, subscribeRender])
+
+  React.useEffect(() => {
+    return () => {
+      if (progressiveFrameRef.current !== null) cancelAnimationFrame(progressiveFrameRef.current)
+    }
+  }, [])
 
   /* ---- coords ---- */
 
@@ -722,6 +819,14 @@ export function CanvasView() {
     return tool === "eraser" || tool === "background-eraser" || tool === "magic-eraser"
   }
 
+  function quickMaskPaintsSubtract() {
+    if (!activeDoc?.quickMask) return false
+    const mode = activeDoc.quickMaskPaintMode ?? "auto"
+    if (mode === "subtract") return true
+    if (mode === "add") return false
+    return isEraserPaintTool()
+  }
+
   function beginBufferedStroke(target: HTMLCanvasElement) {
     if (!isStrokeBufferedPaintTool()) return
     const source = makeCanvas(target.width, target.height)
@@ -730,7 +835,7 @@ export function CanvasView() {
       target,
       source,
       stroke: makeCanvas(target.width, target.height),
-      erasing: isEraserPaintTool(),
+      erasing: activeDoc?.quickMask ? quickMaskPaintsSubtract() : isEraserPaintTool(),
       opacity: clamp01(brush.opacity / 100),
       flow: clamp01(brush.flow / 100),
     }
@@ -929,7 +1034,7 @@ export function CanvasView() {
     // opacity × flow is applied once in renderBufferedStroke() instead.
     const opacity = isBuffered ? 1 : clamp01((brush.opacity / 100) * (brush.flow / 100) * opaMul * flowMul)
     const isErase = tool === "eraser" || tool === "background-eraser" || tool === "magic-eraser"
-    const compositeAsErase = isErase && !options.drawEraserMask
+    const compositeAsErase = activeDoc?.quickMask ? quickMaskPaintsSubtract() : isErase && !options.drawEraserMask
     const dabColor = isErase && options.drawEraserMask ? "#000000" : activeDoc?.quickMask ? "#ffffff" : applyColorDynamics(color, background)
     if (tool === "pattern-stamp") {
       drawPatternStampDab(ctx, x, y, dabSize, dabAngle, dabRoundness, opacity)
@@ -1080,7 +1185,7 @@ export function CanvasView() {
     ctx.translate(x, y)
     ctx.rotate(dabAngle)
     ctx.scale(1, dabRoundness)
-    ctx.globalCompositeOperation = activeDoc?.quickMask && !isErase ? "source-over" : isErase ? "destination-out" : "source-over"
+    ctx.globalCompositeOperation = isErase ? "destination-out" : "source-over"
     ctx.globalAlpha = tool === "pencil" ? 1 : opacity
     if (tip === "square") {
       ctx.fillStyle = color
@@ -1424,18 +1529,6 @@ export function CanvasView() {
     }
   }
 
-  function canvasPixel(canvas: HTMLCanvasElement, x: number, y: number) {
-    const ctx = canvas.getContext("2d")
-    if (!ctx) return { r: 0, g: 0, b: 0, a: 0 }
-    const px = ctx.getImageData(
-      Math.max(0, Math.min(canvas.width - 1, Math.floor(x))),
-      Math.max(0, Math.min(canvas.height - 1, Math.floor(y))),
-      1,
-      1,
-    ).data
-    return { r: px[0], g: px[1], b: px[2], a: px[3] }
-  }
-
   function cloneCanvasForTool(canvas: HTMLCanvasElement) {
     const copy = makeCanvas(canvas.width, canvas.height)
     copy.getContext("2d")!.drawImage(canvas, 0, 0)
@@ -1444,28 +1537,41 @@ export function CanvasView() {
 
   function alphaMaskFromCanvas(canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext("2d")!
-    const img = ctx.getImageData(0, 0, canvas.width, canvas.height)
-    let minX = canvas.width
-    let minY = canvas.height
+    const w = canvas.width
+    const h = canvas.height
+    const img = ctx.getImageData(0, 0, w, h)
+    const data = img.data
+    let minX = w
+    let minY = h
     let maxX = 0
     let maxY = 0
     let hasPixels = false
-    for (let i = 0; i < img.data.length; i += 4) {
-      const a = img.data[i + 3]
-      if (a <= 0) {
-        img.data[i] = img.data[i + 1] = img.data[i + 2] = img.data[i + 3] = 0
-        continue
+    // Single linear pass; reconstruct x,y from a running index instead of using
+    // expensive division+modulo per pixel.
+    let x = 0
+    let y = 0
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] <= 0) {
+        data[i] = 0
+        data[i + 1] = 0
+        data[i + 2] = 0
+        data[i + 3] = 0
+      } else {
+        hasPixels = true
+        if (x < minX) minX = x
+        if (y < minY) minY = y
+        if (x > maxX) maxX = x
+        if (y > maxY) maxY = y
+        data[i] = 255
+        data[i + 1] = 255
+        data[i + 2] = 255
+        data[i + 3] = 255
       }
-      const p = i / 4
-      const x = p % canvas.width
-      const y = Math.floor(p / canvas.width)
-      hasPixels = true
-      minX = Math.min(minX, x)
-      minY = Math.min(minY, y)
-      maxX = Math.max(maxX, x)
-      maxY = Math.max(maxY, y)
-      img.data[i] = img.data[i + 1] = img.data[i + 2] = 255
-      img.data[i + 3] = 255
+      x++
+      if (x === w) {
+        x = 0
+        y++
+      }
     }
     return {
       mask: img,
@@ -1495,17 +1601,22 @@ export function CanvasView() {
     const h = y1 - y0
     if (w <= 0 || h <= 0) return
 
+    const srcCtx = sourceCanvas.getContext("2d")!
+    const src = srcCtx.getImageData(x0, y0, w, h)
+    // Reuse the region read for the centre sample instead of a separate
+    // getImageData(1,1) per dab — same source canvas, same pixel data.
+    const centerSx = Math.max(0, Math.min(w - 1, Math.floor(x) - x0))
+    const centerSy = Math.max(0, Math.min(h - 1, Math.floor(y) - y0))
+    const sIdx = (centerSy * w + centerSx) * 4
     const sample =
       eraser.sampling === "background-swatch"
         ? { ...hexToRgb(background), a: 255 }
         : eraser.sampling === "once" && eraserSampleRef.current
           ? eraserSampleRef.current
-          : canvasPixel(sourceCanvas, x, y)
+          : { r: src.data[sIdx], g: src.data[sIdx + 1], b: src.data[sIdx + 2], a: src.data[sIdx + 3] }
     if (eraser.sampling === "once" && !eraserSampleRef.current) eraserSampleRef.current = sample
     const fg = hexToRgb(foreground)
 
-    const srcCtx = sourceCanvas.getContext("2d")!
-    const src = srcCtx.getImageData(x0, y0, w, h)
     const dest = ctx.getImageData(x0, y0, w, h)
     const matched = new Uint8Array(w * h)
     const hard = clamp01(brush.hardness / 100)
@@ -1861,20 +1972,30 @@ export function CanvasView() {
     const sh = Math.min(ctx.canvas.height - sy, r * 2)
     if (sw <= 0 || sh <= 0) return
     const img = ctx.getImageData(sx, sy, sw, sh)
+    const data = img.data
+    const rSq = r * r
+    // Iterate per-row, derive the analytic horizontal extent of the circle for
+    // that scanline, then only touch pixels inside. Avoids ~21% wasted work on
+    // the corner squares vs. the original bounding-box loop and lets the inner
+    // loop branch-predict cleanly.
     for (let py = 0; py < sh; py++) {
-      for (let px = 0; px < sw; px++) {
-        const dx = px - r
-        const dy = py - r
-        if (dx * dx + dy * dy > r * r) continue
-        const i = (py * sw + px) * 4
-        const rr = img.data[i]
-        const gg = img.data[i + 1]
-        const bb = img.data[i + 2]
+      const dy = py - r
+      const dy2 = dy * dy
+      if (dy2 > rSq) continue
+      const halfW = Math.sqrt(rSq - dy2)
+      const pxStart = Math.max(0, Math.floor(r - halfW))
+      const pxEnd = Math.min(sw - 1, Math.ceil(r + halfW))
+      const rowStart = py * sw * 4
+      for (let px = pxStart; px <= pxEnd; px++) {
+        const i = rowStart + px * 4
+        if (data[i + 3] === 0) continue
+        const rr = data[i]
+        const gg = data[i + 1]
+        const bb = data[i + 2]
         const lum = 0.299 * rr + 0.587 * gg + 0.114 * bb
-        // desaturate (push toward luminance)
-        img.data[i] = rr + (lum - rr) * strength
-        img.data[i + 1] = gg + (lum - gg) * strength
-        img.data[i + 2] = bb + (lum - bb) * strength
+        data[i] = rr + (lum - rr) * strength
+        data[i + 1] = gg + (lum - gg) * strength
+        data[i + 2] = bb + (lum - bb) * strength
       }
     }
     ctx.putImageData(img, sx, sy)
@@ -2348,6 +2469,7 @@ export function CanvasView() {
     rotateStartValue?: number
     directLayerId?: string
     directPointIndex?: number
+    directPathHandle?: "in" | "out"
     directShapeHandle?: "nw" | "ne" | "se" | "sw" | "center"
     sliceDraftId?: string
   }>({ type: null })
@@ -2787,6 +2909,7 @@ export function CanvasView() {
         last: pt,
         directLayerId: layer.id,
         directPointIndex: direct.pointIndex,
+        directPathHandle: direct.pathHandle,
         directShapeHandle: direct.shapeHandle,
       }
       return
@@ -2798,7 +2921,7 @@ export function CanvasView() {
     }
 
     // Shape tools
-    if (tool === "shape-rect" || tool === "shape-rounded-rect" || tool === "shape-ellipse" || tool === "shape-polygon" || tool === "shape-triangle" || tool === "shape-line" || tool === "custom-shape" || tool === "frame" || tool === "artboard" || tool === "slice") {
+    if (tool === "shape-rect" || tool === "shape-rounded-rect" || tool === "shape-ellipse" || tool === "shape-polygon" || tool === "shape-star" || tool === "shape-triangle" || tool === "shape-line" || tool === "custom-shape" || tool === "frame" || tool === "artboard" || tool === "slice") {
       if (tool === "slice") {
         const slice = {
           id: `slice_${Math.random().toString(36).slice(2, 9)}`,
@@ -3285,7 +3408,7 @@ export function CanvasView() {
         drawFramePlaceholder(ctx, { shape: getFrameRuntimeOptions().shape, x, y, w, h })
       } else if (tool === "artboard") {
         drawArtboardPreview(ctx, x, y, w, h, background)
-      } else if (tool === "custom-shape" || tool === "shape-polygon" || tool === "shape-triangle" || tool === "shape-rounded-rect") {
+      } else if (tool === "custom-shape" || tool === "shape-polygon" || tool === "shape-star" || tool === "shape-triangle" || tool === "shape-rounded-rect") {
         rasterizeShape(ov, shapePropsForTool(tool, x, y, w, h, drag.start, pt, foreground, background))
       } else if (tool === "shape-line") {
         ctx.strokeStyle = foreground
@@ -3628,6 +3751,8 @@ export function CanvasView() {
       drawingRef.current = { type: null }
       if (layer) {
         drawPathSelectionPreview(layer)
+        if (layer.path) dispatch({ type: "set-layer-path", id: layer.id, path: layer.path })
+        if (layer.shape) dispatch({ type: "set-layer-shape", id: layer.id, shape: layer.shape })
         commit("Direct Selection", [layer.id])
       }
       return
@@ -3799,9 +3924,11 @@ export function CanvasView() {
                 ? "Rounded Rectangle"
                 : tool === "shape-polygon"
                   ? "Polygon"
-                  : tool === "shape-triangle"
-                    ? "Triangle"
-                    : "Rectangle"
+                  : tool === "shape-star"
+                    ? "Star"
+                    : tool === "shape-triangle"
+                      ? "Triangle"
+                      : "Rectangle"
         const layer: Layer = {
           id,
           name,
@@ -4191,38 +4318,7 @@ export function CanvasView() {
       if (typeof layer.canvas.getContext !== "function") continue
       const srcCtx = layer.canvas.getContext("2d")!
       const srcData = srcCtx.getImageData(0, 0, layer.canvas.width, layer.canvas.height)
-      const dst = new ImageData(outW, outH)
-
-      // For each output pixel, map back to source using inverse bilinear
-      for (let oy = 0; oy < outH; oy++) {
-        const u = oy / (outH - 1)
-        for (let ox = 0; ox < outW; ox++) {
-          const v = ox / (outW - 1)
-          // Bilinear interpolation of source coordinates
-          const sx = (1 - u) * ((1 - v) * tl.x + v * tr.x) + u * ((1 - v) * bl.x + v * br.x)
-          const sy = (1 - u) * ((1 - v) * tl.y + v * tr.y) + u * ((1 - v) * bl.y + v * br.y)
-
-          // Sample source with bilinear interpolation
-          const fx = Math.floor(sx)
-          const fy = Math.floor(sy)
-          const dx = sx - fx
-          const dy = sy - fy
-
-          const idx = (oy * outW + ox) * 4
-          for (let c = 0; c < 4; c++) {
-            const s00 = samplePixel(srcData, fx, fy, c)
-            const s10 = samplePixel(srcData, fx + 1, fy, c)
-            const s01 = samplePixel(srcData, fx, fy + 1, c)
-            const s11 = samplePixel(srcData, fx + 1, fy + 1, c)
-            dst.data[idx + c] = Math.round(
-              s00 * (1 - dx) * (1 - dy) +
-              s10 * dx * (1 - dy) +
-              s01 * (1 - dx) * dy +
-              s11 * dx * dy
-            )
-          }
-        }
-      }
+      const dst = perspectiveCropImageData(srcData, [tl, tr, br, bl]).image
 
       layer.canvas.width = outW
       layer.canvas.height = outH
@@ -4245,12 +4341,6 @@ export function CanvasView() {
     // We need TL, TR, BR, BL
     const [tl, bl, br, tr] = angled
     return [tl, tr, br, bl]
-  }
-
-  function samplePixel(img: ImageData, x: number, y: number, c: number): number {
-    const cx = Math.max(0, Math.min(img.width - 1, x))
-    const cy = Math.max(0, Math.min(img.height - 1, y))
-    return img.data[(cy * img.width + cx) * 4 + c]
   }
 
   /* ---- Polygon lasso finalize ---- */
@@ -4372,12 +4462,11 @@ export function CanvasView() {
 
   function directSelectionTarget(layer: Layer, pt: { x: number; y: number }) {
     if (layer.path?.points.length) {
-      let best = { pointIndex: -1, distance: Infinity }
-      layer.path.points.forEach((point, pointIndex) => {
-        const distance = Math.hypot(point.x - pt.x, point.y - pt.y)
-        if (distance < best.distance) best = { pointIndex, distance }
-      })
-      if (best.pointIndex >= 0 && best.distance <= 14) return { pointIndex: best.pointIndex }
+      const handleHit = nearestPathHandle(layer.path, pt, 18)
+      if (handleHit.index >= 0) {
+        if (handleHit.handle === "anchor") return { pointIndex: handleHit.index, pathHandle: undefined, shapeHandle: undefined }
+        return { pointIndex: handleHit.index, pathHandle: handleHit.handle, shapeHandle: undefined }
+      }
     }
     const bounds = vectorLayerBounds(layer)
     if (!bounds) return null
@@ -4387,12 +4476,30 @@ export function CanvasView() {
       const distance = Math.hypot(handle.x - pt.x, handle.y - pt.y)
       if (distance <= 16 && (!best || distance < best.distance)) best = { shapeHandle: handle.id, distance }
     }
-    return best ? { shapeHandle: best.shapeHandle } : { shapeHandle: "center" as const }
+    return best
+      ? { pointIndex: undefined, pathHandle: undefined, shapeHandle: best.shapeHandle }
+      : { pointIndex: undefined, pathHandle: undefined, shapeHandle: "center" as const }
   }
 
   function updateDirectSelectionDrag(layer: Layer, pt: { x: number; y: number }, drag: typeof drawingRef.current) {
     if (layer.path && drag.directPointIndex !== undefined && drag.directPointIndex >= 0) {
-      const points = layer.path.points.map((point, index) => index === drag.directPointIndex ? { ...point, x: pt.x, y: pt.y } : point)
+      if (drag.directPathHandle) {
+        layer.path = movePathHandle(layer.path, drag.directPointIndex, drag.directPathHandle, pt)
+        rerenderVectorLayer(layer)
+        return
+      }
+      const points = layer.path.points.map((point, index) => {
+        if (index !== drag.directPointIndex) return point
+        const dx = pt.x - point.x
+        const dy = pt.y - point.y
+        return {
+          ...point,
+          x: pt.x,
+          y: pt.y,
+          cp1: point.cp1 ? { x: point.cp1.x + dx, y: point.cp1.y + dy } : undefined,
+          cp2: point.cp2 ? { x: point.cp2.x + dx, y: point.cp2.y + dy } : undefined,
+        }
+      })
       layer.path = { ...layer.path, points }
       rerenderVectorLayer(layer)
       return
@@ -4444,21 +4551,47 @@ export function CanvasView() {
       ctx.restore()
     }
     if (layer.path?.points.length) {
+      const pathParts = [layer.path, ...(layer.path.subpaths ?? [])]
+      const drawHandle = (point: { x: number; y: number }, size = 3) => {
+        ctx.fillRect(point.x - size, point.y - size, size * 2, size * 2)
+        ctx.strokeRect(point.x - size, point.y - size, size * 2, size * 2)
+      }
+      const drawControls = (path: PathProps) => {
+        for (const point of path.points) {
+          if (point.cp1) {
+            ctx.beginPath()
+            ctx.moveTo(point.x, point.y)
+            ctx.lineTo(point.cp1.x, point.cp1.y)
+            ctx.stroke()
+            drawHandle(point.cp1)
+          }
+          if (point.cp2) {
+            ctx.beginPath()
+            ctx.moveTo(point.x, point.y)
+            ctx.lineTo(point.cp2.x, point.cp2.y)
+            ctx.stroke()
+            drawHandle(point.cp2)
+          }
+        }
+      }
       ctx.save()
       ctx.strokeStyle = "#38bdf8"
       ctx.fillStyle = "#ffffff"
       ctx.lineWidth = 1
       ctx.beginPath()
-      const first = layer.path.points[0]
-      ctx.moveTo(first.x, first.y)
-      for (const point of layer.path.points.slice(1)) ctx.lineTo(point.x, point.y)
-      if (layer.path.closed) ctx.closePath()
+      appendPathToCanvas(ctx, layer.path)
       ctx.stroke()
-      for (const point of layer.path.points) {
-        ctx.beginPath()
-        ctx.arc(point.x, point.y, 4, 0, Math.PI * 2)
-        ctx.fill()
-        ctx.stroke()
+      ctx.strokeStyle = "#f59e0b"
+      ctx.fillStyle = "#ffffff"
+      for (const path of pathParts) drawControls(path)
+      ctx.strokeStyle = "#38bdf8"
+      for (const path of pathParts) {
+        for (const point of path.points) {
+          ctx.beginPath()
+          ctx.arc(point.x, point.y, 4, 0, Math.PI * 2)
+          ctx.fill()
+          ctx.stroke()
+        }
       }
       ctx.restore()
     }
@@ -4788,7 +4921,14 @@ export function CanvasView() {
   const cursorStyle = cursorForTool(tool, showBrushCursor)
 
   return (
-    <div ref={containerRef} data-canvas-root className="flex-1 relative overflow-hidden bg-[var(--ps-canvas-bg)]" onWheelCapture={onWheel}>
+    <div
+      ref={containerRef}
+      data-canvas-root
+      className="flex-1 relative overflow-hidden bg-[var(--ps-canvas-bg)]"
+      onWheelCapture={onWheel}
+      role="region"
+      aria-label="Image editor canvas"
+    >
       {activeDoc && <Rulers width={activeDoc.width} height={activeDoc.height} zoom={viewZoom} onCreateGuide={(orient, pos) => {
         const id = `g_${Math.random().toString(36).slice(2, 8)}`
         dispatch({ type: "add-guide", guide: { id, orientation: orient, position: Math.round(pos) } })
@@ -4823,6 +4963,9 @@ export function CanvasView() {
             height={activeDoc.height}
             className={cn("absolute inset-0 w-full h-full")}
             style={{ imageRendering: viewZoom >= 4 ? "pixelated" : "auto" }}
+            role="img"
+            aria-label={`Document canvas: ${activeDoc.name}, ${activeDoc.width} by ${activeDoc.height} pixels`}
+            tabIndex={0}
           />
           <canvas
             ref={overlayRef}
@@ -4996,7 +5139,7 @@ function GuidesOverlay({
   onMove,
   onRemove,
 }: {
-  guides: { id: string; orientation: "horizontal" | "vertical"; position: number; color?: string }[]
+  guides: import("./types").Guide[]
   docW: number
   docH: number
   onMove: (id: string, pos: number) => void
@@ -5004,10 +5147,11 @@ function GuidesOverlay({
 }) {
   return (
     <div className="absolute inset-0 pointer-events-none">
-      {guides.map((g) => (
+      {guides.filter((guide) => guide.visible !== false).map((g) => (
         <div
           key={g.id}
-          className="absolute pointer-events-auto cursor-move"
+          className={`absolute pointer-events-auto ${g.locked ? "cursor-default" : "cursor-move"}`}
+          title={g.name ?? (g.locked ? "Locked guide" : "Guide")}
           style={
             g.orientation === "horizontal"
               ? {
@@ -5029,9 +5173,12 @@ function GuidesOverlay({
                 borderLeft: `1px solid ${g.color ?? "#06b6d4"}`,
               }
           }
-          onDoubleClick={() => onRemove(g.id)}
+          onDoubleClick={() => {
+            if (!g.locked) onRemove(g.id)
+          }}
           onPointerDown={(e) => {
             e.stopPropagation()
+            if (g.locked) return
             const target = e.currentTarget
             target.setPointerCapture(e.pointerId)
             const move = (ev: PointerEvent) => {
@@ -5289,18 +5436,17 @@ function MaskSelectionOverlay({
     canvas.width = docW
     canvas.height = docH
     const ctx = canvas.getContext("2d")
-    const mctx = mask.getContext("2d")
-    if (!ctx || !mctx) return
-    const img = mctx.getImageData(0, 0, docW, docH)
-    const edges: number[] = []
-    const selected = (x: number, y: number) =>
-      x >= 0 && y >= 0 && x < docW && y < docH && img.data[(y * docW + x) * 4 + 3] > 8
-    for (let y = 0; y < docH; y++) {
-      for (let x = 0; x < docW; x++) {
-        if (!selected(x, y)) continue
-        if (!selected(x - 1, y) || !selected(x + 1, y) || !selected(x, y - 1) || !selected(x, y + 1)) {
-          edges.push(y * docW + x)
-        }
+    if (!ctx) return
+    const paths = extractMarchingAntsPaths(mask, { simplifyTolerance: 0.25 })
+    const trace = () => {
+      for (const path of paths) {
+        const first = path.points[0]
+        if (!first) continue
+        ctx.beginPath()
+        ctx.moveTo(first.x, first.y)
+        for (let i = 1; i < path.points.length; i++) ctx.lineTo(path.points[i].x, path.points[i].y)
+        if (path.closed) ctx.closePath()
+        ctx.stroke()
       }
     }
 
@@ -5309,20 +5455,21 @@ function MaskSelectionOverlay({
     let timer = 0
     const draw = () => {
       if (stopped) return
-      const out = ctx.createImageData(docW, docH)
-      for (const p of edges) {
-        const x = p % docW
-        const y = (p - x) / docW
-        const black = ((x + y + phase) & 8) === 0
-        const i = p * 4
-        out.data[i] = black ? 0 : 255
-        out.data[i + 1] = black ? 0 : 255
-        out.data[i + 2] = black ? 0 : 255
-        out.data[i + 3] = 255
-      }
-      ctx.putImageData(out, 0, 0)
-      phase = (phase + 2) % 16
-      timer = window.setTimeout(draw, 120)
+      ctx.clearRect(0, 0, docW, docH)
+      ctx.save()
+      ctx.lineWidth = 1
+      ctx.lineJoin = "miter"
+      ctx.lineCap = "butt"
+      ctx.setLineDash([4, 4])
+      ctx.strokeStyle = "rgba(0,0,0,0.95)"
+      ctx.lineDashOffset = -phase
+      trace()
+      ctx.strokeStyle = "rgba(255,255,255,0.95)"
+      ctx.lineDashOffset = 4 - phase
+      trace()
+      ctx.restore()
+      phase = (phase + 1) % 8
+      timer = window.setTimeout(draw, 90)
     }
     draw()
     return () => {
@@ -5584,7 +5731,10 @@ const _smartFilterCache = new WeakMap<HTMLCanvasElement, SmartFilterCacheEntry>(
 function smartFilterCacheKey(smartFilters: NonNullable<Layer["smartFilters"]>): string {
   return smartFilters
     .filter((sf) => sf.enabled)
-    .map((sf) => `${sf.filterId}:${JSON.stringify(sf.params)}:${sf.opacity ?? 1}:${sf.blendMode ?? "normal"}`)
+    .map((sf) => {
+      const maskId = sf.mask ? _canvasIdMap.get(sf.mask) ?? _assignCanvasId(sf.mask) : ""
+      return `${sf.id}:${sf.filterId}:${JSON.stringify(sf.params)}:${sf.opacity ?? 1}:${sf.blendMode ?? "normal"}:${sf.maskEnabled === false ? 0 : 1}:${maskId}`
+    })
     .join("|")
 }
 
@@ -5595,14 +5745,37 @@ interface LayerStyleCacheEntry {
   result: HTMLCanvasElement
 }
 const _layerStyleCache = new WeakMap<HTMLCanvasElement, LayerStyleCacheEntry>()
+const _layerStyleKeyCache = new WeakMap<NonNullable<Layer["style"]>, string>()
 
-function layerStyleCacheKey(style: NonNullable<Layer["style"]>): string {
-  return JSON.stringify(style)
+function styleEffectFp(prefix: string, e: Record<string, unknown> | undefined): string {
+  if (!e || e.enabled !== true) return ""
+  let out = prefix
+  for (const k of Object.keys(e).sort()) {
+    if (k === "enabled") continue
+    const v = (e as Record<string, unknown>)[k]
+    if (v == null) continue
+    if (typeof v === "object") out += `${k}=${JSON.stringify(v)};`
+    else out += `${k}=${v};`
+  }
+  return out + "|"
 }
 
-function hexToRgba(hex: string, alpha: number) {
-  const { r, g, b } = hexToRgb(hex)
-  return `rgba(${r},${g},${b},${alpha})`
+function layerStyleCacheKey(style: NonNullable<Layer["style"]>): string {
+  const cached = _layerStyleKeyCache.get(style)
+  if (cached !== undefined) return cached
+  const fp =
+    styleEffectFp("st:", style.stroke as Record<string, unknown> | undefined) +
+    styleEffectFp("og:", style.outerGlow as Record<string, unknown> | undefined) +
+    styleEffectFp("ig:", style.innerGlow as Record<string, unknown> | undefined) +
+    styleEffectFp("is:", style.innerShadow as Record<string, unknown> | undefined) +
+    styleEffectFp("bv:", style.bevel as Record<string, unknown> | undefined) +
+    styleEffectFp("sa:", style.satin as Record<string, unknown> | undefined) +
+    styleEffectFp("co:", style.colorOverlay as Record<string, unknown> | undefined) +
+    styleEffectFp("go:", style.gradientOverlay as Record<string, unknown> | undefined) +
+    styleEffectFp("po:", style.patternOverlay as Record<string, unknown> | undefined) +
+    styleEffectFp("ds:", style.dropShadow as Record<string, unknown> | undefined)
+  _layerStyleKeyCache.set(style, fp)
+  return fp
 }
 
 function _createSelectSubjectMask(width: number, height: number): ImageData {
@@ -5849,6 +6022,8 @@ function paramsWithDefaults(filter: NonNullable<ReturnType<typeof getFilter>>, p
       out[param.key] = raw === true
     } else if (param.type === "select") {
       out[param.key] = param.options.some((option) => option.value === raw) ? raw : param.default
+    } else {
+      out[param.key] = typeof raw === "string" ? raw : param.default
     }
   }
   return out
@@ -5869,6 +6044,26 @@ function maskAmountAt(mask: ImageData | null, x: number, y: number) {
   return luminance * (mask.data[i + 3] / 255)
 }
 
+interface SmartFilterMaskCacheEntry {
+  epoch: number
+  width: number
+  height: number
+  mask: ImageData
+}
+const _smartFilterMaskCache = new WeakMap<HTMLCanvasElement, SmartFilterMaskCacheEntry>()
+function readSmartFilterMask(canvas: HTMLCanvasElement, width: number, height: number): ImageData | null {
+  const w = Math.min(canvas.width, width)
+  const h = Math.min(canvas.height, height)
+  if (w <= 0 || h <= 0) return null
+  const cached = _smartFilterMaskCache.get(canvas)
+  if (cached && cached.epoch === _maskAlphaEpoch && cached.width === w && cached.height === h) return cached.mask
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return null
+  const mask = ctx.getImageData(0, 0, w, h)
+  _smartFilterMaskCache.set(canvas, { epoch: _maskAlphaEpoch, width: w, height: h, mask })
+  return mask
+}
+
 function smartFilterResult(
   before: ImageData,
   after: ImageData,
@@ -5879,10 +6074,8 @@ function smartFilterResult(
   const opacity = Math.max(0, Math.min(1, smartFilter.opacity ?? 1))
   if (opacity <= 0) return before
   const blendMode = (smartFilter.blendMode ?? "normal") as BlendMode
-  const maskCtx = smartFilter.maskEnabled === false ? null : smartFilter.mask?.getContext("2d") ?? null
-  const mask = maskCtx
-    ? maskCtx.getImageData(0, 0, Math.min(smartFilter.mask!.width, width), Math.min(smartFilter.mask!.height, height))
-    : null
+  const maskCanvas = smartFilter.maskEnabled === false ? null : smartFilter.mask ?? null
+  const mask = maskCanvas ? readSmartFilterMask(maskCanvas, width, height) : null
 
   if (!mask && opacity >= 1 && blendMode === "normal") return after
 
@@ -5932,45 +6125,160 @@ function applySmartFilters(
   return out
 }
 
+/* ----------- adjustment layer cache & helpers ----------- */
+
+// Cache: mask canvas -> alpha-encoded version (luminance written into alpha).
+// The epoch lets us invalidate when a mask canvas may have been painted on
+// in-place (brush strokes mutate the canvas without changing its identity).
+const _maskAlphaCache = new WeakMap<HTMLCanvasElement, { epoch: number; result: HTMLCanvasElement }>()
+let _maskAlphaEpoch = 0
+function invalidateMaskAlphaCache() {
+  _maskAlphaEpoch++
+}
+
+function getMaskAsAlphaCanvas(mask: HTMLCanvasElement): HTMLCanvasElement | null {
+  const cached = _maskAlphaCache.get(mask)
+  if (
+    cached &&
+    cached.epoch === _maskAlphaEpoch &&
+    cached.result.width === mask.width &&
+    cached.result.height === mask.height
+  ) {
+    return cached.result
+  }
+  if (typeof mask.getContext !== "function") return null
+  const srcCtx = mask.getContext("2d")
+  if (!srcCtx) return null
+  const w = mask.width
+  const h = mask.height
+  const out = cached?.result.width === w && cached.result.height === h ? cached.result : document.createElement("canvas")
+  out.width = w
+  out.height = h
+  const outCtx = out.getContext("2d")!
+  const src = srcCtx.getImageData(0, 0, w, h)
+  const dst = outCtx.createImageData(w, h)
+  const sData = src.data
+  const dData = dst.data
+  for (let i = 0; i < sData.length; i += 4) {
+    // Luminance * source alpha → alpha; RGB stays white so destination-in
+    // multiplies the target alpha by this value cleanly.
+    const lum = (sData[i] + sData[i + 1] + sData[i + 2]) * (sData[i + 3] / 255) / 3
+    dData[i] = 255
+    dData[i + 1] = 255
+    dData[i + 2] = 255
+    dData[i + 3] = lum
+  }
+  outCtx.putImageData(dst, 0, 0)
+  _maskAlphaCache.set(mask, { epoch: _maskAlphaEpoch, result: out })
+  return out
+}
+
+// Cache: per-adjustment-layer filter output. Keyed by layer object identity (WeakMap).
+// `inputFingerprint` is a fingerprint of the ctx state going INTO this adjustment;
+// `paramsKey` is a fingerprint of the filter type + params. If both match, we reuse
+// the cached filter output canvas without re-running the (expensive) pixel filter.
+interface AdjustmentFilterCacheEntry {
+  inputFingerprint: string
+  paramsKey: string
+  width: number
+  height: number
+  result: HTMLCanvasElement
+}
+const _adjustmentFilterCache = new WeakMap<Layer, AdjustmentFilterCacheEntry>()
+
+function adjustmentParamsKey(layer: Layer): string {
+  if (!layer.adjustment) return ""
+  return `${layer.adjustment.type}|${JSON.stringify(layer.adjustment.params)}`
+}
+
 function applyAdjustmentLayer(
   ctx: CanvasRenderingContext2D,
   layer: Layer,
   width: number,
   height: number,
   clipMask?: HTMLCanvasElement | null,
+  inputFingerprint?: string,
 ) {
   if (!layer.adjustment) return
   if (layer.opacity <= 0 || isAdjustmentNoop(layer.adjustment)) return
   const filter = getFilter(layer.adjustment.type)
   if (!filter) return
-  const before = ctx.getImageData(0, 0, width, height)
-  const after = filter.apply(before, paramsWithDefaults(filter, layer.adjustment.params))
+
   const opacity = Math.max(0, Math.min(1, layer.opacity))
-  const maskCtx = layer.maskEnabled === false ? null : layer.mask?.getContext("2d") ?? null
-  const mask = maskCtx ? maskCtx.getImageData(0, 0, Math.min(layer.mask!.width, width), Math.min(layer.mask!.height, height)) : null
-  const clipCtx = clipMask?.getContext("2d") ?? null
-  const clip = clipCtx ? clipCtx.getImageData(0, 0, Math.min(clipMask!.width, width), Math.min(clipMask!.height, height)) : null
-  if (!mask && !clip && opacity >= 1) {
-    ctx.putImageData(after, 0, 0)
-    return
-  }
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const i = (y * width + x) * 4
-      const amount = opacity * maskAmountAt(mask, x, y) * maskAmountAt(clip, x, y)
-      if (amount <= 0) {
-        after.data[i] = before.data[i]
-        after.data[i + 1] = before.data[i + 1]
-        after.data[i + 2] = before.data[i + 2]
-        after.data[i + 3] = before.data[i + 3]
-        continue
-      }
-      for (let k = 0; k < 4; k++) {
-        after.data[i + k] = before.data[i + k] * (1 - amount) + after.data[i + k] * amount
-      }
+  const maskCanvas = layer.maskEnabled === false ? null : layer.mask ?? null
+  const hasMask = !!maskCanvas
+  const hasClip = !!clipMask
+
+  // --- 1. Produce the filter output canvas (cached when input + params unchanged). ---
+  const paramsKey = adjustmentParamsKey(layer)
+  const cached = _adjustmentFilterCache.get(layer)
+  let filterOutCanvas: HTMLCanvasElement
+  let reused = false
+  if (
+    cached &&
+    inputFingerprint !== undefined &&
+    cached.inputFingerprint === inputFingerprint &&
+    cached.paramsKey === paramsKey &&
+    cached.width === width &&
+    cached.height === height
+  ) {
+    filterOutCanvas = cached.result
+    reused = true
+  } else {
+    const before = ctx.getImageData(0, 0, width, height)
+    const after = filter.apply(before, paramsWithDefaults(filter, layer.adjustment.params))
+    const out = document.createElement("canvas")
+    out.width = width
+    out.height = height
+    out.getContext("2d")!.putImageData(after, 0, 0)
+    filterOutCanvas = out
+    if (inputFingerprint !== undefined) {
+      _adjustmentFilterCache.set(layer, {
+        inputFingerprint,
+        paramsKey,
+        width,
+        height,
+        result: out,
+      })
     }
   }
-  ctx.putImageData(after, 0, 0)
+
+  // --- 2. Fast path: no mask, no clip, full opacity → just blit. ---
+  if (!hasMask && !hasClip && opacity >= 1) {
+    ctx.clearRect(0, 0, width, height)
+    ctx.drawImage(filterOutCanvas, 0, 0)
+    return
+  }
+
+  // --- 3. Mask/clip path: apply alpha coverage via GPU composite ops. ---
+  // We build a temp canvas containing the filter output, then multiply its alpha
+  // by mask luminance and clip alpha (via destination-in), then composite onto
+  // the existing ctx (which still has `before`) with globalAlpha for opacity.
+  const tmp = acquireCanvas(width, height)
+  const tctx = tmp.getContext("2d")!
+  tctx.drawImage(filterOutCanvas, 0, 0)
+
+  if (hasMask) {
+    const maskAlpha = getMaskAsAlphaCanvas(maskCanvas!)
+    if (maskAlpha) {
+      tctx.globalCompositeOperation = "destination-in"
+      tctx.drawImage(maskAlpha, 0, 0)
+      tctx.globalCompositeOperation = "source-over"
+    }
+  }
+  if (hasClip) {
+    tctx.globalCompositeOperation = "destination-in"
+    tctx.drawImage(clipMask!, 0, 0)
+    tctx.globalCompositeOperation = "source-over"
+  }
+
+  ctx.save()
+  ctx.globalAlpha = opacity
+  ctx.drawImage(tmp, 0, 0)
+  ctx.restore()
+  releaseCanvas(tmp)
+  // Suppress unused warning while still emitting cache stats in debug builds.
+  void reused
 }
 
 function autoPickLayer(
@@ -5988,20 +6296,29 @@ function autoPickLayer(
   return null
 }
 
-function alphaBounds(canvas: HTMLCanvasElement) {
+type AlphaBoundsRect = { x: number; y: number; w: number; h: number } | null
+const _alphaBoundsCache = new WeakMap<HTMLCanvasElement, { epoch: number; width: number; height: number; result: AlphaBoundsRect }>()
+function alphaBounds(canvas: HTMLCanvasElement): AlphaBoundsRect {
   const ctx = canvas.getContext("2d")
   if (!ctx) return null
   const w = canvas.width
   const h = canvas.height
+  const cached = _alphaBoundsCache.get(canvas)
+  if (cached && cached.epoch === _maskAlphaEpoch && cached.width === w && cached.height === h) {
+    return cached.result
+  }
   const img = ctx.getImageData(0, 0, w, h)
+  const data = img.data
   let minX = w
   let minY = h
   let maxX = 0
   let maxY = 0
   let hasPixels = false
+  // Row-major scan with strided alpha lookups; unrolled to minimise inner-loop overhead.
   for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      if (img.data[(y * w + x) * 4 + 3] > 8) {
+    let rowStart = y * w * 4 + 3
+    for (let x = 0; x < w; x++, rowStart += 4) {
+      if (data[rowStart] > 8) {
         hasPixels = true
         if (x < minX) minX = x
         if (y < minY) minY = y
@@ -6010,8 +6327,11 @@ function alphaBounds(canvas: HTMLCanvasElement) {
       }
     }
   }
-  if (!hasPixels) return null
-  return { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 }
+  const result: AlphaBoundsRect = hasPixels
+    ? { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 }
+    : null
+  _alphaBoundsCache.set(canvas, { epoch: _maskAlphaEpoch, width: w, height: h, result })
+  return result
 }
 
 type TransformHandleId = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "rotate" | "move"
@@ -6244,7 +6564,7 @@ function cursorForTool(tool: string, brushy: boolean) {
   if (tool === "move" || tool === "content-aware-move") return "move"
   if (tool === "pen" || tool === "freeform-pen" || tool === "curvature-pen" || tool === "add-anchor-point" || tool === "delete-anchor-point" || tool === "convert-point") return "crosshair"
   if (tool === "path-select") return "default"
-  if (tool === "shape-rect" || tool === "shape-rounded-rect" || tool === "shape-ellipse" || tool === "shape-polygon" || tool === "shape-triangle" || tool === "shape-line") return "crosshair"
+  if (tool === "shape-rect" || tool === "shape-rounded-rect" || tool === "shape-ellipse" || tool === "shape-polygon" || tool === "shape-star" || tool === "shape-triangle" || tool === "shape-line") return "crosshair"
   if (tool === "marquee-rect" || tool === "marquee-ellipse" || tool === "marquee-row" || tool === "marquee-col" || tool === "lasso" || tool === "lasso-polygon" || tool === "lasso-magnetic" || tool === "magic-wand" || tool === "quick-selection" || tool === "object-select" || tool === "select-subject" || tool === "select-sky" || tool === "select-background" || tool === "patch-tool" || tool === "red-eye" || tool === "crop" || tool === "perspective-crop" || tool === "slice-select") return "crosshair"
   if (tool === "paint-bucket" || tool === "gradient") return "crosshair"
   if (brushy) return "none"
@@ -6265,18 +6585,66 @@ function shapePropsForTool(
   const options = getShapeRuntimeOptions()
   const stroke = options.strokeWidth > 0 ? { color: background, width: options.strokeWidth } : null
   if (tool === "shape-ellipse") {
-    return { type: "ellipse", x, y, w, h, fill: foreground, stroke }
+    return { type: "ellipse", x, y, w, h, fill: foreground, stroke, rotation: options.rotation }
   }
   if (tool === "shape-polygon") {
-    return { type: "polygon", x, y, w, h, fill: foreground, stroke, sides: 6 }
+    return {
+      type: "polygon",
+      x, y, w, h,
+      fill: foreground,
+      stroke,
+      sides: options.sides,
+      vertexRoundness: options.vertexRoundness,
+      rotation: options.rotation,
+    }
   }
   if (tool === "shape-triangle") {
-    return { type: "polygon", x, y, w, h, fill: foreground, stroke, sides: 3 }
+    return {
+      type: "polygon",
+      x, y, w, h,
+      fill: foreground,
+      stroke,
+      sides: 3,
+      vertexRoundness: options.vertexRoundness,
+      rotation: options.rotation,
+    }
+  }
+  if (tool === "shape-star") {
+    return {
+      type: "star",
+      x, y, w, h,
+      fill: foreground,
+      stroke,
+      starPoints: options.sides,
+      innerRadiusRatio: options.innerRadiusRatio,
+      vertexRoundness: options.vertexRoundness,
+      rotation: options.rotation,
+    }
   }
   if (tool === "custom-shape") {
-    return { type: "custom", x, y, w, h, fill: foreground, stroke, customId: getCustomShapeRuntimeId() }
+    return { type: "custom", x, y, w, h, fill: foreground, stroke, customId: getCustomShapeRuntimeId(), rotation: options.rotation }
   }
-  return { type: "rect", x, y, w, h, fill: foreground, stroke, radius: tool === "shape-rounded-rect" ? Math.max(4, options.radius || 18) : options.radius }
+  const cornerRadii: [number, number, number, number] | undefined =
+    options.cornerRadiusTL !== undefined ||
+    options.cornerRadiusTR !== undefined ||
+    options.cornerRadiusBR !== undefined ||
+    options.cornerRadiusBL !== undefined
+      ? [
+          Math.max(0, options.cornerRadiusTL ?? options.radius ?? 0),
+          Math.max(0, options.cornerRadiusTR ?? options.radius ?? 0),
+          Math.max(0, options.cornerRadiusBR ?? options.radius ?? 0),
+          Math.max(0, options.cornerRadiusBL ?? options.radius ?? 0),
+        ]
+      : undefined
+  return {
+    type: "rect",
+    x, y, w, h,
+    fill: foreground,
+    stroke,
+    radius: tool === "shape-rounded-rect" ? Math.max(4, options.radius || 18) : options.radius,
+    cornerRadii,
+    rotation: options.rotation,
+  }
 }
 
 function drawFramePlaceholder(

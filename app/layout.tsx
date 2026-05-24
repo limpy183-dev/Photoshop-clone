@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import Script from 'next/script'
+import { headers } from 'next/headers'
 import { Analytics } from '@vercel/analytics/next'
 import { Toaster } from '@/components/ui/sonner'
 import {
@@ -21,11 +21,13 @@ export const metadata: Metadata = {
 
 void marketingFontVariables
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode
 }>) {
+  const nonce = (await headers()).get('x-nonce') ?? undefined
+
   return (
     <html
       lang="en"
@@ -40,10 +42,11 @@ export default function RootLayout({
           extension-attribute strip that prevents hydration warnings from
           things like Bitdefender's bis_skin_checked.
         */}
-        <Script
+        <script
           id="strip-extension-hydration-attributes"
-          strategy="beforeInteractive"
+          nonce={nonce}
           src="/strip-extension-hydration-attributes.js"
+          suppressHydrationWarning
         />
         {children}
         <Toaster position="bottom-right" richColors closeButton />

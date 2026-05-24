@@ -295,12 +295,21 @@ function hashString(value: string) {
 const SAFE_THUMBNAIL_DATA_URL =
   /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/i
 const MAX_THUMBNAIL_CHARS = 200_000
+const BIDI_AND_ZERO_WIDTH_CONTROLS = /[\u200B-\u200F\u2028-\u202E\u2066-\u2069\uFEFF]/g
 
 function safeThumbnail(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined
   if (value.length === 0 || value.length > MAX_THUMBNAIL_CHARS) return undefined
   if (!SAFE_THUMBNAIL_DATA_URL.test(value)) return undefined
   return value
+}
+
+function safeRecentText(value: string, maxLength: number): string {
+  return value
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(BIDI_AND_ZERO_WIDTH_CONTROLS, "")
+    .trim()
+    .slice(0, maxLength)
 }
 
 function normalizeRecentDocument(value: unknown): RecentDocument | null {
@@ -319,11 +328,11 @@ function normalizeRecentDocument(value: unknown): RecentDocument | null {
   }
   return {
     id: item.id.slice(0, 120),
-    name: item.name.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 160) || "Untitled",
+    name: safeRecentText(item.name, 160) || "Untitled",
     kind: item.kind as RecentDocument["kind"],
     serialized,
     updatedAt: item.updatedAt,
-    fileName: typeof item.fileName === "string" ? item.fileName.slice(0, 180) : undefined,
+    fileName: typeof item.fileName === "string" ? safeRecentText(item.fileName, 180) : undefined,
     storage: typeof item.storage === "string" ? item.storage as RecentDocument["storage"] : undefined,
     thumbnail: safeThumbnail((item as RecentDocument).thumbnail),
   }

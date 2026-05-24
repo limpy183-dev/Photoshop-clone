@@ -4,6 +4,7 @@ class FixtureCanvas {
   width = 1
   height = 1
   fill = "#000000"
+  imageData: ImageData | null = null
 
   getContext() {
     const context = {
@@ -25,8 +26,10 @@ class FixtureCanvas {
       scale: () => {},
       rotate: () => {},
       setTransform: () => {},
-      getImageData: () => ({ data: new Uint8ClampedArray(this.width * this.height * 4), width: this.width, height: this.height }),
-      putImageData: () => {},
+      getImageData: () => this.imageData ?? ({ data: new Uint8ClampedArray(this.width * this.height * 4), width: this.width, height: this.height }),
+      putImageData: (image: ImageData) => {
+        this.imageData = image
+      },
     }
     return context
   }

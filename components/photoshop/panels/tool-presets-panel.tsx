@@ -1,11 +1,15 @@
 "use client"
 
 import * as React from "react"
-import { Check, Plus, Trash2 } from "lucide-react"
+import { Check, Copy, Download, Plus, Search, Trash2, Upload } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useEditor } from "../editor-context"
 import type { AssetLibraryItem, ToolId } from "../types"
+import { uid } from "../uid"
+import { downloadText } from "../document-io"
+import { mergeToolPresetAssets, normalizeToolPresetAssets, serializeToolPresetAssets } from "../tool-preset-library"
+import { toast } from "sonner"
 
 type ToolPresetPayload = {
   tool: ToolId
@@ -17,9 +21,8 @@ type ToolPresetPayload = {
   background: string
 }
 
-function uid(prefix = "preset") {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
-}
+
+
 
 export function ToolPresetsPanel() {
   const {
@@ -35,24 +38,34 @@ export function ToolPresetsPanel() {
     commit,
   } = useEditor()
   const [name, setName] = React.useState("")
+  const [group, setGroup] = React.useState("Tools")
   const [filter, setFilter] = React.useState("")
+  const [groupFilter, setGroupFilter] = React.useState("All")
+  const [sort, setSort] = React.useState<"recent" | "name" | "tool">("recent")
+  const importRef = React.useRef<HTMLInputElement>(null)
 
   if (!activeDoc) return null
 
   const presets = (activeDoc.assetLibrary ?? []).filter((asset) => asset.kind === "tool-preset")
+  const groups = ["All", ...Array.from(new Set(presets.map((preset) => preset.group ?? "Tools"))).sort()]
   const visible = presets.filter((preset) => {
     const payload = preset.payload as Partial<ToolPresetPayload>
     const q = filter.trim().toLowerCase()
-    return !q || `${preset.name} ${payload.tool ?? ""}`.toLowerCase().includes(q)
+    if (groupFilter !== "All" && (preset.group ?? "Tools") !== groupFilter) return false
+    return !q || `${preset.name} ${preset.group ?? ""} ${payload.tool ?? ""}`.toLowerCase().includes(q)
+  }).sort((a, b) => {
+    if (sort === "name") return a.name.localeCompare(b.name)
+    if (sort === "tool") return String((a.payload as Partial<ToolPresetPayload>).tool ?? "").localeCompare(String((b.payload as Partial<ToolPresetPayload>).tool ?? ""))
+    return b.createdAt - a.createdAt
   })
 
   const savePreset = () => {
     const trimmed = name.trim() || `${tool} preset`
     const asset: AssetLibraryItem = {
-      id: uid(),
+      id: uid("preset"),
       name: trimmed,
       kind: "tool-preset",
-      group: "Tools",
+      group: group.trim() || "Tools",
       createdAt: Date.now(),
       payload: {
         tool,
@@ -85,10 +98,51 @@ export function ToolPresetsPanel() {
     window.setTimeout(() => commit("Delete Tool Preset", []), 0)
   }
 
+  const duplicatePreset = (preset: AssetLibraryItem) => {
+    const copy: AssetLibraryItem = {
+      ...preset,
+      id: uid("preset"),
+      name: `${preset.name} copy`,
+      createdAt: Date.now(),
+    }
+    dispatch({ type: "set-asset-library", assets: [copy, ...(activeDoc.assetLibrary ?? [])] })
+    window.setTimeout(() => commit("Duplicate Tool Preset", []), 0)
+  }
+
+  const exportPresets = () => {
+    downloadText(serializeToolPresetAssets(presets), "photoshop-tool-presets.pstoolpresets.json")
+  }
+
+  const importPresets = async (file: File) => {
+    try {
+      if (file.size > 512 * 1024) throw new Error("Tool preset files are limited to 512 KB.")
+      const imported = normalizeToolPresetAssets(JSON.parse(await file.text()))
+      if (!imported.length) throw new Error("Tool preset file does not contain valid presets.")
+      const otherAssets = (activeDoc.assetLibrary ?? []).filter((asset) => asset.kind !== "tool-preset")
+      dispatch({ type: "set-asset-library", assets: [...otherAssets, ...mergeToolPresetAssets(presets, imported)] })
+      toast.success(`Imported ${imported.length} tool preset${imported.length === 1 ? "" : "s"}`)
+      window.setTimeout(() => commit("Import Tool Presets", []), 0)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not import tool presets")
+    } finally {
+      if (importRef.current) importRef.current.value = ""
+    }
+  }
+
   return (
     <div className="flex h-full flex-col text-[11px] text-[var(--ps-text)]">
+      <input
+        ref={importRef}
+        type="file"
+        accept=".json,.pstoolpresets,.pstoolpresets.json,application/json"
+        className="hidden"
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0]
+          if (file) void importPresets(file)
+        }}
+      />
       <div className="space-y-2 border-b border-[var(--ps-divider)] p-2">
-        <div className="grid grid-cols-[1fr_auto] gap-2">
+        <div className="grid grid-cols-[1fr_88px_auto] gap-2">
           <Input
             value={name}
             onChange={(event) => setName(event.target.value)}
@@ -96,6 +150,12 @@ export function ToolPresetsPanel() {
               if (event.key === "Enter") savePreset()
             }}
             placeholder={`${tool} preset name`}
+            className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
+          />
+          <Input
+            value={group}
+            onChange={(event) => setGroup(event.target.value)}
+            placeholder="Group"
             className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
           />
           <Button size="sm" onClick={savePreset}>
@@ -109,6 +169,30 @@ export function ToolPresetsPanel() {
           placeholder="Search tool presets"
           className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
         />
+        <div className="grid grid-cols-2 gap-1">
+          <select value={groupFilter} onChange={(event) => setGroupFilter(event.target.value)} className="h-7 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]">
+            {groups.map((item) => <option key={item} value={item}>{item}</option>)}
+          </select>
+          <select value={sort} onChange={(event) => setSort(event.target.value as typeof sort)} className="h-7 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]">
+            <option value="recent">Recent</option>
+            <option value="name">Name</option>
+            <option value="tool">Tool</option>
+          </select>
+        </div>
+        <div className="flex items-center gap-1">
+          <Button size="sm" variant="outline" onClick={() => importRef.current?.click()}>
+            <Upload className="h-3.5 w-3.5" />
+            Import
+          </Button>
+          <Button size="sm" variant="outline" onClick={exportPresets} disabled={!presets.length}>
+            <Download className="h-3.5 w-3.5" />
+            Export
+          </Button>
+          <div className="ml-auto flex items-center gap-1 text-[10px] text-[var(--ps-text-dim)]">
+            <Search className="h-3 w-3" />
+            {visible.length}/{presets.length}
+          </div>
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-2">
         {visible.length ? (
@@ -116,13 +200,16 @@ export function ToolPresetsPanel() {
             {visible.map((preset) => {
               const payload = preset.payload as Partial<ToolPresetPayload>
               return (
-                <div key={preset.id} className="grid grid-cols-[1fr_auto_auto] items-center gap-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
+                <div key={preset.id} className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
                   <div className="min-w-0">
                     <div className="truncate text-[12px]">{preset.name}</div>
                     <div className="text-[10px] text-[var(--ps-text-dim)]">{payload.tool ?? "Tool"} - {new Date(preset.createdAt).toLocaleDateString()}</div>
                   </div>
                   <Button variant="ghost" size="icon-sm" title="Apply preset" onClick={() => applyPreset(preset)}>
                     <Check className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button variant="ghost" size="icon-sm" title="Duplicate preset" onClick={() => duplicatePreset(preset)}>
+                    <Copy className="h-3.5 w-3.5" />
                   </Button>
                   <Button variant="ghost" size="icon-sm" title="Delete preset" onClick={() => removePreset(preset.id)}>
                     <Trash2 className="h-3.5 w-3.5" />

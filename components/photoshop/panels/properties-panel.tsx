@@ -12,9 +12,13 @@ import {
   buildFontPreview,
   convertTextToEditablePath,
   createTextExtrusionScene,
+  DEFAULT_VARIABLE_AXIS_DEFINITIONS,
   diagnoseDocumentFonts,
+  listOpenTypeFeatureToggles,
   matchFontForLayer,
+  resolveFontSubstitutions,
 } from "../typography-engine"
+import { createDefaultShapeAppearance, shapeToEditablePath } from "../vector-path-operations"
 
 const BLEND_MODES: BlendMode[] = [
   "normal","dissolve","darken","multiply","color-burn","linear-burn","darker-color",
@@ -573,30 +577,55 @@ function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, reques
       variableAxes: layer.text.variableAxes,
       variableAxisDefinitions: layer.text.variableAxisDefinitions,
     })
+    const axisDefinitions = layer.text.variableAxisDefinitions?.length
+      ? layer.text.variableAxisDefinitions
+      : DEFAULT_VARIABLE_AXIS_DEFINITIONS
+    const openTypeToggles = listOpenTypeFeatureToggles()
+    const baseShapeInset = layer.text.textShapeInset ?? 8
+    const textShapeInsets = layer.text.textShapeInsets ?? {
+      top: baseShapeInset,
+      right: baseShapeInset,
+      bottom: baseShapeInset,
+      left: baseShapeInset,
+    }
     const axisValue = (tag: string, fallback: number) => layer.text!.variableAxes?.[tag] ?? fallback
     const updateAxis = (tag: string, value: number) => {
       updateText({ variableAxes: { ...(layer.text!.variableAxes ?? {}), [tag]: value } })
+    }
+    const updateShapeInset = (side: keyof typeof textShapeInsets, value: number) => {
+      updateText({ textShapeInsets: { ...textShapeInsets, [side]: Math.max(0, value) } })
+    }
+    const applySubstitution = () => {
+      const result = resolveFontSubstitutions([layer], { fallbackFont: fontStatus?.substitute ?? "Arial" })
+      const next = result.layers[0]?.text
+      if (!next || !result.changedLayerIds.includes(layer.id)) return
+      updateText(next)
+      window.setTimeout(() => commit("Substitute Missing Font", [layer.id]), 0)
+    }
+    const restoreOriginalFont = () => {
+      if (!layer.text!.missingFontOriginal) return
+      updateText({
+        font: layer.text!.missingFontOriginal,
+        missingFontOriginal: undefined,
+        fontSubstitution: undefined,
+      })
+      window.setTimeout(() => commit("Restore Missing Font", [layer.id]), 0)
     }
     const attachPath = () => {
       if (!pathLayer) return
       const points =
         pathLayer.path?.points ??
-        (pathLayer.shape
-          ? [
-              { x: pathLayer.shape.x, y: pathLayer.shape.y + pathLayer.shape.h / 2 },
-              { x: pathLayer.shape.x + pathLayer.shape.w / 2, y: pathLayer.shape.y },
-              { x: pathLayer.shape.x + pathLayer.shape.w, y: pathLayer.shape.y + pathLayer.shape.h / 2 },
-              { x: pathLayer.shape.x + pathLayer.shape.w / 2, y: pathLayer.shape.y + pathLayer.shape.h },
-              { x: pathLayer.shape.x, y: pathLayer.shape.y + pathLayer.shape.h / 2 },
-            ]
-          : undefined)
+        (pathLayer.shape ? shapeToEditablePath(pathLayer.shape).points : undefined)
       if (!points?.length) return
       updateText({ textPath: points })
       window.setTimeout(() => commit("Type on Path", [layer.id]), 0)
     }
     const putInsideShape = () => {
       if (!shapeLayer?.shape) return
-      updateText(applyTextInsideShape(layer.text!, shapeLayer.shape, { inset: layer.text!.textShapeInset ?? 8 }))
+      updateText(applyTextInsideShape(layer.text!, shapeLayer.shape, {
+        insets: textShapeInsets,
+        verticalAlign: layer.text!.textShapeVerticalAlign ?? "top",
+      }))
       window.setTimeout(() => commit("Text Inside Shape", [layer.id]), 0)
     }
     const convertToPath = () => {
@@ -714,6 +743,28 @@ function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, reques
             {fontStatus?.status === "missing" ? `Missing, substitutes ${fontStatus.substitute}` : "Available"}
           </span>
         </Row>
+        {fontStatus?.status === "missing" ? (
+          <button
+            type="button"
+            onClick={applySubstitution}
+            className="h-7 rounded-sm border border-[var(--ps-divider)] px-2 text-[10px] hover:bg-[var(--ps-tool-hover)]"
+          >
+            Apply Substitute Font
+          </button>
+        ) : null}
+        {layer.text.missingFontOriginal ? (
+          <div className="grid grid-cols-[70px_1fr] items-center gap-2">
+            <span className="text-[var(--ps-text-dim)]">Original</span>
+            <button
+              type="button"
+              onClick={restoreOriginalFont}
+              className="min-h-6 rounded-sm border border-[var(--ps-divider)] px-2 text-left text-[10px] hover:bg-[var(--ps-tool-hover)]"
+              title={layer.text.missingFontOriginal}
+            >
+              {layer.text.missingFontOriginal}
+            </button>
+          </div>
+        ) : null}
         <Row label="AA Mode">
           <select
             value={layer.text.antiAlias === false ? "none" : layer.text.antiAliasMode ?? "smooth"}
@@ -738,24 +789,103 @@ function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, reques
           <NumberField label="Baseline" value={layer.text.baselineShift ?? 0} onChange={(value) => updateText({ baselineShift: value })} onCommit={() => commit("Type Baseline", [layer.id])} />
           <NumberField label="Kerning" value={typeof layer.text.kerning === "number" ? layer.text.kerning : 0} onChange={(value) => updateText({ kerning: value })} onCommit={() => commit("Type Kerning", [layer.id])} />
         </div>
+        <Row label="Writing">
+          <select
+            value={layer.text.vertical ? (layer.text.verticalWritingMode === "lr" ? "vertical-lr" : "vertical-rl") : "horizontal"}
+            onChange={(e) => {
+              const value = e.target.value
+              updateText({
+                vertical: value !== "horizontal",
+                verticalWritingMode: value === "vertical-lr" ? "lr" : "rl",
+              })
+            }}
+            onBlur={() => commit("Type Writing Mode", [layer.id])}
+            className="h-5 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]"
+          >
+            <option value="horizontal">Horizontal</option>
+            <option value="vertical-rl">Vertical RL</option>
+            <option value="vertical-lr">Vertical LR</option>
+          </select>
+        </Row>
+        <Row label="Mojikumi">
+          <select
+            value={layer.text.mojikumi ?? "default"}
+            onChange={(e) => updateText({ mojikumi: e.target.value as NonNullable<Layer["text"]>["mojikumi"] })}
+            onBlur={() => commit("Type Mojikumi", [layer.id])}
+            className="h-5 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]"
+          >
+            <option value="default">Default</option>
+            <option value="compact">Compact</option>
+            <option value="loose">Loose</option>
+            <option value="none">None</option>
+          </select>
+        </Row>
         <div className="grid grid-cols-2 gap-1">
-          <NumberField label="Axis wght" value={axisValue("wght", layer.text.weight === "bold" ? 700 : 400)} onChange={(value) => updateAxis("wght", value)} onCommit={() => commit("Variable Font Axis", [layer.id])} />
-          <NumberField label="Axis wdth" value={axisValue("wdth", 100)} onChange={(value) => updateAxis("wdth", value)} onCommit={() => commit("Variable Font Axis", [layer.id])} />
-          <NumberField label="Axis slnt" value={axisValue("slnt", 0)} onChange={(value) => updateAxis("slnt", value)} onCommit={() => commit("Variable Font Axis", [layer.id])} />
-          <NumberField label="Axis opsz" value={axisValue("opsz", layer.text.size)} onChange={(value) => updateAxis("opsz", value)} onCommit={() => commit("Variable Font Axis", [layer.id])} />
+          <QuickToggle label="Tate Chu Yoko" active={!!layer.text.tateChuYoko} onClick={() => { updateText({ tateChuYoko: !layer.text!.tateChuYoko }); commit("Type Tate Chu Yoko", [layer.id]) }} />
+          <QuickToggle label="Path Flip" active={!!layer.text.textPathFlip} onClick={() => { updateText({ textPathFlip: !layer.text!.textPathFlip }); commit("Type Path Flip", [layer.id]) }} />
+          <QuickToggle label="Path Closed" active={!!layer.text.textPathClosed} onClick={() => { updateText({ textPathClosed: !layer.text!.textPathClosed }); commit("Type Path Closed", [layer.id]) }} />
+        </div>
+        <Row label="Path Align">
+          <select
+            value={layer.text.textPathAlign ?? "start"}
+            onChange={(e) => updateText({ textPathAlign: e.target.value as NonNullable<Layer["text"]>["textPathAlign"] })}
+            onBlur={() => commit("Type Path Align", [layer.id])}
+            className="h-5 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]"
+          >
+            <option value="start">Start</option>
+            <option value="center">Center</option>
+            <option value="end">End</option>
+          </select>
+        </Row>
+        <div className="grid grid-cols-2 gap-1">
+          <NumberField label="Path Start" value={layer.text.textPathStartOffset ?? 0} onChange={(value) => updateText({ textPathStartOffset: value })} onCommit={() => commit("Type Path Start", [layer.id])} />
+          <NumberField label="Path Base" value={layer.text.textPathBaselineOffset ?? 0} onChange={(value) => updateText({ textPathBaselineOffset: value })} onCommit={() => commit("Type Path Baseline", [layer.id])} />
+        </div>
+        <Row label="Inside Align">
+          <select
+            value={layer.text.textShapeVerticalAlign ?? "top"}
+            onChange={(e) => updateText({ textShapeVerticalAlign: e.target.value as NonNullable<Layer["text"]>["textShapeVerticalAlign"] })}
+            onBlur={() => commit("Text Shape Align", [layer.id])}
+            className="h-5 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]"
+          >
+            <option value="top">Top</option>
+            <option value="middle">Middle</option>
+            <option value="bottom">Bottom</option>
+          </select>
+        </Row>
+        <div className="grid grid-cols-4 gap-1">
+          <NumberField label="Inset T" value={textShapeInsets.top} onChange={(value) => updateShapeInset("top", value)} onCommit={() => commit("Text Shape Insets", [layer.id])} />
+          <NumberField label="Inset R" value={textShapeInsets.right} onChange={(value) => updateShapeInset("right", value)} onCommit={() => commit("Text Shape Insets", [layer.id])} />
+          <NumberField label="Inset B" value={textShapeInsets.bottom} onChange={(value) => updateShapeInset("bottom", value)} onCommit={() => commit("Text Shape Insets", [layer.id])} />
+          <NumberField label="Inset L" value={textShapeInsets.left} onChange={(value) => updateShapeInset("left", value)} onCommit={() => commit("Text Shape Insets", [layer.id])} />
         </div>
         <div className="grid grid-cols-2 gap-1">
-          <QuickToggle label="Ligatures" active={layer.text.ligatures !== false} onClick={() => { updateText({ ligatures: layer.text!.ligatures === false }); commit("Type Ligatures", [layer.id]) }} />
-          <QuickToggle label="Discretionary" active={!!layer.text.discretionaryLigatures} onClick={() => { updateText({ discretionaryLigatures: !layer.text!.discretionaryLigatures }); commit("Type Ligatures", [layer.id]) }} />
-          <QuickToggle label="Contextual" active={layer.text.contextualAlternates !== false} onClick={() => { updateText({ contextualAlternates: layer.text!.contextualAlternates === false }); commit("Type Alternates", [layer.id]) }} />
-          <QuickToggle label="Stylistic" active={!!layer.text.stylisticAlternates} onClick={() => { updateText({ stylisticAlternates: !layer.text!.stylisticAlternates }); commit("Type Alternates", [layer.id]) }} />
-          <QuickToggle label="Swash" active={!!layer.text.swash} onClick={() => { updateText({ swash: !layer.text!.swash }); commit("Type Swash", [layer.id]) }} />
-          <QuickToggle label="Ordinals" active={!!layer.text.ordinals} onClick={() => { updateText({ ordinals: !layer.text!.ordinals }); commit("Type Ordinals", [layer.id]) }} />
-          <QuickToggle label="Fractions" active={!!layer.text.fractions} onClick={() => { updateText({ fractions: !layer.text!.fractions }); commit("Type Fractions", [layer.id]) }} />
+          {axisDefinitions.map((axis) => (
+            <NumberField
+              key={axis.tag}
+              label={`Axis ${axis.tag}`}
+              value={axisValue(axis.tag, axis.defaultValue)}
+              onChange={(value) => updateAxis(axis.tag, Math.max(axis.min, Math.min(axis.max, value)))}
+              onCommit={() => commit("Variable Font Axis", [layer.id])}
+            />
+          ))}
+        </div>
+        <div className="grid grid-cols-2 gap-1">
+          {openTypeToggles.map((toggle) => {
+            const value = (layer.text! as unknown as Record<string, boolean | undefined>)[toggle.key] ?? layer.text!.openType?.[toggle.key] ?? toggle.defaultEnabled
+            return (
+              <QuickToggle
+                key={toggle.tag}
+                label={toggle.label}
+                active={!!value}
+                onClick={() => {
+                  updateText({ [toggle.key]: !value } as Partial<NonNullable<Layer["text"]>>)
+                  commit(`Type ${toggle.label}`, [layer.id])
+                }}
+              />
+            )
+          })}
           <QuickToggle label="All Caps" active={!!layer.text.allCaps} onClick={() => { updateText({ allCaps: !layer.text!.allCaps }); commit("Type Case", [layer.id]) }} />
-          <QuickToggle label="Small Caps" active={!!layer.text.smallCaps} onClick={() => { updateText({ smallCaps: !layer.text!.smallCaps }); commit("Type Case", [layer.id]) }} />
-          <QuickToggle label="Oldstyle" active={!!layer.text.oldstyleFigures} onClick={() => { updateText({ oldstyleFigures: !layer.text!.oldstyleFigures }); commit("Type Figures", [layer.id]) }} />
-          <QuickToggle label="Tabular" active={!!layer.text.tabularFigures} onClick={() => { updateText({ tabularFigures: !layer.text!.tabularFigures }); commit("Type Figures", [layer.id]) }} />
         </div>
         <div className="grid grid-cols-2 gap-1">
           <QuickToggle label="Extrusion" active={!!layer.text.extrusion?.enabled} onClick={() => { updateText({ extrusion: { enabled: !layer.text!.extrusion?.enabled, depth: layer.text!.extrusion?.depth ?? 28, bevel: layer.text!.extrusion?.bevel ?? 3, angle: layer.text!.extrusion?.angle ?? 35, color: layer.text!.extrusion?.color ?? layer.text!.color } }); commit("Type Extrusion", [layer.id]) }} />
@@ -782,10 +912,36 @@ function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, reques
   }
 
   // Shape tool
-  if ((tool === "shape-rect" || tool === "shape-ellipse" || tool === "shape-line" || tool === "custom-shape") && layer?.shape) {
+  if (layer?.shape) {
     const updateShape = (patch: Partial<NonNullable<Layer["shape"]>>) => {
       dispatch({ type: "set-layer-shape", id: layer.id, shape: { ...layer.shape!, ...patch } })
       requestRender()
+    }
+    const appearance = createDefaultShapeAppearance(layer.shape)
+    const updateAppearance = (patch: Partial<typeof appearance>) => {
+      updateShape({ appearance: { ...appearance, ...patch } })
+    }
+    const updateFill = (index: number, patch: Partial<(typeof appearance.fills)[number]>) => {
+      updateAppearance({ fills: appearance.fills.map((fill, i) => i === index ? { ...fill, ...patch } : fill) })
+    }
+    const updateStroke = (index: number, patch: Partial<(typeof appearance.strokes)[number]>) => {
+      updateAppearance({ strokes: appearance.strokes.map((stroke, i) => i === index ? { ...stroke, ...patch } : stroke) })
+    }
+    const moveFill = (index: number, offset: number) => {
+      const nextIndex = Math.max(0, Math.min(appearance.fills.length - 1, index + offset))
+      if (nextIndex === index) return
+      const fills = [...appearance.fills]
+      const [item] = fills.splice(index, 1)
+      fills.splice(nextIndex, 0, item)
+      updateAppearance({ fills })
+    }
+    const moveStroke = (index: number, offset: number) => {
+      const nextIndex = Math.max(0, Math.min(appearance.strokes.length - 1, index + offset))
+      if (nextIndex === index) return
+      const strokes = [...appearance.strokes]
+      const [item] = strokes.splice(index, 1)
+      strokes.splice(nextIndex, 0, item)
+      updateAppearance({ strokes })
     }
     return (
       <Section title="Shape Properties" icon={<Square className="w-3 h-3" />}>
@@ -814,7 +970,225 @@ function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, reques
           <NumberField label="W" value={Math.round(layer.shape.w)} onChange={(value) => updateShape({ w: value })} onCommit={() => commit("Shape Bounds", [layer.id])} />
           <NumberField label="H" value={Math.round(layer.shape.h)} onChange={(value) => updateShape({ h: value })} onCommit={() => commit("Shape Bounds", [layer.id])} />
           <NumberField label="Stroke W" value={layer.shape.stroke?.width ?? 0} onChange={(value) => updateShape({ stroke: value > 0 ? { color: layer.shape!.stroke?.color ?? background, width: value } : null })} onCommit={() => commit("Shape Stroke", [layer.id])} />
-          <NumberField label="Radius" value={layer.shape.radius ?? 0} onChange={(value) => updateShape({ radius: Math.max(0, value) })} onCommit={() => commit("Shape Radius", [layer.id])} />
+          <NumberField label="Rotate °" value={Math.round(layer.shape.rotation ?? 0)} onChange={(value) => updateShape({ rotation: value })} onCommit={() => commit("Shape Rotation", [layer.id])} />
+        </div>
+        {layer.shape.type === "rect" ? (
+          <>
+            <Row label="Uniform R">
+              <NumberField
+                label=""
+                value={layer.shape.radius ?? 0}
+                onChange={(value) => {
+                  const r = Math.max(0, value)
+                  updateShape({ radius: r, cornerRadii: [r, r, r, r] })
+                }}
+                onCommit={() => commit("Shape Radius", [layer.id])}
+              />
+            </Row>
+            <div className="grid grid-cols-2 gap-1">
+              <NumberField
+                label="TL"
+                value={Math.round((layer.shape.cornerRadii?.[0] ?? layer.shape.radius ?? 0))}
+                onChange={(value) => {
+                  const c = (layer.shape!.cornerRadii ?? [layer.shape!.radius ?? 0, layer.shape!.radius ?? 0, layer.shape!.radius ?? 0, layer.shape!.radius ?? 0]) as [number, number, number, number]
+                  updateShape({ cornerRadii: [Math.max(0, value), c[1], c[2], c[3]] })
+                }}
+                onCommit={() => commit("Corner TL", [layer.id])}
+              />
+              <NumberField
+                label="TR"
+                value={Math.round((layer.shape.cornerRadii?.[1] ?? layer.shape.radius ?? 0))}
+                onChange={(value) => {
+                  const c = (layer.shape!.cornerRadii ?? [layer.shape!.radius ?? 0, layer.shape!.radius ?? 0, layer.shape!.radius ?? 0, layer.shape!.radius ?? 0]) as [number, number, number, number]
+                  updateShape({ cornerRadii: [c[0], Math.max(0, value), c[2], c[3]] })
+                }}
+                onCommit={() => commit("Corner TR", [layer.id])}
+              />
+              <NumberField
+                label="BL"
+                value={Math.round((layer.shape.cornerRadii?.[3] ?? layer.shape.radius ?? 0))}
+                onChange={(value) => {
+                  const c = (layer.shape!.cornerRadii ?? [layer.shape!.radius ?? 0, layer.shape!.radius ?? 0, layer.shape!.radius ?? 0, layer.shape!.radius ?? 0]) as [number, number, number, number]
+                  updateShape({ cornerRadii: [c[0], c[1], c[2], Math.max(0, value)] })
+                }}
+                onCommit={() => commit("Corner BL", [layer.id])}
+              />
+              <NumberField
+                label="BR"
+                value={Math.round((layer.shape.cornerRadii?.[2] ?? layer.shape.radius ?? 0))}
+                onChange={(value) => {
+                  const c = (layer.shape!.cornerRadii ?? [layer.shape!.radius ?? 0, layer.shape!.radius ?? 0, layer.shape!.radius ?? 0, layer.shape!.radius ?? 0]) as [number, number, number, number]
+                  updateShape({ cornerRadii: [c[0], c[1], Math.max(0, value), c[3]] })
+                }}
+                onCommit={() => commit("Corner BR", [layer.id])}
+              />
+            </div>
+          </>
+        ) : null}
+        {layer.shape.type === "polygon" ? (
+          <div className="grid grid-cols-2 gap-1">
+            <NumberField
+              label="Sides"
+              value={layer.shape.sides ?? 6}
+              onChange={(value) => updateShape({ sides: Math.max(3, Math.min(64, Math.round(value))) })}
+              onCommit={() => commit("Polygon Sides", [layer.id])}
+            />
+            <NumberField
+              label="Roundness"
+              value={Math.round((layer.shape.vertexRoundness ?? 0) * 100)}
+              onChange={(value) => updateShape({ vertexRoundness: Math.max(0, Math.min(1, value / 100)) })}
+              onCommit={() => commit("Polygon Roundness", [layer.id])}
+            />
+          </div>
+        ) : null}
+        {layer.shape.type === "star" ? (
+          <div className="grid grid-cols-2 gap-1">
+            <NumberField
+              label="Points"
+              value={layer.shape.starPoints ?? layer.shape.sides ?? 5}
+              onChange={(value) => updateShape({ starPoints: Math.max(3, Math.min(32, Math.round(value))) })}
+              onCommit={() => commit("Star Points", [layer.id])}
+            />
+            <NumberField
+              label="Inner %"
+              value={Math.round((layer.shape.innerRadiusRatio ?? 0.45) * 100)}
+              onChange={(value) => updateShape({ innerRadiusRatio: Math.max(0.05, Math.min(0.95, value / 100)) })}
+              onCommit={() => commit("Star Inner Radius", [layer.id])}
+            />
+            <NumberField
+              label="Roundness"
+              value={Math.round((layer.shape.vertexRoundness ?? 0) * 100)}
+              onChange={(value) => updateShape({ vertexRoundness: Math.max(0, Math.min(1, value / 100)) })}
+              onCommit={() => commit("Star Roundness", [layer.id])}
+            />
+          </div>
+        ) : null}
+        <div className="space-y-1 border-t border-[var(--ps-divider)] pt-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-[var(--ps-text-dim)]">Fill Stack</span>
+            <button
+              type="button"
+              className="h-5 rounded-sm border border-[var(--ps-divider)] px-2 text-[9px] hover:bg-[var(--ps-tool-hover)]"
+              onClick={() => {
+                updateAppearance({
+                  fills: [
+                    ...appearance.fills,
+                    { id: `fill_${Date.now()}`, enabled: true, color: foreground, opacity: 1 },
+                  ],
+                })
+                commit("Add Shape Fill", [layer.id])
+              }}
+            >
+              Add
+            </button>
+          </div>
+          {appearance.fills.map((fill, index) => (
+            <div key={fill.id} className="grid grid-cols-[18px_26px_1fr_34px_34px_20px] items-center gap-1">
+              <input
+                type="checkbox"
+                checked={fill.enabled}
+                onChange={(e) => updateFill(index, { enabled: e.target.checked })}
+                onBlur={() => commit("Shape Fill Stack", [layer.id])}
+              />
+              <input
+                type="color"
+                value={fill.color}
+                onChange={(e) => updateFill(index, { color: e.target.value })}
+                onBlur={() => commit("Shape Fill Stack", [layer.id])}
+                className="h-5 w-6"
+              />
+              <NumberField
+                label={`Fill ${index + 1}`}
+                value={Math.round(fill.opacity * 100)}
+                onChange={(value) => updateFill(index, { opacity: Math.max(0, Math.min(1, value / 100)) })}
+                onCommit={() => commit("Shape Fill Opacity", [layer.id])}
+              />
+              <button type="button" className="h-5 rounded-sm border border-[var(--ps-divider)] text-[9px]" onClick={() => { moveFill(index, -1); commit("Reorder Shape Fill", [layer.id]) }}>Up</button>
+              <button type="button" className="h-5 rounded-sm border border-[var(--ps-divider)] text-[9px]" onClick={() => { moveFill(index, 1); commit("Reorder Shape Fill", [layer.id]) }}>Down</button>
+              <button type="button" className="h-5 rounded-sm border border-[var(--ps-divider)] text-[9px]" onClick={() => { updateAppearance({ fills: appearance.fills.filter((_, i) => i !== index) }); commit("Remove Shape Fill", [layer.id]) }}>X</button>
+            </div>
+          ))}
+        </div>
+        <div className="space-y-1 border-t border-[var(--ps-divider)] pt-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-[var(--ps-text-dim)]">Stroke Stack</span>
+            <button
+              type="button"
+              className="h-5 rounded-sm border border-[var(--ps-divider)] px-2 text-[9px] hover:bg-[var(--ps-tool-hover)]"
+              onClick={() => {
+                updateAppearance({
+                  strokes: [
+                    ...appearance.strokes,
+                    { id: `stroke_${Date.now()}`, enabled: true, color: background, width: Math.max(1, layer.shape!.stroke?.width ?? 2), opacity: 1, alignment: "center" },
+                  ],
+                })
+                commit("Add Shape Stroke", [layer.id])
+              }}
+            >
+              Add
+            </button>
+          </div>
+          {appearance.strokes.map((stroke, index) => (
+            <div key={stroke.id} className="space-y-1 rounded-sm border border-[var(--ps-divider)] p-1">
+              <div className="grid grid-cols-[18px_26px_1fr_34px_34px_20px] items-center gap-1">
+                <input
+                  type="checkbox"
+                  checked={stroke.enabled}
+                  onChange={(e) => updateStroke(index, { enabled: e.target.checked })}
+                  onBlur={() => commit("Shape Stroke Stack", [layer.id])}
+                />
+                <input
+                  type="color"
+                  value={stroke.color}
+                  onChange={(e) => updateStroke(index, { color: e.target.value })}
+                  onBlur={() => commit("Shape Stroke Stack", [layer.id])}
+                  className="h-5 w-6"
+                />
+                <NumberField
+                  label={`Stroke ${index + 1}`}
+                  value={Math.round(stroke.width)}
+                  onChange={(value) => updateStroke(index, { width: Math.max(0, value) })}
+                  onCommit={() => commit("Shape Stroke Width", [layer.id])}
+                />
+                <button type="button" className="h-5 rounded-sm border border-[var(--ps-divider)] text-[9px]" onClick={() => { moveStroke(index, -1); commit("Reorder Shape Stroke", [layer.id]) }}>Up</button>
+                <button type="button" className="h-5 rounded-sm border border-[var(--ps-divider)] text-[9px]" onClick={() => { moveStroke(index, 1); commit("Reorder Shape Stroke", [layer.id]) }}>Down</button>
+                <button type="button" className="h-5 rounded-sm border border-[var(--ps-divider)] text-[9px]" onClick={() => { updateAppearance({ strokes: appearance.strokes.filter((_, i) => i !== index) }); commit("Remove Shape Stroke", [layer.id]) }}>X</button>
+              </div>
+              <div className="grid grid-cols-3 gap-1">
+                <NumberField
+                  label="Opacity"
+                  value={Math.round(stroke.opacity * 100)}
+                  onChange={(value) => updateStroke(index, { opacity: Math.max(0, Math.min(1, value / 100)) })}
+                  onCommit={() => commit("Shape Stroke Opacity", [layer.id])}
+                />
+                <label className="grid gap-1 text-[10px] text-[var(--ps-text-dim)]">
+                  Align
+                  <select
+                    value={stroke.alignment ?? "center"}
+                    onChange={(e) => updateStroke(index, { alignment: e.target.value as NonNullable<typeof stroke.alignment> })}
+                    onBlur={() => commit("Shape Stroke Align", [layer.id])}
+                    className="h-6 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]"
+                  >
+                    <option value="inside">Inside</option>
+                    <option value="center">Center</option>
+                    <option value="outside">Outside</option>
+                  </select>
+                </label>
+                <label className="grid gap-1 text-[10px] text-[var(--ps-text-dim)]">
+                  Dash
+                  <input
+                    value={(stroke.dash ?? []).join(",")}
+                    onChange={(e) => {
+                      const dash = e.target.value.split(",").map((part) => Number(part.trim())).filter((value) => Number.isFinite(value) && value > 0)
+                      updateStroke(index, { dash: dash.length ? dash : undefined })
+                    }}
+                    onBlur={() => commit("Shape Stroke Dash", [layer.id])}
+                    className="h-6 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]"
+                  />
+                </label>
+              </div>
+            </div>
+          ))}
         </div>
       </Section>
     )

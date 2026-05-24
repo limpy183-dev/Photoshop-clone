@@ -54,6 +54,14 @@ const WORKER_SUPPORTED_FILTERS = [
   "clouds",
   "difference-clouds",
   "fibers",
+  "radial-blur",
+  "surface-blur",
+  "lens-blur",
+  "oil-paint",
+  "high-pass",
+  "offset",
+  "custom-convolution",
+  "lighting-effects",
 ] as const
 
 type WorkerSupportedFilter = typeof WORKER_SUPPORTED_FILTERS[number]
@@ -134,6 +142,17 @@ function suggestedFilterOverlap(filterId: string, params: Record<string, number 
       return 1
     case "ripple":
       return params.size === "large" ? 40 : params.size === "small" ? 5 : 15
+    case "lens-blur":
+      return Math.max(1, Math.ceil(numParam(params, "radius", 10)))
+    case "surface-blur":
+      return Math.max(1, Math.ceil(numParam(params, "radius", 5)))
+    case "oil-paint":
+      return Math.max(1, Math.ceil(numParam(params, "cleanliness", 4)))
+    case "high-pass":
+      return Math.max(1, Math.ceil(numParam(params, "radius", 10)))
+    case "custom-convolution":
+    case "lighting-effects":
+      return 1
     default:
       return 0
   }
@@ -150,6 +169,12 @@ function isExpensiveFilter(filterId: string) {
     "clouds",
     "difference-clouds",
     "fibers",
+    "lens-blur",
+    "surface-blur",
+    "oil-paint",
+    "high-pass",
+    "custom-convolution",
+    "lighting-effects",
   ].includes(filterId)
 }
 
@@ -542,6 +567,298 @@ function renderFibers(data, width, height, params) {
   data.set(out);
 }
 
+function radialBlur(data, width, height, params) {
+  const amount = num(params.amount, 25);
+  const method = String(params.method || "spin");
+  const quality = String(params.quality || "good");
+  const out = new Uint8ClampedArray(data.length);
+  const cx = Math.max(0, Math.min(1, num(params.centerX, 50) / 100)) * (width - 1);
+  const cy = Math.max(0, Math.min(1, num(params.centerY, 50) / 100)) * (height - 1);
+  const strength = Math.max(0, Math.min(100, amount)) / 100;
+  const steps = quality === "best" ? 40 : quality === "good" ? 22 : 10;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let rs = 0, gs = 0, bs = 0, as_ = 0;
+      const dx = x - cx, dy = y - cy;
+      for (let s = 0; s < steps; s++) {
+        const t = (s / Math.max(1, steps - 1) - 0.5) * strength;
+        let sx = x, sy = y;
+        if (method === "zoom") {
+          sx = cx + dx * (1 + t * 1.2);
+          sy = cy + dy * (1 + t * 1.2);
+        } else {
+          const angle = t * Math.PI * 0.75;
+          const cos = Math.cos(angle), sin = Math.sin(angle);
+          sx = cx + dx * cos - dy * sin;
+          sy = cy + dx * sin + dy * cos;
+        }
+        const sample = bilinearSample(data, width, height, sx, sy);
+        rs += sample[0]; gs += sample[1]; bs += sample[2]; as_ += sample[3];
+      }
+      const i = (y * width + x) * 4;
+      out[i] = rs / steps;
+      out[i + 1] = gs / steps;
+      out[i + 2] = bs / steps;
+      out[i + 3] = as_ / steps;
+    }
+  }
+  data.set(out);
+}
+
+function lumaByte(r, g, b) {
+  return 0.299 * r + 0.587 * g + 0.114 * b;
+}
+
+function highPass(data, width, height, params) {
+  const original = new Uint8ClampedArray(data);
+  const blurred = new Uint8ClampedArray(data);
+  gaussianBlur(blurred, width, height, { radius: num(params.radius, 10) });
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = clamp8(original[i] - blurred[i] + 128);
+    data[i + 1] = clamp8(original[i + 1] - blurred[i + 1] + 128);
+    data[i + 2] = clamp8(original[i + 2] - blurred[i + 2] + 128);
+    data[i + 3] = original[i + 3];
+  }
+}
+
+function offsetFilter(data, width, height, params) {
+  const original = new Uint8ClampedArray(data);
+  const out = new Uint8ClampedArray(data.length);
+  const dx = Math.round(num(params.horizontal, 0));
+  const dy = Math.round(num(params.vertical, 0));
+  const mode = String(params.wrap || "wrap");
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let sx = x - dx, sy = y - dy;
+      const o = (y * width + x) * 4;
+      if (mode === "wrap") {
+        sx = ((sx % width) + width) % width;
+        sy = ((sy % height) + height) % height;
+      } else if (mode === "transparent") {
+        if (sx < 0 || sy < 0 || sx >= width || sy >= height) {
+          out[o + 3] = 0;
+          continue;
+        }
+      } else {
+        sx = Math.max(0, Math.min(width - 1, sx));
+        sy = Math.max(0, Math.min(height - 1, sy));
+      }
+      const s = (sy * width + sx) * 4;
+      out[o] = original[s];
+      out[o + 1] = original[s + 1];
+      out[o + 2] = original[s + 2];
+      out[o + 3] = original[s + 3];
+    }
+  }
+  data.set(out);
+}
+
+function parseKernelMatrixWorker(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const numbers = value.trim().split(/[\\s,;]+/).map(Number).filter(Number.isFinite);
+  if (numbers.length !== 9) return null;
+  return numbers;
+}
+
+function customConvolution(data, width, height, params) {
+  const kernels = {
+    "sharpen-more": [0, -1, 0, -1, 5, -1, 0, -1, 0],
+    "edge-enhance": [0, 0, 0, -1, 1, 0, 0, 0, 0],
+    outline: [-1, -1, -1, -1, 8, -1, -1, -1, -1],
+    laplacian: [0, 1, 0, 1, -4, 1, 0, 1, 0],
+    "sobel-x": [-1, 0, 1, -2, 0, 2, -1, 0, 1],
+    "sobel-y": [-1, -2, -1, 0, 0, 0, 1, 2, 1],
+  };
+  const kernel = parseKernelMatrixWorker(params.matrix) || kernels[String(params.preset || "sharpen-more")] || kernels["sharpen-more"];
+  const sum = kernel.reduce((acc, value) => acc + value, 0);
+  const divisor = num(params.divisor, 0) || (sum > 0 ? sum : 1);
+  const original = new Uint8ClampedArray(data);
+  convolve3(data, width, height, kernel, divisor);
+  const raw = new Uint8ClampedArray(data);
+  const mix = Math.max(0, Math.min(200, num(params.strength, 100))) / 100;
+  const bias = Math.max(-255, Math.min(255, num(params.bias, 0)));
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = clamp8(original[i] * (1 - mix) + (raw[i] + bias) * mix);
+    data[i + 1] = clamp8(original[i + 1] * (1 - mix) + (raw[i + 1] + bias) * mix);
+    data[i + 2] = clamp8(original[i + 2] * (1 - mix) + (raw[i + 2] + bias) * mix);
+    data[i + 3] = original[i + 3];
+  }
+}
+
+function surfaceBlur(data, width, height, params) {
+  const radius = num(params.radius, 5);
+  const threshold = num(params.threshold, 24);
+  if (radius <= 0 || threshold <= 0) return;
+  const src = new Uint8ClampedArray(data);
+  const out = new Uint8ClampedArray(data.length);
+  const r = Math.max(1, Math.min(18, Math.round(radius)));
+  const t = Math.max(0, Math.min(255, threshold));
+  const sigmaS = Math.max(0.75, r * 0.65);
+  const sigmaR = Math.max(1, t * 0.7);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const br = src[i], bg = src[i + 1], bb = src[i + 2];
+      const baseLum = lumaByte(br, bg, bb);
+      let rs = 0, gs = 0, bs = 0, as_ = 0, weightSum = 0;
+      for (let oy = -r; oy <= r; oy++) {
+        const sy = Math.max(0, Math.min(height - 1, y + oy));
+        for (let ox = -r; ox <= r; ox++) {
+          if (ox * ox + oy * oy > r * r) continue;
+          const sx = Math.max(0, Math.min(width - 1, x + ox));
+          const p = (sy * width + sx) * 4;
+          const diff = Math.abs(lumaByte(src[p], src[p + 1], src[p + 2]) - baseLum);
+          const colorDiff = Math.hypot(src[p] - br, src[p + 1] - bg, src[p + 2] - bb) / Math.sqrt(3);
+          if (Math.max(diff, colorDiff) > t) continue;
+          const spatial = Math.exp(-(ox * ox + oy * oy) / (2 * sigmaS * sigmaS));
+          const range = Math.exp(-Math.pow(diff * 0.55 + colorDiff * 0.45, 2) / (2 * sigmaR * sigmaR));
+          const weight = spatial * range;
+          rs += src[p] * weight;
+          gs += src[p + 1] * weight;
+          bs += src[p + 2] * weight;
+          as_ += src[p + 3] * weight;
+          weightSum += weight;
+        }
+      }
+      out[i] = weightSum ? rs / weightSum : src[i];
+      out[i + 1] = weightSum ? gs / weightSum : src[i + 1];
+      out[i + 2] = weightSum ? bs / weightSum : src[i + 2];
+      out[i + 3] = weightSum ? as_ / weightSum : src[i + 3];
+    }
+  }
+  data.set(out);
+}
+
+function lensBlur(data, width, height, params) {
+  const radius = num(params.radius, 10);
+  if (radius < 1) return;
+  const src = new Uint8ClampedArray(data);
+  const out = new Uint8ClampedArray(data.length);
+  const r = Math.max(1, Math.min(40, Math.round(radius)));
+  const blades = Math.max(3, Math.min(8, Math.round(num(params.bladeCount, 6))));
+  const rot = num(params.rotation, 0) * Math.PI / 180;
+  const kernel = [];
+  for (let ky = -r; ky <= r; ky++) {
+    for (let kx = -r; kx <= r; kx++) {
+      const dist = Math.hypot(kx, ky);
+      if (dist > r) continue;
+      const angle = Math.atan2(ky, kx) - rot;
+      const segment = (2 * Math.PI) / blades;
+      const local = ((angle % segment) + segment) % segment;
+      const polyRadius = r / Math.max(0.2, Math.cos(Math.PI / blades - local));
+      if (dist <= Math.abs(polyRadius)) kernel.push([kx, ky]);
+    }
+  }
+  const specK = num(params.brightness, 0) / 100;
+  const specThreshold = num(params.threshold, 255);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let rs = 0, gs = 0, bs = 0, as_ = 0, ws = 0;
+      for (const [kx, ky] of kernel) {
+        const sx = Math.max(0, Math.min(width - 1, x + kx));
+        const sy = Math.max(0, Math.min(height - 1, y + ky));
+        const p = (sy * width + sx) * 4;
+        let weight = 1;
+        const lum = Math.max(src[p], src[p + 1], src[p + 2]);
+        if (specK > 0 && lum > specThreshold) weight = 1 + ((lum - specThreshold) / 255) * specK * 4;
+        rs += src[p] * weight;
+        gs += src[p + 1] * weight;
+        bs += src[p + 2] * weight;
+        as_ += src[p + 3] * weight;
+        ws += weight;
+      }
+      const i = (y * width + x) * 4;
+      out[i] = rs / ws;
+      out[i + 1] = gs / ws;
+      out[i + 2] = bs / ws;
+      out[i + 3] = as_ / ws;
+    }
+  }
+  data.set(out);
+}
+
+function oilPaint(data, width, height, params) {
+  const radius = Math.max(1, Math.min(8, Math.round(num(params.cleanliness, 4))));
+  const stylization = Math.max(1, Math.min(10, num(params.stylization, 6)));
+  const src = new Uint8ClampedArray(data);
+  const out = new Uint8ClampedArray(data.length);
+  const bins = 32;
+  const hist = new Uint16Array(bins);
+  const rs = new Uint32Array(bins);
+  const gs = new Uint32Array(bins);
+  const bs = new Uint32Array(bins);
+  const strength = stylization / 10;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      hist.fill(0); rs.fill(0); gs.fill(0); bs.fill(0);
+      for (let oy = -radius; oy <= radius; oy++) {
+        const sy = Math.max(0, Math.min(height - 1, y + oy));
+        for (let ox = -radius; ox <= radius; ox++) {
+          if (ox * ox + oy * oy > radius * radius) continue;
+          const sx = Math.max(0, Math.min(width - 1, x + ox));
+          const p = (sy * width + sx) * 4;
+          const lum = lumaByte(src[p], src[p + 1], src[p + 2]);
+          const bin = Math.max(0, Math.min(bins - 1, Math.floor((lum / 256) * bins)));
+          hist[bin]++;
+          rs[bin] += src[p];
+          gs[bin] += src[p + 1];
+          bs[bin] += src[p + 2];
+        }
+      }
+      let best = 0;
+      for (let i = 1; i < bins; i++) if (hist[i] > hist[best]) best = i;
+      const o = (y * width + x) * 4;
+      const count = Math.max(1, hist[best]);
+      out[o] = clamp8(src[o] * (1 - strength) + (rs[best] / count) * strength);
+      out[o + 1] = clamp8(src[o + 1] * (1 - strength) + (gs[best] / count) * strength);
+      out[o + 2] = clamp8(src[o + 2] * (1 - strength) + (bs[best] / count) * strength);
+      out[o + 3] = src[o + 3];
+    }
+  }
+  data.set(out);
+}
+
+function lightingEffects(data, width, height, params) {
+  const src = new Uint8ClampedArray(data);
+  const out = new Uint8ClampedArray(data.length);
+  const style = String(params.style || "spot");
+  const light = Math.max(0, num(params.intensity, 120)) / 100;
+  const amb = Math.max(0, num(params.ambient, 45)) / 100;
+  const heightScale = Math.max(0, Math.min(100, num(params.height, 35))) / 100;
+  const lx = style === "directional" ? -0.5 : 0.35;
+  const ly = style === "directional" ? -0.7 : -0.45;
+  const lz = style === "omni" ? 0.95 : 0.7;
+  const len = Math.hypot(lx, ly, lz);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const xl = Math.max(0, x - 1), xr = Math.min(width - 1, x + 1), yu = Math.max(0, y - 1), yd = Math.min(height - 1, y + 1);
+      const right = (y * width + xr) * 4, left = (y * width + xl) * 4, down = (yd * width + x) * 4, up = (yu * width + x) * 4;
+      const lumX = lumaByte(src[right], src[right + 1], src[right + 2]) - lumaByte(src[left], src[left + 1], src[left + 2]);
+      const lumY = lumaByte(src[down], src[down + 1], src[down + 2]) - lumaByte(src[up], src[up + 1], src[up + 2]);
+      const nx = -lumX / 255 * heightScale, ny = -lumY / 255 * heightScale, nz = 1;
+      const nLen = Math.hypot(nx, ny, nz);
+      let spot = 1;
+      if (style === "spot") {
+        const dx = (x - width * 0.45) / width, dy = (y - height * 0.35) / height;
+        spot = Math.max(0, 1 - Math.hypot(dx, dy) * 2.2);
+      } else if (style === "omni") {
+        const dx = (x - width * 0.5) / width, dy = (y - height * 0.5) / height;
+        spot = Math.max(0, 1 - Math.hypot(dx, dy) * 1.8);
+      }
+      const diffuse = Math.max(0, (nx * lx + ny * ly + nz * lz) / (nLen * len));
+      const highlight = Math.pow(diffuse, 18) * light * (0.35 + heightScale);
+      const falloff = style === "directional" ? 1 : spot;
+      const amount = amb + diffuse * light * falloff;
+      out[i] = clamp8(src[i] * amount + (12 + 70 * highlight) * falloff);
+      out[i + 1] = clamp8(src[i + 1] * amount + (16 + 62 * highlight) * falloff);
+      out[i + 2] = clamp8(src[i + 2] * amount + (24 + 48 * highlight) * falloff);
+      out[i + 3] = src[i + 3];
+    }
+  }
+  data.set(out);
+}
+
 function applyFilter(filterId, data, params, width, height) {
   switch (filterId) {
     case "invert":
@@ -642,6 +959,30 @@ function applyFilter(filterId, data, params, width, height) {
       return;
     case "fibers":
       renderFibers(data, width, height, params);
+      return;
+    case "radial-blur":
+      radialBlur(data, width, height, params);
+      return;
+    case "surface-blur":
+      surfaceBlur(data, width, height, params);
+      return;
+    case "lens-blur":
+      lensBlur(data, width, height, params);
+      return;
+    case "oil-paint":
+      oilPaint(data, width, height, params);
+      return;
+    case "high-pass":
+      highPass(data, width, height, params);
+      return;
+    case "offset":
+      offsetFilter(data, width, height, params);
+      return;
+    case "custom-convolution":
+      customConvolution(data, width, height, params);
+      return;
+    case "lighting-effects":
+      lightingEffects(data, width, height, params);
       return;
     default:
       throw new Error("Worker filter not supported: " + filterId);

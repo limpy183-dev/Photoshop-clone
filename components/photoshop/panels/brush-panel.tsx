@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { toast } from "sonner"
+import { Copy, Search, Trash2 } from "lucide-react"
 import { useEditor } from "../editor-context"
 import { Slider } from "@/components/ui/slider"
 import {
@@ -183,6 +184,8 @@ export function BrushPanel() {
   const [presetName, setPresetName] = React.useState("Custom Brush")
   const [folder, setFolder] = React.useState("User")
   const [folderFilter, setFolderFilter] = React.useState("All")
+  const [presetSearch, setPresetSearch] = React.useState("")
+  const [presetSort, setPresetSort] = React.useState<"folder" | "name" | "size">("folder")
 
   const set = (patch: Record<string, unknown>) =>
     dispatch({ type: "set-brush", brush: patch as Partial<import("../types").BrushSettings> })
@@ -249,6 +252,30 @@ export function BrushPanel() {
     setPresetName(`Custom Brush ${brushPresets.length + 1}`)
   }
 
+  const visibleBrushPresets = React.useMemo(() => {
+    const q = presetSearch.trim().toLowerCase()
+    return brushPresets
+      .filter((preset) => folderFilter === "All" || (preset.folder ?? "General") === folderFilter)
+      .filter((preset) => !q || `${preset.name} ${preset.folder ?? ""} ${preset.settings?.tipShape ?? ""}`.toLowerCase().includes(q))
+      .slice()
+      .sort((a, b) => {
+        if (presetSort === "name") return a.name.localeCompare(b.name)
+        if (presetSort === "size") return a.size - b.size || a.name.localeCompare(b.name)
+        return (a.folder ?? "General").localeCompare(b.folder ?? "General") || a.name.localeCompare(b.name)
+      })
+  }, [brushPresets, folderFilter, presetSearch, presetSort])
+
+  const duplicatePreset = (preset: BrushPreset) => {
+    dispatch({
+      type: "add-brush-preset",
+      preset: {
+        ...preset,
+        id: `brush_${Math.random().toString(36).slice(2, 9)}`,
+        name: `${preset.name} copy`,
+      },
+    })
+  }
+
   const exportCurrentBrush = () => {
     downloadJson(`${brush.tipShape ?? "round"}-brush.json`, brush)
   }
@@ -302,36 +329,72 @@ export function BrushPanel() {
   return (
     <div className="flex flex-col h-full overflow-y-auto text-[var(--ps-text)]">
       <Section title="Brushes" defaultOpen>
-        <div className="grid grid-cols-2 gap-1">
-          {brushPresets
-            .filter((preset) => folderFilter === "All" || (preset.folder ?? "General") === folderFilter)
-            .map((preset) => (
-            <button
+        <div className="grid grid-cols-[1fr_86px] gap-1">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-1.5 top-1.5 h-3 w-3 text-[var(--ps-text-dim)]" />
+            <input
+              value={presetSearch}
+              onChange={(e) => setPresetSearch(e.target.value)}
+              className="h-6 w-full rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] pl-6 pr-2 text-[10px] outline-none"
+              placeholder="Search brushes"
+            />
+          </div>
+          <select
+            value={presetSort}
+            onChange={(e) => setPresetSort(e.target.value as typeof presetSort)}
+            className="h-6 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]"
+          >
+            <option value="folder">Folder</option>
+            <option value="name">Name</option>
+            <option value="size">Size</option>
+          </select>
+        </div>
+        <div className="grid grid-cols-1 gap-1">
+          {visibleBrushPresets.map((preset) => (
+            <div
               key={preset.id}
-              onClick={() => dispatch({ type: "apply-brush-preset", preset })}
-              className="h-12 flex items-center gap-2 px-2 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] hover:bg-[var(--ps-tool-hover)] text-left"
-              title={preset.name}
+              className="grid grid-cols-[1fr_auto_auto] items-center gap-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)]"
             >
-              <span
-                className="w-7 h-7 rounded-sm border border-[var(--ps-divider)] bg-black/20 shrink-0"
-                style={
-                  preset.thumbnail
-                    ? { backgroundImage: `url(${preset.thumbnail})`, backgroundSize: "cover" }
-                    : {
-                        background:
-                          preset.settings?.tipShape === "bristle"
-                            ? "repeating-linear-gradient(90deg,#111,#111 1px,#777 2px)"
-                            : "#222",
-                      }
-                }
-              />
-              <span className="min-w-0">
-                <span className="block text-[10px] truncate">{preset.name}</span>
-                <span className="block text-[9px] text-[var(--ps-text-dim)]">
-                  {preset.size}px / {preset.hardness}%
+              <button
+                onClick={() => dispatch({ type: "apply-brush-preset", preset })}
+                className="h-12 min-w-0 flex items-center gap-2 px-2 hover:bg-[var(--ps-tool-hover)] text-left"
+                title={preset.name}
+              >
+                <span
+                  className="w-7 h-7 rounded-sm border border-[var(--ps-divider)] bg-black/20 shrink-0"
+                  style={
+                    preset.thumbnail
+                      ? { backgroundImage: `url(${preset.thumbnail})`, backgroundSize: "cover" }
+                      : {
+                          background:
+                            preset.settings?.tipShape === "bristle"
+                              ? "repeating-linear-gradient(90deg,#111,#111 1px,#777 2px)"
+                              : "#222",
+                        }
+                  }
+                />
+                <span className="min-w-0">
+                  <span className="block text-[10px] truncate">{preset.name}</span>
+                  <span className="block text-[9px] text-[var(--ps-text-dim)]">
+                    {(preset.folder ?? "General")} - {preset.size}px / {preset.hardness}%
+                  </span>
                 </span>
-              </span>
-            </button>
+              </button>
+              <button
+                className="flex h-7 w-7 items-center justify-center rounded-sm hover:bg-[var(--ps-tool-hover)]"
+                title="Duplicate brush preset"
+                onClick={() => duplicatePreset(preset)}
+              >
+                <Copy className="h-3.5 w-3.5" />
+              </button>
+              <button
+                className="flex h-7 w-7 items-center justify-center rounded-sm hover:bg-[var(--ps-tool-hover)]"
+                title="Delete brush preset"
+                onClick={() => dispatch({ type: "remove-brush-preset", id: preset.id })}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
           ))}
         </div>
         <div className="grid grid-cols-[1fr_88px] gap-1">

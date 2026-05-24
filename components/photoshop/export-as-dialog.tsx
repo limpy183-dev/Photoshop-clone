@@ -15,17 +15,25 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
-import { Download, FileImage, RefreshCw } from "lucide-react"
+import { AlertTriangle, Download, FileImage, RefreshCw } from "lucide-react"
 import { useEditor } from "./editor-context"
 import {
   buildRasterExportCanvas,
+  createDocumentReport,
+  createExportCompatibilityManifest,
   createExportLimitationReport,
   dataUrlBytes,
+  downloadBlob,
   downloadDataUrl,
+  downloadText,
+  exportAnimationDataUrl,
+  exportMetadataSidecarDataUrl,
+  exportRasterBlob,
   exportRasterDataUrl,
   exportSvgDataUrl,
   formatBytes,
   rasterMime,
+  type BrowserRasterExportFormat,
   type ExportFormat,
 } from "./document-io"
 import { canvasSizeError } from "./canvas-limits"
@@ -44,6 +52,54 @@ type ExportPresetPayload = Partial<{
   includeMetadata: boolean
   precision: number
 }>
+
+const EXPORT_FORMATS: Array<{ format: ExportFormat; label: string }> = [
+  { format: "png", label: "PNG" },
+  { format: "jpeg", label: "JPG" },
+  { format: "webp", label: "WebP" },
+  { format: "gif", label: "GIF" },
+  { format: "avif", label: "AVIF" },
+  { format: "svg", label: "SVG" },
+  { format: "tga", label: "TGA" },
+  { format: "ppm", label: "PPM" },
+  { format: "pgm", label: "PGM" },
+  { format: "pbm", label: "PBM" },
+  { format: "apng", label: "APNG" },
+  { format: "animated-webp", label: "Anim WebP" },
+  { format: "metadata-json", label: "Sidecar" },
+]
+
+const EXPORT_EXTENSIONS: Record<ExportFormat, string> = {
+  png: "png",
+  jpeg: "jpg",
+  webp: "webp",
+  avif: "avif",
+  gif: "gif",
+  svg: "svg",
+  tga: "tga",
+  ppm: "ppm",
+  pgm: "pgm",
+  pbm: "pbm",
+  apng: "png",
+  "animated-webp": "webp",
+  "metadata-json": "metadata.json",
+}
+
+function previewRasterFormat(format: ExportFormat): BrowserRasterExportFormat {
+  if (
+    format === "svg" ||
+    format === "metadata-json" ||
+    format === "apng" ||
+    format === "animated-webp" ||
+    format === "tga" ||
+    format === "ppm" ||
+    format === "pgm" ||
+    format === "pbm"
+  ) {
+    return "png"
+  }
+  return format
+}
 
 function presetScaleToPercent(scale: number | undefined) {
   if (!Number.isFinite(scale)) return undefined
@@ -89,8 +145,9 @@ export function ExportAsDialog({
       setEstimate("Too large")
       return
     }
+    const rasterFormat = previewRasterFormat(format)
     const canvas =
-      format === "svg"
+      format === "svg" || format === "metadata-json"
         ? buildRasterExportCanvas(activeDoc, {
             format: "png",
             scale: scaleRatio,
@@ -99,7 +156,7 @@ export function ExportAsDialog({
             matte,
           })
         : buildRasterExportCanvas(activeDoc, {
-            format,
+            format: rasterFormat,
             scale: scaleRatio,
             quality: losslessWebp && format === "webp" ? 1 : quality / 100,
             transparent,
@@ -118,8 +175,16 @@ export function ExportAsDialog({
     ctx.imageSmoothingQuality = "high"
     ctx.drawImage(canvas, 0, 0, preview.width, preview.height)
 
+    if (format === "gif" || format === "apng" || format === "animated-webp") {
+      const frameCount = Math.max(1, activeDoc.timelineFrames?.length ?? 1)
+      const perFrame = dataUrlBytes(canvas.toDataURL("image/png"))
+      setEstimate(`~${formatBytes(perFrame * frameCount)} (${frameCount} fr)`)
+      return
+    }
     const dataUrl =
-      format === "svg"
+      format === "metadata-json"
+        ? exportMetadataSidecarDataUrl(activeDoc, createDocumentReport(activeDoc, "Project Export"))
+        : format === "svg"
         ? exportSvgDataUrl(activeDoc, {
             scale: scaleRatio,
             transparent,
@@ -127,16 +192,16 @@ export function ExportAsDialog({
             includeMetadata,
             precision,
           })
-        : format === "gif"
+        : format === "tga" || format === "ppm" || format === "pgm" || format === "pbm"
           ? exportRasterDataUrl(activeDoc, {
               format,
               scale: scaleRatio,
-              quality: 1,
+              quality: quality / 100,
               transparent,
               matte,
               dither,
             })
-          : canvas.toDataURL(rasterMime(format), losslessWebp && format === "webp" ? 1 : quality / 100)
+          : canvas.toDataURL(rasterMime(rasterFormat), losslessWebp && rasterFormat === "webp" ? 1 : quality / 100)
     setEstimate(formatBytes(dataUrlBytes(dataUrl)))
   }, [
     activeDoc,
@@ -191,31 +256,60 @@ export function ExportAsDialog({
     transparent,
     quality,
   })
+  const compatibilityManifest = createExportCompatibilityManifest(activeDoc, {
+    format,
+    includeMetadata,
+    interlaced,
+    progressive,
+    transparent,
+    quality,
+  })
   const visibleLimitations = limitationReport.items.filter((item) => item.status !== "info").slice(0, 6)
+  const visibleManifestItems = compatibilityManifest.entries
+    .filter((item) => item.status === "unsupported" || item.status === "flattened" || item.status === "approximated")
+    .slice(0, 4)
+  const safeName = activeDoc.name.replace(/\.[^.]+$/, "").replace(/[\\/:*?"<>|]/g, "_")
 
-  const exportFile = () => {
+  const exportCompatibilityManifest = () => {
+    downloadText(
+      JSON.stringify(compatibilityManifest, null, 2),
+      `${safeName}-${format}-compatibility-manifest.json`,
+    )
+  }
+
+  const exportFile = async () => {
     if (outputSizeError) {
       toast.error(outputSizeError)
       return
     }
-    const safeName = activeDoc.name.replace(/\.[^.]+$/, "").replace(/[\\/:*?"<>|]/g, "_")
     if (format === "svg") {
       downloadDataUrl(
         exportSvgDataUrl(activeDoc, { scale: scaleRatio, transparent, matte, includeMetadata, precision }),
         `${safeName}.svg`,
       )
-    } else {
+    } else if (format === "metadata-json") {
       downloadDataUrl(
-        exportRasterDataUrl(activeDoc, {
+        exportMetadataSidecarDataUrl(activeDoc, createDocumentReport(activeDoc, "Project Export")),
+        `${safeName}.metadata.json`,
+      )
+    } else if (format === "gif" || format === "apng" || format === "animated-webp") {
+      try {
+        const dataUrl = await exportAnimationDataUrl(activeDoc, format, { transparent, matte, scale: scaleRatio })
+        downloadDataUrl(dataUrl, `${safeName}.${EXPORT_EXTENSIONS[format]}`)
+      } catch (err) {
+        toast.error(`Animation export failed: ${(err as Error).message}`)
+        return
+      }
+    } else {
+      const blob = await exportRasterBlob(activeDoc, {
           format,
           scale: scaleRatio,
           quality: losslessWebp && format === "webp" ? 1 : quality / 100,
           transparent,
           matte,
           dither,
-        }),
-        `${safeName}.${format === "jpeg" ? "jpg" : format}`,
-      )
+        })
+      downloadBlob(blob, `${safeName}.${EXPORT_EXTENSIONS[format]}`)
     }
     onOpenChange(false)
   }
@@ -334,7 +428,7 @@ export function ExportAsDialog({
             </Panel>
 
             <div className="grid grid-cols-6 gap-1">
-              {(["png", "jpeg", "webp", "gif", "avif", "svg"] as ExportFormat[]).map((f) => (
+              {EXPORT_FORMATS.map(({ format: f, label }) => (
                 <button
                   key={f}
                   type="button"
@@ -347,7 +441,7 @@ export function ExportAsDialog({
                   )}
                 >
                   <FileImage className="w-3.5 h-3.5" />
-                  {f === "jpeg" ? "JPG" : f}
+                  {label}
                 </button>
               ))}
             </div>
@@ -373,7 +467,7 @@ export function ExportAsDialog({
               <div className="mt-2 text-[10px] text-[var(--ps-text-dim)]">Scale percent, high quality bicubic resampling.</div>
             </Panel>
 
-            {format !== "svg" ? (
+            {format !== "svg" && format !== "metadata-json" ? (
               <Panel title="Format Options">
                 {(format === "jpeg" || format === "webp" || format === "avif") && (
                   <div className="grid grid-cols-[1fr_54px] gap-3 items-center mb-3">
@@ -412,6 +506,16 @@ export function ExportAsDialog({
                     GIF exports use a 256-color indexed palette with optional 1-bit transparency.
                   </div>
                 ) : null}
+                {format === "apng" || format === "animated-webp" ? (
+                  <div className="mt-3 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1.5 text-[10px] text-[var(--ps-text-dim)]">
+                    Timeline frames are exported when present; otherwise the current composite becomes one frame.
+                  </div>
+                ) : null}
+                {format === "tga" || format === "ppm" || format === "pgm" || format === "pbm" ? (
+                  <div className="mt-3 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1.5 text-[10px] text-[var(--ps-text-dim)]">
+                    This format is encoded by the app from canvas pixels, bypassing browser MIME encoder support.
+                  </div>
+                ) : null}
                 <div className="grid gap-1.5 mt-3">
                   <Label className="text-[11px]">Matte color</Label>
                   <Input
@@ -420,6 +524,20 @@ export function ExportAsDialog({
                     onChange={(e) => setMatte(e.target.value)}
                     className="h-8 w-24 p-1"
                   />
+                </div>
+              </Panel>
+            ) : format === "metadata-json" ? (
+              <Panel title="Sidecar Options">
+                <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1.5 text-[10px] text-[var(--ps-text-dim)]">
+                  <div className="mb-1 font-medium text-[var(--ps-text)]">{limitationReport.summary}</div>
+                  <div className="grid gap-1">
+                    {visibleLimitations.map((item) => (
+                      <div key={`${item.label}-${item.status}`} className="grid grid-cols-[92px_1fr] gap-2">
+                        <span className="uppercase tracking-wide text-amber-300">{item.status}</span>
+                        <span>{item.label}: {item.detail}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </Panel>
             ) : (
@@ -464,6 +582,52 @@ export function ExportAsDialog({
               </Panel>
             )}
 
+            <Panel title="Compatibility Manifest">
+              <div className="space-y-2 text-[10px]">
+                <div className="flex items-center gap-2">
+                  <span className={cn(
+                    "rounded-sm border px-2 py-1 uppercase tracking-wide",
+                    compatibilityManifest.riskLevel === "high"
+                      ? "border-red-500/40 bg-red-500/10 text-red-200"
+                      : compatibilityManifest.riskLevel === "medium"
+                        ? "border-amber-500/40 bg-amber-500/10 text-amber-200"
+                        : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200",
+                  )}>
+                    {compatibilityManifest.riskLevel} risk
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-[var(--ps-text-dim)]">
+                    {compatibilityManifest.summary}
+                  </span>
+                </div>
+                <div className="grid grid-cols-4 gap-1 text-center">
+                  <ManifestCount label="Flat" value={compatibilityManifest.totals.flattened} className="text-orange-300" />
+                  <ManifestCount label="Approx" value={compatibilityManifest.totals.approximated} className="text-amber-300" />
+                  <ManifestCount label="Unsupported" value={compatibilityManifest.totals.unsupported} className="text-red-300" />
+                  <ManifestCount label="Preserved" value={compatibilityManifest.totals.preserved} className="text-emerald-300" />
+                </div>
+                {compatibilityManifest.warnings.length ? (
+                  <div className="space-y-1 rounded-sm border border-amber-500/35 bg-amber-500/10 px-2 py-1.5 text-amber-100">
+                    {compatibilityManifest.warnings.slice(0, 4).map((warning) => (
+                      <div key={warning} className="flex gap-1.5">
+                        <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                        <span>{warning}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {visibleManifestItems.length ? (
+                  <div className="grid gap-1 text-[var(--ps-text-dim)]">
+                    {visibleManifestItems.map((item) => (
+                      <div key={`${item.label}-${item.status}`} className="grid grid-cols-[84px_1fr] gap-2">
+                        <span className="uppercase tracking-wide text-[var(--ps-text)]">{item.status}</span>
+                        <span>{item.label}: {item.detail}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </Panel>
+
             <Button variant="outline" size="sm" onClick={refreshPreview} className="w-full">
               <RefreshCw className="w-4 h-4" />
               Refresh Preview
@@ -471,6 +635,10 @@ export function ExportAsDialog({
           </div>
         </div>
         <DialogFooter>
+          <Button variant="outline" onClick={exportCompatibilityManifest}>
+            <Download className="w-4 h-4" />
+            Manifest
+          </Button>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
@@ -489,6 +657,15 @@ function InfoPill({ label, value }: { label: string; value: string }) {
     <div className="border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] rounded-sm px-2 py-1">
       <div className="uppercase text-[9px]">{label}</div>
       <div className="text-[var(--ps-text)] tabular-nums">{value}</div>
+    </div>
+  )
+}
+
+function ManifestCount({ label, value, className }: { label: string; value: number; className: string }) {
+  return (
+    <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 py-1">
+      <div className="uppercase text-[9px] text-[var(--ps-text-dim)]">{label}</div>
+      <div className={`tabular-nums ${className}`}>{value}</div>
     </div>
   )
 }

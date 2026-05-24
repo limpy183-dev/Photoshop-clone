@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import type {
+  AlphaChannel,
   AdjustmentProps,
   BlendMode,
   BrushPreset,
@@ -32,6 +33,8 @@ import type {
   Layer,
   LayerComp,
   LayerKind,
+  LayerMetadata,
+  LayerNote,
   LayerSnapshot,
   LayerStyle,
   MacroAction,
@@ -52,12 +55,22 @@ import type {
   TextProps,
   ThreeDScene,
   TimelineFrame,
+  TimelineSettings,
   ToolId,
   TransformState,
   VariableDataSet,
   VideoLayerProps,
 } from "./types"
 import { createSmartObjectSource, markSmartObjectLinked, replaceSmartObjectContents } from "./smart-objects"
+import {
+  duplicateSlice,
+  fillMaskCanvas,
+  invertMaskCanvas,
+  normalizeGuide,
+  normalizeSlice,
+  reorderSmartFilterStack,
+  updateSmartFilterStack,
+} from "./layer-workflows"
 import { compositeLayer, getNativeComposite } from "./blend-modes"
 import { loadPreferencesFromStorage, recordHistoryLogEntryFromStorage } from "./preferences-engine"
 import { createHistoryJumpScheduler, type HistoryJumpScheduler } from "./history-jump-scheduler"
@@ -76,6 +89,8 @@ import {
   smoothSelectionMask,
 } from "./tool-helpers"
 import { assertCanvasSize } from "./canvas-limits"
+import { makeCanvas } from "./canvas-utils"
+import { uid } from "./uid"
 
 /* ----------------------------- helpers --------------------------------- */
 
@@ -85,6 +100,8 @@ interface DirtyRect {
   w: number
   h: number
 }
+
+type SelectionChannelLoadMode = "replace" | "add" | "subtract" | "intersect"
 
 type LayerChangeHints = {
   ids?: readonly string[]
@@ -122,10 +139,6 @@ export interface DocumentLifecycleState {
 const MAX_HISTORY_PATCHES = 24
 const MAX_HISTORY_PATCH_AREA_RATIO = 0.42
 const MAX_HISTORY_PATCH_CHAIN_AREA_RATIO = 0.9
-
-function uid(prefix = "id") {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
-}
 
 /** Read the undo limit from user preferences (defaults to 50). */
 function getUndoLimit(): number {
@@ -314,20 +327,30 @@ function cloneCanvas(src: HTMLCanvasElement | null | undefined): HTMLCanvasEleme
   return c
 }
 
-function makeCanvas(w: number, h: number, fill?: string): HTMLCanvasElement {
-  const size = assertCanvasSize(w, h)
-  if (typeof document === "undefined") {
-    return { width: size.width, height: size.height, getContext: () => null } as unknown as HTMLCanvasElement
+function combineSelectionWithChannel(
+  doc: PsDocument,
+  channel: AlphaChannel,
+  mode: SelectionChannelLoadMode = "replace",
+) {
+  const channelMask = cloneCanvas(channel.canvas) ?? makeCanvas(doc.width, doc.height)
+  if (mode === "replace") return channelMask
+
+  const base = selectionToMaskCanvas(doc.width, doc.height, doc.selection) ?? makeCanvas(doc.width, doc.height)
+  const out = makeCanvas(doc.width, doc.height)
+  const ctx = out.getContext("2d")!
+  ctx.drawImage(base, 0, 0)
+  if (mode === "add") {
+    ctx.globalCompositeOperation = "source-over"
+    ctx.drawImage(channelMask, 0, 0)
+  } else if (mode === "subtract") {
+    ctx.globalCompositeOperation = "destination-out"
+    ctx.drawImage(channelMask, 0, 0)
+  } else {
+    ctx.globalCompositeOperation = "destination-in"
+    ctx.drawImage(channelMask, 0, 0)
   }
-  const c = document.createElement("canvas")
-  c.width = size.width
-  c.height = size.height
-  if (fill) {
-    const ctx = c.getContext("2d")!
-    ctx.fillStyle = fill
-    ctx.fillRect(0, 0, size.width, size.height)
-  }
-  return c
+  ctx.globalCompositeOperation = "source-over"
+  return out
 }
 
 function isLayerChangeHints(value: ChangedLayerIds | undefined): value is LayerChangeHints {
@@ -353,9 +376,17 @@ function commitAffectsComposite(doc: PsDocument, changedLayerIds: ChangedLayerId
 
 function renderChangeForChangedLayerIds(changedLayerIds: ChangedLayerIds | undefined): RenderChange {
   const ids = changedLayerIdsList(changedLayerIds)
-  return ids && ids.length
+  const hints = isLayerChangeHints(changedLayerIds) ? changedLayerIds : undefined
+  const dirtyByLayer: Record<string, DirtyRect[]> = {}
+  if (hints?.bounds) {
+    for (const [id, rect] of Object.entries(hints.bounds)) {
+      if (rect && rect.w > 0 && rect.h > 0) dirtyByLayer[id] = [rect]
+    }
+  }
+  const base = ids && ids.length
     ? { layerIds: ids, reason: "history" }
-    : { layerIds: "all", reason: "history" }
+    : { layerIds: "all" as const, reason: "history" }
+  return Object.keys(dirtyByLayer).length ? { ...base, dirtyByLayer } : base
 }
 
 function normalizeDirtyRect(rect: DirtyRect | undefined, width: number, height: number): DirtyRect | null {
@@ -375,23 +406,6 @@ function cloneCanvasPatch(src: HTMLCanvasElement, rect: DirtyRect): CanvasPatch 
   return { ...rect, canvas: patchCanvas }
 }
 
-/**
- * Pre-captured layer source canvases at the moment of commit().
- *
- * Currently unused — `commit()` builds history entries synchronously and
- * `snapshotLayers` reads from the live layer canvases directly. The type and
- * the `preCaptured` parameter on `snapshotLayers` / `makeHistoryEntry` are
- * retained as an optional override so a future async snapshot path (e.g.
- * worker-backed clones) can reintroduce stable per-commit captures without
- * changing the call sites.
- */
-type LayerSourceCapture = {
-  canvas?: HTMLCanvasElement
-  mask?: HTMLCanvasElement | null
-  frameImage?: HTMLCanvasElement | null
-  smartSourceCanvas?: HTMLCanvasElement | null
-}
-
 function canPatchSnapshot(
   previous: LayerSnapshot | undefined,
   live: HTMLCanvasElement,
@@ -405,26 +419,6 @@ function canPatchSnapshot(
   const chainArea = (previous.canvasPatches ?? []).reduce((sum, patch) => sum + patch.w * patch.h, 0)
   if ((chainArea + patchArea) / canvasArea > MAX_HISTORY_PATCH_CHAIN_AREA_RATIO) return false
   return patchArea / canvasArea <= MAX_HISTORY_PATCH_AREA_RATIO
-}
-
-function _materializeLayerSnapshotCanvas(
-  snap: LayerSnapshot,
-  width: number,
-  height: number,
-): HTMLCanvasElement | null {
-  const patches = snap.canvasPatches
-  if (!patches?.length) return snap.canvas
-  const materialized = makeCanvas(width, height)
-  const ctx = materialized.getContext?.("2d")
-  if (!ctx) return snap.canvas
-  if (snap.canvas) ctx.drawImage(snap.canvas, 0, 0)
-  for (const patch of patches) {
-    ctx.clearRect(patch.x, patch.y, patch.w, patch.h)
-    ctx.drawImage(patch.canvas, patch.x, patch.y)
-  }
-  snap.canvas = materialized
-  snap.canvasPatches = undefined
-  return materialized
 }
 
 function intersectDirtyRects(a: DirtyRect, b: DirtyRect): DirtyRect | null {
@@ -586,6 +580,52 @@ function translatePath(path: PathProps | null | undefined, dx: number, dy: numbe
   }
 }
 
+function cloneLayerExtras(layer: Layer) {
+  return {
+    threeD: layer.threeD ? deepClonePlain(layer.threeD) : undefined,
+    video: layer.video ? deepClonePlain(layer.video) : undefined,
+    smartFilters: cloneSmartFilters(layer.smartFilters),
+    smartSource: cloneSmartSource(layer.smartSource),
+    notes: layer.notes ? deepClonePlain(layer.notes) : undefined,
+    metadata: layer.metadata ? deepClonePlain(layer.metadata) : undefined,
+  }
+}
+
+function cloneSmartFilters(filters: Layer["smartFilters"]): Layer["smartFilters"] {
+  return filters?.map((filter) => ({
+    ...filter,
+    params: deepClonePlain(filter.params),
+    mask: filter.mask ? cloneCanvas(filter.mask) : filter.mask,
+  }))
+}
+
+function cloneTranslatedSmartFilters(
+  filters: Layer["smartFilters"],
+  targetWidth: number,
+  targetHeight: number,
+  dx: number,
+  dy: number,
+): Layer["smartFilters"] {
+  return filters?.map((filter) => {
+    const mask = filter.mask ? makeCanvas(targetWidth, targetHeight) : filter.mask
+    if (mask && filter.mask) mask.getContext("2d")!.drawImage(filter.mask, dx, dy)
+    return {
+      ...filter,
+      params: deepClonePlain(filter.params),
+      mask,
+    }
+  })
+}
+
+function cloneSmartSource(source: Layer["smartSource"]): Layer["smartSource"] {
+  if (!source) return undefined
+  return {
+    ...source,
+    editPackage: source.editPackage ? deepClonePlain(source.editPackage) : undefined,
+    canvas: source.canvas ? cloneCanvas(source.canvas) : source.canvas,
+  }
+}
+
 function cloneLayerIntoDocument(layer: Layer, targetWidth: number, targetHeight: number, sourceWidth: number, sourceHeight: number): Layer {
   const bounds = layer.kind === "group" ? null : alphaBounds(layer.canvas)
   const shouldCenter = sourceWidth !== targetWidth || sourceHeight !== targetHeight
@@ -616,16 +656,8 @@ function cloneLayerIntoDocument(layer: Layer, targetWidth: number, targetHeight:
     path: translatePath(layer.path, dx, dy) ?? undefined,
     frame: layer.frame ? { ...layer.frame, x: layer.frame.x + dx, y: layer.frame.y + dy, imageCanvas: frameImage } : undefined,
     artboard: layer.artboard ? { ...layer.artboard, x: layer.artboard.x + dx, y: layer.artboard.y + dy } : undefined,
-    threeD: layer.threeD ? deepClonePlain(layer.threeD) : undefined,
-    video: layer.video ? deepClonePlain(layer.video) : undefined,
-    smartFilters: layer.smartFilters ? deepClonePlain(layer.smartFilters) : undefined,
-    smartSource: layer.smartSource
-      ? {
-          width: layer.smartSource.width,
-          height: layer.smartSource.height,
-          canvas: cloneCanvas(layer.smartSource.canvas),
-        }
-      : undefined,
+    ...cloneLayerExtras(layer),
+    smartFilters: cloneTranslatedSmartFilters(layer.smartFilters, targetWidth, targetHeight, dx, dy),
   }
 }
 
@@ -649,16 +681,7 @@ function cloneLayerExact(layer: Layer, idMap: Map<string, string>): Layer {
       ? { ...layer.frame, imageCanvas: layer.frame.imageCanvas ? cloneCanvas(layer.frame.imageCanvas) : null }
       : undefined,
     artboard: layer.artboard ? { ...layer.artboard } : undefined,
-    threeD: layer.threeD ? deepClonePlain(layer.threeD) : undefined,
-    video: layer.video ? deepClonePlain(layer.video) : undefined,
-    smartFilters: layer.smartFilters ? deepClonePlain(layer.smartFilters) : undefined,
-    smartSource: layer.smartSource
-      ? {
-          width: layer.smartSource.width,
-          height: layer.smartSource.height,
-          canvas: cloneCanvas(layer.smartSource.canvas),
-        }
-      : undefined,
+    ...cloneLayerExtras(layer),
   }
 }
 
@@ -685,13 +708,16 @@ function duplicateDocumentDeep(doc: PsDocument): PsDocument {
     comps: doc.comps ? deepClonePlain(doc.comps) : undefined,
     channels: doc.channels ? doc.channels.map((channel) => ({ ...channel, id: uid("alpha"), canvas: cloneCanvas(channel.canvas) ?? makeCanvas(doc.width, doc.height) })) : undefined,
     quickMaskCanvas: doc.quickMaskCanvas ? cloneCanvas(doc.quickMaskCanvas) : null,
+    quickMaskPaintMode: doc.quickMaskPaintMode ?? "auto",
     stylePresets: doc.stylePresets ? deepClonePlain(doc.stylePresets) : undefined,
     gradientPresets: doc.gradientPresets ? deepClonePlain(doc.gradientPresets) : undefined,
     characterStyles: doc.characterStyles ? deepClonePlain(doc.characterStyles) : undefined,
     paragraphStyles: doc.paragraphStyles ? deepClonePlain(doc.paragraphStyles) : undefined,
     assetLibrary: doc.assetLibrary ? deepClonePlain(doc.assetLibrary) : undefined,
     timelineFrames: doc.timelineFrames ? deepClonePlain(doc.timelineFrames) : undefined,
+    timelineSettings: doc.timelineSettings ? deepClonePlain(doc.timelineSettings) : undefined,
     plugins: doc.plugins ? deepClonePlain(doc.plugins) : undefined,
+    pluginStorage: doc.pluginStorage ? deepClonePlain(doc.pluginStorage) : undefined,
     variableDataSets: doc.variableDataSets ? deepClonePlain(doc.variableDataSets) : undefined,
     modeSettings: doc.modeSettings ? deepClonePlain(doc.modeSettings) : undefined,
     reports: doc.reports ? deepClonePlain(doc.reports) : undefined,
@@ -805,6 +831,7 @@ export function makeDocument(
     snapToGuides: true,
     quickMask: false,
     quickMaskCanvas: null,
+    quickMaskPaintMode: "auto",
     rulerUnits: "px",
     rulerOrigin: { x: 0, y: 0 },
     gridColor: "#78b4ff",
@@ -848,6 +875,7 @@ export function makeDocument(
     },
     modeSettings: { mode: "RGB" },
     plugins: [],
+    pluginStorage: {},
     variableDataSets: [],
   }
 }
@@ -1076,10 +1104,12 @@ export type Action =
   | { type: "set-show-smart-guides"; show: boolean }
   | { type: "add-guide"; guide: Guide }
   | { type: "update-guide"; id: string; patch: Partial<Guide> }
+  | { type: "update-guide-state"; id: string; patch: Partial<Guide> }
   | { type: "move-guide"; id: string; position: number }
   | { type: "remove-guide"; id: string }
   | { type: "clear-guides" }
   | { type: "set-quick-mask"; on: boolean; canvas?: HTMLCanvasElement | null }
+  | { type: "set-quick-mask-paint-mode"; mode: NonNullable<PsDocument["quickMaskPaintMode"]> }
   | { type: "set-selection"; selection: Selection }
   | { type: "add-layer"; layer: Layer }
   | { type: "remove-layer"; id: string }
@@ -1096,6 +1126,8 @@ export type Action =
   | { type: "set-layer-style"; id: string; style: LayerStyle | undefined }
   | { type: "set-layer-mask"; id: string; mask: HTMLCanvasElement | null }
   | { type: "set-layer-mask-enabled"; id: string; enabled: boolean }
+  | { type: "fill-layer-mask"; id: string; value: "black" | "white" | "transparent" }
+  | { type: "invert-layer-mask"; id: string }
   | { type: "set-layer-text"; id: string; text: TextProps | undefined }
   | { type: "set-layer-shape"; id: string; shape: ShapeProps }
   | { type: "set-layer-path"; id: string; path: PathProps | undefined }
@@ -1107,6 +1139,7 @@ export type Action =
   | { type: "set-layer-smart-link-status"; id: string; status: NonNullable<SmartObjectSource["status"]> }
   | { type: "replace-smart-object-contents"; id: string; canvas: HTMLCanvasElement; source?: Partial<SmartObjectSource> }
   | { type: "update-smart-object-parent"; parentDocId: string; layerId: string; canvas: HTMLCanvasElement }
+  | { type: "set-smart-object-edit-package"; id: string; editPackage: NonNullable<SmartObjectSource["editPackage"]> | undefined }
   | { type: "rename-layer"; id: string; name: string }
   | { type: "move-layer"; id: string; direction: "up" | "down" }
   | { type: "merge-down"; id: string }
@@ -1146,19 +1179,28 @@ export type Action =
   | { type: "set-layer-vector-mask"; id: string; mask: PathProps | null }
   | { type: "set-layer-adjustment"; id: string; adjustment: AdjustmentProps }
   | { type: "set-layer-smart-filters"; id: string; smartFilters: SmartFilter[] }
+  | { type: "update-smart-filter"; layerId: string; filterId: string; patch: Partial<SmartFilter> }
+  | { type: "reorder-smart-filter"; layerId: string; filterId: string; offset: number }
+  | { type: "set-smart-filter-mask"; layerId: string; filterId: string; mask: HTMLCanvasElement | null; enabled?: boolean }
   | { type: "set-style-presets"; presets: NonNullable<PsDocument["stylePresets"]> }
   | { type: "set-asset-library"; assets: AssetLibraryItem[] }
   | { type: "set-timeline-frames"; frames: TimelineFrame[] }
+  | { type: "set-timeline-settings"; settings: TimelineSettings | undefined }
   | { type: "set-global-light"; globalLight: GlobalLight }
   | { type: "set-document-metadata"; metadata: DocumentMetadata }
   | { type: "set-color-management"; settings: ColorManagementSettings }
   | { type: "set-print-settings"; settings: PrintSettings }
   | { type: "set-document-mode-settings"; colorMode: PsDocument["colorMode"]; settings?: DocumentModeSettings }
   | { type: "set-plugins"; plugins: PluginDescriptor[] }
+  | { type: "set-plugin-storage"; pluginStorage: NonNullable<PsDocument["pluginStorage"]> }
   | { type: "set-variable-data-sets"; dataSets: VariableDataSet[] }
   | { type: "add-document-report"; report: DocumentReport }
   | { type: "clear-document-reports" }
   | { type: "set-layer-color-label"; id: string; label: Layer["colorLabel"] }
+  | { type: "set-layer-metadata"; id: string; metadata: LayerMetadata | undefined }
+  | { type: "add-layer-note"; id: string; note: LayerNote }
+  | { type: "update-layer-note"; id: string; noteId: string; patch: Partial<LayerNote> }
+  | { type: "remove-layer-note"; id: string; noteId: string }
   | { type: "align-layers"; align: LayerAlignMode; ids?: string[] }
   | { type: "distribute-layers"; axis: LayerDistributeAxis; ids?: string[] }
   | { type: "reorder-layer"; id: string; targetId: string; position: "above" | "below" | "into" }
@@ -1168,6 +1210,7 @@ export type Action =
   | { type: "remove-note"; id: string }
   | { type: "add-slice"; slice: Slice }
   | { type: "update-slice"; id: string; patch: Partial<Slice> }
+  | { type: "duplicate-slice"; id: string }
   | { type: "set-active-slice"; id: string | null }
   | { type: "remove-slice"; id: string }
   | { type: "clear-slices" }
@@ -1195,9 +1238,9 @@ export type Action =
   | { type: "feather-selection"; radius: number }
   | { type: "border-selection"; width: number }
   | { type: "smooth-selection"; radius: number }
-  | { type: "save-selection"; channel: { id: string; name: string; canvas: HTMLCanvasElement } }
-  | { type: "load-selection"; channelId: string }
-  | { type: "update-channel"; channelId: string; patch: Partial<{ name: string; canvas: HTMLCanvasElement }> }
+  | { type: "save-selection"; channel: AlphaChannel }
+  | { type: "load-selection"; channelId: string; mode?: SelectionChannelLoadMode }
+  | { type: "update-channel"; channelId: string; patch: Partial<AlphaChannel> }
   | { type: "delete-channel"; channelId: string }
   | { type: "mark-document-dirty"; id: string }
   | { type: "mark-document-saved"; id: string; lifecycle?: Partial<DocumentLifecycleState> }
@@ -1315,6 +1358,7 @@ const DOCUMENT_DIRTY_ACTIONS = new Set<Action["type"]>([
   "set-style-presets",
   "set-asset-library",
   "set-timeline-frames",
+  "set-timeline-settings",
   "set-global-light",
   "set-document-metadata",
   "set-color-management",
@@ -1633,24 +1677,35 @@ export function reducer(state: EditorState, action: Action): EditorState {
     case "add-guide":
       return mutateActiveDoc(state, (d) => ({
         ...d,
-        guides: [...(d.guides ?? []), action.guide],
+        guides: [...(d.guides ?? []), normalizeGuide(action.guide, d.width, d.height)],
       }))
     case "update-guide":
       return mutateActiveDoc(state, (d) => ({
         ...d,
-        guides: (d.guides ?? []).map((g) => (g.id === action.id ? { ...g, ...action.patch } : g)),
+        guides: (d.guides ?? []).map((g) =>
+          g.id === action.id ? normalizeGuide({ ...g, ...action.patch }, d.width, d.height) : g,
+        ),
+      }))
+    case "update-guide-state":
+      return mutateActiveDoc(state, (d) => ({
+        ...d,
+        guides: (d.guides ?? []).map((g) =>
+          g.id === action.id ? normalizeGuide({ ...g, ...action.patch }, d.width, d.height) : g,
+        ),
       }))
     case "move-guide":
       return mutateActiveDoc(state, (d) => ({
         ...d,
         guides: (d.guides ?? []).map((g) =>
-          g.id === action.id ? { ...g, position: action.position } : g,
+          g.id === action.id && !g.locked
+            ? normalizeGuide({ ...g, position: action.position }, d.width, d.height)
+            : g,
         ),
       }))
     case "remove-guide":
       return mutateActiveDoc(state, (d) => ({
         ...d,
-        guides: (d.guides ?? []).filter((g) => g.id !== action.id),
+        guides: (d.guides ?? []).filter((g) => g.id !== action.id || g.locked),
       }))
     case "clear-guides":
       return mutateActiveDoc(state, (d) => ({ ...d, guides: [] }))
@@ -1659,6 +1714,11 @@ export function reducer(state: EditorState, action: Action): EditorState {
         ...d,
         quickMask: action.on,
         quickMaskCanvas: action.canvas !== undefined ? action.canvas : d.quickMaskCanvas,
+      }))
+    case "set-quick-mask-paint-mode":
+      return mutateActiveDoc(state, (d) => ({
+        ...d,
+        quickMaskPaintMode: action.mode,
       }))
     case "set-selection":
       return mutateActiveDoc(state, (d) => ({ ...d, selection: action.selection }))
@@ -1778,6 +1838,28 @@ export function reducer(state: EditorState, action: Action): EditorState {
       return mutateActiveDoc(state, (d) => ({
         ...d,
         layers: d.layers.map((l) => (l.id === action.id && !isLayerLocked(l) ? { ...l, maskEnabled: action.enabled } : l)),
+      }))
+    case "fill-layer-mask":
+      return mutateActiveDoc(state, (d) => ({
+        ...d,
+        layers: d.layers.map((l) =>
+          l.id === action.id && !isLayerLocked(l)
+            ? {
+                ...l,
+                mask: fillMaskCanvas(d.width, d.height, action.value),
+                maskEnabled: true,
+              }
+            : l,
+        ),
+      }))
+    case "invert-layer-mask":
+      return mutateActiveDoc(state, (d) => ({
+        ...d,
+        layers: d.layers.map((l) =>
+          l.id === action.id && l.mask && !isLayerLocked(l)
+            ? { ...l, mask: invertMaskCanvas(l.mask), maskEnabled: true }
+            : l,
+        ),
       }))
     case "set-layer-text":
       return mutateActiveDoc(state, (d) => ({
@@ -1901,22 +1983,44 @@ export function reducer(state: EditorState, action: Action): EditorState {
             const canvas = makeCanvas(doc.width, doc.height)
             const ctx = canvas.getContext("2d")!
             ctx.drawImage(action.canvas, 0, 0)
+            const smartSource: NonNullable<Layer["smartSource"]> = {
+              ...(layer.smartSource ?? {}),
+              width: action.canvas.width,
+              height: action.canvas.height,
+              canvas: source,
+              status: layer.smartSource?.linkType === "linked" ? "modified" : "current",
+              updatedAt: Date.now(),
+            }
             return {
               ...layer,
               kind: "smart-object" as const,
               smartObject: true,
               canvas,
-              smartSource: {
-                width: action.canvas.width,
-                height: action.canvas.height,
-                canvas: source,
-              },
+              smartSource,
             }
           }),
         }
       })
       return { ...state, documents, activeDocId: action.parentDocId }
     }
+    case "set-smart-object-edit-package":
+      return mutateActiveDoc(state, (d) => ({
+        ...d,
+        layers: d.layers.map((l) =>
+          l.id === action.id && (l.smartObject || l.kind === "smart-object") && !isLayerLocked(l)
+            ? {
+                ...l,
+                kind: "smart-object",
+                smartObject: true,
+                smartSource: {
+                  ...(l.smartSource ?? createSmartObjectSource(l.canvas, { name: l.name })),
+                  editPackage: action.editPackage ? deepClonePlain(action.editPackage) : undefined,
+                  updatedAt: Date.now(),
+                },
+              }
+            : l,
+        ),
+      }))
     case "rename-layer":
       return mutateActiveDoc(state, (d) => ({
         ...d,
@@ -2183,6 +2287,7 @@ export function reducer(state: EditorState, action: Action): EditorState {
           colorSamplers: action.entry.colorSamplers ? deepClonePlain(action.entry.colorSamplers) : d.colorSamplers,
           quickMask: action.entry.quickMask ?? d.quickMask,
           quickMaskCanvas: action.entry.quickMaskCanvas ? cloneCanvas(action.entry.quickMaskCanvas) : d.quickMaskCanvas,
+          quickMaskPaintMode: action.entry.quickMaskPaintMode ?? d.quickMaskPaintMode,
           colorMode: action.entry.colorMode ?? d.colorMode,
           modeSettings: action.entry.modeSettings ? deepClonePlain(action.entry.modeSettings) : d.modeSettings,
           variableDataSets: action.entry.variableDataSets ? deepClonePlain(action.entry.variableDataSets) : d.variableDataSets,
@@ -2220,6 +2325,7 @@ export function reducer(state: EditorState, action: Action): EditorState {
           colorSamplers: action.entry.colorSamplers ? deepClonePlain(action.entry.colorSamplers) : d.colorSamplers,
           quickMask: action.entry.quickMask ?? d.quickMask,
           quickMaskCanvas: action.entry.quickMaskCanvas ? cloneCanvas(action.entry.quickMaskCanvas) : d.quickMaskCanvas,
+          quickMaskPaintMode: action.entry.quickMaskPaintMode ?? d.quickMaskPaintMode,
           colorMode: action.entry.colorMode ?? d.colorMode,
           modeSettings: action.entry.modeSettings ? deepClonePlain(action.entry.modeSettings) : d.modeSettings,
           variableDataSets: action.entry.variableDataSets ? deepClonePlain(action.entry.variableDataSets) : d.variableDataSets,
@@ -2371,6 +2477,44 @@ export function reducer(state: EditorState, action: Action): EditorState {
         ...d,
         layers: d.layers.map((l) => (l.id === action.id && !isLayerLocked(l) ? { ...l, smartFilters: action.smartFilters } : l)),
       }))
+    case "update-smart-filter":
+      return mutateActiveDoc(state, (d) => ({
+        ...d,
+        layers: d.layers.map((l) =>
+          l.id === action.layerId && !isLayerLocked(l)
+            ? { ...l, smartFilters: updateSmartFilterStack(l.smartFilters, action.filterId, action.patch) }
+            : l,
+        ),
+      }))
+    case "reorder-smart-filter":
+      return mutateActiveDoc(state, (d) => ({
+        ...d,
+        layers: d.layers.map((l) =>
+          l.id === action.layerId && !isLayerLocked(l)
+            ? { ...l, smartFilters: reorderSmartFilterStack(l.smartFilters ?? [], action.filterId, action.offset) }
+            : l,
+        ),
+      }))
+    case "set-smart-filter-mask":
+      return mutateActiveDoc(state, (d) => ({
+        ...d,
+        layers: d.layers.map((l) =>
+          l.id === action.layerId && !isLayerLocked(l)
+            ? {
+                ...l,
+                smartFilters: (l.smartFilters ?? []).map((filter) =>
+                  filter.id === action.filterId
+                    ? {
+                        ...filter,
+                        mask: action.mask,
+                        maskEnabled: action.enabled ?? filter.maskEnabled ?? true,
+                      }
+                    : filter,
+                ),
+              }
+            : l,
+        ),
+      }))
     case "set-style-presets":
       return mutateActiveDoc(state, (d) => ({
         ...d,
@@ -2385,6 +2529,11 @@ export function reducer(state: EditorState, action: Action): EditorState {
       return mutateActiveDoc(state, (d) => ({
         ...d,
         timelineFrames: action.frames,
+      }))
+    case "set-timeline-settings":
+      return mutateActiveDoc(state, (d) => ({
+        ...d,
+        timelineSettings: action.settings,
       }))
     case "set-global-light":
       return mutateActiveDoc(state, (d) => {
@@ -2427,6 +2576,11 @@ export function reducer(state: EditorState, action: Action): EditorState {
         ...d,
         plugins: action.plugins,
       }))
+    case "set-plugin-storage":
+      return mutateActiveDoc(state, (d) => ({
+        ...d,
+        pluginStorage: action.pluginStorage,
+      }))
     case "set-variable-data-sets":
       return mutateActiveDoc(state, (d) => ({
         ...d,
@@ -2446,6 +2600,49 @@ export function reducer(state: EditorState, action: Action): EditorState {
       return mutateActiveDoc(state, (d) => ({
         ...d,
         layers: d.layers.map((l) => (l.id === action.id ? { ...l, colorLabel: action.label } : l)),
+      }))
+    case "set-layer-metadata":
+      return mutateActiveDoc(state, (d) => ({
+        ...d,
+        layers: d.layers.map((l) =>
+          l.id === action.id && !isLayerLocked(l)
+            ? { ...l, metadata: action.metadata ? deepClonePlain(action.metadata) : undefined }
+            : l,
+        ),
+      }))
+    case "add-layer-note":
+      return mutateActiveDoc(state, (d) => ({
+        ...d,
+        layers: d.layers.map((l) =>
+          l.id === action.id && !isLayerLocked(l)
+            ? { ...l, notes: [...(l.notes ?? []), deepClonePlain(action.note)] }
+            : l,
+        ),
+      }))
+    case "update-layer-note":
+      return mutateActiveDoc(state, (d) => ({
+        ...d,
+        layers: d.layers.map((l) =>
+          l.id === action.id && !isLayerLocked(l)
+            ? {
+                ...l,
+                notes: (l.notes ?? []).map((note) =>
+                  note.id === action.noteId
+                    ? { ...note, ...deepClonePlain(action.patch), updatedAt: Date.now() }
+                    : note,
+                ),
+              }
+            : l,
+        ),
+      }))
+    case "remove-layer-note":
+      return mutateActiveDoc(state, (d) => ({
+        ...d,
+        layers: d.layers.map((l) =>
+          l.id === action.id && !isLayerLocked(l)
+            ? { ...l, notes: (l.notes ?? []).filter((note) => note.id !== action.noteId) }
+            : l,
+        ),
       }))
     case "align-layers":
       return mutateActiveDoc(state, (d) => alignLayersInDocument(d, action.align, action.ids))
@@ -2519,14 +2716,29 @@ export function reducer(state: EditorState, action: Action): EditorState {
     case "add-slice":
       return mutateActiveDoc(state, (d) => ({
         ...d,
-        slices: [...(d.slices ?? []), action.slice],
+        slices: [...(d.slices ?? []), normalizeSlice(action.slice, d.width, d.height)],
         selectedSliceId: action.slice.id,
       }))
     case "update-slice":
       return mutateActiveDoc(state, (d) => ({
         ...d,
-        slices: (d.slices ?? []).map((s) => (s.id === action.id ? { ...s, ...action.patch } : s)),
+        slices: (d.slices ?? []).map((s) =>
+          s.id === action.id && (!s.locked || action.patch.locked !== undefined || action.patch.visible !== undefined)
+            ? normalizeSlice({ ...s, ...action.patch }, d.width, d.height)
+            : s,
+        ),
       }))
+    case "duplicate-slice":
+      return mutateActiveDoc(state, (d) => {
+        const source = (d.slices ?? []).find((slice) => slice.id === action.id)
+        if (!source) return d
+        const copy = duplicateSlice(source, (d.slices ?? []).map((slice) => slice.name), d.width, d.height)
+        return {
+          ...d,
+          slices: [...(d.slices ?? []), copy],
+          selectedSliceId: copy.id,
+        }
+      })
     case "set-active-slice":
       return mutateActiveDoc(state, (d) => ({
         ...d,
@@ -2535,8 +2747,8 @@ export function reducer(state: EditorState, action: Action): EditorState {
     case "remove-slice":
       return mutateActiveDoc(state, (d) => ({
         ...d,
-        slices: (d.slices ?? []).filter((s) => s.id !== action.id),
-        selectedSliceId: d.selectedSliceId === action.id ? undefined : d.selectedSliceId,
+        slices: (d.slices ?? []).filter((s) => s.id !== action.id || s.locked),
+        selectedSliceId: d.selectedSliceId === action.id && !(d.slices ?? []).some((s) => s.id === action.id && s.locked) ? undefined : d.selectedSliceId,
       }))
     case "clear-slices":
       return mutateActiveDoc(state, (d) => ({ ...d, slices: [], selectedSliceId: undefined }))
@@ -2600,8 +2812,19 @@ export function reducer(state: EditorState, action: Action): EditorState {
               shape: s.shape ? { ...s.shape } : s.shape,
               path: s.path ? deepClonePlain(s.path) : s.path,
               adjustment: s.adjustment ? deepClonePlain(s.adjustment) : s.adjustment,
-              smartFilters: s.smartFilters ? deepClonePlain(s.smartFilters) : s.smartFilters,
+              smartFilters: s.smartFilters
+                ? s.smartFilters.map((filter) => {
+                    const existingFilter = l.smartFilters?.find((candidate) => candidate.id === filter.id)
+                    return {
+                      ...filter,
+                      params: deepClonePlain(filter.params),
+                      mask: existingFilter?.mask ? cloneCanvas(existingFilter.mask) : existingFilter?.mask ?? filter.mask,
+                    }
+                  })
+                : s.smartFilters,
               colorLabel: s.colorLabel,
+              notes: s.notes ? deepClonePlain(s.notes) : undefined,
+              metadata: s.metadata ? deepClonePlain(s.metadata) : undefined,
             }
           }),
           activeLayerId: comp.activeLayerId && d.layers.some((l) => l.id === comp.activeLayerId) ? comp.activeLayerId : d.activeLayerId,
@@ -2774,33 +2997,7 @@ export function reducer(state: EditorState, action: Action): EditorState {
       return mutateActiveDoc(state, (d) => {
         const ch = (d.channels ?? []).find((c) => c.id === action.channelId)
         if (!ch) return d
-        // Compute bounds from channel mask
-        const ctx = ch.canvas.getContext("2d")!
-        const img = ctx.getImageData(0, 0, d.width, d.height)
-        let minX = d.width, minY = d.height, maxX = 0, maxY = 0
-        let any = false
-        for (let y = 0; y < d.height; y++) {
-          for (let x = 0; x < d.width; x++) {
-            if (img.data[(y * d.width + x) * 4 + 3] > 0) {
-              any = true
-              if (x < minX) minX = x
-              if (y < minY) minY = y
-              if (x > maxX) maxX = x
-              if (y > maxY) maxY = y
-            }
-          }
-        }
-        if (!any) return d
-        const cloned = makeCanvas(d.width, d.height)
-        cloned.getContext("2d")!.drawImage(ch.canvas, 0, 0)
-        return {
-          ...d,
-          selection: {
-            bounds: { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 },
-            shape: "rect",
-            mask: cloned,
-          },
-        }
+        return { ...d, selection: selectionFromMask(combineSelectionWithChannel(d, ch, action.mode), "freehand") }
       })
     case "update-channel":
       return mutateActiveDoc(state, (d) => ({
@@ -2859,7 +3056,6 @@ function snapshotLayers(
   doc: PsDocument,
   previousEntry?: HistoryEntry,
   changedLayerIds?: ChangedLayerIds,
-  preCaptured?: Map<string, LayerSourceCapture>,
 ): LayerSnapshot[] {
   const previousById = new Map(previousEntry?.layers.map((l) => [l.id, l]) ?? [])
   const changeHints = isLayerChangeHints(changedLayerIds) ? changedLayerIds : undefined
@@ -2881,21 +3077,10 @@ function snapshotLayers(
     const previous = previousById.get(l.id)
     const layerIsChanged =
       changedLayerIds === "all" || !previous || (changedSet ? changedSet.has(l.id) : true)
-    // When we have a synchronously pre-captured snapshot of the live layer
-    // canvas (taken at commit-time before any subsequent strokes can mutate
-    // it), use it for both the dirty-rect/patch computation and the eventual
-    // adopted canvas reference. This ensures rapid back-to-back commits each
-    // record a stable, distinct snapshot rather than all reading from the
-    // same final mutated canvas.
-    const captured = preCaptured?.get(l.id)
-    const sourceCanvas = captured?.canvas ?? l.canvas
-    const sourceMask = captured && "mask" in captured ? captured.mask : l.mask
-    const sourceFrameImage =
-      captured && "frameImage" in captured ? captured.frameImage : l.frame?.imageCanvas ?? null
-    const sourceSmartSource =
-      captured && "smartSourceCanvas" in captured
-        ? captured.smartSourceCanvas
-        : l.smartSource?.canvas ?? null
+    const sourceCanvas = l.canvas
+    const sourceMask = l.mask
+    const sourceFrameImage = l.frame?.imageCanvas ?? null
+    const sourceSmartSource = l.smartSource?.canvas ?? null
     const dirtyRect = normalizeDirtyRect(changeHints?.bounds?.[l.id], sourceCanvas.width, sourceCanvas.height)
     const patch =
       layerIsChanged && canPatchSnapshot(previous, sourceCanvas, dirtyRect)
@@ -2943,14 +3128,12 @@ function snapshotLayers(
       linkGroupId: l.linkGroupId,
       canvas: reuseCanvas
         ? previous!.canvas
-        : captured?.canvas ?? cloneCanvas(l.canvas),
+        : cloneCanvas(l.canvas),
       canvasPatches,
       mask: sourceMask
         ? reuseMask
           ? previous!.mask
-          : captured && "mask" in captured && captured.mask
-            ? captured.mask
-            : cloneCanvas(sourceMask)
+          : cloneCanvas(sourceMask)
         : null,
       maskEnabled: l.maskEnabled,
       vectorMask: l.vectorMask ? deepClonePlain(l.vectorMask) : null,
@@ -2969,9 +3152,7 @@ function snapshotLayers(
             imageCanvas: sourceFrameImage
               ? reuseFrameImage
                 ? previous!.frame!.imageCanvas
-                : captured && "frameImage" in captured && captured.frameImage
-                  ? captured.frameImage
-                  : cloneCanvas(sourceFrameImage)
+                : cloneCanvas(sourceFrameImage)
               : null,
           }
         : undefined,
@@ -2979,20 +3160,22 @@ function snapshotLayers(
       threeD: l.threeD ? deepClonePlain(l.threeD) : undefined,
       video: l.video ? deepClonePlain(l.video) : undefined,
       colorLabel: l.colorLabel,
-      smartFilters: l.smartFilters ? deepClonePlain(l.smartFilters) : undefined,
+      smartFilters: cloneSmartFilters(l.smartFilters),
       smartSource: l.smartSource
         ? {
+            ...l.smartSource,
+            editPackage: l.smartSource.editPackage ? deepClonePlain(l.smartSource.editPackage) : undefined,
             width: l.smartSource.width,
             height: l.smartSource.height,
             canvas: sourceSmartSource
               ? reuseSmartSource
                 ? previous!.smartSource!.canvas
-                : captured && "smartSourceCanvas" in captured && captured.smartSourceCanvas
-                  ? captured.smartSourceCanvas
-                  : cloneCanvas(sourceSmartSource)
+                : cloneCanvas(sourceSmartSource)
               : null,
           }
         : undefined,
+      notes: l.notes ? deepClonePlain(l.notes) : undefined,
+      metadata: l.metadata ? deepClonePlain(l.metadata) : undefined,
     }
   })
 }
@@ -3046,7 +3229,6 @@ function makeHistoryEntry(
   label: string,
   previousEntry?: HistoryEntry,
   changedLayerIds?: ChangedLayerIds,
-  preCaptured?: Map<string, LayerSourceCapture>,
 ): HistoryEntry {
   // Reuse previous auxiliary canvas clones if they haven't changed
   const reuseSelectionMask = previousEntry?.selection?.mask != null
@@ -3059,7 +3241,7 @@ function makeHistoryEntry(
   return {
     id: uid("h"),
     label,
-    layers: snapshotLayers(doc, previousEntry, changedLayerIds, preCaptured),
+    layers: snapshotLayers(doc, previousEntry, changedLayerIds),
     activeLayerId: doc.activeLayerId,
     selectedLayerIds: [...doc.selectedLayerIds],
     thumb: SKIP_HISTORY_THUMB_LABELS.has(label) ? previousEntry?.thumb : buildHistoryThumb(doc),
@@ -3084,6 +3266,7 @@ function makeHistoryEntry(
     quickMaskCanvas: reuseQuickMask
       ? previousEntry!.quickMaskCanvas
       : doc.quickMaskCanvas ? cloneCanvas(doc.quickMaskCanvas) : null,
+    quickMaskPaintMode: doc.quickMaskPaintMode ?? "auto",
     colorMode: doc.colorMode,
     modeSettings: doc.modeSettings ? deepClonePlain(doc.modeSettings) : undefined,
     variableDataSets: doc.variableDataSets ? deepClonePlain(doc.variableDataSets) : undefined,
@@ -3173,9 +3356,11 @@ function restoreFromEntry(
       threeD: snap.threeD,
       video: snap.video,
       colorLabel: snap.colorLabel,
-      smartFilters: snap.smartFilters,
+      smartFilters: cloneSmartFilters(snap.smartFilters),
       smartSource: snap.smartSource
         ? {
+            ...snap.smartSource,
+            editPackage: snap.smartSource.editPackage ? deepClonePlain(snap.smartSource.editPackage) : undefined,
             width: snap.smartSource.width,
             height: snap.smartSource.height,
             canvas:
@@ -3184,6 +3369,8 @@ function restoreFromEntry(
                 : cloneCanvas(snap.smartSource.canvas),
           }
         : undefined,
+      notes: snap.notes ? deepClonePlain(snap.notes) : undefined,
+      metadata: snap.metadata ? deepClonePlain(snap.metadata) : undefined,
     }
   })
 }
@@ -3432,32 +3619,72 @@ function sanitizeColorString(value: unknown): string | undefined {
   return undefined
 }
 
+const PERSISTED_BRUSH_KEYS = [
+  "size",
+  "hardness",
+  "opacity",
+  "flow",
+  "smoothing",
+  "spacing",
+  "tipShape",
+] as const satisfies readonly (keyof EditorState["brush"])[]
+const PERSISTED_GRADIENT_KEYS = ["type", "reverse"] as const satisfies readonly (keyof EditorState["gradient"])[]
+const PERSISTED_SYMMETRY_KEYS = ["enabled", "axis"] as const satisfies readonly (keyof EditorState["symmetry"])[]
+
+function pickPersistedFields<T extends object, K extends readonly (keyof T)[]>(
+  value: unknown,
+  keys: K,
+): Partial<Pick<T, K[number]>> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+  const source = value as Record<string, unknown>
+  const filtered: Partial<Pick<T, K[number]>> = {}
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) {
+      filtered[key] = source[String(key)] as T[K[number]]
+    }
+  }
+  return filtered
+}
+
+export function filterPersistedSettingsForHydration(value: unknown): Partial<EditorState> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+  const s = sanitizePersistedSetting(value) as Record<string, unknown> | undefined
+  if (!s) return {}
+  const out: Partial<EditorState> = {}
+
+  const foreground = sanitizeColorString(s.foreground)
+  if (foreground) out.foreground = foreground
+  const background = sanitizeColorString(s.background)
+  if (background) out.background = background
+
+  const brush = pickPersistedFields<EditorState["brush"], typeof PERSISTED_BRUSH_KEYS>(
+    s.brush,
+    PERSISTED_BRUSH_KEYS,
+  )
+  if (brush) out.brush = { ...initialState.brush, ...brush }
+
+  const gradient = pickPersistedFields<EditorState["gradient"], typeof PERSISTED_GRADIENT_KEYS>(
+    s.gradient,
+    PERSISTED_GRADIENT_KEYS,
+  )
+  if (gradient) out.gradient = { ...initialState.gradient, ...gradient }
+
+  const symmetry = pickPersistedFields<EditorState["symmetry"], typeof PERSISTED_SYMMETRY_KEYS>(
+    s.symmetry,
+    PERSISTED_SYMMETRY_KEYS,
+  )
+  if (symmetry) out.symmetry = { ...initialState.symmetry, ...symmetry }
+
+  return out
+}
+
 function loadPersistedSettings(): Partial<EditorState> {
   if (typeof window === "undefined") return {}
   try {
     const raw = localStorage.getItem(SETTINGS_KEY)
     if (!raw) return {}
     const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {}
-    const s = sanitizePersistedSetting(parsed) as Record<string, unknown> | undefined
-    if (!s) return {}
-    const out: Partial<EditorState> = {}
-
-    const foreground = sanitizeColorString(s.foreground)
-    if (foreground) out.foreground = foreground
-    const background = sanitizeColorString(s.background)
-    if (background) out.background = background
-
-    if (s.brush && typeof s.brush === "object" && !Array.isArray(s.brush)) {
-      out.brush = { ...initialState.brush, ...(s.brush as object) } as EditorState["brush"]
-    }
-    if (s.gradient && typeof s.gradient === "object" && !Array.isArray(s.gradient)) {
-      out.gradient = { ...initialState.gradient, ...(s.gradient as object) } as EditorState["gradient"]
-    }
-    if (s.symmetry && typeof s.symmetry === "object" && !Array.isArray(s.symmetry)) {
-      out.symmetry = { ...initialState.symmetry, ...(s.symmetry as object) } as EditorState["symmetry"]
-    }
-    return out
+    return filterPersistedSettingsForHydration(parsed)
   } catch { return {} }
 }
 
@@ -3663,12 +3890,16 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
       }
     }
     return result
-  }, [state])
+    // documentStatuses only depends on the document list, per-doc lifecycle
+    // state, and per-doc history. Depending on the entire `state` here
+    // re-ran this memo on every slider tick — narrow the dep list to the
+    // slices that actually affect the output.
+  }, [state.documents, state.documentLifecycle, state.histories])
   const documentHistoryVersions = React.useMemo(() => {
     const result: Record<string, number> = {}
     for (const doc of state.documents) result[doc.id] = currentHistoryIndex(state, doc.id)
     return result
-  }, [state])
+  }, [state.documents, state.histories])
 
   // Initialize SSR-safe canvases on the client.
   //
@@ -4581,7 +4812,18 @@ export function useRenderSubscription(cb: (change: MergedRenderChange) => void) 
   const ctx = React.useContext(EditorRenderContext)
   if (!ctx) throw new Error("useRenderSubscription must be used within EditorProvider")
   const { subscribeRender } = ctx
-  React.useEffect(() => subscribeRender(cb), [cb, subscribeRender])
+  // Hold the latest callback in a ref so we can subscribe once with a stable
+  // wrapper. Without this the subscription tears down and rebuilds every time
+  // the caller produces a fresh callback identity (which is the common case
+  // for inline arrow functions inside render).
+  const cbRef = React.useRef(cb)
+  React.useEffect(() => {
+    cbRef.current = cb
+  }, [cb])
+  React.useEffect(
+    () => subscribeRender((change) => cbRef.current(change)),
+    [subscribeRender],
+  )
 }
 
 export { makeCanvas, cloneCanvas, makeHistoryEntry }

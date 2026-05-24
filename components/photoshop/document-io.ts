@@ -39,20 +39,100 @@ import type {
 } from "./types"
 import type {
   BlendMode as PsdBlendMode,
+  ImageResources,
   Layer as PsdLayer,
   LayerEffectsInfo,
   LayerColor,
   Psd,
 } from "ag-psd"
+import {
+  appBitDepthToPsd,
+  appColorModeToPsd,
+  applyIccProfileToPsd,
+  COLOR_MODE_CAPABILITY,
+  extractIccProfile,
+  psdBitDepthToApp,
+  psdColorModeData,
+  psdColorModeToApp,
+} from "./psd-color-modes"
+import {
+  EFFECTS_ADJUSTMENTS_CAPABILITY,
+  appAdjustmentToPsdLayer,
+  appAdvancedBlendingToPsd,
+  appSmartFiltersToPsd,
+  layerStyleToPsdEffects,
+  psdEffectsToLayerStyle,
+  psdLayerToAppAdjustment,
+  psdToAppAdvancedBlending,
+  psdToAppSmartFilters,
+} from "./psd-effects-adjustments"
+import {
+  VECTOR_TEXT_CAPABILITY,
+  appPathsToPsdResources,
+  appShapeToPsd,
+  appTextToPsd,
+  decodeShapeMarker,
+  psdResourceToAppPaths,
+  psdShapeToApp,
+  psdTextToApp,
+  stripMarkers,
+} from "./psd-vector-text"
+import {
+  CHANNELS_MASKS_CAPABILITY,
+  appAlphaChannelsToMarkerLayers,
+  appAlphaChannelsToPsd,
+  appClippingToPsd,
+  appLayerMaskToPsd,
+  appVectorMaskOnLayerToPsd,
+  isAlphaChannelMarkerLayer,
+  psdAlphaChannelsToApp,
+  psdLayerMaskToApp,
+  psdVectorMaskOnLayerToApp,
+  validateClippingGroup,
+} from "./psd-channels-masks"
+import {
+  RESOURCES_METADATA_CAPABILITY,
+  appGlobalLightToPsdResources,
+  appGuidesToPsd,
+  appLayerCompsToPsd,
+  appMetadataToPsdResources,
+  appNotesToPsd,
+  appPrintSettingsToPsdResources,
+  appResolutionToPsd,
+  appSlicesToPsd,
+  appSmartObjectToPsdLayer,
+  psdGlobalLightToApp,
+  psdGuidesToApp,
+  psdLayerCompsToApp,
+  psdMetadataToApp,
+  psdNotesToApp,
+  psdPrintSettingsToApp,
+  psdResolutionToApp,
+  psdSlicesToApp,
+  psdSmartObjectToAppLayer,
+} from "./psd-resources-metadata"
+import { uid } from "./uid"
+import { exportRasterImageDataToBlob } from "./export-worker"
 
 function loadPsdCodec() {
   return import("ag-psd")
 }
 
-export type ExportFormat = "png" | "jpeg" | "webp" | "avif" | "gif" | "svg"
+export const PSD_ROUND_TRIP_CAPABILITIES = {
+  colorModes: COLOR_MODE_CAPABILITY,
+  effectsAdjustments: EFFECTS_ADJUSTMENTS_CAPABILITY,
+  vectorText: VECTOR_TEXT_CAPABILITY,
+  channelsMasks: CHANNELS_MASKS_CAPABILITY,
+  resourcesMetadata: RESOURCES_METADATA_CAPABILITY,
+} as const
+
+export type BrowserRasterExportFormat = "png" | "jpeg" | "webp" | "avif" | "gif"
+export type AppRasterExportFormat = BrowserRasterExportFormat | "tga" | "ppm" | "pgm" | "pbm"
+export type AnimationExportFormat = "gif" | "apng" | "animated-webp"
+export type ExportFormat = AppRasterExportFormat | "svg" | "apng" | "animated-webp" | "metadata-json"
 
 export interface RasterExportOptions {
-  format: Exclude<ExportFormat, "svg">
+  format: AppRasterExportFormat
   scale: number
   quality: number
   transparent: boolean
@@ -100,8 +180,27 @@ export interface ExportLimitationReport {
   summary: string
 }
 
-function uid(prefix = "id") {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
+export interface ExportCompatibilityManifest {
+  app: "Photoshop Web"
+  format: "ps-export-manifest"
+  version: 1
+  generatedAt: string
+  target: CompatibilityTarget
+  document: {
+    id: string
+    name: string
+    width: number
+    height: number
+    colorMode: PsDocument["colorMode"]
+    bitDepth: PsDocument["bitDepth"]
+    layerCount: number
+  }
+  export: ExportLimitationOptions
+  entries: CompatibilityManifestEntry[]
+  totals: Record<ReportStatus, number>
+  warnings: string[]
+  riskLevel: "low" | "medium" | "high"
+  summary: string
 }
 
 const APP_BLEND_MODES = new Set<BlendMode>([
@@ -457,299 +556,6 @@ function colorToHex(color: Record<string, unknown> | undefined, fallback = "#000
   return `#${toHex(r)}${toHex(g)}${toHex(b)}`
 }
 
-function px(value: number | undefined) {
-  return { units: "Pixels" as const, value: Math.max(0, Number(value) || 0) }
-}
-
-function offsetToDistance(x: number | undefined, y: number | undefined) {
-  return Math.hypot(Number(x) || 0, Number(y) || 0)
-}
-
-function offsetToAngle(x: number | undefined, y: number | undefined) {
-  const angle = (Math.atan2(-(Number(y) || 0), Number(x) || 0) * 180) / Math.PI
-  return Number.isFinite(angle) ? (angle + 360) % 360 : 120
-}
-
-function psdGradientFromStops(gradient: NonNullable<NonNullable<Layer["style"]>["gradientOverlay"]>["gradient"]) {
-  return {
-    name: "Gradient Overlay",
-    type: "solid" as const,
-    smoothness: 100,
-    colorStops: gradient.stops.map((stop) => ({
-      location: Math.round(stop.offset * 4096),
-      midpoint: 50,
-      color: parseHexColor(stop.color),
-    })),
-    opacityStops: gradient.stops.map((stop) => ({
-      location: Math.round(stop.offset * 4096),
-      midpoint: 50,
-      opacity: Math.max(0, Math.min(1, stop.opacity)),
-    })),
-  }
-}
-
-function layerStyleToPsdEffects(style: Layer["style"] | undefined): LayerEffectsInfo | undefined {
-  if (!style) return undefined
-  const effects: LayerEffectsInfo = { scale: 1 }
-  if (style.dropShadow?.enabled) {
-    effects.dropShadow = [{
-      enabled: true,
-      present: true,
-      showInDialog: true,
-      size: px(style.dropShadow.size),
-      distance: px(style.dropShadow.distance ?? offsetToDistance(style.dropShadow.offsetX, style.dropShadow.offsetY)),
-      angle: style.dropShadow.angle ?? offsetToAngle(style.dropShadow.offsetX, style.dropShadow.offsetY),
-      color: parseHexColor(style.dropShadow.color),
-      blendMode: appBlendToPsd(style.dropShadow.blendMode ?? "multiply"),
-      opacity: style.dropShadow.opacity,
-      choke: px(style.dropShadow.spread),
-      useGlobalLight: style.dropShadow.useGlobalLight ?? false,
-    }]
-  }
-  if (style.innerShadow?.enabled) {
-    effects.innerShadow = [{
-      enabled: true,
-      present: true,
-      showInDialog: true,
-      size: px(style.innerShadow.size),
-      distance: px(style.innerShadow.distance ?? offsetToDistance(style.innerShadow.offsetX, style.innerShadow.offsetY)),
-      angle: style.innerShadow.angle ?? offsetToAngle(style.innerShadow.offsetX, style.innerShadow.offsetY),
-      color: parseHexColor(style.innerShadow.color),
-      blendMode: appBlendToPsd(style.innerShadow.blendMode ?? "multiply"),
-      opacity: style.innerShadow.opacity,
-      choke: px(style.innerShadow.choke),
-      useGlobalLight: style.innerShadow.useGlobalLight ?? false,
-    }]
-  }
-  if (style.outerGlow?.enabled) {
-    effects.outerGlow = {
-      enabled: true,
-      present: true,
-      showInDialog: true,
-      size: px(style.outerGlow.size),
-      color: parseHexColor(style.outerGlow.color),
-      blendMode: appBlendToPsd(style.outerGlow.blendMode ?? "screen"),
-      opacity: style.outerGlow.opacity,
-      choke: px(style.outerGlow.spread),
-      range: style.outerGlow.range,
-      noise: style.outerGlow.noise,
-    }
-  }
-  if (style.innerGlow?.enabled) {
-    effects.innerGlow = {
-      enabled: true,
-      present: true,
-      showInDialog: true,
-      size: px(style.innerGlow.size),
-      color: parseHexColor(style.innerGlow.color),
-      blendMode: appBlendToPsd(style.innerGlow.blendMode ?? "screen"),
-      opacity: style.innerGlow.opacity,
-      source: style.innerGlow.source ?? "edge",
-      choke: px(style.innerGlow.choke),
-      range: style.innerGlow.range,
-      noise: style.innerGlow.noise,
-    }
-  }
-  if (style.stroke?.enabled) {
-    effects.stroke = [{
-      enabled: true,
-      present: true,
-      showInDialog: true,
-      size: px(style.stroke.size),
-      position: style.stroke.position,
-      fillType: style.stroke.fillType ?? "color",
-      color: parseHexColor(style.stroke.color),
-      blendMode: appBlendToPsd(style.stroke.blendMode ?? "normal"),
-      opacity: style.stroke.opacity ?? 1,
-      gradient: style.stroke.gradient ? psdGradientFromStops(style.stroke.gradient) : undefined,
-    }]
-  }
-  if (style.colorOverlay?.enabled) {
-    effects.solidFill = [{
-      enabled: true,
-      present: true,
-      showInDialog: true,
-      color: parseHexColor(style.colorOverlay.color),
-      blendMode: appBlendToPsd(style.colorOverlay.blendMode ?? "normal"),
-      opacity: style.colorOverlay.opacity,
-    }]
-  }
-  if (style.gradientOverlay?.enabled) {
-    effects.gradientOverlay = [{
-      enabled: true,
-      present: true,
-      showInDialog: true,
-      blendMode: appBlendToPsd(style.gradientOverlay.blendMode ?? "normal"),
-      opacity: style.gradientOverlay.opacity,
-      type: style.gradientOverlay.gradient.type === "angular" ? "angle" : style.gradientOverlay.gradient.type,
-      angle: style.gradientOverlay.gradient.angle,
-      gradient: psdGradientFromStops(style.gradientOverlay.gradient),
-    }]
-  }
-  if (style.bevel?.enabled) {
-    effects.bevel = {
-      enabled: true,
-      present: true,
-      showInDialog: true,
-      size: px(style.bevel.size),
-      soften: px(style.bevel.soften),
-      strength: style.bevel.depth,
-      angle: style.bevel.angle,
-      altitude: style.bevel.altitude,
-      direction: style.bevel.direction ?? "up",
-      style:
-        style.bevel.style === "outer"
-          ? "outer bevel"
-          : style.bevel.style === "emboss"
-            ? "emboss"
-            : style.bevel.style === "pillow"
-              ? "pillow emboss"
-              : "inner bevel",
-      highlightColor: parseHexColor(style.bevel.highlight),
-      shadowColor: parseHexColor(style.bevel.shadow),
-      highlightOpacity: style.bevel.highlightOpacity ?? style.bevel.opacity,
-      shadowOpacity: style.bevel.shadowOpacity ?? style.bevel.opacity,
-      highlightBlendMode: appBlendToPsd(style.bevel.highlightBlendMode ?? "screen"),
-      shadowBlendMode: appBlendToPsd(style.bevel.shadowBlendMode ?? "multiply"),
-      useGlobalLight: style.bevel.useGlobalLight ?? false,
-    }
-  }
-  return Object.keys(effects).length > 1 ? effects : undefined
-}
-
-function psdEffectsToLayerStyle(effects: LayerEffectsInfo | undefined): Layer["style"] | undefined {
-  if (!effects) return undefined
-  const dropShadow = effects.dropShadow?.find((effect) => effect.enabled)
-  const innerShadow = effects.innerShadow?.find((effect) => effect.enabled)
-  const stroke = effects.stroke?.find((effect) => effect.enabled)
-  const solidFill = effects.solidFill?.find((effect) => effect.enabled)
-  const gradientOverlay = effects.gradientOverlay?.find((effect) => effect.enabled)
-  const style: NonNullable<Layer["style"]> = {}
-  if (dropShadow) {
-    const distance = dropShadow.distance?.value ?? 0
-    const angle = dropShadow.angle ?? 120
-    style.dropShadow = {
-      enabled: true,
-      color: colorToHex(dropShadow.color, "#000000"),
-      size: dropShadow.size?.value ?? 0,
-      offsetX: Math.cos((angle * Math.PI) / 180) * distance,
-      offsetY: -Math.sin((angle * Math.PI) / 180) * distance,
-      opacity: dropShadow.opacity ?? 0.75,
-      blendMode: psdBlendToApp(dropShadow.blendMode),
-      angle,
-      distance,
-      spread: dropShadow.choke?.value,
-      useGlobalLight: dropShadow.useGlobalLight,
-    }
-  }
-  if (innerShadow) {
-    const distance = innerShadow.distance?.value ?? 0
-    const angle = innerShadow.angle ?? 120
-    style.innerShadow = {
-      enabled: true,
-      color: colorToHex(innerShadow.color, "#000000"),
-      size: innerShadow.size?.value ?? 0,
-      offsetX: Math.cos((angle * Math.PI) / 180) * distance,
-      offsetY: -Math.sin((angle * Math.PI) / 180) * distance,
-      opacity: innerShadow.opacity ?? 0.75,
-      blendMode: psdBlendToApp(innerShadow.blendMode),
-      angle,
-      distance,
-      choke: innerShadow.choke?.value,
-      useGlobalLight: innerShadow.useGlobalLight,
-    }
-  }
-  if (effects.outerGlow?.enabled) {
-    style.outerGlow = {
-      enabled: true,
-      color: colorToHex(effects.outerGlow.color, "#ffffff"),
-      size: effects.outerGlow.size?.value ?? 0,
-      opacity: effects.outerGlow.opacity ?? 0.75,
-      blendMode: psdBlendToApp(effects.outerGlow.blendMode),
-      spread: effects.outerGlow.choke?.value,
-      range: effects.outerGlow.range,
-      noise: effects.outerGlow.noise,
-    }
-  }
-  if (effects.innerGlow?.enabled) {
-    style.innerGlow = {
-      enabled: true,
-      color: colorToHex(effects.innerGlow.color, "#ffffff"),
-      size: effects.innerGlow.size?.value ?? 0,
-      opacity: effects.innerGlow.opacity ?? 0.75,
-      blendMode: psdBlendToApp(effects.innerGlow.blendMode),
-      source: effects.innerGlow.source,
-      choke: effects.innerGlow.choke?.value,
-      range: effects.innerGlow.range,
-      noise: effects.innerGlow.noise,
-    }
-  }
-  if (stroke) {
-    style.stroke = {
-      enabled: true,
-      color: colorToHex(stroke.color, "#000000"),
-      size: stroke.size?.value ?? 1,
-      position: stroke.position ?? "outside",
-      opacity: stroke.opacity,
-      blendMode: psdBlendToApp(stroke.blendMode),
-      fillType: stroke.fillType === "gradient" ? "gradient" : "color",
-    }
-  }
-  if (solidFill) {
-    style.colorOverlay = {
-      enabled: true,
-      color: colorToHex(solidFill.color, "#000000"),
-      opacity: solidFill.opacity ?? 1,
-      blendMode: psdBlendToApp(solidFill.blendMode),
-    }
-  }
-  if (gradientOverlay?.gradient?.type === "solid") {
-    style.gradientOverlay = {
-      enabled: true,
-      opacity: gradientOverlay.opacity ?? 1,
-      blendMode: psdBlendToApp(gradientOverlay.blendMode as PsdBlendMode),
-      gradient: {
-        type: gradientOverlay.type === "angle" ? "angular" : gradientOverlay.type ?? "linear",
-        angle: gradientOverlay.angle ?? 0,
-        stops: gradientOverlay.gradient.colorStops.map((stop, index) => ({
-          offset: Math.max(0, Math.min(1, stop.location / 4096)),
-          color: colorToHex(stop.color, "#000000"),
-          opacity: gradientOverlay.gradient?.type === "solid"
-            ? gradientOverlay.gradient.opacityStops[index]?.opacity ?? 1
-            : 1,
-        })),
-      },
-    }
-  }
-  if (effects.bevel?.enabled) {
-    style.bevel = {
-      enabled: true,
-      style:
-        effects.bevel.style === "outer bevel"
-          ? "outer"
-          : effects.bevel.style === "emboss"
-            ? "emboss"
-            : effects.bevel.style === "pillow emboss"
-              ? "pillow"
-              : "inner",
-      direction: effects.bevel.direction,
-      depth: effects.bevel.strength ?? 100,
-      size: effects.bevel.size?.value ?? 0,
-      soften: effects.bevel.soften?.value ?? 0,
-      angle: effects.bevel.angle ?? 120,
-      altitude: effects.bevel.altitude ?? 30,
-      highlight: colorToHex(effects.bevel.highlightColor, "#ffffff"),
-      shadow: colorToHex(effects.bevel.shadowColor, "#000000"),
-      opacity: Math.max(effects.bevel.highlightOpacity ?? 0, effects.bevel.shadowOpacity ?? 0, 0.75),
-      highlightOpacity: effects.bevel.highlightOpacity,
-      shadowOpacity: effects.bevel.shadowOpacity,
-      highlightBlendMode: psdBlendToApp(effects.bevel.highlightBlendMode),
-      shadowBlendMode: psdBlendToApp(effects.bevel.shadowBlendMode),
-      useGlobalLight: effects.bevel.useGlobalLight,
-    }
-  }
-  return Object.keys(style).length ? style : undefined
-}
 
 export function makeIoCanvas(w: number, h: number, fill?: string) {
   const size = assertCanvasSize(w, h)
@@ -792,6 +598,8 @@ function paramsWithDefaults(filter: NonNullable<ReturnType<typeof getFilter>>, p
       out[param.key] = raw === true
     } else if (param.type === "select") {
       out[param.key] = param.options.some((option) => option.value === raw) ? raw : param.default
+    } else {
+      out[param.key] = typeof raw === "string" ? raw : param.default
     }
   }
   return out
@@ -963,7 +771,7 @@ export function buildRasterExportCanvas(doc: PsDocument, options: RasterExportOp
   return scaled
 }
 
-export function rasterMime(format: Exclude<ExportFormat, "svg">) {
+export function rasterMime(format: BrowserRasterExportFormat) {
   if (format === "jpeg") return "image/jpeg"
   if (format === "webp") return "image/webp"
   if (format === "avif") return "image/avif"
@@ -992,6 +800,88 @@ function bytesToBinary(bytes: number[]) {
     out += String.fromCharCode(...bytes.slice(i, i + 8192))
   }
   return out
+}
+
+function bytesToBase64(bytes: Uint8Array) {
+  let binary = ""
+  for (let i = 0; i < bytes.length; i += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + 8192, bytes.length)))
+  }
+  return btoa(binary)
+}
+
+function dataUrlFromBytes(mime: string, bytes: Uint8Array) {
+  return `data:${mime};base64,${bytesToBase64(bytes)}`
+}
+
+function textDataUrl(mime: string, text: string) {
+  return dataUrlFromBytes(mime, new TextEncoder().encode(text))
+}
+
+function canvasToTgaDataUrl(canvas: HTMLCanvasElement) {
+  const ctx = canvas.getContext("2d")!
+  const img = ctx.getImageData(0, 0, canvas.width, canvas.height)
+  const bytes = new Uint8Array(18 + canvas.width * canvas.height * 4)
+  bytes[2] = 2
+  bytes[12] = canvas.width & 0xff
+  bytes[13] = (canvas.width >> 8) & 0xff
+  bytes[14] = canvas.height & 0xff
+  bytes[15] = (canvas.height >> 8) & 0xff
+  bytes[16] = 32
+  bytes[17] = 0x28
+  let out = 18
+  for (let i = 0; i < img.data.length; i += 4) {
+    bytes[out++] = img.data[i + 2]
+    bytes[out++] = img.data[i + 1]
+    bytes[out++] = img.data[i]
+    bytes[out++] = img.data[i + 3]
+  }
+  return dataUrlFromBytes("image/x-tga", bytes)
+}
+
+function canvasToPnmDataUrl(canvas: HTMLCanvasElement, format: "ppm" | "pgm" | "pbm") {
+  const ctx = canvas.getContext("2d")!
+  const img = ctx.getImageData(0, 0, canvas.width, canvas.height)
+  const header =
+    format === "ppm"
+      ? `P6\n${canvas.width} ${canvas.height}\n255\n`
+      : format === "pgm"
+        ? `P5\n${canvas.width} ${canvas.height}\n255\n`
+        : `P4\n${canvas.width} ${canvas.height}\n`
+  const headerBytes = new TextEncoder().encode(header)
+  const body =
+    format === "ppm"
+      ? new Uint8Array(canvas.width * canvas.height * 3)
+      : format === "pgm"
+        ? new Uint8Array(canvas.width * canvas.height)
+        : new Uint8Array(Math.ceil(canvas.width / 8) * canvas.height)
+
+  if (format === "ppm") {
+    for (let p = 0, i = 0, o = 0; p < canvas.width * canvas.height; p++, i += 4) {
+      body[o++] = img.data[i]
+      body[o++] = img.data[i + 1]
+      body[o++] = img.data[i + 2]
+    }
+  } else if (format === "pgm") {
+    for (let p = 0, i = 0; p < canvas.width * canvas.height; p++, i += 4) {
+      body[p] = Math.round(0.299 * img.data[i] + 0.587 * img.data[i + 1] + 0.114 * img.data[i + 2])
+    }
+  } else {
+    const stride = Math.ceil(canvas.width / 8)
+    for (let y = 0; y < canvas.height; y++) {
+      for (let x = 0; x < canvas.width; x++) {
+        const i = (y * canvas.width + x) * 4
+        const gray = 0.299 * img.data[i] + 0.587 * img.data[i + 1] + 0.114 * img.data[i + 2]
+        if (gray < 128) body[y * stride + (x >> 3)] |= 0x80 >> (x & 7)
+      }
+    }
+  }
+
+  const bytes = new Uint8Array(headerBytes.length + body.length)
+  bytes.set(headerBytes, 0)
+  bytes.set(body, headerBytes.length)
+  const mime = format === "ppm" ? "image/x-portable-pixmap" : format === "pgm" ? "image/x-portable-graymap" : "image/x-portable-bitmap"
+  return dataUrlFromBytes(mime, bytes)
 }
 
 function gifPaletteColor(index: number) {
@@ -1084,12 +974,215 @@ export function canvasToGifDataUrl(canvas: HTMLCanvasElement, transparent: boole
 export function exportRasterDataUrl(doc: PsDocument, options: RasterExportOptions) {
   const canvas = buildRasterExportCanvas(doc, options)
   if (options.format === "gif") return canvasToGifDataUrl(canvas, options.transparent)
+  if (options.format === "tga") return canvasToTgaDataUrl(canvas)
+  if (options.format === "ppm" || options.format === "pgm" || options.format === "pbm") {
+    return canvasToPnmDataUrl(canvas, options.format)
+  }
   const dataUrl = canvas.toDataURL(rasterMime(options.format), options.quality)
   // Inject EXIF metadata into JPEG exports
   if (options.format === "jpeg" && doc.metadata) {
     return injectJpegExif(dataUrl, doc)
   }
   return dataUrl
+}
+
+function dataUrlToBlob(dataUrl: string) {
+  const [header, body = ""] = dataUrl.split(",", 2)
+  const mime = /^data:([^;]+)/i.exec(header)?.[1] ?? "application/octet-stream"
+  const binary = atob(body)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return new Blob([bytes], { type: mime })
+}
+
+function canvasToBlobAsync(canvas: HTMLCanvasElement, format: BrowserRasterExportFormat, quality: number) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob)
+      else reject(new Error("Canvas export returned no blob"))
+    }, rasterMime(format), quality)
+  })
+}
+
+export async function exportRasterBlob(doc: PsDocument, options: RasterExportOptions): Promise<Blob> {
+  if (
+    options.format === "gif" ||
+    options.format === "tga" ||
+    options.format === "ppm" ||
+    options.format === "pgm" ||
+    options.format === "pbm" ||
+    (options.format === "jpeg" && doc.metadata)
+  ) {
+    return dataUrlToBlob(exportRasterDataUrl(doc, options))
+  }
+
+  const needsMatte = options.format === "jpeg" || !options.transparent
+  const base = renderDocumentComposite(doc, {
+    transparent: !needsMatte,
+    matte: options.matte,
+  })
+  const ctx = base.getContext("2d")
+  if (ctx) {
+    try {
+      const image = ctx.getImageData(0, 0, base.width, base.height)
+      return await exportRasterImageDataToBlob(image, options)
+    } catch {
+      // Fall back to the existing synchronous canvas pipeline below.
+    }
+  }
+
+  const canvas = buildRasterExportCanvas(doc, options)
+  return canvasToBlobAsync(canvas, options.format, options.quality)
+}
+
+function documentWithTimelineFrame(doc: PsDocument, frameIndex: number): PsDocument {
+  const frame = doc.timelineFrames?.[frameIndex]
+  if (!frame) return doc
+  return {
+    ...doc,
+    layers: doc.layers.map((layer) => ({
+      ...layer,
+      visible: frame.layerVisibility[layer.id] ?? layer.visible,
+      opacity: frame.layerOpacity?.[layer.id] ?? layer.opacity,
+      fillOpacity: frame.layerFillOpacity?.[layer.id] ?? layer.fillOpacity,
+      blendMode: frame.layerBlend?.[layer.id] ?? layer.blendMode,
+      style: frame.layerStyle?.[layer.id] === null
+        ? undefined
+        : frame.layerStyle?.[layer.id] ?? layer.style,
+    })),
+  }
+}
+
+function animationFrameCanvases(
+  doc: PsDocument,
+  options: Pick<RasterExportOptions, "transparent" | "matte" | "scale">,
+) {
+  const frames = doc.timelineFrames?.length ? doc.timelineFrames : null
+  const count = Math.max(1, frames?.length ?? 1)
+  const canvases: Array<{ name: string; durationMs: number; dataUrl: string }> = []
+  for (let i = 0; i < count; i++) {
+    const frameDoc = documentWithTimelineFrame(doc, i)
+    const canvas = buildRasterExportCanvas(frameDoc, {
+      format: "png",
+      scale: options.scale,
+      quality: 1,
+      transparent: options.transparent,
+      matte: options.matte,
+    })
+    canvases.push({
+      name: frames?.[i]?.name ?? `Frame ${i + 1}`,
+      durationMs: frames?.[i]?.durationMs ?? 100,
+      dataUrl: canvas.toDataURL("image/png"),
+    })
+  }
+  return canvases
+}
+
+/** Exported PNG dataURL sequence helper, used by sidecar/batch tooling. */
+export function timelineFrameSequenceDataUrls(
+  doc: PsDocument,
+  options: Pick<RasterExportOptions, "transparent" | "matte" | "scale">,
+) {
+  return animationFrameCanvases(doc, options)
+}
+
+export async function exportAnimationDataUrl(
+  doc: PsDocument,
+  format: AnimationExportFormat,
+  options: Pick<RasterExportOptions, "transparent" | "matte" | "scale">,
+): Promise<string> {
+  const { collectAnimationFrames, encodeAnimatedGif, encodeApngFromFrames, encodeAnimatedWebP, bytesToDataUrl } = await import("./animation-encoding")
+  const animFrames = collectAnimationFrames(doc, {
+    transparent: options.transparent,
+    matte: options.matte,
+    scale: options.scale,
+  })
+  const loopCount = doc.timelineSettings?.loopCount ?? 0
+  if (format === "gif") {
+    const bytes = encodeAnimatedGif(animFrames, { transparent: options.transparent, loopCount })
+    return bytesToDataUrl(bytes, "image/gif")
+  }
+  if (format === "apng") {
+    const bytes = await encodeApngFromFrames(animFrames, { loopCount })
+    return bytesToDataUrl(bytes, "image/apng")
+  }
+  if (format === "animated-webp") {
+    const bytes = await encodeAnimatedWebP(animFrames, { transparent: options.transparent, loopCount, quality: 0.9 })
+    return bytesToDataUrl(bytes, "image/webp")
+  }
+  // Should not reach here, but as a fallback expose a JSON manifest.
+  const payload = {
+    app: "Photoshop Web",
+    format: "animation-frames",
+    document: { name: doc.name, width: doc.width, height: doc.height },
+    frames: animFrames.map((frame, index) => ({
+      index,
+      durationMs: frame.durationMs,
+      dataUrl: frame.canvas.toDataURL("image/png"),
+    })),
+  }
+  return textDataUrl("application/json", JSON.stringify(payload, null, 2))
+}
+
+export function exportMetadataSidecarDataUrl(doc: PsDocument, report: DocumentReport) {
+  const payload = {
+    app: "Photoshop Web",
+    format: "metadata-sidecar",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    document: {
+      id: doc.id,
+      name: doc.name,
+      width: doc.width,
+      height: doc.height,
+      colorMode: doc.colorMode,
+      bitDepth: doc.bitDepth,
+      dpi: doc.dpi,
+      metadata: doc.metadata,
+      colorManagement: doc.colorManagement,
+      printSettings: doc.printSettings,
+      globalLight: doc.globalLight,
+      channels: (doc.channels ?? []).map((channel) => ({
+        id: channel.id,
+        name: channel.name,
+        kind: channel.kind ?? "alpha",
+        spotColor: channel.spotColor,
+        spotOpacity: channel.spotOpacity,
+      })),
+      layers: doc.layers.map((layer) => {
+        const smartSource = layer.smartSource
+          ? (() => {
+              const { canvas: _canvas, fileHandle: _fileHandle, ...rest } = layer.smartSource!
+              return rest
+            })()
+          : undefined
+        return {
+          id: layer.id,
+          name: layer.name,
+          kind: layer.kind,
+          visible: layer.visible,
+          opacity: layer.opacity,
+          fillOpacity: layer.fillOpacity,
+          blendMode: layer.blendMode,
+          locked: layer.locked,
+          colorLabel: layer.colorLabel,
+          notes: layer.notes,
+          metadata: layer.metadata,
+          smartSource,
+          smartFilters: layer.smartFilters?.map((filter) => {
+            const { mask: _mask, ...rest } = filter
+            return { ...rest, hasMask: !!filter.mask }
+          }),
+        }
+      }),
+      slices: doc.slices,
+      guides: doc.guides,
+      timelineFrames: doc.timelineFrames,
+      variableDataSets: doc.variableDataSets,
+    },
+    report,
+  }
+  return textDataUrl("application/json", JSON.stringify(payload, null, 2))
 }
 
 /* ---- EXIF metadata injection for JPEG ---- */
@@ -1463,6 +1556,9 @@ function serializeChannel(channel: AlphaChannel) {
   return {
     id: channel.id,
     name: channel.name,
+    kind: channel.kind,
+    spotColor: channel.spotColor,
+    spotOpacity: channel.spotOpacity,
     canvasDataUrl: canvasDataUrl(channel.canvas),
   }
 }
@@ -1474,6 +1570,16 @@ function serializeSmartFilter(filter: SmartFilter) {
 
 function serializeLayer(layer: Layer) {
   const { canvas, mask, frame, smartFilters, smartSource, ...rest } = layer
+  const serializedSmartSource = smartSource
+    ? (() => {
+        const { canvas: sourceCanvas, fileHandle: _fileHandle, ...sourceRest } = smartSource
+        return {
+          ...sourceRest,
+          canvasDataUrl: canvasDataUrl(sourceCanvas),
+          canvas: undefined,
+        }
+      })()
+    : undefined
   return {
     ...rest,
     canvasDataUrl: canvasDataUrl(canvas),
@@ -1486,13 +1592,7 @@ function serializeLayer(layer: Layer) {
         }
       : undefined,
     smartFilters: smartFilters?.map(serializeSmartFilter),
-    smartSource: smartSource
-      ? {
-          ...smartSource,
-          canvasDataUrl: canvasDataUrl(smartSource.canvas),
-          canvas: undefined,
-        }
-      : undefined,
+    smartSource: serializedSmartSource,
   }
 }
 
@@ -1564,9 +1664,14 @@ export function createCompatibilityManifest(
   const smartObjectLayers = layers.filter((layer) => layer.kind === "smart-object" || layer.smartObject)
   const smartObjectSources = smartObjectLayers.filter((layer) => layer.smartSource).length
   const linkedSmartObjects = smartObjectLayers.filter((layer) => layer.smartSource?.linkType === "linked").length
+  const smartObjectEditPackages = smartObjectLayers.filter((layer) => layer.smartSource?.editPackage).length
+  const smartObjectFileHandles = smartObjectLayers.filter((layer) => layer.smartSource?.fileHandleName || layer.smartSource?.handlePermission).length
   const adjustmentLayers = layers.filter((layer) => layer.kind === "adjustment").length
   const smartFilters = layers.reduce((sum, layer) => sum + (layer.smartFilters?.length ?? 0), 0)
+  const smartFilterMasks = layers.reduce((sum, layer) => sum + (layer.smartFilters?.filter((filter) => filter.mask || filter.maskEnabled === false).length ?? 0), 0)
   const maskedLayers = layers.filter((layer) => layer.mask || layer.vectorMask).length
+  const layerNotes = layers.reduce((sum, layer) => sum + (layer.notes?.length ?? 0), 0)
+  const layerMetadata = layers.filter((layer) => layer.metadata).length
   const styledLayers = layers.filter((layer) => layer.style).length
   const groupLayers = layers.filter((layer) => layer.kind === "group").length
   const blendModes = [...new Set(layers.map((layer) => layer.blendMode).filter((mode) => mode && mode !== "normal"))]
@@ -1601,14 +1706,14 @@ export function createCompatibilityManifest(
     psd: `${reportPlural(layers.length, "layer")} are mapped to PSD layers where possible; app-only descriptors stay in the preservation report.`,
     "browser-raster": `${reportPlural(layers.length, "layer")} are composited into one pixel surface for browser export.`,
   })
-  if (textLayers) add("Text layers", "preserved", "approximated", "flattened", {
+  if (textLayers) add("Text layers", "preserved", "preserved", "flattened", {
     project: `${reportPlural(textLayers, "editable text layer")} retain typography, OpenType, path, shape, and extrusion metadata.`,
-    psd: "Editable text intent is reported, but PSD export keeps the rendered/text approximation supported by ag-psd.",
+    psd: `${reportPlural(textLayers, "editable text layer")} round-trip through native PSD text engine descriptors; extended properties (variable axes, OpenType features, on-path geometry) ag-psd lacks fields for are appended to the layer name as "__pstext:<base64-json>__" markers, stripped on display and decoded on import.`,
     "browser-raster": "Text is rasterized into the flattened export surface.",
   })
-  if (shapeLayers) add("Shape layers", "preserved", "approximated", "flattened", {
+  if (shapeLayers) add("Shape layers", "preserved", "preserved", "flattened", {
     project: `${reportPlural(shapeLayers, "shape layer")} retain geometry, stroke, fill, radius, and custom-shape metadata.`,
-    psd: "Shape intent and rendered pixels are retained where possible; advanced app geometry is approximated.",
+    psd: `${reportPlural(shapeLayers, "shape layer")} round-trip as vector masks with native fill/stroke descriptors; custom-shape parameters and per-subpath metadata are appended to the layer name as "__psshape:<base64-json>__" and "__pspath:<kind>:<base64-json>__" markers (hidden from the layer label on display, decoded back into the editable shape on import).`,
     "browser-raster": "Vector shape geometry is rasterized into the flattened export surface.",
   })
   if (groupLayers) add("Groups", "preserved", "approximated", "flattened", {
@@ -1626,19 +1731,24 @@ export function createCompatibilityManifest(
     psd: "Layer mask pixels are exported where compatible; vector/app mask metadata is approximated.",
     "browser-raster": "Masks affect the composite only; editable masks are not exported.",
   })
-  if (styledLayers) add("Layer styles", "preserved", "approximated", "flattened", {
+  if (layerNotes || layerMetadata) add("Layer notes and metadata", "preserved", "unsupported", "unsupported", {
+    project: `${reportPlural(layerNotes, "layer note")} and ${reportPlural(layerMetadata, "metadata-bearing layer")} retain searchable app-only annotations, tags, and custom key/value fields.`,
+    psd: "Layer-level notes, tags, and custom key/value metadata are app-only and are reported rather than written as native PSD layer records.",
+    "browser-raster": "Layer-level notes and metadata are editor metadata and are omitted from flattened image exports.",
+  })
+  if (styledLayers) add("Layer styles", "preserved", "preserved", "flattened", {
     project: `${reportPlural(styledLayers, "styled layer")} retain editable effect settings.`,
-    psd: "Supported effects are mapped; unsupported effect controls are reported as approximations.",
+    psd: `${reportPlural(styledLayers, "styled layer")} round-trip native PSD effects (drop/inner shadow, outer/inner glow, bevel, satin, color/gradient/pattern overlay, stroke) with global-light tracking.`,
     "browser-raster": "Layer styles are baked into the exported pixels.",
   })
   if (adjustmentLayers) add("Adjustment layers", "preserved", "approximated", "flattened", {
     project: `${reportPlural(adjustmentLayers, "adjustment layer")} retain non-destructive settings.`,
-    psd: "Adjustment metadata is approximated and the current visual result is preserved.",
+    psd: `${reportPlural(adjustmentLayers, "adjustment layer")} round-trip; 16 types (brightness-contrast, levels, curves, exposure, vibrance, hue-saturation, color-balance, black-white, photo-filter, channel-mixer, color-lookup, invert, posterize, threshold, gradient-map, selective-color) use native ag-psd descriptors. 6 unsupported types (shadows-highlights, hdr-toning, desaturate, match-color, replace-color, equalize) encode params as "__adj:<type>:<base64-of-encodeURIComponent(json)>__" tokens appended to the layer name; the marker is stripped from the visible name and decoded back into the live adjustment on import.`,
     "browser-raster": "Adjustments are baked into the flattened export pixels.",
   })
   if (smartFilters) add("Smart filters", "preserved", "approximated", "flattened", {
-    project: `${reportPlural(smartFilters, "smart filter")} retain filter id, parameters, masks, opacity, and blend mode.`,
-    psd: "Smart-filter stacks are represented by rendered pixels and a report entry.",
+    project: `${reportPlural(smartFilters, "smart filter")} retain filter id, parameters, stack order, masks, opacity, and blend mode${smartFilterMasks ? `, including ${reportPlural(smartFilterMasks, "filter mask state")}` : ""}.`,
+    psd: `${reportPlural(smartFilters, "smart filter")} bake their visual result into the layer pixels for native compatibility; editable filter id, parameters, mask data, opacity, blend mode, and order round-trip only via the companion project (.psd-web) file, not the PSD itself.`,
     "browser-raster": "Smart filters are baked into the flattened export pixels.",
   })
   if (smartObjectLayers.length) add("Smart objects", "preserved", "approximated", "flattened", {
@@ -1647,33 +1757,38 @@ export function createCompatibilityManifest(
     "browser-raster": "Smart objects are flattened to their current rendered pixels.",
   })
   if (smartObjectSources) add("Smart object sources", "preserved", "approximated", "flattened", {
-    project: `${reportPlural(smartObjectSources, "embedded smart source")} retain source canvas, link status, file name, and relink metadata.`,
-    psd: "Source documents are not written as native Photoshop smart-object resources; rendered layers are preserved.",
+    project: `${reportPlural(smartObjectSources, "embedded smart source")} retain source canvas, link status, file name, relink metadata, exported-content timestamps, and edit-package descriptors${smartObjectEditPackages ? ` for ${reportPlural(smartObjectEditPackages, "package")}` : ""}.`,
+    psd: `${reportPlural(smartObjectSources, "embedded smart source")} round-trip via the native PSD placedLayer (PlLd/SoLd) descriptor + linkedFiles array; embedded PNG bytes are capped at 30 MB per source; ids are hashed to GUIDs the writer requires.`,
     "browser-raster": "Source documents are not included in browser raster exports.",
+  })
+  if (smartObjectFileHandles) add("File System Access links", "preserved", "unsupported", "unsupported", {
+    project: `${reportPlural(smartObjectFileHandles, "smart object file handle reference")} retain handle name, permission status, file modified time, and content hash when available; live FileSystemFileHandle objects are intentionally not serialized.`,
+    psd: "Browser File System Access handles cannot be represented in native PSD bytes.",
+    "browser-raster": "Linked source handles are omitted from flattened image exports.",
   })
   if (linkedSmartObjects) add("Linked smart object references", "preserved", "unsupported", "unsupported", {
     project: `${reportPlural(linkedSmartObjects, "linked smart object reference")} retain local path/status metadata.`,
     psd: "Native Photoshop linked smart-object resource records are not authored by the browser exporter.",
     "browser-raster": "Linked source references are omitted from the exported image.",
   })
-  if (doc.channels?.length) add("Alpha and saved channels", "preserved", "approximated", "unsupported", {
+  if (doc.channels?.length) add("Alpha and saved channels", "preserved", "preserved", "unsupported", {
     project: `${reportPlural(doc.channels.length, "saved channel")} retain editable channel pixels.`,
-    psd: "Saved channels are represented in the report and compatible data where possible.",
+    psd: `${reportPlural(doc.channels.length, "saved channel")} round-trip through a hidden marker group; native PSD alphaChannelNames carries the names and spot channels use a [spot:#rrggbb:opacity] naming convention.`,
     "browser-raster": "Extra channels, spot channels, and saved alpha channels are not emitted by browser raster encoders.",
   })
-  if (doc.comps?.length) add("Layer comps", "preserved", "unsupported", "unsupported", {
+  if (doc.comps?.length) add("Layer comps", "preserved", "approximated", "unsupported", {
     project: `${reportPlural(doc.comps.length, "layer comp")} retain appearance snapshots.`,
-    psd: "Layer comp records are app-only metadata and are not authored as native PSD layer comps.",
+    psd: `${reportPlural(doc.comps.length, "layer comp")} export as native PSD layer comps (flags + comment); per-layer state snapshots embed as base64 JSON in the comment for round-trip.`,
     "browser-raster": "Layer comps are not included in flattened image exports.",
   })
   if (doc.guides?.length) add("Guides", "preserved", "unsupported", "unsupported", {
     project: `${reportPlural(doc.guides.length, "guide")} retain orientation, position, and color.`,
-    psd: "Guide metadata is kept in the app report but is not written as native PSD guide resources.",
+    psd: `${reportPlural(doc.guides.length, "guide")} are written to gridAndGuidesInformation but Photoshop discards guides on import from non-native sources.`,
     "browser-raster": "Guides are non-printing editor metadata and are omitted.",
   })
   if (doc.slices?.length) add("Slices", "preserved", "unsupported", "unsupported", {
     project: `${reportPlural(doc.slices.length, "slice")} retain web export regions and selected slice state.`,
-    psd: "Slice metadata is app-only and is not written as native PSD slice resources.",
+    psd: `${reportPlural(doc.slices.length, "slice")} are written through the PSD slices image resource but legacy slice tooling is removed from current Photoshop versions.`,
     "browser-raster": "Slices are not included in single-image browser exports.",
   })
   if (exportPresets) add("Export presets", "preserved", "unsupported", "unsupported", {
@@ -1701,14 +1816,29 @@ export function createCompatibilityManifest(
     psd: "Variable data sets are app-only metadata in this implementation.",
     "browser-raster": "Variable data is omitted from flattened image exports.",
   })
-  if (doc.metadata) add("File metadata", "preserved", "approximated", "unsupported", {
+  if (doc.metadata) add("File metadata", "preserved", "preserved", "unsupported", {
     project: "IPTC-style metadata and local content credentials are serialized.",
-    psd: "Basic document metadata is retained where supported; app credentials remain in the report/project format.",
+    psd: "Document metadata round-trips through the native PSD XMP image resource; IPTC/EXIF blobs are built for sidecar use but not surfaced by ag-psd's public ImageResources type.",
     "browser-raster": "Browser encoders generally do not embed IPTC/XMP/content-credential metadata.",
+  })
+  if (doc.printSettings) add("Print settings", "preserved", "preserved", "unsupported", {
+    project: `${doc.printSettings.paperSize} print setup, marks, bleed, and color-handling metadata retained.`,
+    psd: "Print settings round-trip through the native printScale + printFlags resources; paper size, orientation, and bleed are recovered via an embedded JSON extra payload.",
+    "browser-raster": "Print settings are non-printing editor metadata and are omitted from raster exports.",
+  })
+  if (doc.notes?.length) add("Notes", "preserved", "preserved", "unsupported", {
+    project: `${reportPlural(doc.notes.length, "note")} retain author, text, position, and color metadata.`,
+    psd: `${reportPlural(doc.notes.length, "note")} round-trip through the native PSD annotations records.`,
+    "browser-raster": "Notes are editor metadata and are omitted from raster exports.",
+  })
+  if (doc.dpi || doc.globalLight) add("Resolution and global light", "preserved", "preserved", "approximated", {
+    project: `${doc.dpi ? `${doc.dpi} DPI` : "Default resolution"} and global light (${doc.globalLight?.angle ?? 30}°/${doc.globalLight?.altitude ?? 30}°) are retained.`,
+    psd: "Resolution round-trips through resolutionInfo; global light angle/altitude round-trip through globalAngle/globalAltitude resources and inform layer effects.",
+    "browser-raster": "Resolution is metadata; raster encoders may include a DPI chunk but never global-light data.",
   })
   if (doc.colorManagement || specialMode) add("Color and bit depth", "preserved", "approximated", "approximated", {
     project: `${doc.colorMode}/${doc.bitDepth}-bit intent${profile ? ` with ${profile}` : ""} is retained as document metadata.`,
-    psd: `${doc.colorMode}/${doc.bitDepth}-bit metadata is tracked, but browser preview and many operations run through 8-bit RGBA surfaces.`,
+    psd: `${doc.colorMode}/${doc.bitDepth}-bit metadata round-trips through colorMode/bitsPerChannel; ICC profile bytes round-trip through the iccProfile resource. Browser pixel rendering remains 8-bit RGBA regardless.`,
     "browser-raster": `${doc.colorMode}/${doc.bitDepth}-bit intent is converted through browser 8-bit RGBA export; ICC transforms are not embedded.`,
   })
 
@@ -1735,11 +1865,25 @@ export function createExportLimitationReport(
     items.push({ label, status, detail })
   }
 
+  if (format === "metadata-json") {
+    add("Metadata sidecar", "preserved", "Exports document metadata, color management, print settings, layer descriptors, channels, slices, timeline frames, and compatibility reports as structured JSON.")
+    add("Layer descriptors", "preserved", `${reportPlural(layers, "layer")} are described without baking pixel data into the sidecar.`)
+    if (doc.timelineFrames?.length) add("Timeline frame descriptors", "preserved", `${reportPlural(doc.timelineFrames.length, "timeline frame")} retain names, durations, and transition metadata.`)
+    if (doc.slices?.length) add("Slice descriptors", "preserved", `${reportPlural(doc.slices.length, "slice")} retain web-export bounds and names.`)
+    if (doc.channels?.length) add("Channel descriptors", "preserved", `${reportPlural(doc.channels.length, "channel")} retain channel names and visibility flags.`)
+    const totals = reportTotals(items)
+    return {
+      format,
+      items,
+      summary: `${format.toUpperCase()} export limitations: ${totals.flattened} flattened, ${totals.approximated} approximated, ${totals.unsupported} unsupported.`,
+    }
+  }
+
   add("Layer structure", "flattened", `${reportPlural(layers, "layer")} are composited into the exported ${format.toUpperCase()} result.`)
   if (hasEditableText) add("Editable text", "flattened", "Text remains editable in the project format, but browser image exports contain rasterized glyph pixels.")
   if (hasEditableVectors || format === "svg") {
-    add("Editable vector structure", "flattened", format === "svg"
-      ? "SVG export wraps the rendered document as an image; it does not emit editable Photoshop shape/text vectors."
+    add("Editable vector structure", format === "svg" ? "approximated" : "flattened", format === "svg"
+      ? "SVG export embeds the rendered document for visual reliability and emits simple shape/text layer elements where browser-safe geometry is available."
       : "Shape and vector-mask geometry is baked into browser raster pixels.")
   }
   if (highBitOrNonRgb) {
@@ -1773,6 +1917,26 @@ export function createExportLimitationReport(
     if (doc.timelineFrames?.length) add("Frame animation", "approximated", "Timeline frames can be converted to GIF frames, but advanced video/audio metadata is not retained.")
   } else if (format === "svg") {
     add("SVG image wrapper", "info", "The SVG stores the current rendered document as an embedded raster image for visual round-trip reliability.")
+    add("SVG layer metadata", options.includeMetadata ? "preserved" : "info", options.includeMetadata
+      ? "A compact app metadata block records document dimensions and layer descriptors."
+      : "Enable metadata to include document dimensions and layer descriptors.")
+  } else if (format === "tga") {
+    add("TGA encoder", "preserved", "Exports uncompressed 32-bit top-left TGA pixels with alpha.")
+    add("TGA metadata", "unsupported", "TGA-specific extension areas and developer metadata are not authored.")
+  } else if (format === "ppm" || format === "pgm" || format === "pbm") {
+    add("Portable AnyMap encoder", "preserved", `${format.toUpperCase()} export writes binary browser-generated pixels in the matching Netpbm family format.`)
+    add("Portable AnyMap metadata", "unsupported", "Netpbm comments and original source max-value metadata are not embedded.")
+  } else if (format === "apng") {
+    add("APNG encoder", "preserved", "Exports PNG/APNG chunks with RGBA frames and per-frame delays.")
+    add("Frame animation", "preserved", doc.timelineFrames?.length
+      ? `${reportPlural(doc.timelineFrames.length, "timeline frame")} are encoded as APNG frames.`
+      : "Single-frame APNG export is available when no timeline frames exist.")
+    add("APNG optimization", "approximated", "Frames are stored as full-frame RGBA payloads instead of delta-optimized animation rectangles.")
+  } else if (format === "animated-webp") {
+    add("Animated WebP encoder", "approximated", "Browser Canvas encodes still WebP frames and the app wraps them into a RIFF WebP animation with VP8X, ANIM, and ANMF chunks.")
+    add("Frame animation", doc.timelineFrames?.length ? "preserved" : "info", doc.timelineFrames?.length
+      ? `${reportPlural(doc.timelineFrames.length, "timeline frame")} are encoded as animated WebP frames when the browser static WebP encoder is available.`
+      : "Single-frame animated WebP export is available when no timeline frames exist.")
   }
 
   const totals = reportTotals(items)
@@ -1780,6 +1944,63 @@ export function createExportLimitationReport(
     format,
     items,
     summary: `${format.toUpperCase()} export limitations: ${totals.flattened} flattened, ${totals.approximated} approximated, ${totals.unsupported} unsupported.`,
+  }
+}
+
+export function createExportCompatibilityManifest(
+  doc: PsDocument,
+  options: ExportLimitationOptions,
+): ExportCompatibilityManifest {
+  const limitationReport = createExportLimitationReport(doc, options)
+  const compatibility = createCompatibilityManifest(doc, "browser-raster")
+  const entries = [...compatibility.entries, ...limitationReport.items]
+  const totals = reportTotals(entries)
+  const warnings: string[] = []
+
+  if (options.format === "jpeg" && options.transparent) {
+    warnings.push("JPEG does not preserve transparency; transparent pixels are composited against the matte color.")
+  }
+  if ((options.quality ?? 100) < 70 && ["jpeg", "webp", "avif"].includes(options.format)) {
+    warnings.push(`${options.format.toUpperCase()} quality is below 70; visible compression artifacts are likely.`)
+  }
+  if (options.includeMetadata && options.format !== "svg" && options.format !== "metadata-json") {
+    warnings.push("Browser raster encoders do not reliably embed IPTC, XMP, ICC, or content-credential metadata.")
+  }
+  if (doc.colorMode !== "RGB" || doc.bitDepth > 8) {
+    warnings.push(`${doc.colorMode}/${doc.bitDepth}-bit document intent is converted through an 8-bit browser canvas export path.`)
+  }
+  if (doc.layers.length > 1) {
+    warnings.push(`${doc.layers.length} layers are flattened into a single exported output surface.`)
+  }
+
+  const riskLevel =
+    totals.unsupported > 0 || totals.flattened > 2 || warnings.length >= 3
+      ? "high"
+      : totals.flattened > 0 || totals.approximated > 1 || warnings.length
+        ? "medium"
+        : "low"
+
+  return {
+    app: "Photoshop Web",
+    format: "ps-export-manifest",
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    target: "browser-raster",
+    document: {
+      id: doc.id,
+      name: doc.name,
+      width: doc.width,
+      height: doc.height,
+      colorMode: doc.colorMode,
+      bitDepth: doc.bitDepth,
+      layerCount: doc.layers.length,
+    },
+    export: options,
+    entries,
+    totals,
+    warnings,
+    riskLevel,
+    summary: `${options.format.toUpperCase()} compatibility manifest: ${riskLevel} risk, ${totals.flattened} flattened, ${totals.approximated} approximated, ${totals.unsupported} unsupported.`,
   }
 }
 
@@ -1816,8 +2037,27 @@ export function createDocumentReport(
   const smartObjectSources = smartObjectLayers.filter((layer) => layer.smartSource).length
   const linkedSmartObjects = smartObjectLayers.filter((layer) => layer.smartSource?.linkType === "linked").length
   const missingSmartObjects = smartObjectLayers.filter((layer) => layer.smartSource?.status === "missing").length
+  const smartObjectEditPackages = smartObjectLayers.filter((layer) => layer.smartSource?.editPackage).length
+  const smartObjectFileHandles = smartObjectLayers.filter((layer) => layer.smartSource?.fileHandleName || layer.smartSource?.handlePermission).length
+  const smartFilterMasks = layers.reduce((sum, layer) => sum + (layer.smartFilters?.filter((filter) => filter.mask || filter.maskEnabled === false).length ?? 0), 0)
+  const layerNotes = layers.reduce((sum, layer) => sum + (layer.notes?.length ?? 0), 0)
+  const layerMetadata = layers.filter((layer) => layer.metadata).length
   const exportPresets = (doc.assetLibrary ?? []).filter((asset) => asset.kind === "export").length
   items.push({ label: "Canvas", status: "preserved", detail: `${doc.width} x ${doc.height}px, ${doc.colorMode}, ${doc.bitDepth}-bit metadata retained.` })
+  if (source.includes("PSD") && (doc.bitDepth === 16 || doc.bitDepth === 32)) {
+    items.push({
+      label: "Bit depth",
+      status: "approximated",
+      detail: `Document declares ${doc.bitDepth}-bit/channel but the PSD writer only emits 8-bit/channel; pixel data is written at 8-bit while the original depth is retained in project metadata.`,
+    })
+  }
+  if (source.includes("PSD") && doc.colorMode && doc.colorMode !== "RGB" && doc.colorMode !== "Grayscale" && doc.colorMode !== "Bitmap") {
+    items.push({
+      label: "Color mode",
+      status: "approximated",
+      detail: `Document declares ${doc.colorMode} but the browser canvas renders 8-bit RGBA; PSD export converts pixels via the RGB composite while preserving the original mode flag.`,
+    })
+  }
   for (const capabilityWarning of capabilityWarningsForDocument(doc)) {
     const status =
       capabilityWarning.status === "unsupported"
@@ -1844,37 +2084,48 @@ export function createDocumentReport(
   if (doc.printSettings) items.push({ label: "Print settings", status: "preserved", detail: `${doc.printSettings.paperSize} print setup, marks, bleed, and color-handling metadata retained.` })
   items.push({ label: "Project schema", status: "info", detail: "Project saves use schema version 2 with migration-aware loading and recovery from wrapped JSON text." })
   items.push({ label: "Layers", status: "preserved", detail: `${layers.length} layer records retained with visibility, opacity, blend mode, and lock state.` })
-  if (textLayers) items.push({ label: "Text layers", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${textLayers} editable text layer${textLayers === 1 ? "" : "s"} with app text properties.` })
-  if (shapeLayers) items.push({ label: "Shape layers", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${shapeLayers} shape layer${shapeLayers === 1 ? "" : "s"} retained with available geometry metadata.` })
-  if (groupLayers) items.push({ label: "Groups", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${groupLayers} group layer${groupLayers === 1 ? "" : "s"} retain child relationship metadata; PSD export maps folders where possible and approximates app-only state.` })
+  if (textLayers) items.push({ label: "Text layers", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${textLayers} editable text layer${textLayers === 1 ? "" : "s"} round-trip through the native PSD text engine; extended properties (variable axes, OpenType features, on-path geometry) ride along as a "__pstext:<base64-json>__" suffix on the layer name and are stripped from the display name on import.` })
+  if (shapeLayers) items.push({ label: "Shape layers", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${shapeLayers} shape layer${shapeLayers === 1 ? "" : "s"} round-trip as vector masks with native fill/stroke descriptors; custom-shape parameters and per-subpath metadata are appended as "__psshape:<base64-json>__" and "__pspath:<kind>:<base64-json>__" name markers, hidden on display.` })
+  if (groupLayers) items.push({ label: "Groups", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${groupLayers} group layer${groupLayers === 1 ? "" : "s"} retain child relationship metadata; PSD export maps folders natively.` })
   if (blendModes.length) items.push({ label: "Blend modes", status: source.includes("PSD") ? "approximated" : "preserved", detail: `Non-normal blend modes modeled for round trip: ${blendModes.join(", ")}.` })
   const threeDLayers = layers.filter((layer) => layer.kind === "3d").length
   const videoLayers = layers.filter((layer) => layer.kind === "video").length
   if (threeDLayers) items.push({ label: "3D layers", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${threeDLayers} browser-native 3D scene layer${threeDLayers === 1 ? "" : "s"} retained with mesh, material, light, and camera metadata.` })
   if (videoLayers) items.push({ label: "Video layers", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${videoLayers} video layer${videoLayers === 1 ? "" : "s"} retained with poster frame, timing, keyframe, and audio metadata.` })
   if (maskedLayers) items.push({ label: "Masks", status: "preserved", detail: `${maskedLayers} raster/vector mask entry${maskedLayers === 1 ? "" : "ies"} serialized.` })
-  if (styledLayers) items.push({ label: "Layer styles", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${styledLayers} styled layer${styledLayers === 1 ? "" : "s"} mapped to supported effects.` })
+  if (layerNotes || layerMetadata) items.push({ label: "Layer notes and metadata", status: source.includes("PSD") ? "unsupported" : "preserved", detail: `${layerNotes} layer note${layerNotes === 1 ? "" : "s"} and ${layerMetadata} metadata-bearing layer${layerMetadata === 1 ? "" : "s"} retained as app-only searchable annotations, tags, and custom key/value fields.` })
+  if (styledLayers) items.push({ label: "Layer styles", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${styledLayers} styled layer${styledLayers === 1 ? "" : "s"} round-trip native PSD effects (shadow/glow/bevel/satin/overlays/stroke) with global-light tracking.` })
   if (adjustmentLayers) items.push({
     label: "Adjustment layers",
     status: source.includes("PSD") ? "approximated" : "preserved",
     detail: source.includes("PSD")
-      ? `${adjustmentLayers} non-destructive adjustment layer${adjustmentLayers === 1 ? "" : "s"} reported with settings while the current visual result is preserved for PSD interoperability.`
+      ? `${adjustmentLayers} non-destructive adjustment layer${adjustmentLayers === 1 ? "" : "s"} round-trip the current visual result; 16 types use native ag-psd descriptors. The 6 remaining types (shadows-highlights, hdr-toning, desaturate, match-color, replace-color, equalize) encode their params as a "__adj:<type>:<base64-json>__" suffix on the layer name, which is decoded back on import.`
       : `${adjustmentLayers} non-destructive adjustment layer${adjustmentLayers === 1 ? "" : "s"} retained in project format.`,
   })
-  if (smartFilters) items.push({ label: "Smart filters", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${smartFilters} smart filter${smartFilters === 1 ? "" : "s"} retained in project format; PSD export rasterizes their visual result.` })
-  if (smartObjectSources) items.push({ label: "Smart object sources", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${smartObjectSources} embedded smart source${smartObjectSources === 1 ? "" : "s"} preserved in project format; PSD export stores the rendered layer approximation.` })
-  if (linkedSmartObjects) items.push({ label: "Linked smart objects", status: source.includes("PSD") ? "unsupported" : "info", detail: `${linkedSmartObjects} linked smart object reference${linkedSmartObjects === 1 ? "" : "s"} tracked locally with file name, path, and status metadata; native Photoshop relink resources are not written.` })
+  if (smartFilters) items.push({ label: "Smart filters", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${smartFilters} smart filter${smartFilters === 1 ? "" : "s"} bake their visual result into the layer's exported pixels; editable filter id, parameters, order, masks${smartFilterMasks ? ` (${smartFilterMasks} mask state${smartFilterMasks === 1 ? "" : "s"})` : ""}, opacity, and blend mode survive only in the companion .psd-web project file, not the PSD bytes themselves.` })
+  if (smartObjectSources) items.push({ label: "Smart object sources", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${smartObjectSources} embedded smart source${smartObjectSources === 1 ? "" : "s"} round-trip via the native PSD placedLayer + linkedFiles array (PNG bytes, 30 MB cap), with app project preservation for relink metadata, export timestamps, and ${smartObjectEditPackages} edit package${smartObjectEditPackages === 1 ? "" : "s"}.` })
+  if (smartObjectFileHandles) items.push({ label: "File System Access smart links", status: source.includes("PSD") ? "unsupported" : "preserved", detail: `${smartObjectFileHandles} linked smart object handle reference${smartObjectFileHandles === 1 ? "" : "s"} retain handle name, permission state, content hash, and modified time; live browser FileSystemFileHandle objects are intentionally not serialized.` })
+  if (linkedSmartObjects) items.push({ label: "Linked smart objects", status: source.includes("PSD") ? "unsupported" : "info", detail: `${linkedSmartObjects} linked smart object reference${linkedSmartObjects === 1 ? "" : "s"} round-trip via the linkedFiles "linked" type; the source file is referenced by path rather than embedded.` })
   if (missingSmartObjects) items.push({ label: "Missing smart object links", status: "unsupported", detail: `${missingSmartObjects} smart object link${missingSmartObjects === 1 ? " is" : "s are"} marked missing and require relink before source edits are reliable.` })
-  if (doc.channels?.length) items.push({ label: "Alpha channels", status: "preserved", detail: `${doc.channels.length} saved channel${doc.channels.length === 1 ? "" : "s"} retained.` })
+  if (doc.channels?.length) items.push({ label: "Alpha channels", status: "preserved", detail: `${doc.channels.length} saved channel${doc.channels.length === 1 ? "" : "s"} retained; PSD round-trip stores pixel data in a hidden group whose layer names follow the "[spot:#rrggbb:opacity]" convention for spot channels, and the alphaChannelNames image resource carries the human-readable channel name table.` })
   if (doc.timelineFrames?.length) items.push({ label: "Timeline", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${doc.timelineFrames.length} frame/video timeline entries retained in project format.` })
   if (doc.plugins?.length) items.push({ label: "Plugin descriptors", status: source.includes("PSD") ? "unsupported" : "preserved", detail: `${doc.plugins.length} CEP/UX/8BF-style local plugin descriptor${doc.plugins.length === 1 ? "" : "s"} retained.` })
   if (doc.variableDataSets?.length) items.push({ label: "Variable data", status: source.includes("PSD") ? "unsupported" : "preserved", detail: `${doc.variableDataSets.length} variable data set${doc.variableDataSets.length === 1 ? "" : "s"} retained for data-driven graphics.` })
-  if (doc.comps?.length) items.push({ label: "Layer comps", status: source.includes("PSD") ? "unsupported" : "preserved", detail: `${doc.comps.length} layer comp${doc.comps.length === 1 ? "" : "s"} retained with appearance state snapshots.` })
+  if (doc.comps?.length) items.push({ label: "Layer comps", status: source.includes("PSD") ? "unsupported" : "preserved", detail: `${doc.comps.length} layer comp${doc.comps.length === 1 ? "" : "s"} retained; PSD layer-comp records carry visibility/position/style flags natively, and the full per-layer state snapshot is appended to the comp's comment field as "__ps-web-comp:<base64-json>" — Photoshop displays the comment verbatim, this app strips the prefix and decodes the JSON back into a comp on import.` })
   if (exportPresets) items.push({ label: "Export presets", status: source.includes("PSD") ? "unsupported" : "preserved", detail: `${exportPresets} reusable export preset${exportPresets === 1 ? "" : "s"} retained in the asset library.` })
-  if (doc.guides?.length) items.push({ label: "Guides", status: source.includes("PSD") ? "unsupported" : "preserved", detail: `${doc.guides.length} guide${doc.guides.length === 1 ? "" : "s"} retained for layout alignment.` })
-  if (doc.slices?.length) items.push({ label: "Slices", status: source.includes("PSD") ? "unsupported" : "preserved", detail: `${doc.slices.length} web export slice${doc.slices.length === 1 ? "" : "s"} retained in project format.` })
+  if (doc.guides?.length) items.push({ label: "Guides", status: source.includes("PSD") ? "unsupported" : "preserved", detail: `${doc.guides.length} guide${doc.guides.length === 1 ? "" : "s"} round-trip through the native gridAndGuidesInformation resource.` })
+  if (doc.slices?.length) items.push({ label: "Slices", status: source.includes("PSD") ? "unsupported" : "preserved", detail: `${doc.slices.length} web export slice${doc.slices.length === 1 ? "" : "s"} round-trip through the native PSD slices resource.` })
+  if (doc.notes?.length) items.push({ label: "Notes", status: "preserved", detail: `${doc.notes.length} note${doc.notes.length === 1 ? "" : "s"} round-trip through the native PSD annotations records.` })
   if (source.includes("PSD")) {
     items.push({ label: "PSD interoperability boundary", status: "approximated", detail: "3D, video, plugin, cloud library, and vendor metadata are preserved in the app project format; PSD import/export keeps a raster-compatible approximation." })
+    const clipWarnings = validateClippingGroup(layers).warnings
+    if (clipWarnings.length) {
+      items.push({
+        label: "Clipping groups",
+        status: "info",
+        detail: `${clipWarnings.length} clipping warning${clipWarnings.length === 1 ? "" : "s"}: ${clipWarnings.slice(0, 3).join("; ")}${clipWarnings.length > 3 ? "; ..." : ""}`,
+      })
+    }
   }
   return {
     id: `report_${Math.random().toString(36).slice(2, 9)}`,
@@ -2015,6 +2266,9 @@ export async function deserializeProject(text: string): Promise<PsDocument> {
     channelEntries.map(async (ch) => ({
       id: cleanText(ch.id, uid("channel"), 80),
       name: cleanText(ch.name, "Alpha"),
+      kind: ch.kind === "spot" ? "spot" as const : "alpha" as const,
+      spotColor: typeof ch.spotColor === "string" ? cleanText(ch.spotColor, "#ff00ff", 20) : undefined,
+      spotOpacity: typeof ch.spotOpacity === "number" ? Math.max(0, Math.min(100, ch.spotOpacity)) : undefined,
       canvas: await canvasFromDataUrl(ch.canvasDataUrl as string | undefined, width, height),
     })),
   )
@@ -2156,6 +2410,7 @@ export async function deserializeProject(text: string): Promise<PsDocument> {
     assetLibrary: safeJsonArray<NonNullable<PsDocument["assetLibrary"]>[number]>(source.assetLibrary),
     timelineFrames: safeJsonArray<NonNullable<PsDocument["timelineFrames"]>[number]>(source.timelineFrames),
     plugins: safeJsonArray<NonNullable<PsDocument["plugins"]>[number]>(source.plugins),
+    pluginStorage: safeJsonObject<NonNullable<PsDocument["pluginStorage"]>>(source.pluginStorage),
     variableDataSets: safeJsonArray<NonNullable<PsDocument["variableDataSets"]>[number]>(source.variableDataSets),
     modeSettings: safeJsonObject<DocumentModeSettings>(source.modeSettings),
     // reports are generated at runtime (createDocumentReport); we never
@@ -2176,6 +2431,7 @@ function flattenPsdChildren(children: PsdLayer[] | undefined, docW: number, docH
   const layers: Layer[] = []
   const directIds: string[] = []
   for (const child of [...(children ?? [])].reverse()) {
+    if (isAlphaChannelMarkerLayer(child)) continue
     const isGroup = Array.isArray(child.children)
     if (isGroup) {
       const groupId = uid("group")
@@ -2183,7 +2439,7 @@ function flattenPsdChildren(children: PsdLayer[] | undefined, docW: number, docH
       layers.push(...nested.layers)
       const group: Layer = {
         id: groupId,
-        name: cleanText(child.name, "Group", MAX_LAYER_NAME_LENGTH),
+        name: cleanText(stripMarkers(child.name ?? "") || child.name, "Group", MAX_LAYER_NAME_LENGTH),
         kind: "group",
         visible: !child.hidden,
         locked: !!child.protected?.composite,
@@ -2199,6 +2455,8 @@ function flattenPsdChildren(children: PsdLayer[] | undefined, docW: number, docH
         expanded: child.opened !== false,
         colorLabel: child.layerColor,
       }
+      const groupAdvancedBlending = psdToAppAdvancedBlending(child)
+      if (groupAdvancedBlending) group.advancedBlending = groupAdvancedBlending
       layers.push(group)
       directIds.push(groupId)
       continue
@@ -2208,13 +2466,27 @@ function flattenPsdChildren(children: PsdLayer[] | undefined, docW: number, docH
     const sourceCanvas = child.canvas
     const left = Math.round(child.left ?? 0)
     const top = Math.round(child.top ?? 0)
-    const mask = child.mask?.canvas
-      ? canvasAtDocumentSize(child.mask.canvas, docW, docH, child.mask.left ?? 0, child.mask.top ?? 0)
-      : null
+
+    const adjustment = psdLayerToAppAdjustment(child)
+    const shape = adjustment ? null : psdShapeToApp(child) ?? decodeShapeMarker(child.name ?? "")
+    const text = adjustment || shape ? null : (child.text ? psdTextToApp(child.text, left, top) : null)
+
+    const maskInfo = child.mask ? psdLayerMaskToApp(child.mask, docW, docH) : null
+    const vectorMaskPath = child.vectorMask ? psdVectorMaskOnLayerToApp(child.vectorMask) : null
+    const layerKind: Layer["kind"] = adjustment
+      ? "adjustment"
+      : shape
+        ? "shape"
+        : text
+          ? "text"
+          : vectorMaskPath
+            ? "shape"
+            : "raster"
+
     const layer: Layer = {
       id: layerId,
-      name: cleanText(child.name, "Layer", MAX_LAYER_NAME_LENGTH),
-      kind: child.text ? "text" : child.vectorMask || child.vectorFill ? "shape" : "raster",
+      name: cleanText(stripMarkers(child.name ?? "") || child.name, "Layer", MAX_LAYER_NAME_LENGTH),
+      kind: layerKind,
       visible: !child.hidden,
       locked: !!child.protected?.composite,
       lockTransparency: !!(child.transparencyProtected || child.protected?.transparency),
@@ -2225,25 +2497,21 @@ function flattenPsdChildren(children: PsdLayer[] | undefined, docW: number, docH
       blendMode: psdBlendToApp(child.blendMode),
       linkGroupId: child.linkGroup ? String(child.linkGroup) : undefined,
       canvas: canvasAtDocumentSize(sourceCanvas, docW, docH, left, top),
-      mask,
+      mask: maskInfo?.mask ?? null,
       clipped: child.clipping,
       parentId,
-      text: child.text
-        ? {
-            content: child.text.text ?? "",
-            font: child.text.style?.font?.name ?? "Arial",
-            size: child.text.style?.fontSize ?? 24,
-            weight: child.text.style?.fauxBold ? "bold" : "normal",
-            italic: !!child.text.style?.fauxItalic,
-            color: colorToHex(child.text.style?.fillColor, "#000000"),
-            align: child.text.paragraphStyle?.justification === "right" ? "right" : child.text.paragraphStyle?.justification === "center" ? "center" : "left",
-            x: child.text.left ?? left,
-            y: child.text.top ?? top,
-          }
-        : undefined,
+      text: text ?? undefined,
+      shape: shape ?? undefined,
+      vectorMask: vectorMaskPath ?? undefined,
+      adjustment: adjustment ?? undefined,
       style: psdEffectsToLayerStyle(child.effects),
       colorLabel: child.layerColor,
     }
+    if (maskInfo && !maskInfo.maskEnabled) layer.maskEnabled = false
+    const advancedBlending = psdToAppAdvancedBlending(child)
+    if (advancedBlending) layer.advancedBlending = advancedBlending
+    const smartFilters = psdToAppSmartFilters(child)
+    if (smartFilters && smartFilters.length) layer.smartFilters = smartFilters
     layers.push(layer)
     directIds.push(layerId)
   }
@@ -2284,10 +2552,56 @@ export async function deserializePsdFile(file: File): Promise<PsDocument> {
         blendMode: "normal" as const,
         canvas: canvasAtDocumentSize(psd.canvas, width, height),
       }]
+
+  // Async smart-object decoding pass — read any embedded linked-file
+  // PNG bytes back into HTMLCanvasElement sources.
+  const linkedFilesById = new Map<string, NonNullable<Psd["linkedFiles"]>[number]>()
+  for (const linked of (psd as Psd & { linkedFiles?: NonNullable<Psd["linkedFiles"]> }).linkedFiles ?? []) {
+    if (linked?.id) linkedFilesById.set(linked.id, linked)
+  }
+  const layerNodes = collectPsdLayerNodes(psd.children)
+  for (const layer of layers) {
+    if (layer.kind !== "smart-object" && layer.kind !== "raster") continue
+    const node = layerNodes.shift()
+    if (!node) break
+    if (!(node as PsdLayer & { placedLayer?: unknown }).placedLayer) continue
+    const smartSource = await psdSmartObjectToAppLayer(node, width, height, linkedFilesById)
+    if (smartSource) {
+      layer.smartSource = smartSource
+      layer.smartObject = true
+      layer.kind = "smart-object"
+    }
+  }
+
+  const colorModeData = psdColorModeData(psd)
+  const colorModeResult = psdColorModeToApp(psd.colorMode ?? 3, colorModeData ?? undefined)
+  const bitDepth = psdBitDepthToApp(
+    psd.bitsPerChannel as 1 | 8 | 16 | 32 | undefined,
+    psd.colorMode ?? 3,
+  )
+  const iccExtraction = extractIccProfile(psd)
+  const docMetadata = psdMetadataToApp(psd)
+  const docGuides = psdGuidesToApp(psd.imageResources?.gridAndGuidesInformation?.guides)
+  const docSlices = psdSlicesToApp(
+    (psd.imageResources as ImageResources & { slices?: unknown })?.slices as
+      | Parameters<typeof psdSlicesToApp>[0]
+      | undefined,
+  )
+  const docComps = psdLayerCompsToApp(
+    psd.imageResources?.layerComps as Parameters<typeof psdLayerCompsToApp>[0],
+    layers,
+  )
+  const docNotes = psdNotesToApp(psd)
+  const docPrint = psdPrintSettingsToApp(psd)
+  const docGlobalLight = psdGlobalLightToApp(psd) ?? { angle: 120, altitude: 30 }
+  const docDpi = psdResolutionToApp(psd.imageResources?.resolutionInfo)
+  const alphaChannels = await psdAlphaChannelsToApp(psd, width, height)
+  const storedPaths = psdResourceToAppPaths(psd)
+
   const activeLayerId = [...layers].reverse().find((layer) => layer.kind !== "group")?.id ?? layers[layers.length - 1].id
-  return {
+  const doc: PsDocument = {
     id: uid("doc"),
-    name: file.name.replace(/\.psd$/i, ""),
+    name: file.name.replace(/\.(?:psd|psb)$/i, ""),
     width,
     height,
     zoom: 1,
@@ -2295,11 +2609,12 @@ export async function deserializePsdFile(file: File): Promise<PsDocument> {
     activeLayerId,
     selectedLayerIds: [activeLayerId],
     background: "#ffffff",
-    colorMode: psd.colorMode === 4 ? "CMYK" : psd.colorMode === 1 ? "Grayscale" : "RGB",
-    bitDepth: (psd.bitsPerChannel === 16 || psd.bitsPerChannel === 32 ? psd.bitsPerChannel : 8) as 8 | 16 | 32,
+    colorMode: colorModeResult.colorMode,
+    modeSettings: colorModeResult.modeSettings,
+    bitDepth,
     selection: { bounds: null, shape: "rect" },
     rotation: 0,
-    guides: [],
+    guides: docGuides,
     showGrid: false,
     showSmartGuides: true,
     gridSize: 50,
@@ -2314,9 +2629,104 @@ export async function deserializePsdFile(file: File): Promise<PsDocument> {
     gridSubdivisions: 1,
     gridOpacity: 0.42,
     showPixelGrid: false,
-    slices: [],
-    globalLight: { angle: 120, altitude: 30 },
+    slices: docSlices,
+    globalLight: docGlobalLight,
+    notes: docNotes.length ? docNotes : undefined,
+    channels: alphaChannels.length ? alphaChannels : undefined,
+    comps: docComps.length ? docComps : undefined,
+    metadata: hasMeaningfulMetadata(docMetadata) ? docMetadata : undefined,
+    printSettings: docPrint,
+    dpi: docDpi,
   }
+  if (iccExtraction) {
+    const profileName = iccExtraction.profileName
+    const isCmyk = doc.colorMode === "CMYK"
+    const isGray = doc.colorMode === "Grayscale"
+    const assignedProfile = mapIccNameToAssignedProfileLoose(profileName, doc.colorMode)
+    type ColorMgmt = NonNullable<PsDocument["colorManagement"]>
+    const workingSpace: ColorMgmt["workingSpace"] = isCmyk
+      ? "Working CMYK"
+      : assignedProfile === "Working CMYK" || assignedProfile === "Dot Gain 20%" || assignedProfile === "Gray Gamma 2.2"
+        ? "sRGB IEC61966-2.1"
+        : (assignedProfile as ColorMgmt["workingSpace"])
+    doc.colorManagement = {
+      assignedProfile,
+      workingSpace,
+      renderingIntent: "perceptual",
+      blackPointCompensation: true,
+      proofProfile: isCmyk ? "Working CMYK" : isGray ? "Dot Gain 20%" : "None",
+      proofColors: false,
+      gamutWarning: false,
+    } satisfies ColorMgmt
+  }
+  if (storedPaths.length) {
+    const pathLayers = storedPaths.map((entry) => ({
+      id: uid("path"),
+      name: entry.name,
+      kind: "shape" as const,
+      visible: false,
+      locked: false,
+      opacity: 1,
+      blendMode: "normal" as const,
+      canvas: makeIoCanvas(width, height),
+      path: entry.path,
+    }))
+    // Stored document paths are surfaced as hidden shape layers so the
+    // app's Paths panel can re-attach them; mirroring Photoshop's "Paths"
+    // resource into editable surfaces.
+    doc.layers = [...pathLayers, ...doc.layers]
+  }
+  return doc
+}
+
+function collectPsdLayerNodes(children: PsdLayer[] | undefined): PsdLayer[] {
+  const out: PsdLayer[] = []
+  const walk = (list: PsdLayer[] | undefined) => {
+    for (const child of (list ?? [])) {
+      if (Array.isArray(child.children)) walk(child.children)
+      else out.push(child)
+    }
+  }
+  walk(children)
+  return out
+}
+
+type AssignedProfile = NonNullable<PsDocument["colorManagement"]>["assignedProfile"]
+
+function mapIccNameToAssignedProfileLoose(
+  raw: string | undefined,
+  colorMode: PsDocument["colorMode"],
+): AssignedProfile {
+  if (raw) {
+    const lower = raw.toLowerCase()
+    if (lower.includes("display p3") || lower.includes("displayp3")) return "Display P3"
+    if (lower.includes("prophoto") || lower.includes("pro photo")) return "ProPhoto RGB"
+    if (lower.includes("adobe rgb") || lower.includes("adobergb")) return "Adobe RGB (1998)"
+    if (lower.includes("srgb")) return "sRGB IEC61966-2.1"
+    if (lower.includes("dot gain") || lower.includes("dotgain")) return "Dot Gain 20%"
+    if (lower.includes("gray gamma") || lower.includes("graygamma")) return "Gray Gamma 2.2"
+    if (lower.includes("cmyk") || lower.includes("swop") || lower.includes("coated")) return "Working CMYK"
+  }
+  if (colorMode === "CMYK") return "Working CMYK"
+  if (colorMode === "Grayscale") return "Dot Gain 20%"
+  return "sRGB IEC61966-2.1"
+}
+
+function hasMeaningfulMetadata(m: ReturnType<typeof psdMetadataToApp>): boolean {
+  if (!m) return false
+  const fields: Array<keyof typeof m> = [
+    "title",
+    "author",
+    "description",
+    "copyright",
+    "credit",
+    "source",
+    "createdAt",
+    "modifiedAt",
+  ]
+  if (fields.some((f) => typeof m[f] === "string" && (m[f] as string).length > 0)) return true
+  if (Array.isArray(m.keywords) && m.keywords.length > 0) return true
+  return false
 }
 
 function psdChildrenFromLayers(doc: PsDocument, parentId?: string): PsdLayer[] {
@@ -2327,80 +2737,155 @@ function psdChildrenFromLayers(doc: PsDocument, parentId?: string): PsdLayer[] {
       composite: !!(layer.lockDraw || layer.lockAll || layer.locked),
       position: !!(layer.lockMove || layer.lockAll),
     }
+    const adjustmentExtras = layer.kind === "adjustment" ? appAdjustmentToPsdLayer(layer) : {}
+    const advancedBlendExtras = appAdvancedBlendingToPsd(layer)
+    const clippingExtras = appClippingToPsd(layer)
+    const smartObjectExtras = layer.kind === "smart-object" && layer.smartSource
+      ? appSmartObjectToPsdLayer(layer)
+      : null
+    const smartFilterExtras = appSmartFiltersToPsd(
+      layer,
+      (source) => cloneIoCanvas(source) ?? source,
+    )
+
+    const layerName = (adjustmentExtras as { name?: string }).name ?? layer.name
     const base: PsdLayer = {
-      name: layer.name,
+      name: layerName,
       hidden: !layer.visible,
       opacity: layer.opacity,
       blendMode: appBlendToPsd(layer.kind === "group" ? "normal" : layer.blendMode),
       layerColor: (layer.colorLabel ?? "none") as LayerColor,
       transparencyProtected: !!layer.lockTransparency,
       protected: protectedState,
-      clipping: !!layer.clipped,
+      clipping: clippingExtras.clipping,
       linkGroup: layer.linkGroupId ? Number.parseInt(layer.linkGroupId, 10) || undefined : undefined,
-      effects: layerStyleToPsdEffects(layer.style),
+      effects: layerStyleToPsdEffects(layer.style, doc.globalLight),
     }
     if (layer.kind === "group") {
       return {
         ...base,
+        ...advancedBlendExtras,
         opened: layer.expanded !== false,
         children: psdChildrenFromLayers(doc, layer.id),
       }
     }
-    return {
+
+    const sourceCanvas =
+      (smartFilterExtras?.rastered as HTMLCanvasElement | undefined) ?? layer.canvas
+    const baseCanvas = cloneIoCanvas(sourceCanvas) ?? makeIoCanvas(doc.width, doc.height)
+    const mask = appLayerMaskToPsd(layer, doc.width, doc.height)
+    const vectorMask = layer.vectorMask
+      ? appVectorMaskOnLayerToPsd(layer.vectorMask, doc.width, doc.height)
+      : undefined
+    const textPayload = layer.text ? appTextToPsd(layer.text, 0, 0) : null
+    const shapePayload = layer.shape ? appShapeToPsd(layer.shape, doc.width, doc.height) : null
+    const additionalLayerInfo: Record<string, unknown> = {
+      ...(smartFilterExtras?.additionalInfo ?? {}),
+    }
+    const out: PsdLayer = {
       ...base,
+      ...advancedBlendExtras,
+      ...adjustmentExtras,
+      ...(textPayload ?? {}),
       top: 0,
       left: 0,
       bottom: doc.height,
       right: doc.width,
-      canvas: cloneIoCanvas(layer.canvas) ?? makeIoCanvas(doc.width, doc.height),
-      mask: layer.mask
-        ? {
-            top: 0,
-            left: 0,
-            bottom: doc.height,
-            right: doc.width,
-            defaultColor: 0,
-            canvas: cloneIoCanvas(layer.mask) ?? undefined,
-          }
-        : undefined,
-      text: layer.text
-        ? {
-            text: layer.text.content,
-            top: layer.text.y,
-            left: layer.text.x,
-            bottom: layer.text.y + layer.text.size * 1.4,
-            right: layer.text.x + layer.text.content.length * layer.text.size * 0.6,
-            style: {
-              font: { name: layer.text.font },
-              fontSize: layer.text.size,
-              fillColor: parseHexColor(layer.text.color),
-              fauxBold: layer.text.weight === "bold",
-              fauxItalic: layer.text.italic,
-            },
-            paragraphStyle: { justification: layer.text.align },
-          }
-        : undefined,
+      canvas: baseCanvas,
+      mask,
     }
+    if (vectorMask) (out as PsdLayer).vectorMask = vectorMask
+    else if (shapePayload?.vectorMask) (out as PsdLayer).vectorMask = shapePayload.vectorMask
+    if (shapePayload?.vectorStroke) {
+      (out as PsdLayer).vectorStroke = shapePayload.vectorStroke
+    }
+    if (shapePayload?.vectorFill) {
+      ;(out as PsdLayer & { vectorFill?: unknown }).vectorFill = shapePayload.vectorFill
+    }
+    if (shapePayload?.markerName) out.name = shapePayload.markerName
+    if (smartObjectExtras?.placedLayer) {
+      ;(out as PsdLayer & { placedLayer?: unknown }).placedLayer = smartObjectExtras.placedLayer
+    }
+    if (Object.keys(additionalLayerInfo).length) {
+      ;(out as PsdLayer & { additionalLayerInfo?: Record<string, unknown> }).additionalLayerInfo = additionalLayerInfo
+    }
+    return out
   })
 }
 
-export async function serializePsd(doc: PsDocument): Promise<Blob> {
+export async function serializePsd(doc: PsDocument, options: { psb?: boolean } = {}): Promise<Blob> {
+  const colorModeExport = appColorModeToPsd(doc)
+  const bitsPerChannel = appBitDepthToPsd(doc)
+  const children = psdChildrenFromLayers(doc)
+
+  // Prepend the saved-alpha-channel marker group so per-channel pixel
+  // data survives a vanilla ag-psd write/read cycle (ag-psd does not
+  // expose `Psd.channels` as a pixel array).
+  const alphaMarkerGroup = appAlphaChannelsToMarkerLayers(doc)
+  if (alphaMarkerGroup) children.unshift(alphaMarkerGroup)
+
+  const alphaChannelInfo = appAlphaChannelsToPsd(doc)
+  const guides = appGuidesToPsd(doc.guides)
+  const slices = appSlicesToPsd(doc.slices, doc.width, doc.height)
+  const layerComps = appLayerCompsToPsd(doc.comps)
+  const metadataResources = appMetadataToPsdResources(doc.metadata)
+  const printResources = appPrintSettingsToPsdResources(doc.printSettings)
+  const resolutionInfo = appResolutionToPsd(doc)
+  const globalLightResources = appGlobalLightToPsdResources(doc.globalLight)
+  const annotations = appNotesToPsd(doc.notes)
+  const documentPathResources = appPathsToPsdResources(doc.layers)
+
+  const imageResources: ImageResources = {
+    resolutionInfo,
+    ...(guides && guides.length ? { gridAndGuidesInformation: { guides } } : {}),
+    ...(alphaChannelInfo.channelNames?.length
+      ? { alphaChannelNames: alphaChannelInfo.channelNames }
+      : {}),
+    ...(metadataResources.xmpMetadata ? { xmpMetadata: metadataResources.xmpMetadata } : {}),
+    ...(globalLightResources ?? {}),
+    ...(printResources ?? {}),
+    ...(slices ? { slices } : {}),
+    ...(layerComps ? { layerComps } : {}),
+  }
+
+  // Document path resources are encoded as a marker token attached to the
+  // PSD's top-level name (see psdResourceToAppPaths). ag-psd doesn't expose
+  // 0x07D0+ path image resources directly through `imageResources`.
+  const pathMarkerName = documentPathResources?.markerName
+
   const psd: Psd = {
     width: doc.width,
     height: doc.height,
-    channels: 4,
-    bitsPerChannel: 8,
-    colorMode: doc.colorMode === "CMYK" ? 4 : doc.colorMode === "Grayscale" ? 1 : 3,
+    channels: doc.colorMode === "CMYK" ? 4 : doc.colorMode === "Grayscale" ? 2 : 4,
+    bitsPerChannel,
+    colorMode: colorModeExport.colorMode,
     canvas: renderDocumentComposite(doc, { transparent: true }),
-    children: psdChildrenFromLayers(doc),
+    children,
+    imageResources,
+    ...(annotations.length ? { annotations } : {}),
+    ...(pathMarkerName ? { name: pathMarkerName } : {}),
   }
+
+  if (colorModeExport.palette) {
+    ;(psd as Psd & { palette?: unknown }).palette = colorModeExport.palette
+  }
+
+  // Apply ICC profile bytes into the imageResources (or stash as side-band
+  // metadata when ag-psd's writer can't emit the iccProfile field).
+  applyIccProfileToPsd(doc, psd)
+
   const { writePsd } = await loadPsdCodec()
   const buffer = writePsd(psd, {
     generateThumbnail: false,
     noBackground: true,
     trimImageData: true,
+    psb: options.psb,
   })
   return new Blob([buffer], { type: "image/vnd.adobe.photoshop" })
+}
+
+export async function serializePsb(doc: PsDocument): Promise<Blob> {
+  return serializePsd(doc, { psb: true })
 }
 
 export async function loadImageFromFile(file: File): Promise<HTMLImageElement> {
@@ -2457,7 +2942,7 @@ export async function showSaveProjectPicker(suggestedName = "project.psproj"): P
         },
         {
           description: "PSD File",
-          accept: { "image/vnd.adobe.photoshop": [".psd"] },
+          accept: { "image/vnd.adobe.photoshop": [".psd", ".psb"] },
         },
       ],
     })

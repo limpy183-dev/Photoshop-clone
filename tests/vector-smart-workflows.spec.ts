@@ -2,9 +2,13 @@ import { expect, test } from "@playwright/test"
 
 import {
   addAnchorPointToPath,
+  applyShapeBooleanOperation,
+  createDefaultShapeAppearance,
   convertAnchorPoint,
   deleteNearestAnchorPoint,
   exportPathToSvgPath,
+  movePathHandle,
+  normalizeCornerRadii,
   shapeToEditablePath,
 } from "../components/photoshop/vector-path-operations"
 import {
@@ -14,7 +18,7 @@ import {
   reorderSmartFilters,
   saveSmartObjectEditDocumentBack,
 } from "../components/photoshop/smart-objects"
-import type { SmartFilter } from "../components/photoshop/types"
+import type { ShapeProps, SmartFilter } from "../components/photoshop/types"
 import { installFixtureDom, richFixtureDocument } from "./photoshop-fixtures"
 
 class TestImageData {
@@ -59,6 +63,72 @@ test("shape conversion creates editable path points for rounded rectangles and p
   expect(rounded.closed).toBe(true)
   expect(rounded.points.some((point) => point.cp1 || point.cp2)).toBe(true)
   expect(triangle.points).toHaveLength(3)
+})
+
+test("per-corner rectangle radii and star controls create editable geometry", () => {
+  const rounded: ShapeProps = {
+    type: "rect",
+    x: 10,
+    y: 20,
+    w: 120,
+    h: 80,
+    fill: "#ffffff",
+    stroke: null,
+    cornerRadii: [6, 18, 30, 42],
+  }
+  const star: ShapeProps = {
+    type: "star",
+    x: 0,
+    y: 0,
+    w: 100,
+    h: 100,
+    fill: "#ffffff",
+    stroke: null,
+    starPoints: 7,
+    innerRadiusRatio: 0.32,
+    rotation: 15,
+  }
+
+  expect(normalizeCornerRadii(rounded)).toEqual([6, 18, 30, 40])
+  expect(shapeToEditablePath(rounded).points.some((point) => point.cp1 || point.cp2)).toBe(true)
+  expect(shapeToEditablePath(star).points).toHaveLength(14)
+  expect(shapeToEditablePath(star).points[0].x).not.toBe(50)
+})
+
+test("boolean shape operations remain editable and appearance stacks preserve paint order", () => {
+  const base: ShapeProps = { type: "rect", x: 10, y: 10, w: 100, h: 80, fill: "#112233", stroke: { color: "#ffffff", width: 2 } }
+  const operand: ShapeProps = { type: "ellipse", x: 40, y: 20, w: 70, h: 70, fill: "#ff0000", stroke: null }
+  const combined = applyShapeBooleanOperation(base, operand, "subtract")
+  const appearance = createDefaultShapeAppearance({
+    ...combined,
+    appearance: {
+      fills: [
+        { id: "fill-shadow", enabled: true, color: "#000000", opacity: 0.35 },
+        { id: "fill-main", enabled: true, color: "#44aaee", opacity: 1 },
+      ],
+      strokes: [
+        { id: "stroke-inner", enabled: true, color: "#ffffff", width: 2, opacity: 1, alignment: "inside" },
+        { id: "stroke-outer", enabled: true, color: "#111111", width: 6, opacity: 0.6, alignment: "outside" },
+      ],
+    },
+  })
+
+  expect(combined.components).toHaveLength(2)
+  expect(combined.components?.[1].operation).toBe("subtract")
+  expect(shapeToEditablePath(combined).subpaths).toHaveLength(2)
+  expect(appearance.fills.map((fill) => fill.id)).toEqual(["fill-shadow", "fill-main"])
+  expect(appearance.strokes.map((stroke) => stroke.alignment)).toEqual(["inside", "outside"])
+})
+
+test("path handle editing moves incoming and outgoing handles without losing anchor data", () => {
+  const smooth = convertAnchorPoint({ closed: false, points: [{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 100, y: 0 }] }, 1).path
+  const movedIncoming = movePathHandle(smooth, 1, "in", { x: 35, y: -20 }, { mirror: true })
+  const movedOutgoing = movePathHandle(movedIncoming, 1, "out", { x: 70, y: 25 }, { mirror: false })
+
+  expect(movedIncoming.points[1].cp1).toEqual({ x: 35, y: -20 })
+  expect(movedIncoming.points[1].cp2).toEqual({ x: 65, y: 20 })
+  expect(movedOutgoing.points[1]).toMatchObject({ x: 50, y: 0, cp2: { x: 70, y: 25 } })
+  expect(movedOutgoing.points[1].cp1).toEqual({ x: 35, y: -20 })
 })
 
 test("smart object edit document saves back to the parent layer and convert-to-layers preserves source plus filter records", () => {

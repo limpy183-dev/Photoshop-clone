@@ -18,7 +18,6 @@ import {
   contentAwareScaleCanvas,
   drawProceduralTexture,
   edgeAwareQuickSelectionMask,
-  featherLayerAlpha,
   gradientMap,
   layerContentBounds,
   motionBlur,
@@ -35,8 +34,10 @@ import {
   transformSelectionMask,
   type ColorStop,
 } from "./algorithmic-operations"
+import { autoBlendImageStack } from "./photo-workflow-engine"
 import { findReplaceTextLayers } from "./typography-engine"
 import type { AssetLibraryItem, CountMarker, Layer, PathProps, PrintSettings, TextProps } from "./types"
+import { uid } from "./uid"
 
 type TabId =
   | "paths"
@@ -73,9 +74,6 @@ const tabs: { id: TabId; label: string }[] = [
 
 const smallInput = "h-8 bg-[var(--ps-panel-2)] text-[11px]"
 
-function uid(prefix = "algo") {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
-}
 
 export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const editor = useEditor()
@@ -107,6 +105,10 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
   const [iccInfo, setIccInfo] = React.useState<string>("")
   const [contentSamplingMode, setContentSamplingMode] = React.useState<"auto" | "all-except-fill">("auto")
   const [contentOutputTarget, setContentOutputTarget] = React.useState<"current-layer" | "new-layer">("current-layer")
+  const [seamProtectSource, setSeamProtectSource] = React.useState<"none" | "selection" | "layer">("none")
+  const [seamRemoveSource, setSeamRemoveSource] = React.useState<"none" | "selection" | "layer">("none")
+  const [seamProtectLayerId, setSeamProtectLayerId] = React.useState<string>("")
+  const [seamRemoveLayerId, setSeamRemoveLayerId] = React.useState<string>("")
   const layers = selectedLayers.length ? selectedLayers : activeLayer ? [activeLayer] : []
 
   const requireDoc = () => {
@@ -190,7 +192,7 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
     updateActivePath(polylineToPath(outlinePolyline(pathToPolyline(path), strokeWidth, path.closed), true), "Outline Path")
   }
 
-  const runAutoAlign = (mode: "centers" | "edges" | "canvas-center") => {
+  const runAutoAlign = (mode: "features" | "centers" | "edges" | "canvas-center") => {
     const doc = requireDoc()
     if (!doc || layers.length < 2) return toast.error("Select at least two layers.")
     autoAlignLayers(layers, doc.width, doc.height, mode)
@@ -198,9 +200,25 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
   }
 
   const runAutoBlend = () => {
-    if (layers.length < 2) return toast.error("Select at least two layers.")
-    for (const layer of layers) featherLayerAlpha(layer, 24)
-    finish("Auto-Blend Layers", layers.map((layer) => layer.id))
+    const doc = requireDoc()
+    if (!doc || layers.length < 2) return toast.error("Select at least two layers.")
+    const images = layers.map((layer) => layer.canvas.getContext("2d")!.getImageData(0, 0, doc.width, doc.height))
+    const placements = layers.map(() => ({ dx: 0, dy: 0, score: 0 }))
+    const blended = autoBlendImageStack(images, placements, { featherRadius: 24 })
+    const canvas = makeCanvas(doc.width, doc.height)
+    canvas.getContext("2d")!.putImageData(blended.image, 0, 0)
+    const layer: Layer = {
+      id: uid("layer"),
+      name: "Auto-Blend Composite",
+      kind: "raster",
+      visible: true,
+      locked: false,
+      opacity: 1,
+      blendMode: "normal",
+      canvas,
+    }
+    dispatch({ type: "add-layer", layer })
+    finish("Auto-Blend Layers", [...layers.map((candidate) => candidate.id), layer.id])
   }
 
   const runContentAwareScale = () => {
@@ -211,7 +229,22 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
     const targetHeight = Math.round(doc.height * scalePct / 100)
     const plan = analyzeContentAwareScale(layer.canvas.width, layer.canvas.height, targetWidth, targetHeight)
     if (plan.quality === "partial-seam-fallback") toast.info(`Content-Aware Scale: ${plan.message}`)
-    const scaled = contentAwareScaleCanvas(layer.canvas, targetWidth, targetHeight)
+    // Resolve protect/remove masks from UI selection
+    let protectMask: HTMLCanvasElement | ImageData | null = null
+    let removeMask: HTMLCanvasElement | ImageData | null = null
+    if (seamProtectSource === "selection" && doc.selection.bounds) {
+      protectMask = selectionToMaskCanvas(doc.width, doc.height, doc.selection)
+    } else if (seamProtectSource === "layer" && seamProtectLayerId) {
+      const src = doc.layers.find((l) => l.id === seamProtectLayerId)
+      if (src) protectMask = src.canvas
+    }
+    if (seamRemoveSource === "selection" && doc.selection.bounds) {
+      removeMask = selectionToMaskCanvas(doc.width, doc.height, doc.selection)
+    } else if (seamRemoveSource === "layer" && seamRemoveLayerId) {
+      const src = doc.layers.find((l) => l.id === seamRemoveLayerId)
+      if (src) removeMask = src.canvas
+    }
+    const scaled = contentAwareScaleCanvas(layer.canvas, targetWidth, targetHeight, { protectMask, removeMask })
     const ctx = layer.canvas.getContext("2d")!
     ctx.clearRect(0, 0, doc.width, doc.height)
     ctx.drawImage(scaled, Math.round((doc.width - scaled.width) / 2), Math.round((doc.height - scaled.height) / 2))
@@ -579,6 +612,7 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
                 <ButtonGrid>
                   <Button size="sm" onClick={() => runAutoAlign("centers")}>Auto-Align Centers</Button>
                   <Button size="sm" onClick={() => runAutoAlign("edges")}>Auto-Align Edges</Button>
+                  <Button size="sm" onClick={() => runAutoAlign("features")}>Auto-Align Features</Button>
                   <Button size="sm" onClick={runAutoBlend}>Auto-Blend Layers</Button>
                   <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-gap-workflow", { detail: "photomerge" }))}>Stitch Panorama</Button>
                 </ButtonGrid>
@@ -603,6 +637,44 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
                       { value: "new-layer", label: "New layer" },
                     ]}
                   />
+                </ControlGrid>
+                <ControlGrid>
+                  <SelectField
+                    label="Protect Mask"
+                    value={seamProtectSource}
+                    onChange={(value) => setSeamProtectSource(value as typeof seamProtectSource)}
+                    options={[
+                      { value: "none", label: "None" },
+                      { value: "selection", label: "Current selection" },
+                      { value: "layer", label: "Pick layer..." },
+                    ]}
+                  />
+                  {seamProtectSource === "layer" && activeDoc ? (
+                    <SelectField
+                      label="Protect Layer"
+                      value={seamProtectLayerId}
+                      onChange={setSeamProtectLayerId}
+                      options={[{ value: "", label: "(select layer)" }, ...activeDoc.layers.map((l) => ({ value: l.id, label: l.name }))]}
+                    />
+                  ) : null}
+                  <SelectField
+                    label="Remove Mask"
+                    value={seamRemoveSource}
+                    onChange={(value) => setSeamRemoveSource(value as typeof seamRemoveSource)}
+                    options={[
+                      { value: "none", label: "None" },
+                      { value: "selection", label: "Current selection" },
+                      { value: "layer", label: "Pick layer..." },
+                    ]}
+                  />
+                  {seamRemoveSource === "layer" && activeDoc ? (
+                    <SelectField
+                      label="Remove Layer"
+                      value={seamRemoveLayerId}
+                      onChange={setSeamRemoveLayerId}
+                      options={[{ value: "", label: "(select layer)" }, ...activeDoc.layers.map((l) => ({ value: l.id, label: l.name }))]}
+                    />
+                  ) : null}
                 </ControlGrid>
                 <ButtonGrid>
                   <Button size="sm" variant="secondary" onClick={runContentAwareScale}>Content-Aware Scale</Button>

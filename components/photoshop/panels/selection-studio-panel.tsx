@@ -6,15 +6,13 @@ import { useEditor } from "../editor-context"
 import {
   focusAreaMask,
   selectionFromMask,
+  selectionToPath,
   selectionToMaskCanvas,
   selectSkyMask,
   selectSubjectMask,
 } from "../tool-helpers"
 import type { ToolId } from "../types"
-
-function uid(prefix: string) {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
-}
+import { uid } from "../uid"
 
 export function SelectionStudioPanel() {
   const { activeDoc, activeLayer, dispatch, commit, requestRender } = useEditor()
@@ -71,6 +69,13 @@ export function SelectionStudioPanel() {
     toast.success("Selection saved")
   }
 
+  const makePathFromSelection = () => {
+    if (!activeLayer || !hasSelection) return
+    const path = selectionToPath(selection, activeDoc.width, activeDoc.height, 1.1)
+    if (!path) return
+    runSelection("Make Work Path from Selection", () => dispatch({ type: "set-layer-path", id: activeLayer.id, path }))
+  }
+
   return (
     <div className="flex h-full flex-col text-[11px] text-[var(--ps-text)]">
       <div className="border-b border-[var(--ps-divider)] p-2">
@@ -114,6 +119,7 @@ export function SelectionStudioPanel() {
             <PanelButton label="Sky" disabled={!activeLayer} onClick={() => autoMask("sky")} />
             <PanelButton label="Focus Area" disabled={!activeLayer} onClick={() => autoMask("focus")} />
             <PanelButton label="Mask..." disabled={!activeDoc} onClick={() => window.dispatchEvent(new CustomEvent("ps-open-select-and-mask"))} />
+            <PanelButton label="To Path" disabled={!activeLayer || !hasSelection} onClick={makePathFromSelection} />
           </div>
           <div className="grid grid-cols-2 gap-1">
             <PanelButton label="Object Tool" onClick={() => setTool("object-select")} />
@@ -199,9 +205,12 @@ export function SelectionStudioPanel() {
               <div className="px-2 py-3 text-center text-[var(--ps-text-dim)]">No saved channels</div>
             ) : (
               channels.map((channel) => (
-                <div key={channel.id} className="grid grid-cols-[1fr_auto_auto] items-center gap-1 px-2 py-1.5">
+                <div key={channel.id} className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-1 px-2 py-1.5">
                   <span className="truncate">{channel.name}</span>
-                  <SmallButton label="Load" onClick={() => runSelection("Load Selection", () => dispatch({ type: "load-selection", channelId: channel.id }))} />
+                  <SmallButton label="Replace" onClick={() => runSelection("Load Selection", () => dispatch({ type: "load-selection", channelId: channel.id, mode: "replace" }))} />
+                  <SmallButton label="Add" onClick={() => runSelection("Load Selection", () => dispatch({ type: "load-selection", channelId: channel.id, mode: "add" }))} />
+                  <SmallButton label="Sub" onClick={() => runSelection("Load Selection", () => dispatch({ type: "load-selection", channelId: channel.id, mode: "subtract" }))} />
+                  <SmallButton label="Int" onClick={() => runSelection("Load Selection", () => dispatch({ type: "load-selection", channelId: channel.id, mode: "intersect" }))} />
                   <SmallButton label="Delete" onClick={() => dispatch({ type: "delete-channel", channelId: channel.id })} />
                 </div>
               ))

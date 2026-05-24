@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url"
+
 /** @type {import('next').NextConfig} */
 
 // Security response headers applied to every route.
@@ -7,13 +9,9 @@
 //       'self'                      — bundled Next.js code.
 //       https://va.vercel-scripts.com — Vercel Analytics loader (only loaded
 //                                       when NODE_ENV === 'production').
-//       'unsafe-inline'             — required by the strip-extension
-//                                       hydration fix in app/layout.tsx,
-//                                       which has to run beforeInteractive
-//                                       and predates React hydration. Move
-//                                       that script to a static file under
-//                                       public/ and switch this to a per-
-//                                       request nonce when convenient.
+//       No 'unsafe-inline' here: scripts either come from bundled/static files
+//       or receive the per-request nonce attached by proxy.ts. In
+//       development only, React/Next debugging needs 'unsafe-eval'.
 //   - style-src 'unsafe-inline'    — Tailwind injects critical inline styles
 //                                       and Radix/sonner ship inline style
 //                                       attributes; required.
@@ -40,7 +38,7 @@
 // still works over http://localhost.
 const csp = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://va.vercel-scripts.com",
+  `script-src 'self'${process.env.NODE_ENV === "production" ? "" : " 'unsafe-eval'"} https://va.vercel-scripts.com`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
@@ -57,14 +55,19 @@ const securityHeaders = [
   { key: "Content-Security-Policy", value: csp },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+  { key: "Cross-Origin-Resource-Policy", value: "same-origin" },
+  { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains" },
   { key: "X-Frame-Options", value: "DENY" },
   {
     key: "Permissions-Policy",
     value: "camera=(), microphone=(), geolocation=(), interest-cohort=()",
   },
-  // Strict-Transport-Security is set by the hosting platform (Vercel) so we
-  // don't double up here; if you self-host behind plain HTTP this is fine.
+  // COEP is intentionally not enabled: require-corp would break future
+  // third-party embeds/assets unless they ship compatible CORP headers.
 ]
+
+const emptyNodeFs = fileURLToPath(new URL("./components/photoshop/empty-node-fs.ts", import.meta.url))
 
 const nextConfig = {
   images: {
@@ -87,16 +90,27 @@ const nextConfig = {
       "@radix-ui/react-context-menu",
       "@radix-ui/react-navigation-menu",
       "@radix-ui/react-scroll-area",
-      "recharts",
-      "date-fns",
       // Added during the codebase-review pass — each of these is imported
       // in 5+ files via barrel re-exports, so they benefit from the same
       // tree-shake-on-import treatment as the Radix family above.
       "cmdk",
       "sonner",
-      "vaul",
-      "react-day-picker",
     ],
+  },
+  turbopack: {
+    resolveAlias: {
+      fs: "./components/photoshop/empty-node-fs.ts",
+    },
+  },
+  webpack(config, { isServer }) {
+    if (!isServer) {
+      config.resolve = config.resolve ?? {}
+      config.resolve.alias = {
+        ...(config.resolve.alias ?? {}),
+        fs: emptyNodeFs,
+      }
+    }
+    return config
   },
   async headers() {
     return [

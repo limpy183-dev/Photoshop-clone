@@ -14,13 +14,26 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import { makeCanvas, makeDocument, useEditor } from "./editor-context"
-import { canvasToGifDataUrl, downloadBlob, downloadDataUrl, loadImageFromFile, rasterMime } from "./document-io"
-import { FILTERS } from "./filters"
-import type { ExportFormat, RasterExportOptions } from "./document-io"
+import { canvasToGifDataUrl, downloadBlob, downloadDataUrl, loadImageFromFile, rasterMime, renderDocumentComposite } from "./document-io"
+import type { BrowserRasterExportFormat } from "./document-io"
+import {
+  DEFAULT_AUTOMATION_OUTPUT,
+  createAutomationWorkflow,
+  executeCanvasWorkflow,
+  loadAutomationWorkflows,
+  loadCommandMacros,
+  macroToWorkflow,
+  parseSafeDslCommands,
+  renderTemplateName,
+  type AutomationOperation,
+  type AutomationWorkflow,
+  type CommandMacro,
+} from "./automation-engine"
 
-type RasterFormat = Exclude<ExportFormat, "svg">
-type BatchOperation = "none" | "auto-tone" | "auto-contrast" | "auto-color" | "equalize" | "hdr-toning"
+type RasterFormat = BrowserRasterExportFormat
+type BatchOperation = AutomationOperation
 
 const RASTER_FORMATS: RasterFormat[] = ["jpeg", "png", "webp", "gif", "avif"]
 const FORMAT_LABELS: Record<RasterFormat, string> = {
@@ -83,80 +96,11 @@ function imageToCanvas(img: HTMLImageElement, maxWidth: number, maxHeight: numbe
   return canvas
 }
 
-function autoTone(canvas: HTMLCanvasElement, perChannel: boolean) {
-  const ctx = canvas.getContext("2d")!
-  const img = ctx.getImageData(0, 0, canvas.width, canvas.height)
-  const mins = [255, 255, 255]
-  const maxs = [0, 0, 0]
-  for (let i = 0; i < img.data.length; i += 4) {
-    if (img.data[i + 3] === 0) continue
-    if (perChannel) {
-      for (let c = 0; c < 3; c++) {
-        mins[c] = Math.min(mins[c], img.data[i + c])
-        maxs[c] = Math.max(maxs[c], img.data[i + c])
-      }
-    } else {
-      const v = Math.round(0.299 * img.data[i] + 0.587 * img.data[i + 1] + 0.114 * img.data[i + 2])
-      mins[0] = Math.min(mins[0], v)
-      maxs[0] = Math.max(maxs[0], v)
-    }
-  }
-  for (let i = 0; i < img.data.length; i += 4) {
-    if (perChannel) {
-      for (let c = 0; c < 3; c++) {
-        const range = Math.max(1, maxs[c] - mins[c])
-        img.data[i + c] = Math.max(0, Math.min(255, ((img.data[i + c] - mins[c]) * 255) / range))
-      }
-    } else {
-      const range = Math.max(1, maxs[0] - mins[0])
-      for (let c = 0; c < 3; c++) {
-        img.data[i + c] = Math.max(0, Math.min(255, ((img.data[i + c] - mins[0]) * 255) / range))
-      }
-    }
-  }
-  ctx.putImageData(img, 0, 0)
-}
-
-function autoColor(canvas: HTMLCanvasElement) {
-  const ctx = canvas.getContext("2d")!
-  const img = ctx.getImageData(0, 0, canvas.width, canvas.height)
-  let sumR = 0
-  let sumG = 0
-  let sumB = 0
-  let count = 0
-  for (let i = 0; i < img.data.length; i += 4) {
-    if (img.data[i + 3] === 0) continue
-    sumR += img.data[i]
-    sumG += img.data[i + 1]
-    sumB += img.data[i + 2]
-    count++
-  }
-  if (!count) return
-  const gray = (sumR + sumG + sumB) / (3 * count)
-  const gains = [gray / Math.max(1, sumR / count), gray / Math.max(1, sumG / count), gray / Math.max(1, sumB / count)]
-  for (let i = 0; i < img.data.length; i += 4) {
-    img.data[i] = Math.max(0, Math.min(255, img.data[i] * gains[0]))
-    img.data[i + 1] = Math.max(0, Math.min(255, img.data[i + 1] * gains[1]))
-    img.data[i + 2] = Math.max(0, Math.min(255, img.data[i + 2] * gains[2]))
-  }
-  ctx.putImageData(img, 0, 0)
-}
-
-function applyOperation(canvas: HTMLCanvasElement, operation: BatchOperation) {
-  if (operation === "auto-tone") autoTone(canvas, false)
-  if (operation === "auto-contrast") autoTone(canvas, true)
-  if (operation === "auto-color") autoColor(canvas)
-  if (operation === "equalize" || operation === "hdr-toning") {
-    const ctx = canvas.getContext("2d")!
-    const src = ctx.getImageData(0, 0, canvas.width, canvas.height)
-    const filter = FILTERS[operation]
-    const params: Record<string, number | string | boolean> = {}
-    for (const param of filter.params) params[param.key] = param.default
-    ctx.putImageData(filter.apply(src, params), 0, 0)
-  }
-}
-
-async function exportCanvas(canvas: HTMLCanvasElement, filename: string, options: Pick<RasterExportOptions, "format" | "quality" | "transparent" | "matte">) {
+async function exportCanvas(
+  canvas: HTMLCanvasElement,
+  filename: string,
+  options: { format: RasterFormat; quality: number; transparent: boolean; matte: string },
+) {
   const capability = getRasterFormatCapability(options.format)
   if (!capability.supported) {
     throw new Error(`${FORMAT_LABELS[options.format]} export is unavailable: ${capability.summary}`)
@@ -177,8 +121,15 @@ async function exportCanvas(canvas: HTMLCanvasElement, filename: string, options
 }
 
 export function BatchProcessingDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const { documents } = useEditor()
   const [files, setFiles] = React.useState<File[]>([])
   const [operation, setOperation] = React.useState<BatchOperation>("auto-tone")
+  const [workflowMode, setWorkflowMode] = React.useState<"operation" | "macro" | "script" | "workflow">("operation")
+  const [macros, setMacros] = React.useState<CommandMacro[]>([])
+  const [workflows, setWorkflows] = React.useState<AutomationWorkflow[]>([])
+  const [macroId, setMacroId] = React.useState("")
+  const [workflowId, setWorkflowId] = React.useState("")
+  const [scriptSource, setScriptSource] = React.useState('report("Batch script")\nautoTone()')
   const [format, setFormat] = React.useState<RasterFormat>("jpeg")
   const [quality, setQuality] = React.useState(0.9)
   const [resize, setResize] = React.useState(false)
@@ -186,26 +137,81 @@ export function BatchProcessingDialog({ open, onOpenChange }: { open: boolean; o
   const [maxHeight, setMaxHeight] = React.useState(1080)
   const [transparent, setTransparent] = React.useState(true)
   const [matte, setMatte] = React.useState("#ffffff")
+  const [filenameTemplate, setFilenameTemplate] = React.useState(DEFAULT_AUTOMATION_OUTPUT.filenameTemplate)
+  const [includeOpenDocuments, setIncludeOpenDocuments] = React.useState(false)
+  const [log, setLog] = React.useState<string[]>([])
   const [busy, setBusy] = React.useState(false)
 
+  React.useEffect(() => {
+    if (!open) return
+    const nextMacros = loadCommandMacros()
+    const nextWorkflows = loadAutomationWorkflows()
+    setMacros(nextMacros)
+    setWorkflows(nextWorkflows)
+    setMacroId((current) => current || nextMacros[0]?.id || "")
+    setWorkflowId((current) => current || nextWorkflows[0]?.id || "")
+  }, [open])
+
+  const appendLog = (line: string) => setLog((prev) => [...prev.slice(-80), line])
+
+  const buildWorkflow = () => {
+    const output = { format, quality, transparent, matte, filenameTemplate }
+    if (workflowMode === "macro") {
+      const macro = macros.find((item) => item.id === macroId)
+      if (!macro) throw new Error("Choose a command macro before running the batch.")
+      return macroToWorkflow(macro, output)
+    }
+    if (workflowMode === "script") {
+      parseSafeDslCommands(scriptSource)
+      return createAutomationWorkflow("Ad Hoc Script", [{ id: "script-step", type: "script", source: scriptSource }], output)
+    }
+    if (workflowMode === "workflow") {
+      const workflow = workflows.find((item) => item.id === workflowId)
+      if (!workflow) throw new Error("Choose a saved workflow before running the batch.")
+      return { ...workflow, output: { ...workflow.output, ...output } }
+    }
+    const steps = [
+      { id: "operation-step", type: "operation" as const, operation },
+      ...(resize ? [{ id: "resize-step", type: "resize" as const, maxWidth, maxHeight }] : []),
+    ]
+    return createAutomationWorkflow(operation, steps, output)
+  }
+
   const process = async () => {
-    if (!files.length) return
+    if (!files.length && !includeOpenDocuments) return
     setBusy(true)
+    setLog([])
     try {
+      const workflow = buildWorkflow()
+      let processed = 0
       for (const file of files) {
         try {
           const img = await loadImageFromFile(file)
           const canvas = imageToCanvas(img, maxWidth, maxHeight, resize)
-          applyOperation(canvas, operation)
-          await exportCanvas(canvas, `${safeName(file.name)}-${operation}`, { format, quality, transparent, matte })
+          const output = await executeCanvasWorkflow(canvas, workflow, { makeCanvas, log: appendLog })
+          const filename = renderTemplateName(workflow.output.filenameTemplate, { name: safeName(file.name), workflow: workflow.name }, processed)
+          await exportCanvas(output, filename, workflow.output)
+          processed++
+          appendLog(`${file.name}: exported ${filename}`)
         } catch (error) {
           throw new Error(`${file.name}: ${error instanceof Error ? error.message : "Processing failed"}`)
         }
       }
-      toast.success(`Processed ${files.length} file${files.length === 1 ? "" : "s"}`)
+      if (includeOpenDocuments) {
+        for (const doc of documents) {
+          const source = renderDocumentComposite(doc, { transparent: true })
+          const output = await executeCanvasWorkflow(source, workflow, { makeCanvas, log: appendLog })
+          const filename = renderTemplateName(workflow.output.filenameTemplate, { name: safeName(doc.name), workflow: workflow.name }, processed)
+          await exportCanvas(output, filename, workflow.output)
+          processed++
+          appendLog(`${doc.name}: exported ${filename}`)
+        }
+      }
+      toast.success(`Processed ${processed} item${processed === 1 ? "" : "s"}`)
       onOpenChange(false)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Batch processing failed")
+      appendLog(err instanceof Error ? err.message : "Batch processing failed")
     } finally {
       setBusy(false)
     }
@@ -215,21 +221,63 @@ export function BatchProcessingDialog({ open, onOpenChange }: { open: boolean; o
     <ProcessingShell title="Batch Processing" description="Process multiple image files with a selected operation and export settings." open={open} onOpenChange={onOpenChange}>
       <FilePicker files={files} setFiles={setFiles} />
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Operation">
-          <select value={operation} onChange={(event) => setOperation(event.target.value as BatchOperation)} className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px]">
-            <option value="auto-tone">Auto Tone</option>
-            <option value="auto-contrast">Auto Contrast</option>
-            <option value="auto-color">Auto Color</option>
-            <option value="equalize">Equalize</option>
-            <option value="hdr-toning">HDR Toning</option>
+        <Field label="Workflow source">
+          <select value={workflowMode} onChange={(event) => setWorkflowMode(event.target.value as typeof workflowMode)} className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px]">
+            <option value="operation">Built-in operation</option>
+            <option value="macro">Command macro</option>
+            <option value="script">Safe script</option>
+            <option value="workflow">Saved workflow / droplet</option>
           </select>
         </Field>
-        <ExportControls format={format} setFormat={setFormat} quality={quality} setQuality={setQuality} transparent={transparent} setTransparent={setTransparent} matte={matte} setMatte={setMatte} />
+        {workflowMode === "operation" && (
+          <Field label="Operation">
+            <select value={operation} onChange={(event) => setOperation(event.target.value as BatchOperation)} className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px]">
+              <option value="auto-tone">Auto Tone</option>
+              <option value="auto-contrast">Auto Contrast</option>
+              <option value="auto-color">Auto Color</option>
+              <option value="equalize">Equalize</option>
+              <option value="hdr-toning">HDR Toning</option>
+              <option value="invert">Invert</option>
+              <option value="grayscale">Grayscale</option>
+              <option value="desaturate">Desaturate</option>
+            </select>
+          </Field>
+        )}
+        {workflowMode === "macro" && (
+          <Field label="Macro">
+            <select value={macroId} onChange={(event) => setMacroId(event.target.value)} className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px]">
+              {macros.length ? macros.map((macro) => <option key={macro.id} value={macro.id}>{macro.name}</option>) : <option value="">No macros saved</option>}
+            </select>
+          </Field>
+        )}
+        {workflowMode === "workflow" && (
+          <Field label="Saved workflow">
+            <select value={workflowId} onChange={(event) => setWorkflowId(event.target.value)} className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px]">
+              {workflows.length ? workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.name}</option>) : <option value="">No workflows saved</option>}
+            </select>
+          </Field>
+        )}
       </div>
+      {workflowMode === "script" && (
+        <Textarea value={scriptSource} onChange={(event) => setScriptSource(event.target.value)} className="h-24 resize-none font-mono text-[11px]" spellCheck={false} />
+      )}
+      <ExportControls format={format} setFormat={setFormat} quality={quality} setQuality={setQuality} transparent={transparent} setTransparent={setTransparent} matte={matte} setMatte={setMatte} />
+      <Field label="Filename template">
+        <Input value={filenameTemplate} onChange={(event) => setFilenameTemplate(event.target.value)} className="h-8 bg-[var(--ps-panel-2)] text-[11px]" />
+      </Field>
       <ResizeControls resize={resize} setResize={setResize} maxWidth={maxWidth} setMaxWidth={setMaxWidth} maxHeight={maxHeight} setMaxHeight={setMaxHeight} />
+      <label className="flex items-center gap-2 text-[11px]">
+        <Checkbox checked={includeOpenDocuments} onCheckedChange={(value) => setIncludeOpenDocuments(value === true)} />
+        Include open documents ({documents.length})
+      </label>
+      {log.length ? (
+        <div className="max-h-28 overflow-y-auto rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2 font-mono text-[10px] text-[var(--ps-text-dim)]">
+          {log.map((line, index) => <div key={`${line}-${index}`}>{line}</div>)}
+        </div>
+      ) : null}
       <DialogFooter>
         <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-        <Button disabled={!files.length || busy} onClick={process}>{busy ? "Processing..." : "Run Batch"}</Button>
+        <Button disabled={(!files.length && !includeOpenDocuments) || busy} onClick={process}>{busy ? "Processing..." : "Run Batch"}</Button>
       </DialogFooter>
     </ProcessingShell>
   )

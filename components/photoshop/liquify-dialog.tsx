@@ -12,6 +12,13 @@ import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { useEditor } from "./editor-context"
 import { makeCanvas } from "./tool-helpers"
+import {
+  createLiquifyMesh,
+  moveLiquifyMeshPointByIndex,
+  nearestLiquifyMeshPoint,
+  warpImageDataWithLiquifyMesh,
+  type LiquifyMesh,
+} from "./liquify-engine"
 
 type LiquifyMode = "push" | "reconstruct" | "pucker" | "bloat" | "twirl" | "twirl-left" | "face-eyes" | "face-smile" | "face-jaw"
 
@@ -93,10 +100,14 @@ export function LiquifyDialog({
   const [density, setDensity] = React.useState(50)
   const [mode, setMode] = React.useState<LiquifyMode>("push")
   const [showMesh, setShowMesh] = React.useState(true)
+  const [editMesh, setEditMesh] = React.useState(false)
   const previewRef = React.useRef<HTMLCanvasElement>(null)
   const workingRef = React.useRef<HTMLCanvasElement | null>(null)
   const originalRef = React.useRef<HTMLCanvasElement | null>(null)
+  const meshBaseRef = React.useRef<HTMLCanvasElement | null>(null)
+  const meshRef = React.useRef<LiquifyMesh | null>(null)
   const draggingRef = React.useRef<{ x: number; y: number } | null>(null)
+  const meshDraggingRef = React.useRef<{ index: number; startX: number; startY: number; baseDx: number; baseDy: number } | null>(null)
 
   const drawPreview = React.useCallback(() => {
     const cv = previewRef.current
@@ -114,22 +125,58 @@ export function LiquifyDialog({
       ctx.save()
       ctx.strokeStyle = "rgba(0, 225, 255, 0.28)"
       ctx.lineWidth = 1
-      const step = Math.max(16, Math.round(Math.min(cv.width, cv.height) / 12))
-      for (let x = step; x < cv.width; x += step) {
-        ctx.beginPath()
-        ctx.moveTo(x + 0.5, 0)
-        ctx.lineTo(x + 0.5, cv.height)
-        ctx.stroke()
-      }
-      for (let y = step; y < cv.height; y += step) {
-        ctx.beginPath()
-        ctx.moveTo(0, y + 0.5)
-        ctx.lineTo(cv.width, y + 0.5)
-        ctx.stroke()
+      const mesh = meshRef.current
+      if (mesh) {
+        const sx = cv.width / Math.max(1, work.width)
+        const sy = cv.height / Math.max(1, work.height)
+        for (let row = 0; row < mesh.rows; row++) {
+          ctx.beginPath()
+          for (let col = 0; col < mesh.columns; col++) {
+            const point = mesh.points[row * mesh.columns + col]
+            const x = (point.x + point.dx) * sx
+            const y = (point.y + point.dy) * sy
+            if (col === 0) ctx.moveTo(x, y)
+            else ctx.lineTo(x, y)
+          }
+          ctx.stroke()
+        }
+        for (let col = 0; col < mesh.columns; col++) {
+          ctx.beginPath()
+          for (let row = 0; row < mesh.rows; row++) {
+            const point = mesh.points[row * mesh.columns + col]
+            const x = (point.x + point.dx) * sx
+            const y = (point.y + point.dy) * sy
+            if (row === 0) ctx.moveTo(x, y)
+            else ctx.lineTo(x, y)
+          }
+          ctx.stroke()
+        }
+        if (editMesh) {
+          ctx.fillStyle = "rgba(0, 225, 255, 0.85)"
+          for (const point of mesh.points) {
+            ctx.beginPath()
+            ctx.arc((point.x + point.dx) * sx, (point.y + point.dy) * sy, 3, 0, Math.PI * 2)
+            ctx.fill()
+          }
+        }
+      } else {
+        const step = Math.max(16, Math.round(Math.min(cv.width, cv.height) / 12))
+        for (let x = step; x < cv.width; x += step) {
+          ctx.beginPath()
+          ctx.moveTo(x + 0.5, 0)
+          ctx.lineTo(x + 0.5, cv.height)
+          ctx.stroke()
+        }
+        for (let y = step; y < cv.height; y += step) {
+          ctx.beginPath()
+          ctx.moveTo(0, y + 0.5)
+          ctx.lineTo(cv.width, y + 0.5)
+          ctx.stroke()
+        }
       }
       ctx.restore()
     }
-  }, [showMesh])
+  }, [showMesh, editMesh])
 
   React.useEffect(() => {
     if (!open || !activeLayer) return
@@ -142,21 +189,50 @@ export function LiquifyDialog({
     const work = makeCanvas(w, h)
     work.getContext("2d")!.drawImage(activeLayer.canvas, 0, 0)
     workingRef.current = work
+    meshBaseRef.current = null
+    meshRef.current = createLiquifyMesh(w, h, 7, 7)
     drawPreview()
-  }, [open, activeLayer, drawPreview])
+  }, [open, activeLayer])
+
+  React.useEffect(() => {
+    if (open) drawPreview()
+  }, [open, drawPreview])
 
   const reset = () => {
     if (!originalRef.current || !workingRef.current) return
     const wctx = workingRef.current.getContext("2d")!
     wctx.clearRect(0, 0, workingRef.current.width, workingRef.current.height)
     wctx.drawImage(originalRef.current, 0, 0)
+    meshBaseRef.current = null
+    meshRef.current = createLiquifyMesh(workingRef.current.width, workingRef.current.height, 7, 7)
     drawPreview()
+  }
+
+  const ensureMeshBase = () => {
+    const work = workingRef.current
+    if (!work) return null
+    if (!meshBaseRef.current) {
+      const base = makeCanvas(work.width, work.height)
+      base.getContext("2d")!.drawImage(work, 0, 0)
+      meshBaseRef.current = base
+    }
+    return meshBaseRef.current
+  }
+
+  const applyMeshWarp = () => {
+    const work = workingRef.current
+    const mesh = meshRef.current
+    const base = ensureMeshBase()
+    if (!work || !mesh || !base) return
+    const data = base.getContext("2d")!.getImageData(0, 0, base.width, base.height)
+    work.getContext("2d")!.putImageData(warpImageDataWithLiquifyMesh(data, mesh), 0, 0)
   }
 
   const applyLiquifyAtPoint = (cx: number, cy: number, dx: number, dy: number) => {
     const work = workingRef.current
     const original = originalRef.current
     if (!work) return
+    meshBaseRef.current = null
     if (mode.startsWith("face-")) {
       applyFaceAware(mode)
       return
@@ -287,6 +363,15 @@ export function LiquifyDialog({
     const rect = cv.getBoundingClientRect()
     const x = ((e.clientX - rect.left) / rect.width) * work.width
     const y = ((e.clientY - rect.top) / rect.height) * work.height
+    if (editMesh && meshRef.current) {
+      ensureMeshBase()
+      const index = nearestLiquifyMeshPoint(meshRef.current, x, y, brushSize * 0.35)
+      if (index >= 0) {
+        const point = meshRef.current.points[index]
+        meshDraggingRef.current = { index, startX: x, startY: y, baseDx: point.dx, baseDy: point.dy }
+      }
+      return
+    }
     draggingRef.current = { x, y }
     if (mode !== "push") {
       applyLiquifyAtPoint(x, y, 0, 0)
@@ -295,21 +380,36 @@ export function LiquifyDialog({
   }
 
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    const drag = draggingRef.current
-    if (!drag) return
     const cv = previewRef.current
     const work = workingRef.current
     if (!cv || !work) return
     const rect = cv.getBoundingClientRect()
     const x = ((e.clientX - rect.left) / rect.width) * work.width
     const y = ((e.clientY - rect.top) / rect.height) * work.height
+    const meshDrag = meshDraggingRef.current
+    if (meshDrag && meshRef.current) {
+      meshRef.current = moveLiquifyMeshPointByIndex(
+        meshRef.current,
+        meshDrag.index,
+        meshDrag.baseDx + x - meshDrag.startX,
+        meshDrag.baseDy + y - meshDrag.startY,
+      )
+      applyMeshWarp()
+      drawPreview()
+      return
+    }
+    const drag = draggingRef.current
+    if (!drag) return
     if (mode.startsWith("face-")) return
     applyLiquifyAtPoint(x, y, x - drag.x, y - drag.y)
     draggingRef.current = { x, y }
     drawPreview()
   }
 
-  const onPointerUp = () => { draggingRef.current = null }
+  const onPointerUp = () => {
+    draggingRef.current = null
+    meshDraggingRef.current = null
+  }
 
   const apply = () => {
     if (!activeLayer || activeLayer.locked || !workingRef.current) {
@@ -366,6 +466,17 @@ export function LiquifyDialog({
                 <input type="checkbox" checked={showMesh} onChange={(e) => setShowMesh(e.target.checked)} />
                 Mesh overlay
               </label>
+              <label className="flex items-center gap-2 text-[11px]">
+                <input
+                  type="checkbox"
+                  checked={editMesh}
+                  onChange={(e) => {
+                    setEditMesh(e.target.checked)
+                    if (e.target.checked) setShowMesh(true)
+                  }}
+                />
+                Edit mesh points
+              </label>
             </div>
           </div>
           {/* Preview */}
@@ -381,7 +492,7 @@ export function LiquifyDialog({
           </div>
         </div>
         <p className="text-[11px] text-[var(--ps-text-dim)]">
-          {MODES.find((m) => m.id === mode)?.desc}. Drag inside the preview to deform pixels.
+          {editMesh ? "Drag mesh intersections to build a controlled warp" : MODES.find((m) => m.id === mode)?.desc}. Drag inside the preview to deform pixels.
         </p>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>

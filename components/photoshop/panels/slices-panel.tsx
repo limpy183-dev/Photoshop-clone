@@ -2,14 +2,11 @@
 
 import * as React from "react"
 import { toast } from "sonner"
-import { Download, Plus, Trash2 } from "lucide-react"
+import { Copy, Download, Eye, EyeOff, Lock, Plus, Trash2, Unlock } from "lucide-react"
 import { useEditor, makeCanvas } from "../editor-context"
 import { downloadBlob, rasterMime, renderDocumentComposite } from "../document-io"
 import type { Slice } from "../types"
-
-function uid(prefix: string) {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
-}
+import { uid } from "../uid"
 
 function safeName(name: string) {
   return name.replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "-").replace(/^-+|-+$/g, "") || "slice"
@@ -28,11 +25,15 @@ function normalizeSlice(slice: Slice, width: number, height: number) {
 }
 
 async function exportSlice(source: HTMLCanvasElement, slice: Slice, filename: string) {
-  const crop = makeCanvas(slice.w, slice.h)
-  crop.getContext("2d")!.drawImage(source, slice.x, slice.y, slice.w, slice.h, 0, 0, slice.w, slice.h)
-  const blob = await new Promise<Blob | null>((resolve) => crop.toBlob(resolve, rasterMime("png")))
+  const scale = Math.max(0.1, Math.min(10, slice.scale ?? 1))
+  const exportW = Math.max(1, Math.round(slice.w * scale))
+  const exportH = Math.max(1, Math.round(slice.h * scale))
+  const crop = makeCanvas(exportW, exportH)
+  crop.getContext("2d")!.drawImage(source, slice.x, slice.y, slice.w, slice.h, 0, 0, exportW, exportH)
+  const format = slice.format ?? "png"
+  const blob = await new Promise<Blob | null>((resolve) => crop.toBlob(resolve, rasterMime(format), 0.92))
   if (!blob) throw new Error(`Could not export ${slice.name}`)
-  downloadBlob(blob, `${filename}.png`)
+  downloadBlob(blob, `${filename}.${format === "jpeg" ? "jpg" : format}`)
 }
 
 export function SlicesPanel() {
@@ -85,11 +86,12 @@ export function SlicesPanel() {
     if (!slices.length) return
     try {
       const composite = renderDocumentComposite(activeDoc, { transparent: true })
-      for (const slice of slices) {
+      const exportable = slices.filter((slice) => slice.visible !== false)
+      for (const slice of exportable) {
         const normalized = normalizeSlice(slice, activeDoc.width, activeDoc.height)
         await exportSlice(composite, normalized, `${safeName(activeDoc.name)}-${safeName(prefix)}-${safeName(slice.name)}`)
       }
-      toast.success(`Exported ${slices.length} slice${slices.length === 1 ? "" : "s"}`)
+      toast.success(`Exported ${exportable.length} slice${exportable.length === 1 ? "" : "s"}`)
       window.setTimeout(() => commit("Export Slices", []), 0)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Slice export failed")
@@ -154,24 +156,46 @@ export function SlicesPanel() {
                   activeDoc.selectedSliceId === slice.id ? "bg-orange-500/10" : ""
                 }`}
               >
-                <div className="grid grid-cols-[1fr_auto] gap-1">
+                <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-1">
                   <input
                     value={slice.name}
+                    disabled={!!slice.locked}
                     onChange={(event) => updateSlice(slice.id, { name: event.target.value })}
                     className="h-7 min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 outline-none"
                   />
+                  <ToolButton title="Duplicate slice" onClick={() => {
+                    dispatch({ type: "duplicate-slice", id: slice.id })
+                    window.setTimeout(() => commit("Duplicate Slice", []), 0)
+                  }}>
+                    <Copy className="h-3.5 w-3.5" />
+                  </ToolButton>
+                  <ToolButton title={slice.visible === false ? "Show slice" : "Hide slice"} onClick={() => updateSlice(slice.id, { visible: slice.visible === false })}>
+                    {slice.visible === false ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </ToolButton>
+                  <ToolButton title={slice.locked ? "Unlock slice" : "Lock slice"} onClick={() => updateSlice(slice.id, { locked: !slice.locked })}>
+                    {slice.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
+                  </ToolButton>
                   <ToolButton title="Delete slice" onClick={() => {
                     dispatch({ type: "remove-slice", id: slice.id })
                     window.setTimeout(() => commit("Remove Slice", []), 0)
-                  }}>
+                  }} disabled={!!slice.locked}>
                     <Trash2 className="h-3.5 w-3.5" />
                   </ToolButton>
                 </div>
                 <div className="grid grid-cols-4 gap-1">
-                  <NumberField label="X" value={normalized.x} onChange={(value) => updateSlice(slice.id, { x: clamp(value, 0, activeDoc.width - 1) })} />
-                  <NumberField label="Y" value={normalized.y} onChange={(value) => updateSlice(slice.id, { y: clamp(value, 0, activeDoc.height - 1) })} />
-                  <NumberField label="W" value={normalized.w} onChange={(value) => updateSlice(slice.id, { w: clamp(value, 1, activeDoc.width - normalized.x) })} />
-                  <NumberField label="H" value={normalized.h} onChange={(value) => updateSlice(slice.id, { h: clamp(value, 1, activeDoc.height - normalized.y) })} />
+                  <NumberField label="X" value={normalized.x} disabled={!!slice.locked} onChange={(value) => updateSlice(slice.id, { x: clamp(value, 0, activeDoc.width - 1) })} />
+                  <NumberField label="Y" value={normalized.y} disabled={!!slice.locked} onChange={(value) => updateSlice(slice.id, { y: clamp(value, 0, activeDoc.height - 1) })} />
+                  <NumberField label="W" value={normalized.w} disabled={!!slice.locked} onChange={(value) => updateSlice(slice.id, { w: clamp(value, 1, activeDoc.width - normalized.x) })} />
+                  <NumberField label="H" value={normalized.h} disabled={!!slice.locked} onChange={(value) => updateSlice(slice.id, { h: clamp(value, 1, activeDoc.height - normalized.y) })} />
+                </div>
+                <div className="grid grid-cols-[1fr_64px_74px] gap-1">
+                  <TextField label="URL" value={slice.url ?? ""} disabled={!!slice.locked} onChange={(value) => updateSlice(slice.id, { url: value })} />
+                  <SelectField label="Format" value={slice.format ?? "png"} disabled={!!slice.locked} onChange={(value) => updateSlice(slice.id, { format: value as Slice["format"] })} />
+                  <NumberField label="Scale" value={slice.scale ?? 1} step={0.1} disabled={!!slice.locked} onChange={(value) => updateSlice(slice.id, { scale: Math.max(0.1, Math.min(10, value || 1)) })} />
+                </div>
+                <div className="grid grid-cols-2 gap-1">
+                  <TextField label="Target" value={slice.target ?? ""} disabled={!!slice.locked} onChange={(value) => updateSlice(slice.id, { target: value })} />
+                  <TextField label="Alt" value={slice.altText ?? ""} disabled={!!slice.locked} onChange={(value) => updateSlice(slice.id, { altText: value })} />
                 </div>
               </div>
             )
@@ -182,16 +206,51 @@ export function SlicesPanel() {
   )
 }
 
-function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+function NumberField({ label, value, step, disabled, onChange }: { label: string; value: number; step?: number; disabled?: boolean; onChange: (value: number) => void }) {
   return (
     <label className="grid gap-1 text-[10px] text-[var(--ps-text-dim)]">
       {label}
       <input
         type="number"
+        step={step}
+        disabled={disabled}
         value={Number.isFinite(value) ? value : 0}
         onChange={(event) => onChange(Number(event.target.value) || 0)}
         className="h-7 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px] text-[var(--ps-text)] outline-none"
       />
+    </label>
+  )
+}
+
+function TextField({ label, value, disabled, onChange }: { label: string; value: string; disabled?: boolean; onChange: (value: string) => void }) {
+  return (
+    <label className="grid gap-1 text-[10px] text-[var(--ps-text-dim)]">
+      {label}
+      <input
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-7 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[10px] text-[var(--ps-text)] outline-none"
+      />
+    </label>
+  )
+}
+
+function SelectField({ label, value, disabled, onChange }: { label: string; value: string; disabled?: boolean; onChange: (value: string) => void }) {
+  return (
+    <label className="grid gap-1 text-[10px] text-[var(--ps-text-dim)]">
+      {label}
+      <select
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-7 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px] text-[var(--ps-text)] outline-none"
+      >
+        <option value="png">PNG</option>
+        <option value="jpeg">JPEG</option>
+        <option value="webp">WebP</option>
+        <option value="avif">AVIF</option>
+      </select>
     </label>
   )
 }

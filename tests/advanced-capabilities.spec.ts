@@ -15,8 +15,8 @@ test("advanced capabilities label local browser-native limits instead of native 
   await openCommand(page, "RAW, DNG, DICOM, EXR, HDR, PSB, and Metadata")
   await expect(page.getByRole("dialog", { name: "Advanced Photoshop Subsystems" })).toBeVisible()
   await expect(page.getByRole("heading", { name: "Format Capability Matrix" })).toBeVisible()
-  await expect(page.getByTestId("format-openexr")).toContainText(/Metadata only/)
-  await expect(page.getByTestId("format-psb")).toContainText(/Metadata only/)
+  await expect(page.getByTestId("format-openexr")).toContainText(/Decoder-backed/)
+  await expect(page.getByTestId("format-psb")).toContainText(/Browser-limited/)
   await page.keyboard.press("Escape")
 
   await openCommand(page, "Plugin Manager")

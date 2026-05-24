@@ -3,13 +3,10 @@
 import * as React from "react"
 import { useEditor } from "../editor-context"
 import { FILTERS } from "../filters"
-import { downloadText } from "../document-io"
 import { rasterizeText } from "../tool-helpers"
-import type { AssetLibraryItem, CustomShapeId, LayerStyle, Note, TimelineFrame } from "../types"
-
-function uid(prefix: string) {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
-}
+import type { AssetLibraryItem, CustomShapeId, LayerStyle, Note } from "../types"
+import { uid } from "../uid"
+import { TimelinePanel } from "./timeline-panel"
 
 const glyphs = "©®™•…—–°±×÷µΩπ∞≤≥≈≠∑√ƒ∂∆∫∏αβγδλ✓✕★☆"
 const shapes: { id: CustomShapeId; name: string }[] = [
@@ -53,47 +50,7 @@ export function GlyphsPanel() {
 }
 
 export function AnimationPanel() {
-  const { activeDoc, dispatch, commit } = useEditor()
-  const frames = activeDoc?.timelineFrames ?? []
-  const addFrame = () => {
-    if (!activeDoc) return
-    const frame: TimelineFrame = {
-      id: uid("frame"),
-      name: `Frame ${frames.length + 1}`,
-      durationMs: 120,
-      layerVisibility: Object.fromEntries(activeDoc.layers.map((layer) => [layer.id, layer.visible])),
-      layerOpacity: Object.fromEntries(activeDoc.layers.map((layer) => [layer.id, layer.opacity])),
-      transition: "hold",
-    }
-    dispatch({ type: "set-timeline-frames", frames: [...frames, frame] })
-    window.setTimeout(() => commit("Add Animation Frame", []), 0)
-  }
-  const play = async () => {
-    if (!activeDoc || !frames.length) return
-    for (const frame of frames) {
-      for (const [id, visible] of Object.entries(frame.layerVisibility)) {
-        dispatch({ type: "set-layer-visibility", id, visible })
-      }
-      await new Promise((resolve) => window.setTimeout(resolve, frame.durationMs))
-    }
-  }
-  return (
-    <PanelShell title="Animation">
-      <div className="grid grid-cols-3 gap-1">
-        <SmallButton label="Add Frame" onClick={addFrame} />
-        <SmallButton label="Play" disabled={!frames.length} onClick={() => { void play() }} />
-        <SmallButton label="Export JSON" disabled={!frames.length || !activeDoc} onClick={() => activeDoc && downloadText(JSON.stringify(frames, null, 2), `${activeDoc.name}-frames.json`)} />
-      </div>
-      <div className="space-y-1">
-        {frames.length ? frames.map((frame, index) => (
-          <div key={frame.id} className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
-            <div className="text-[12px]">{index + 1}. {frame.name}</div>
-            <div className="text-[10px] text-[var(--ps-text-dim)]">{frame.durationMs} ms - {Object.values(frame.layerVisibility).filter(Boolean).length} visible layers</div>
-          </div>
-        )) : <PanelHint text="Frame animation uses document layer visibility and opacity per frame." />}
-      </div>
-    </PanelShell>
-  )
+  return <TimelinePanel />
 }
 
 export function LibrariesPanel() {

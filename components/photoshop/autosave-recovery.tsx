@@ -4,9 +4,10 @@ import * as React from "react"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { toast } from "sonner"
-import { planAutosaveDocuments } from "./autosave-planner"
+import { planAutosaveDocuments, planIncrementalAutosave, type IncrementalAutosaveManifest } from "./autosave-planner"
 import { deserializeProject, serializeProject } from "./document-io"
 import { useEditor } from "./editor-context"
+import { writeScratchBlob } from "./opfs-scratch"
 import { loadPreferencesFromStorage } from "./preferences-engine"
 import { clearAutosave, readAutosaves, readAutosavesAsync, writeAutosaves, type AutosaveDocument } from "./recent-documents"
 
@@ -44,6 +45,7 @@ export function AutosaveRecovery() {
   }, [documentHistoryVersions])
   const lastSavedVersionsRef = React.useRef<Record<string, number>>({})
   const serializedAutosavesRef = React.useRef<Record<string, Omit<AutosaveDocument, "id" | "kind" | "updatedAt">>>({})
+  const autosaveManifestRef = React.useRef<IncrementalAutosaveManifest>({ entries: {} })
   const writingRef = React.useRef(false)
 
   const runAutosave = React.useCallback(() => {
@@ -72,16 +74,45 @@ export function AutosaveRecovery() {
 
       if (!plan.documentsToSerialize.length && !pruned) return
 
+      const serializedLengths: Record<string, number> = {}
       for (const planDoc of plan.documentsToSerialize) {
         const doc = docs.find((candidateDoc) => candidateDoc.id === planDoc.id)
         if (!doc) continue
+        const serialized = serializeProject(doc)
+        serializedLengths[doc.id] = serialized.length
         serializedAutosavesRef.current[doc.id] = {
           documentId: doc.id,
           name: doc.name,
-          serialized: serializeProject(doc),
+          serialized,
         }
       }
       lastSavedVersionsRef.current = plan.nextSavedVersions
+
+      const incremental = planIncrementalAutosave({
+        documents: docs.map((doc) => {
+          const existing = serializedAutosavesRef.current[doc.id]?.serialized
+          const previous = autosaveManifestRef.current.entries[doc.id]
+          return {
+            id: doc.id,
+            name: doc.name,
+            version: documentHistoryVersionsRef.current[doc.id] ?? 0,
+            dirty: documentStatusesRef.current[doc.id]?.dirty === true,
+            serializedLength: serializedLengths[doc.id] ?? existing?.length ?? previous?.bytes ?? 0,
+          }
+        }),
+        previousManifest: autosaveManifestRef.current,
+      })
+      autosaveManifestRef.current = incremental.nextManifest
+
+      for (const write of incremental.documentsToWrite) {
+        if (write.storage !== "scratch") continue
+        const serialized = serializedAutosavesRef.current[write.id]?.serialized
+        if (!serialized) continue
+        writeScratchBlob(
+          `autosave-${write.id}-${write.version}.psproj`,
+          new Blob([serialized], { type: "application/json" }),
+        ).catch(() => {})
+      }
 
       const payload = Object.values(serializedAutosavesRef.current)
       if (payload.length) {

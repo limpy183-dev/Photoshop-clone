@@ -1,15 +1,18 @@
-/**
+﻿/**
  * Pixel-level filter implementations. Each `apply(src, params)` returns a
  * NEW ImageData with the filter applied. Source is not mutated, so callers
  * can use the same ImageData for live previews across many parameter changes.
  */
 
 import type { BlendMode } from "./types"
+import { hexToRgb as hexToRgbFilter } from "./color-utils"
+import { applyChannelMixerToImageData, type ChannelMixerParams } from "./color-channel-ops"
 
 export type FilterParam =
   | { type: "slider"; key: string; label: string; min: number; max: number; step?: number; default: number; suffix?: string }
   | { type: "select"; key: string; label: string; options: { value: string; label: string }[]; default: string }
   | { type: "checkbox"; key: string; label: string; default: boolean }
+  | { type: "text"; key: string; label: string; default: string; multiline?: boolean; placeholder?: string; accept?: string }
 
 export interface FilterDef {
   id: string
@@ -21,6 +24,10 @@ export interface FilterDef {
 
 export interface FilterContext {
   matchColorSource?: ImageData | null
+  displacementMap?: ImageData | null
+  applyImageSource?: ImageData | null
+  calcSourceA?: ImageData | null
+  calcSourceB?: ImageData | null
 }
 
 /* --------------------------- helpers ----------------------------------- */
@@ -204,7 +211,7 @@ function hslToRgb(h: number, s: number, l: number) {
 
 /* --------------------------- BLUR -------------------------------------- */
 
-/** Stack box blur — fast, separable, good Gaussian approximation. */
+/** Stack box blur â€” fast, separable, good Gaussian approximation. */
 function boxBlur(src: ImageData, radius: number): ImageData {
   if (radius <= 0) return clone(src)
   const r = Math.floor(radius)
@@ -282,7 +289,7 @@ function boxBlur(src: ImageData, radius: number): ImageData {
 
 function gaussianBlur(src: ImageData, radius: number): ImageData {
   if (radius <= 0) return clone(src)
-  // 3 passes of box blur ≈ Gaussian
+  // 3 passes of box blur â‰ˆ Gaussian
   const r = Math.max(1, Math.round(radius / 3))
   let out = boxBlur(src, r)
   out = boxBlur(out, r)
@@ -683,27 +690,27 @@ function _blackWhite(src: ImageData, reds: number, yellows: number, greens: numb
     // Normalize hue to 0-1 range
     const hue = h
 
-    // Red range (0-30° and 330-360°)
+    // Red range (0-30Â° and 330-360Â°)
     if (hue < 0.083 || hue > 0.917) {
       lightness += (reds / 100) * 0.3 // Scale factor for subtle adjustment
     }
-    // Yellow range (30-90°)
+    // Yellow range (30-90Â°)
     else if (hue >= 0.083 && hue < 0.25) {
       lightness += (yellows / 100) * 0.3
     }
-    // Green range (90-150°)
+    // Green range (90-150Â°)
     else if (hue >= 0.25 && hue < 0.417) {
       lightness += (greens / 100) * 0.3
     }
-    // Cyan range (150-210°)
+    // Cyan range (150-210Â°)
     else if (hue >= 0.417 && hue < 0.583) {
       lightness += (cyans / 100) * 0.3
     }
-    // Blue range (210-270°)
+    // Blue range (210-270Â°)
     else if (hue >= 0.583 && hue < 0.75) {
       lightness += (blues / 100) * 0.3
     }
-    // Magenta range (270-330°)
+    // Magenta range (270-330Â°)
     else if (hue >= 0.75 && hue < 0.917) {
       lightness += (magentas / 100) * 0.3
     }
@@ -739,11 +746,26 @@ function sepia(src: ImageData, amount: number): ImageData {
   return new ImageData(out, src.width, src.height)
 }
 
-function threshold(src: ImageData, level: number): ImageData {
+function channelValue(data: Uint8ClampedArray, i: number, channel: string) {
+  switch (channel) {
+    case "red":
+      return data[i]
+    case "green":
+      return data[i + 1]
+    case "blue":
+      return data[i + 2]
+    case "alpha":
+      return data[i + 3]
+    default:
+      return luma(data[i], data[i + 1], data[i + 2])
+  }
+}
+
+function threshold(src: ImageData, level: number, channel = "rgb", invert = false): ImageData {
   const out = new Uint8ClampedArray(src.data)
   for (let i = 0; i < out.length; i += 4) {
-    const lum = 0.299 * out[i] + 0.587 * out[i + 1] + 0.114 * out[i + 2]
-    const v = lum >= level ? 255 : 0
+    const value = channelValue(out, i, channel)
+    const v = (value >= level) !== invert ? 255 : 0
     out[i] = v
     out[i + 1] = v
     out[i + 2] = v
@@ -751,13 +773,15 @@ function threshold(src: ImageData, level: number): ImageData {
   return new ImageData(out, src.width, src.height)
 }
 
-function posterize(src: ImageData, levels: number): ImageData {
+function posterize(src: ImageData, levels: number, dither = false): ImageData {
   const out = new Uint8ClampedArray(src.data)
-  const step = 255 / Math.max(1, levels - 1)
-  for (let i = 0; i < out.length; i += 4) {
-    out[i] = Math.round(out[i] / step) * step
-    out[i + 1] = Math.round(out[i + 1] / step) * step
-    out[i + 2] = Math.round(out[i + 2] / step) * step
+  const count = Math.max(2, Math.min(256, Math.round(levels)))
+  const step = 255 / Math.max(1, count - 1)
+  for (let i = 0, p = 0; i < out.length; i += 4, p++) {
+    const noise = dither ? (pseudoDither(p) - 0.5) * step : 0
+    out[i] = Math.round(clamp8(out[i] + noise) / step) * step
+    out[i + 1] = Math.round(clamp8(out[i + 1] + noise) / step) * step
+    out[i + 2] = Math.round(clamp8(out[i + 2] + noise) / step) * step
   }
   return new ImageData(out, src.width, src.height)
 }
@@ -861,17 +885,20 @@ function channelMixer(
   bR: number,
   bG: number,
   bB: number,
+  extra: Partial<ChannelMixerParams> = {},
 ): ImageData {
-  const out = new Uint8ClampedArray(src.data)
-  for (let i = 0; i < out.length; i += 4) {
-    const r = src.data[i]
-    const g = src.data[i + 1]
-    const b = src.data[i + 2]
-    out[i] = clamp8((r * rR + g * rG + b * rB) / 100)
-    out[i + 1] = clamp8((r * gR + g * gG + b * gB) / 100)
-    out[i + 2] = clamp8((r * bR + g * bG + b * bB) / 100)
-  }
-  return new ImageData(out, src.width, src.height)
+  return applyChannelMixerToImageData(src, {
+    rR,
+    rG,
+    rB,
+    gR,
+    gG,
+    gB,
+    bR,
+    bG,
+    bB,
+    ...extra,
+  })
 }
 
 function _vibrance(src: ImageData, amount: number): ImageData {
@@ -949,31 +976,32 @@ function equalize(src: ImageData): ImageData {
   return new ImageData(out, src.width, src.height)
 }
 
-function replaceColor(src: ImageData, hue: number, tolerance: number, lightness: number): ImageData {
+function replaceColor(
+  src: ImageData,
+  sourceHue: number,
+  fuzziness: number,
+  replacementHue: number,
+  replacementSaturation: number,
+  replacementLightness: number,
+): ImageData {
   const out = new Uint8ClampedArray(src.data)
-  const hRange = tolerance / 2
+  const targetHue = (((sourceHue % 360) + 360) % 360) / 360
+  const replacement = (((replacementHue % 360) + 360) % 360) / 360
+  const range = Math.max(0.001, Math.min(180, fuzziness)) / 360
+  const satShift = replacementSaturation / 100
+  const lightShift = replacementLightness / 100
 
   for (let i = 0; i < out.length; i += 4) {
     const { h, s, l } = rgbToHsl(out[i], out[i + 1], out[i + 2])
-    let nh = h
-
-    // Check if hue is within tolerance range (accounting for wrap-around)
-    let hueDiff = Math.abs(h - hue)
-    if (hueDiff > 0.5) hueDiff = 1 - hueDiff
-
-    if (hueDiff <= hRange) {
-      // Shift hue
-      nh = hue + ((h - hue) * 0.5) // Blend towards target hue
-      nh = nh - Math.floor(nh) // Normalize to 0-1
-
-      // Adjust lightness
-      const nl = l + lightness / 100
-
-      const { r, g, b } = hslToRgb(nh, s, nl)
-      out[i] = r
-      out[i + 1] = g
-      out[i + 2] = b
-    }
+    const d = hueDistance(h, targetHue)
+    if (d > range) continue
+    const mask = clamp01(1 - d / range)
+    const nextS = clamp01(s + satShift * mask)
+    const nextL = clamp01(l + lightShift * mask)
+    const { r, g, b } = hslToRgb(h + (replacement - h) * mask, nextS, nextL)
+    out[i] = r
+    out[i + 1] = g
+    out[i + 2] = b
   }
 
   return new ImageData(out, src.width, src.height)
@@ -1003,75 +1031,79 @@ function _matchColor(src: ImageData): ImageData {
   return new ImageData(out, src.width, src.height)
 }
 
-function selectiveColor(src: ImageData, cyans: number, magentas: number, yellows: number, whites: number, neutrals: number, blacks: number): ImageData {
-  // Simplified implementation - adjust color ranges
+function selectiveColor(
+  src: ImageData,
+  range: string,
+  cyan: number,
+  magenta: number,
+  yellow: number,
+  black: number,
+  method: string,
+): ImageData {
   const out = new Uint8ClampedArray(src.data)
+  const relative = method !== "absolute"
 
   for (let i = 0; i < out.length; i += 4) {
-    const r = out[i] / 255
-    const g = out[i + 1] / 255
-    const b = out[i + 2] / 255
+    const r = out[i]
+    const g = out[i + 1]
+    const b = out[i + 2]
     const { h, s, l } = rgbToHsl(r, g, b)
+    const mask = selectiveColorMask(range, h, s, l)
+    if (mask <= 0) continue
 
-    let adjustments = 0
+    const c = 1 - r / 255
+    const m = 1 - g / 255
+    const y = 1 - b / 255
+    const k = Math.min(c, m, y)
+    const scale = relative ? mask : mask * 0.65
+    const nextC = clamp01(c + (cyan / 100) * scale * (relative ? Math.max(0.08, 1 - c) : 1))
+    const nextM = clamp01(m + (magenta / 100) * scale * (relative ? Math.max(0.08, 1 - m) : 1))
+    const nextY = clamp01(y + (yellow / 100) * scale * (relative ? Math.max(0.08, 1 - y) : 1))
+    const nextK = clamp01(k + (black / 100) * scale * (relative ? Math.max(0.08, 1 - k) : 1))
 
-    // Simple selective color adjustments based on hue ranges
-    if (h >= 0.4 && h <= 0.6) { // Cyans/blues
-      adjustments += cyans
-    } else if (h >= 0.9 || h <= 0.1) { // Reds/magentas
-      adjustments += magentas
-    } else if (h >= 0.1 && h <= 0.4) { // Yellows/greens
-      adjustments += yellows
-    } else if (l > 0.8) { // Whites
-      adjustments += whites
-    } else if (l < 0.2) { // Blacks
-      adjustments += blacks
-    } else if (s < 0.2) { // Neutrals
-      adjustments += neutrals
-    }
-
-    // Apply adjustment to lightness
-    const nl = Math.max(0, Math.min(1, l + adjustments / 100))
-    const { r: nr, g: ng, b: nb } = hslToRgb(h, s, nl)
-
-    out[i] = nr * 255
-    out[i + 1] = ng * 255
-    out[i + 2] = nb * 255
+    out[i] = clamp8((1 - Math.min(1, nextC + nextK * 0.7)) * 255)
+    out[i + 1] = clamp8((1 - Math.min(1, nextM + nextK * 0.7)) * 255)
+    out[i + 2] = clamp8((1 - Math.min(1, nextY + nextK * 0.7)) * 255)
   }
 
   return new ImageData(out, src.width, src.height)
 }
 
-function shadowsHighlights(src: ImageData, shadows: number, highlights: number, midpoint: number): ImageData {
+function selectiveColorMask(range: string, h: number, s: number, l: number) {
+  if (range === "whites") return clamp01((l - 0.72) / 0.22)
+  if (range === "neutrals") return clamp01(1 - Math.abs(l - 0.5) / 0.34) * clamp01(1 - Math.max(0, s - 0.5))
+  if (range === "blacks") return clamp01((0.30 - l) / 0.24)
+  const centers: Record<string, number> = {
+    reds: 0,
+    yellows: 1 / 6,
+    greens: 1 / 3,
+    cyans: 0.5,
+    blues: 2 / 3,
+    magentas: 5 / 6,
+  }
+  const center = centers[range] ?? 0
+  return clamp01(1 - hueDistance(h, center) / (1 / 9)) * clamp01(s * 1.6)
+}
+
+function shadowsHighlights(src: ImageData, shadows: number, highlights: number, tonalWidth: number, radius: number, colorCorrection: number): ImageData {
   const out = new Uint8ClampedArray(src.data)
-  const mid = midpoint / 100
+  const width = Math.max(0.05, Math.min(1, tonalWidth / 100))
+  const blurred = radius > 0 ? gaussianBlur(src, Math.min(24, radius)) : src
 
   for (let i = 0; i < out.length; i += 4) {
-    const r = out[i] / 255
-    const g = out[i + 1] / 255
-    const b = out[i + 2] / 255
-    const { h, s, l } = rgbToHsl(r, g, b)
-
-    let adjustment = 0
-
-    // Shadows adjustment (darker tones)
-    if (l < mid) {
-      const factor = (mid - l) / mid
-      adjustment = shadows * factor / 100
+    const localLum = luma(blurred.data[i], blurred.data[i + 1], blurred.data[i + 2]) / 255
+    const shadowMask = clamp01((width - localLum) / width)
+    const highlightMask = clamp01((localLum - (1 - width)) / width)
+    const lift = shadows / 100 * shadowMask
+    const recover = highlights / 100 * highlightMask
+    const colorK = colorCorrection / 100
+    for (let c = 0; c < 3; c++) {
+      const v = out[i + c] / 255
+      const shadowed = v + (1 - v) * lift * 0.65
+      const recovered = shadowed * (1 - recover * 0.48)
+      const neutral = luma(out[i], out[i + 1], out[i + 2]) / 255
+      out[i + c] = clamp8((recovered + (recovered - neutral) * colorK * 0.18) * 255)
     }
-    // Highlights adjustment (lighter tones)
-    else if (l > mid) {
-      const factor = (l - mid) / (1 - mid)
-      adjustment = highlights * factor / 100
-    }
-
-    // Apply adjustment to lightness
-    const nl = Math.max(0, Math.min(1, l + adjustment))
-    const { r: nr, g: ng, b: nb } = hslToRgb(h, s, nl)
-
-    out[i] = nr * 255
-    out[i + 1] = ng * 255
-    out[i + 2] = nb * 255
   }
 
   return new ImageData(out, src.width, src.height)
@@ -1106,24 +1138,90 @@ function hdrTonning(src: ImageData, radius: number, strength: number): ImageData
   return new ImageData(out, src.width, src.height)
 }
 
-function colorLookup(src: ImageData, lutStrength: number): ImageData {
-  // Simplified color lookup using a 3D LUT approximation
+interface CubeLut {
+  size: number
+  values: Array<[number, number, number]>
+}
+
+function parseCubeLut(value: unknown): CubeLut | null {
+  if (typeof value !== "string" || !value.trim()) return null
+  let size = 0
+  const values: Array<[number, number, number]> = []
+  for (const raw of value.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line || line.startsWith("#") || /^TITLE\b/i.test(line)) continue
+    const sizeMatch = line.match(/^LUT_3D_SIZE\s+(\d+)/i)
+    if (sizeMatch) {
+      size = Math.max(2, Math.min(64, Number(sizeMatch[1]) || 0))
+      continue
+    }
+    if (/^(DOMAIN_MIN|DOMAIN_MAX)\b/i.test(line)) continue
+    const parts = line.split(/\s+/).map(Number)
+    if (parts.length >= 3 && parts.every(Number.isFinite)) {
+      values.push([
+        clamp01(parts[0]) * 255,
+        clamp01(parts[1]) * 255,
+        clamp01(parts[2]) * 255,
+      ])
+    }
+  }
+  if (!size || values.length < size * size * size) return null
+  return { size, values }
+}
+
+function sampleCubeLut(lut: CubeLut, r: number, g: number, b: number): [number, number, number] {
+  const n = lut.size
+  const rf = clamp01(r / 255) * (n - 1)
+  const gf = clamp01(g / 255) * (n - 1)
+  const bf = clamp01(b / 255) * (n - 1)
+  const r0 = Math.floor(rf), g0 = Math.floor(gf), b0 = Math.floor(bf)
+  const r1 = Math.min(n - 1, r0 + 1), g1 = Math.min(n - 1, g0 + 1), b1 = Math.min(n - 1, b0 + 1)
+  const tr = rf - r0, tg = gf - g0, tb = bf - b0
+  const at = (ri: number, gi: number, bi: number) => lut.values[bi * n * n + gi * n + ri] ?? [r, g, b]
+  const out: [number, number, number] = [0, 0, 0]
+  for (const [ri, rw] of [[r0, 1 - tr], [r1, tr]] as const) {
+    for (const [gi, gw] of [[g0, 1 - tg], [g1, tg]] as const) {
+      for (const [bi, bw] of [[b0, 1 - tb], [b1, tb]] as const) {
+        const c = at(ri, gi, bi)
+        const w = rw * gw * bw
+        out[0] += c[0] * w
+        out[1] += c[1] * w
+        out[2] += c[2] * w
+      }
+    }
+  }
+  return out
+}
+
+function applyLookupPreset(r: number, g: number, b: number, preset: string): [number, number, number] {
+  const rn = r / 255, gn = g / 255, bn = b / 255
+  if (preset === "warm") return [clamp8(r * 1.08 + 8), clamp8(g * 1.02 + 3), clamp8(b * 0.92)]
+  if (preset === "cool") return [clamp8(r * 0.92), clamp8(g * 1.02 + 2), clamp8(b * 1.1 + 8)]
+  if (preset === "bleach") {
+    const gray = luma(r, g, b)
+    return [clamp8(gray * 0.35 + r * 0.88 + 12), clamp8(gray * 0.35 + g * 0.88 + 12), clamp8(gray * 0.35 + b * 0.88 + 12)]
+  }
+  if (preset === "cross-process") return [clamp8(Math.pow(rn, 0.82) * 255), clamp8(Math.pow(gn, 1.06) * 255 + 8), clamp8(Math.pow(bn, 1.22) * 255)]
+  const contrast = 1.15
+  return [
+    clamp8((rn - 0.5) * 255 * contrast + 128),
+    clamp8((gn - 0.5) * 255 * contrast + 128),
+    clamp8((bn - 0.5) * 255 * contrast + 128),
+  ]
+}
+
+function colorLookup(src: ImageData, lutStrength: number, lutData = "", preset = "filmic"): ImageData {
   const out = new Uint8ClampedArray(src.data)
+  const amount = Math.max(-100, Math.min(100, lutStrength)) / 100
+  const lut = parseCubeLut(lutData)
 
   for (let i = 0; i < out.length; i += 4) {
-    const r = out[i] / 255
-    const g = out[i + 1] / 255
-    const b = out[i + 2] / 255
-
-    // Simple 3D LUT: enhance contrast and slightly shift colors
-    const contrast = 1 + (lutStrength / 100)
-    const nr = Math.pow(r, contrast) * 255
-    const ng = Math.pow(g, contrast) * 255
-    const nb = Math.pow(b, contrast) * 255
-
-    out[i] = clamp8(nr)
-    out[i + 1] = clamp8(ng)
-    out[i + 2] = clamp8(nb)
+    const mapped = lut
+      ? sampleCubeLut(lut, out[i], out[i + 1], out[i + 2])
+      : applyLookupPreset(out[i], out[i + 1], out[i + 2], preset)
+    out[i] = clamp8(out[i] + (mapped[0] - out[i]) * amount)
+    out[i + 1] = clamp8(out[i + 1] + (mapped[1] - out[i + 1]) * amount)
+    out[i + 2] = clamp8(out[i + 2] + (mapped[2] - out[i + 2]) * amount)
   }
 
   return new ImageData(out, src.width, src.height)
@@ -1366,7 +1464,7 @@ function parseGradientStops(value: unknown): GradientStopValue[] {
   return stops
 }
 
-function sampleGradient(stops: GradientStopValue[], t: number) {
+function sampleGradient(stops: GradientStopValue[], t: number, interpolation = "rgb") {
   const first = stops[0]
   if (t <= first.offset) return hexToRgbFilter(first.color)
   for (let i = 0; i < stops.length - 1; i++) {
@@ -1377,6 +1475,15 @@ function sampleGradient(stops: GradientStopValue[], t: number) {
       const k = (t - a.offset) / span
       const ca = hexToRgbFilter(a.color)
       const cb = hexToRgbFilter(b.color)
+      if (interpolation === "hsl") {
+        const ha = rgbToHsl(ca.r, ca.g, ca.b)
+        const hb = rgbToHsl(cb.r, cb.g, cb.b)
+        let dh = hb.h - ha.h
+        if (dh > 0.5) dh -= 1
+        if (dh < -0.5) dh += 1
+        const c = hslToRgb((ha.h + dh * k + 1) % 1, ha.s + (hb.s - ha.s) * k, ha.l + (hb.l - ha.l) * k)
+        return { r: c.r, g: c.g, b: c.b }
+      }
       return {
         r: ca.r + (cb.r - ca.r) * k,
         g: ca.g + (cb.g - ca.g) * k,
@@ -1387,24 +1494,15 @@ function sampleGradient(stops: GradientStopValue[], t: number) {
   return hexToRgbFilter(stops[stops.length - 1].color)
 }
 
-function hexToRgbFilter(hex: string) {
-  const raw = hex.replace("#", "")
-  const v = Number.parseInt(raw.length === 3 ? raw.split("").map((c) => c + c).join("") : raw, 16)
-  return {
-    r: (v >> 16) & 255,
-    g: (v >> 8) & 255,
-    b: v & 255,
-  }
-}
 
-function gradientMapAdvanced(src: ImageData, gradient: string, reverse = false, dither = false): ImageData {
+function gradientMapAdvanced(src: ImageData, gradient: string, reverse = false, dither = false, interpolation = "rgb"): ImageData {
   const out = new Uint8ClampedArray(src.data)
   const stops = parseGradientStops(gradient)
   for (let i = 0, p = 0; i < out.length; i += 4, p++) {
     let t = luma(out[i], out[i + 1], out[i + 2]) / 255
     if (dither) t = clamp01(t + (pseudoDither(p) - 0.5) / 255)
     if (reverse) t = 1 - t
-    const c = sampleGradient(stops, t)
+    const c = sampleGradient(stops, t, interpolation)
     out[i] = c.r
     out[i + 1] = c.g
     out[i + 2] = c.b
@@ -1769,7 +1867,76 @@ function adaptiveWideAngle(src: ImageData, correction: number, fisheye: number, 
   return new ImageData(out, w, h)
 }
 
-function vanishingPoint(src: ImageData, horizonPct: number, leftVanishing: number, rightVanishing: number, depth: number, showGrid: boolean): ImageData {
+function perspectivePlaneWarp(
+  src: ImageData,
+  offsets: {
+    topLeftX: number
+    topLeftY: number
+    topRightX: number
+    topRightY: number
+    bottomRightX: number
+    bottomRightY: number
+    bottomLeftX: number
+    bottomLeftY: number
+  },
+  showGrid: boolean,
+) {
+  const w = src.width
+  const h = src.height
+  const out = new Uint8ClampedArray(src.data.length)
+  const scaleX = w / 100
+  const scaleY = h / 100
+  const tl = { x: offsets.topLeftX * scaleX, y: offsets.topLeftY * scaleY }
+  const tr = { x: w - 1 + offsets.topRightX * scaleX, y: offsets.topRightY * scaleY }
+  const br = { x: w - 1 + offsets.bottomRightX * scaleX, y: h - 1 + offsets.bottomRightY * scaleY }
+  const bl = { x: offsets.bottomLeftX * scaleX, y: h - 1 + offsets.bottomLeftY * scaleY }
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let u = w <= 1 ? 0 : x / (w - 1)
+      let v = h <= 1 ? 0 : y / (h - 1)
+      for (let iter = 0; iter < 5; iter++) {
+        const px = (1 - u) * (1 - v) * tl.x + u * (1 - v) * tr.x + u * v * br.x + (1 - u) * v * bl.x
+        const py = (1 - u) * (1 - v) * tl.y + u * (1 - v) * tr.y + u * v * br.y + (1 - u) * v * bl.y
+        const dux = -(1 - v) * tl.x + (1 - v) * tr.x + v * br.x - v * bl.x
+        const duy = -(1 - v) * tl.y + (1 - v) * tr.y + v * br.y - v * bl.y
+        const dvx = -(1 - u) * tl.x - u * tr.x + u * br.x + (1 - u) * bl.x
+        const dvy = -(1 - u) * tl.y - u * tr.y + u * br.y + (1 - u) * bl.y
+        const ex = px - x
+        const ey = py - y
+        const det = dux * dvy - dvx * duy
+        if (Math.abs(det) < 0.0001) break
+        u = clamp01(u - (ex * dvy - ey * dvx) / det)
+        v = clamp01(v - (dux * ey - duy * ex) / det)
+      }
+      const [rr, gg, bb, aa] = bilinearSample(src.data, w, h, u * (w - 1), v * (h - 1))
+      const i = (y * w + x) * 4
+      out[i] = rr
+      out[i + 1] = gg
+      out[i + 2] = bb
+      out[i + 3] = aa
+      if (showGrid && ((Math.round(u * 8) === u * 8) || (Math.round(v * 8) === v * 8))) {
+        out[i] = clamp8(out[i] * 0.55 + 38)
+        out[i + 1] = clamp8(out[i + 1] * 0.55 + 160)
+        out[i + 2] = clamp8(out[i + 2] * 0.55 + 255)
+        out[i + 3] = Math.max(out[i + 3], 190)
+      }
+    }
+  }
+  return new ImageData(out, w, h)
+}
+
+function vanishingPoint(
+  src: ImageData,
+  horizonPct: number,
+  leftVanishing: number,
+  rightVanishing: number,
+  depth: number,
+  showGrid: boolean,
+  planeOffsets?: Parameters<typeof perspectivePlaneWarp>[1],
+): ImageData {
+  if (planeOffsets && Object.values(planeOffsets).some((value) => Math.abs(value) > 0.001)) {
+    return perspectivePlaneWarp(src, planeOffsets, showGrid)
+  }
   const w = src.width
   const h = src.height
   const out = new Uint8ClampedArray(src.data.length)
@@ -1974,7 +2141,7 @@ function filterHighPass(src: ImageData, radius: number): ImageData {
   return new ImageData(out, src.width, src.height)
 }
 
-function filterOffset(src: ImageData, dx: number, dy: number, edgeMode: string): ImageData {
+function filterOffset(src: ImageData, dx: number, dy: number, edgeMode: string, fillR = 255, fillG = 255, fillB = 255): ImageData {
   const w = src.width, h = src.height, out = new Uint8ClampedArray(src.data.length)
   const dxi = Math.round(dx), dyi = Math.round(dy)
   for (let y = 0; y < h; y++) {
@@ -1987,6 +2154,11 @@ function filterOffset(src: ImageData, dx: number, dy: number, edgeMode: string):
       } else if (edgeMode === "repeat") {
         sx = Math.max(0, Math.min(w - 1, sx))
         sy = Math.max(0, Math.min(h - 1, sy))
+      } else if (edgeMode === "background") {
+        if (sx < 0 || sx >= w || sy < 0 || sy >= h) {
+          out[oi] = fillR; out[oi + 1] = fillG; out[oi + 2] = fillB; out[oi + 3] = 255
+          continue
+        }
       } else {
         if (sx < 0 || sx >= w || sy < 0 || sy >= h) {
           out[oi] = 0; out[oi + 1] = 0; out[oi + 2] = 0; out[oi + 3] = 0
@@ -2089,58 +2261,75 @@ function lensBlur(src: ImageData, radius: number, bladeCount: number, rotation: 
   const r = Math.max(1, Math.min(40, Math.round(radius)))
   const blades = Math.max(3, Math.min(8, Math.round(bladeCount)))
 
-  // Build hexagonal/polygon kernel
-  const kernel: number[][] = []
-  let kernelTotal = 0
+  // Build polygon (iris) aperture kernel. Each kernel entry is (offset, weight).
+  // Using gamma-2.0 (linear-light) accumulation so specular highlights produce
+  // the bright "ringed" bokeh that Photoshop's Lens Blur is famous for.
+  const offsets: number[] = []
   const rotRad = rotation * Math.PI / 180
+  const halfSeg = Math.PI / blades
   for (let ky = -r; ky <= r; ky++) {
     for (let kx = -r; kx <= r; kx++) {
       const dist = Math.hypot(kx, ky)
       if (dist > r) continue
-      // Check if point is inside polygon
       const angle = Math.atan2(ky, kx) - rotRad
-      const segment = (2 * Math.PI) / blades
-      const localAngle = ((angle % segment) + segment) % segment
-      const polyRadius = r / Math.cos(Math.PI / blades - localAngle)
-      if (dist <= Math.abs(polyRadius)) {
-        kernel.push([kx, ky, 1])
-        kernelTotal++
-      }
+      const segment = 2 * Math.PI / blades
+      const localAngle = ((angle % segment) + segment) % segment - halfSeg
+      const polyRadius = r * Math.cos(halfSeg) / Math.max(0.001, Math.cos(localAngle))
+      if (dist <= polyRadius) offsets.push(kx, ky)
     }
   }
-  if (kernelTotal === 0) return new ImageData(new Uint8ClampedArray(src.data), src.width, src.height)
+  if (!offsets.length) return new ImageData(new Uint8ClampedArray(src.data), w, h)
+  const kCount = offsets.length / 2
+
+  // Pre-convert source to linear-light squared values for gamma-correct averaging.
+  const linR = new Float32Array(w * h)
+  const linG = new Float32Array(w * h)
+  const linB = new Float32Array(w * h)
+  const specMap = new Float32Array(w * h) // extra multiplier for bright specs
+  const specK = Math.max(0, specBright) / 100
+  const specT = Math.max(0, Math.min(255, specThreshold))
+  for (let py = 0; py < h; py++) {
+    for (let px = 0; px < w; px++) {
+      const i = (py * w + px) * 4
+      const rr = src.data[i] / 255, gg = src.data[i + 1] / 255, bb = src.data[i + 2] / 255
+      linR[py * w + px] = rr * rr
+      linG[py * w + px] = gg * gg
+      linB[py * w + px] = bb * bb
+      const lum = Math.max(src.data[i], src.data[i + 1], src.data[i + 2])
+      let m = 1
+      if (specK > 0 && lum > specT) {
+        // Boost is proportional to how far above threshold the pixel is.
+        m = 1 + ((lum - specT) / Math.max(1, 255 - specT)) * specK * 6
+      }
+      specMap[py * w + px] = m
+    }
+  }
 
   const out = new Uint8ClampedArray(src.data.length)
-  const specK = specBright / 100
-
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       let rSum = 0, gSum = 0, bSum = 0, aSum = 0, wSum = 0
-      for (const [kx, ky] of kernel) {
-        const sx = Math.max(0, Math.min(w - 1, x + kx))
-        const sy = Math.max(0, Math.min(h - 1, y + ky))
-        const si = (sy * w + sx) * 4
-        // Weight brighter pixels more for specular highlights
-        let weight = 1
-        if (specK > 0) {
-          const lum = Math.max(src.data[si], src.data[si + 1], src.data[si + 2])
-          if (lum > specThreshold) weight = 1 + (lum - specThreshold) / 255 * specK * 4
-        }
-        rSum += src.data[si] * weight
-        gSum += src.data[si + 1] * weight
-        bSum += src.data[si + 2] * weight
-        aSum += src.data[si + 3] * weight
+      for (let k = 0; k < kCount; k++) {
+        const ox = offsets[k * 2], oy = offsets[k * 2 + 1]
+        const sx = x + ox < 0 ? 0 : x + ox >= w ? w - 1 : x + ox
+        const sy = y + oy < 0 ? 0 : y + oy >= h ? h - 1 : y + oy
+        const sIdx = sy * w + sx
+        const weight = specMap[sIdx]
+        rSum += linR[sIdx] * weight
+        gSum += linG[sIdx] * weight
+        bSum += linB[sIdx] * weight
+        aSum += src.data[sIdx * 4 + 3] * weight
         wSum += weight
       }
       const idx = (y * w + x) * 4
-      out[idx] = clamp8(rSum / wSum)
-      out[idx + 1] = clamp8(gSum / wSum)
-      out[idx + 2] = clamp8(bSum / wSum)
+      // sqrt back to gamma-encoded display space
+      out[idx] = clamp8(Math.sqrt(rSum / wSum) * 255)
+      out[idx + 1] = clamp8(Math.sqrt(gSum / wSum) * 255)
+      out[idx + 2] = clamp8(Math.sqrt(bSum / wSum) * 255)
       out[idx + 3] = clamp8(aSum / wSum)
     }
   }
 
-  // Add noise if requested
   if (noiseAmt > 0) {
     const amp = noiseAmt * 2.55
     for (let y = 0; y < h; y++) {
@@ -2166,67 +2355,114 @@ function lensBlur(src: ImageData, radius: number, bladeCount: number, rotation: 
 function surfaceBlur(src: ImageData, radius: number, threshold: number): ImageData {
   if (radius <= 0 || threshold <= 0) return clone(src)
   const w = src.width, h = src.height
-  const out = new Uint8ClampedArray(src.data.length)
   const r = Math.max(1, Math.min(18, Math.round(radius)))
-  const t = Math.max(0, Math.min(255, threshold))
-  const sigmaS = Math.max(0.75, r * 0.65)
-  const sigmaR = Math.max(1, t * 0.55)
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = (y * w + x) * 4
-      const baseLum = luma(src.data[i], src.data[i + 1], src.data[i + 2])
-      let rs = 0, gs = 0, bs = 0, as = 0, weightSum = 0
-      for (let oy = -r; oy <= r; oy++) {
-        const sy = Math.max(0, Math.min(h - 1, y + oy))
-        for (let ox = -r; ox <= r; ox++) {
-          if (ox * ox + oy * oy > r * r) continue
-          const sx = Math.max(0, Math.min(w - 1, x + ox))
-          const p = (sy * w + sx) * 4
-          const diff = Math.abs(luma(src.data[p], src.data[p + 1], src.data[p + 2]) - baseLum)
-          if (diff <= t) {
-            const spatial = Math.exp(-(ox * ox + oy * oy) / (2 * sigmaS * sigmaS))
-            const range = Math.exp(-(diff * diff) / (2 * sigmaR * sigmaR))
-            const weight = spatial * range
-            rs += src.data[p] * weight; gs += src.data[p + 1] * weight; bs += src.data[p + 2] * weight; as += src.data[p + 3] * weight
-            weightSum += weight
-          }
-        }
-      }
-      out[i] = weightSum ? rs / weightSum : src.data[i]
-      out[i + 1] = weightSum ? gs / weightSum : src.data[i + 1]
-      out[i + 2] = weightSum ? bs / weightSum : src.data[i + 2]
-      out[i + 3] = weightSum ? as / weightSum : src.data[i + 3]
+  const t = Math.max(1, Math.min(255, threshold))
+
+  // Precompute circular spatial weight table (Gaussian with sigma derived from radius).
+  // Surface blur in Photoshop behaves as a thresholded bilateral filter: pixels whose
+  // tonal difference exceeds threshold contribute nothing, while pixels well inside
+  // the threshold contribute fully — producing the characteristic flat-region look.
+  const sigmaS = Math.max(0.85, r * 0.6)
+  const twoSigmaS2 = 2 * sigmaS * sigmaS
+  const r2 = r * r
+  const spatial = new Float32Array((2 * r + 1) * (2 * r + 1))
+  const offsets: number[] = []
+  for (let oy = -r; oy <= r; oy++) {
+    for (let ox = -r; ox <= r; ox++) {
+      const d2 = ox * ox + oy * oy
+      if (d2 > r2) continue
+      spatial[(oy + r) * (2 * r + 1) + (ox + r)] = Math.exp(-d2 / twoSigmaS2)
+      offsets.push(ox, oy)
     }
   }
-  return new ImageData(out, w, h)
+
+  // Iterate twice to push toward piecewise-constant surfaces (matches PS behavior).
+  let cur = src.data
+  const buf = new Uint8ClampedArray(src.data.length)
+  const passes = r >= 6 ? 2 : 1
+  for (let pass = 0; pass < passes; pass++) {
+    const tInv = 1 / t
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4
+        const cR = cur[i], cG = cur[i + 1], cB = cur[i + 2], cA = cur[i + 3]
+        let rs = 0, gs = 0, bs = 0, as_ = 0, wSum = 0
+        for (let k = 0; k < offsets.length; k += 2) {
+          const ox = offsets[k], oy = offsets[k + 1]
+          const sx = x + ox < 0 ? 0 : x + ox >= w ? w - 1 : x + ox
+          const sy = y + oy < 0 ? 0 : y + oy >= h ? h - 1 : y + oy
+          const p = (sy * w + sx) * 4
+          const dr = cur[p] - cR, dg = cur[p + 1] - cG, db = cur[p + 2] - cB
+          const maxDiff = Math.max(Math.abs(dr), Math.abs(dg), Math.abs(db))
+          if (maxDiff >= t) continue
+          // 1 - (d/t)^2 falloff — Photoshop-like tent, with circular spatial weight.
+          const norm = maxDiff * tInv
+          const range = 1 - norm * norm
+          const sp = spatial[(oy + r) * (2 * r + 1) + (ox + r)]
+          const weight = sp * range
+          rs += cur[p] * weight
+          gs += cur[p + 1] * weight
+          bs += cur[p + 2] * weight
+          as_ += cur[p + 3] * weight
+          wSum += weight
+        }
+        if (wSum > 0) {
+          buf[i] = rs / wSum
+          buf[i + 1] = gs / wSum
+          buf[i + 2] = bs / wSum
+          buf[i + 3] = as_ / wSum
+        } else {
+          buf[i] = cR; buf[i + 1] = cG; buf[i + 2] = cB; buf[i + 3] = cA
+        }
+      }
+    }
+    cur = new Uint8ClampedArray(buf)
+  }
+  return new ImageData(new Uint8ClampedArray(cur), w, h)
 }
 
-function radialBlur(src: ImageData, amount: number, method: string, quality: string): ImageData {
+function radialBlur(src: ImageData, amount: number, method: string, quality: string, centerX = 50, centerY = 50): ImageData {
   const w = src.width, h = src.height, out = new Uint8ClampedArray(src.data.length)
-  const cx = w / 2, cy = h / 2
+  const cx = clamp01(centerX / 100) * (w - 1)
+  const cy = clamp01(centerY / 100) * (h - 1)
   const strength = Math.max(0, Math.min(100, amount)) / 100
-  const steps = quality === "best" ? 28 : quality === "good" ? 16 : 8
+  if (strength <= 0) return new ImageData(new Uint8ClampedArray(src.data), w, h)
+  const steps = quality === "best" ? 48 : quality === "good" ? 24 : 12
+  // Scale spin angle with image diagonal so far pixels travel a constant arc length,
+  // which is what Photoshop's spin blur does (constant pixel velocity).
+  const diag = Math.hypot(w, h)
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      let rs = 0, gs = 0, bs = 0, as = 0
       const dx = x - cx, dy = y - cy
+      const dist = Math.hypot(dx, dy)
+      let rs = 0, gs = 0, bs = 0, as_ = 0, wSum = 0
       for (let s = 0; s < steps; s++) {
-        const t = (s / Math.max(1, steps - 1) - 0.5) * strength
+        // Tent weight peaks at the center sample for natural smooth falloff.
+        const stepWeight = 1 - Math.abs((s / Math.max(1, steps - 1)) - 0.5) * 2
+        const jitter = quality === "best" ? (pseudoDither(y * w + x + s * 17) - 0.5) / steps : 0
+        const t = (s / Math.max(1, steps - 1) - 0.5 + jitter) * strength
         let sx = x, sy = y
         if (method === "zoom") {
-          sx = cx + dx * (1 + t * 0.9)
-          sy = cy + dy * (1 + t * 0.9)
+          const scale = 1 + t * 1.3
+          sx = cx + dx * scale
+          sy = cy + dy * scale
         } else {
-          const angle = t * Math.PI * 0.45
-          const cos = Math.cos(angle), sin = Math.sin(angle)
+          // spin — angular sweep proportional to (amount / dist) so arc length is
+          // bounded by the diagonal-scaled spin radius
+          const arc = t * (diag * 0.5) / Math.max(8, dist)
+          const cos = Math.cos(arc), sin = Math.sin(arc)
           sx = cx + dx * cos - dy * sin
           sy = cy + dx * sin + dy * cos
         }
         const sample = bilinearSample(src.data, w, h, sx, sy)
-        rs += sample[0]; gs += sample[1]; bs += sample[2]; as += sample[3]
+        rs += sample[0] * stepWeight
+        gs += sample[1] * stepWeight
+        bs += sample[2] * stepWeight
+        as_ += sample[3] * stepWeight
+        wSum += stepWeight
       }
       const i = (y * w + x) * 4
-      out[i] = rs / steps; out[i + 1] = gs / steps; out[i + 2] = bs / steps; out[i + 3] = as / steps
+      out[i] = rs / wSum; out[i + 1] = gs / wSum; out[i + 2] = bs / wSum; out[i + 3] = as_ / wSum
     }
   }
   return new ImageData(out, w, h)
@@ -2374,22 +2610,82 @@ function spinBlur(src: ImageData, amount: number, centerX: number, centerY: numb
   return mixBlurredByWeight(field, shifted, () => 0.65)
 }
 
-function lensCorrection(src: ImageData, distortion: number, vignette: number, chromatic: number): ImageData {
+/* ------------------------- lens profile presets -------------------------- */
+interface LensProfilePreset {
+  k1: number
+  k2: number
+  k3: number
+  p1: number
+  p2: number
+  vignette: number
+  chromatic: number
+  description: string
+}
+const LENS_PROFILE_PRESETS: Record<string, LensProfilePreset> = {
+  custom:        { k1: 0,     k2: 0,    k3: 0,    p1: 0,    p2: 0,    vignette: 0,    chromatic: 0,    description: "Manual" },
+  smartphone:    { k1: 0.16,  k2: 0.04, k3: 0,    p1: 0,    p2: 0,    vignette: 0.18, chromatic: 0.08, description: "Generic phone wide" },
+  "wide-angle":  { k1: 0.34,  k2: 0.10, k3: 0.02, p1: 0,    p2: 0,    vignette: 0.32, chromatic: 0.18, description: "24mm wide" },
+  fisheye:       { k1: 0.62,  k2: 0.30, k3: 0.10, p1: 0,    p2: 0,    vignette: 0.45, chromatic: 0.22, description: "Fisheye 8-15mm" },
+  "standard-50": { k1: 0.04,  k2: 0.01, k3: 0,    p1: 0,    p2: 0,    vignette: 0.08, chromatic: 0.04, description: "Standard 50mm" },
+  telephoto:     { k1: -0.10, k2: -0.02, k3: 0,   p1: 0,    p2: 0,    vignette: 0.10, chromatic: 0.05, description: "85-200mm tele" },
+  "super-tele":  { k1: -0.22, k2: -0.06, k3: -0.01, p1: 0,  p2: 0,    vignette: 0.06, chromatic: 0.03, description: "300mm+ super tele" },
+  "drone-fpv":   { k1: 0.45,  k2: 0.18, k3: 0.05, p1: 0.01, p2: 0.01, vignette: 0.36, chromatic: 0.20, description: "Drone/action cam" },
+}
+
+function lensCorrection(
+  src: ImageData,
+  distortion: number,
+  vignette: number,
+  chromatic: number,
+  k2Strength: number = 0,
+  k3Strength: number = 0,
+  tangentialX: number = 0,
+  tangentialY: number = 0,
+  profile: string = "custom",
+  autoScale: boolean = false,
+  edgeMode: string = "clamp",
+): ImageData {
   const w = src.width, h = src.height, out = new Uint8ClampedArray(src.data.length)
   const cx = (w - 1) / 2, cy = (h - 1) / 2
   const maxR = Math.max(1, Math.hypot(cx, cy))
-  const k1 = distortion / 160
-  const k2 = distortion / 420
-  const ca = chromatic / 100
-  const vig = vignette / 100
+  const preset = LENS_PROFILE_PRESETS[profile] ?? LENS_PROFILE_PRESETS.custom
+  const k1 = preset.k1 + distortion / 160
+  const k2 = preset.k2 + (k2Strength + distortion * 0.4) / 420
+  const k3 = preset.k3 + k3Strength / 900
+  const p1 = preset.p1 + tangentialX / 1200
+  const p2 = preset.p2 + tangentialY / 1200
+  const ca = (chromatic + preset.chromatic * 100) / 100
+  const vig = (vignette + preset.vignette * 100) / 100
+  // Compute an auto-scale factor so the corrected image fills the frame
+  // without exposing the resampled edge — sample the 4 image corners and
+  // scale by the smallest displacement factor.
+  let outScale = 1
+  if (autoScale) {
+    const corners: Array<[number, number]> = [
+      [0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1],
+    ]
+    let minFactor = Infinity
+    for (const [px, py] of corners) {
+      const dx = px - cx, dy = py - cy
+      const nx2 = dx / maxR, ny2 = dy / maxR
+      const r2c = nx2 * nx2 + ny2 * ny2
+      const f = 1 + k1 * r2c + k2 * r2c * r2c + k3 * r2c * r2c * r2c
+      if (f > 0 && f < minFactor) minFactor = f
+    }
+    if (isFinite(minFactor) && minFactor > 0) outScale = minFactor
+  }
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      const dx = x - cx, dy = y - cy
+      const dx = (x - cx) * outScale, dy = (y - cy) * outScale
       const nx = dx / maxR, ny = dy / maxR
       const r2 = nx * nx + ny * ny
-      const factor = 1 + k1 * r2 + k2 * r2 * r2
-      const sx = cx + dx * factor
-      const sy = cy + dy * factor
+      const r4 = r2 * r2, r6 = r4 * r2
+      const factor = 1 + k1 * r2 + k2 * r4 + k3 * r6
+      // Brown-Conrady tangential distortion (off-axis lens tilt)
+      const tx = 2 * p1 * nx * ny + p2 * (r2 + 2 * nx * nx)
+      const ty = p1 * (r2 + 2 * ny * ny) + 2 * p2 * nx * ny
+      const sx = cx + dx * factor + tx * maxR
+      const sy = cy + dy * factor + ty * maxR
       const chromaShift = ca * (0.3 + r2) * 1.35
       const red = bilinearSample(src.data, w, h, sx + nx * chromaShift, sy + ny * chromaShift)
       const mid = bilinearSample(src.data, w, h, sx, sy)
@@ -2397,10 +2693,19 @@ function lensCorrection(src: ImageData, distortion: number, vignette: number, ch
       const radial = Math.pow(clamp01(Math.sqrt(r2)), 1.7)
       const shade = vig >= 0 ? clamp01(1 - vig * radial * 0.85) : 1 + Math.abs(vig) * radial * 0.55
       const i = (y * w + x) * 4
-      out[i] = clamp8(red[0] * shade)
-      out[i + 1] = clamp8(mid[1] * shade)
-      out[i + 2] = clamp8(blue[2] * shade)
-      out[i + 3] = mid[3]
+      const outOfBounds = sx < 0 || sx > w - 1 || sy < 0 || sy > h - 1
+      if (outOfBounds && edgeMode === "transparent") {
+        out[i] = 0; out[i + 1] = 0; out[i + 2] = 0; out[i + 3] = 0
+      } else if (outOfBounds && edgeMode === "black") {
+        out[i] = 0; out[i + 1] = 0; out[i + 2] = 0; out[i + 3] = mid[3]
+      } else if (outOfBounds && edgeMode === "white") {
+        out[i] = 255; out[i + 1] = 255; out[i + 2] = 255; out[i + 3] = mid[3]
+      } else {
+        out[i] = clamp8(red[0] * shade)
+        out[i + 1] = clamp8(mid[1] * shade)
+        out[i + 2] = clamp8(blue[2] * shade)
+        out[i + 3] = mid[3]
+      }
     }
   }
   return new ImageData(out, w, h)
@@ -2449,53 +2754,203 @@ function mezzotint(src: ImageData, type: string, density: number): ImageData {
   return new ImageData(out, w, h)
 }
 
-function lightingEffects(src: ImageData, style: string, intensity: number, ambient: number, height: number): ImageData {
+interface LightConfig {
+  type?: "spot" | "point" | "directional" | "omni"
+  x?: number
+  y?: number
+  z?: number
+  intensity?: number
+  color?: [number, number, number]
+  radius?: number
+  focus?: number
+  angleX?: number
+  angleY?: number
+}
+
+interface MaterialConfig {
+  gloss?: number
+  shine?: number
+  ambientColor?: [number, number, number]
+  exposure?: number
+}
+
+function defaultLightsForStyle(style: string, intensityPercent: number): LightConfig[] {
+  const intensity = Math.max(0, intensityPercent) / 100
+  if (style === "directional") {
+    return [{ type: "directional", angleX: -0.5, angleY: -0.7, z: 0.7, intensity, color: [255, 240, 215] }]
+  }
+  if (style === "omni" || style === "point") {
+    return [{ type: "point", x: 0.5, y: 0.5, z: 0.45, intensity, color: [255, 245, 230], radius: 0.7 }]
+  }
+  if (style === "three-point") {
+    return [
+      { type: "spot", x: 0.32, y: 0.3, z: 0.55, intensity, color: [255, 235, 200], radius: 0.55, focus: 0.45 },
+      { type: "spot", x: 0.72, y: 0.4, z: 0.4, intensity: intensity * 0.55, color: [200, 220, 255], radius: 0.5, focus: 0.35 },
+      { type: "point", x: 0.5, y: 0.85, z: 0.3, intensity: intensity * 0.35, color: [255, 215, 180], radius: 0.65 },
+    ]
+  }
+  if (style === "rgb-trio") {
+    return [
+      { type: "spot", x: 0.25, y: 0.35, z: 0.5, intensity, color: [255, 60, 60], radius: 0.55, focus: 0.4 },
+      { type: "spot", x: 0.55, y: 0.3, z: 0.5, intensity, color: [60, 255, 80], radius: 0.55, focus: 0.4 },
+      { type: "spot", x: 0.75, y: 0.5, z: 0.5, intensity, color: [60, 80, 255], radius: 0.55, focus: 0.4 },
+    ]
+  }
+  return [{ type: "spot", x: 0.45, y: 0.35, z: 0.6, intensity, color: [255, 240, 215], radius: 0.6, focus: 0.4 }]
+}
+
+function parseLightsConfig(raw: unknown): LightConfig[] | null {
+  if (!raw) return null
+  try {
+    const value = typeof raw === "string" ? JSON.parse(raw) : raw
+    if (!Array.isArray(value)) return null
+    return value.filter((entry) => entry && typeof entry === "object") as LightConfig[]
+  } catch {
+    return null
+  }
+}
+
+function lightingEffects(
+  src: ImageData,
+  style: string,
+  intensity: number,
+  ambient: number,
+  height: number,
+  lightsRaw?: unknown,
+  materialRaw?: unknown,
+): ImageData {
   const w = src.width, h = src.height, out = new Uint8ClampedArray(src.data.length)
-  const light = Math.max(0, intensity) / 100
   const amb = Math.max(0, ambient) / 100
   const heightScale = Math.max(0, Math.min(100, height)) / 100
-  const lx = style === "directional" ? -0.5 : 0.35
-  const ly = style === "directional" ? -0.7 : -0.45
-  const lz = style === "omni" ? 0.95 : 0.7
-  const len = Math.hypot(lx, ly, lz)
+  const lights = parseLightsConfig(lightsRaw) ?? defaultLightsForStyle(style, intensity)
+  const material: MaterialConfig = (() => {
+    if (!materialRaw) return {}
+    try {
+      return typeof materialRaw === "string" ? JSON.parse(materialRaw) : (materialRaw as MaterialConfig)
+    } catch {
+      return {}
+    }
+  })()
+  const gloss = Math.max(0, Math.min(1, material.gloss ?? 0.5))
+  const shine = Math.max(0, Math.min(1, material.shine ?? 0.6))
+  const exposure = Math.pow(2, Math.max(-2, Math.min(2, material.exposure ?? 0)))
+  const ambColor = material.ambientColor ?? [255, 255, 255]
+  const specExp = 4 + gloss * 96
+
+  const nxBuf = new Float32Array(w * h)
+  const nyBuf = new Float32Array(w * h)
+  const nzBuf = new Float32Array(w * h)
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      const i = (y * w + x) * 4
-      const xl = Math.max(0, x - 1), xr = Math.min(w - 1, x + 1), yu = Math.max(0, y - 1), yd = Math.min(h - 1, y + 1)
+      const xl = x > 0 ? x - 1 : x
+      const xr = x < w - 1 ? x + 1 : x
+      const yu = y > 0 ? y - 1 : y
+      const yd = y < h - 1 ? y + 1 : y
       const right = (y * w + xr) * 4
       const left = (y * w + xl) * 4
       const down = (yd * w + x) * 4
       const up = (yu * w + x) * 4
-      const lumX = luma(src.data[right], src.data[right + 1], src.data[right + 2]) - luma(src.data[left], src.data[left + 1], src.data[left + 2])
-      const lumY = luma(src.data[down], src.data[down + 1], src.data[down + 2]) - luma(src.data[up], src.data[up + 1], src.data[up + 2])
-      const nx = -lumX / 255 * heightScale
-      const ny = -lumY / 255 * heightScale
-      const nz = 1
-      const nLen = Math.hypot(nx, ny, nz)
-      let spot = 1
-      if (style === "spot") {
-        const dx = (x - w * 0.45) / w
-        const dy = (y - h * 0.35) / h
-        spot = Math.max(0, 1 - Math.hypot(dx, dy) * 2.2)
-      } else if (style === "omni") {
-        const dx = (x - w * 0.5) / w
-        const dy = (y - h * 0.5) / h
-        spot = Math.max(0, 1 - Math.hypot(dx, dy) * 1.8)
+      const lx = (luma(src.data[right], src.data[right + 1], src.data[right + 2]) - luma(src.data[left], src.data[left + 1], src.data[left + 2])) / 255
+      const ly = (luma(src.data[down], src.data[down + 1], src.data[down + 2]) - luma(src.data[up], src.data[up + 1], src.data[up + 2])) / 255
+      const vx = -lx * heightScale * 3
+      const vy = -ly * heightScale * 3
+      const vz = 1
+      const n = Math.hypot(vx, vy, vz) || 1
+      const idx = y * w + x
+      nxBuf[idx] = vx / n
+      nyBuf[idx] = vy / n
+      nzBuf[idx] = vz / n
+    }
+  }
+
+  const diag = Math.hypot(w, h)
+  const prep = lights.map((light) => {
+    const t = light.type ?? "spot"
+    const lc = light.color ?? [255, 255, 255]
+    const intensityN = Math.max(0, light.intensity ?? 0.8)
+    if (t === "directional") {
+      const dx = light.angleX ?? -0.4
+      const dy = light.angleY ?? -0.5
+      const dz = light.z ?? 0.75
+      const n = Math.hypot(dx, dy, dz) || 1
+      return { kind: "dir" as const, dx: dx / n, dy: dy / n, dz: dz / n, intensity: intensityN, color: lc }
+    }
+    return {
+      kind: (t === "point" || t === "omni") ? ("point" as const) : ("spot" as const),
+      cx: (light.x ?? 0.5) * w,
+      cy: (light.y ?? 0.5) * h,
+      cz: Math.max(0.05, light.z ?? 0.4) * diag,
+      radius: Math.max(0.01, light.radius ?? 0.6) * diag,
+      focus: Math.max(0.01, light.focus ?? 0.4),
+      intensity: intensityN,
+      color: lc,
+    }
+  })
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4
+      const idx = y * w + x
+      const nX = nxBuf[idx], nY = nyBuf[idx], nZ = nzBuf[idx]
+
+      let rLight = ambColor[0] * amb
+      let gLight = ambColor[1] * amb
+      let bLight = ambColor[2] * amb
+
+      for (const light of prep) {
+        let lx = 0, ly = 0, lz = 0
+        let attenuation = 1
+        let cone = 1
+        if (light.kind === "dir") {
+          lx = light.dx; ly = light.dy; lz = light.dz
+        } else {
+          const dx = light.cx - x
+          const dy = light.cy - y
+          const dz = light.cz
+          const len = Math.hypot(dx, dy, dz) || 1
+          lx = dx / len; ly = dy / len; lz = dz / len
+          const planar = Math.hypot(dx, dy)
+          attenuation = Math.max(0, 1 - planar / light.radius)
+          attenuation *= attenuation
+          if (light.kind === "spot") {
+            const coneAngle = Math.max(0, lz)
+            cone = Math.pow(coneAngle, 1 + light.focus * 10)
+          }
+        }
+        const dotN = Math.max(0, nX * lx + nY * ly + nZ * lz)
+        const diffuse = dotN * attenuation * cone * light.intensity
+        const hx = lx, hy = ly, hz = lz + 1
+        const hLen = Math.hypot(hx, hy, hz) || 1
+        const specDot = Math.max(0, (nX * hx + nY * hy + nZ * hz) / hLen)
+        const specular = Math.pow(specDot, specExp) * shine * attenuation * cone * light.intensity
+
+        rLight += light.color[0] * diffuse + 255 * specular
+        gLight += light.color[1] * diffuse + 255 * specular
+        bLight += light.color[2] * diffuse + 255 * specular
       }
-      const diffuse = Math.max(0, (nx * lx + ny * ly + nz * lz) / (nLen * len))
-      const highlight = Math.pow(diffuse, 18) * light * (0.35 + heightScale)
-      const falloff = style === "directional" ? 1 : spot
-      const amount = amb + diffuse * light * falloff
-      out[i] = clamp8(src.data[i] * amount + (12 + 70 * highlight) * falloff)
-      out[i + 1] = clamp8(src.data[i + 1] * amount + (16 + 62 * highlight) * falloff)
-      out[i + 2] = clamp8(src.data[i + 2] * amount + (24 + 48 * highlight) * falloff)
+
+      out[i] = clamp8((src.data[i] * rLight / 255) * exposure)
+      out[i + 1] = clamp8((src.data[i + 1] * gLight / 255) * exposure)
+      out[i + 2] = clamp8((src.data[i + 2] * bLight / 255) * exposure)
       out[i + 3] = src.data[i + 3]
     }
   }
   return new ImageData(out, w, h)
 }
 
-function customConvolution(src: ImageData, preset: string, strength: number, bias: number): ImageData {
+function parseKernelMatrix(value: unknown): number[] | null {
+  if (typeof value !== "string" || !value.trim()) return null
+  const numbers = value
+    .trim()
+    .split(/[\s,;]+/)
+    .map(Number)
+    .filter(Number.isFinite)
+  const side = Math.sqrt(numbers.length)
+  if (!Number.isInteger(side) || side < 3 || side > 7 || side % 2 === 0) return null
+  return numbers
+}
+
+function customConvolution(src: ImageData, preset: string, strength: number, bias: number, matrix = "", divisor = 0): ImageData {
   const kernels: Record<string, number[]> = {
     "sharpen-more": [0, -1, 0, -1, 5, -1, 0, -1, 0],
     "edge-enhance": [0, 0, 0, -1, 1, 0, 0, 0, 0],
@@ -2504,7 +2959,9 @@ function customConvolution(src: ImageData, preset: string, strength: number, bia
     "sobel-x": [-1, 0, 1, -2, 0, 2, -1, 0, 1],
     "sobel-y": [-1, -2, -1, 0, 0, 0, 1, 2, 1],
   }
-  const raw = convolve(src, kernels[preset] ?? kernels["sharpen-more"], 1)
+  const kernel = parseKernelMatrix(matrix) ?? kernels[preset] ?? kernels["sharpen-more"]
+  const kernelSum = kernel.reduce((sum, value) => sum + value, 0)
+  const raw = convolve(src, kernel, divisor ? divisor : kernelSum > 0 ? kernelSum : 1)
   const mix = Math.max(0, Math.min(200, strength)) / 100
   const offset = Math.max(-255, Math.min(255, bias))
   const out = new Uint8ClampedArray(src.data.length)
@@ -2515,6 +2972,151 @@ function customConvolution(src: ImageData, preset: string, strength: number, bia
     out[i + 3] = src.data[i + 3]
   }
   return new ImageData(out, src.width, src.height)
+}
+
+/* --------- APPLY IMAGE / CALCULATIONS --------- */
+
+type ApplyChannel = "rgb" | "red" | "green" | "blue" | "luminance" | "alpha" | "gray"
+
+function selectChannelValue(data: Uint8ClampedArray, i: number, channel: ApplyChannel): [number, number, number] {
+  switch (channel) {
+    case "red":   return [data[i], data[i], data[i]]
+    case "green": return [data[i + 1], data[i + 1], data[i + 1]]
+    case "blue":  return [data[i + 2], data[i + 2], data[i + 2]]
+    case "alpha": return [data[i + 3], data[i + 3], data[i + 3]]
+    case "gray":
+    case "luminance": {
+      const v = luma(data[i], data[i + 1], data[i + 2])
+      return [v, v, v]
+    }
+    default:
+      return [data[i], data[i + 1], data[i + 2]]
+  }
+}
+
+function resampleImageData(src: ImageData, targetW: number, targetH: number): ImageData {
+  if (src.width === targetW && src.height === targetH) return src
+  const out = new ImageData(targetW, targetH)
+  const sxScale = src.width / targetW
+  const syScale = src.height / targetH
+  for (let y = 0; y < targetH; y++) {
+    for (let x = 0; x < targetW; x++) {
+      const sx = Math.min(src.width - 1, Math.floor(x * sxScale))
+      const sy = Math.min(src.height - 1, Math.floor(y * syScale))
+      const si = (sy * src.width + sx) * 4
+      const di = (y * targetW + x) * 4
+      out.data[di] = src.data[si]
+      out.data[di + 1] = src.data[si + 1]
+      out.data[di + 2] = src.data[si + 2]
+      out.data[di + 3] = src.data[si + 3]
+    }
+  }
+  return out
+}
+
+function pixelBlend(
+  dr: number, dg: number, db: number,
+  sr: number, sg: number, sb: number,
+  mode: string,
+): [number, number, number] {
+  const b = [dr / 255, dg / 255, db / 255]
+  const s = [sr / 255, sg / 255, sb / 255]
+  const apply = (fn: (a: number, c: number) => number) =>
+    [fn(b[0], s[0]), fn(b[1], s[1]), fn(b[2], s[2])] as [number, number, number]
+  let out: [number, number, number]
+  switch (mode) {
+    case "multiply":     out = apply((a, c) => a * c); break
+    case "screen":       out = apply((a, c) => 1 - (1 - a) * (1 - c)); break
+    case "overlay":      out = apply((a, c) => a < 0.5 ? 2 * a * c : 1 - 2 * (1 - a) * (1 - c)); break
+    case "soft-light":   out = apply((a, c) => c <= 0.5 ? a - (1 - 2 * c) * a * (1 - a) : a + (2 * c - 1) * ((a <= 0.25 ? ((16 * a - 12) * a + 4) * a : Math.sqrt(a)) - a)); break
+    case "hard-light":   out = apply((a, c) => c < 0.5 ? 2 * a * c : 1 - 2 * (1 - a) * (1 - c)); break
+    case "darken":       out = apply((a, c) => Math.min(a, c)); break
+    case "lighten":      out = apply((a, c) => Math.max(a, c)); break
+    case "difference":   out = apply((a, c) => Math.abs(a - c)); break
+    case "exclusion":    out = apply((a, c) => a + c - 2 * a * c); break
+    case "color-burn":   out = apply((a, c) => c === 0 ? 0 : Math.max(0, 1 - (1 - a) / c)); break
+    case "linear-burn":  out = apply((a, c) => Math.max(0, a + c - 1)); break
+    case "color-dodge":  out = apply((a, c) => c >= 1 ? 1 : Math.min(1, a / (1 - c))); break
+    case "linear-dodge": out = apply((a, c) => Math.min(1, a + c)); break
+    case "vivid-light":  out = apply((a, c) => c <= 0.5 ? (c === 0 ? 0 : Math.max(0, 1 - (1 - a) / (2 * c))) : (2 * (c - 0.5) >= 1 ? 1 : Math.min(1, a / (1 - 2 * (c - 0.5))))); break
+    case "linear-light": out = apply((a, c) => Math.max(0, Math.min(1, a + 2 * c - 1))); break
+    case "pin-light":    out = apply((a, c) => c <= 0.5 ? Math.min(a, 2 * c) : Math.max(a, 2 * c - 1)); break
+    case "hard-mix":     out = apply((a, c) => a + c >= 1 ? 1 : 0); break
+    case "subtract":     out = apply((a, c) => Math.max(0, a - c)); break
+    case "divide":       out = apply((a, c) => c === 0 ? 1 : Math.min(1, a / c)); break
+    case "add":          out = apply((a, c) => Math.min(1, a + c)); break
+    default:             out = [s[0], s[1], s[2]] // normal
+  }
+  return [clamp8(out[0] * 255), clamp8(out[1] * 255), clamp8(out[2] * 255)]
+}
+
+function applyImageFilter(
+  src: ImageData,
+  source: ImageData | null,
+  channel: ApplyChannel,
+  blendMode: string,
+  opacity: number,
+  invert: boolean,
+  preserveTransparency: boolean,
+): ImageData {
+  if (!source) return clone(src)
+  const w = src.width, h = src.height
+  const out = new Uint8ClampedArray(src.data)
+  const sample = resampleImageData(source, w, h)
+  const op = Math.max(0, Math.min(1, opacity))
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4
+      let [sr, sg, sb] = selectChannelValue(sample.data, i, channel)
+      if (invert) { sr = 255 - sr; sg = 255 - sg; sb = 255 - sb }
+      const dr = src.data[i], dg = src.data[i + 1], db = src.data[i + 2]
+      const [br, bg, bb] = pixelBlend(dr, dg, db, sr, sg, sb, blendMode)
+      out[i] = clamp8(dr * (1 - op) + br * op)
+      out[i + 1] = clamp8(dg * (1 - op) + bg * op)
+      out[i + 2] = clamp8(db * (1 - op) + bb * op)
+      out[i + 3] = preserveTransparency ? src.data[i + 3] : Math.max(src.data[i + 3], sample.data[i + 3])
+    }
+  }
+  return new ImageData(out, w, h)
+}
+
+function calculationsFilter(
+  src: ImageData,
+  sourceA: ImageData | null,
+  sourceB: ImageData | null,
+  channelA: ApplyChannel,
+  channelB: ApplyChannel,
+  blendMode: string,
+  opacity: number,
+  invertA: boolean,
+  invertB: boolean,
+  resultChannel: "gray" | "red" | "green" | "blue" | "alpha",
+): ImageData {
+  const w = src.width, h = src.height
+  const out = new Uint8ClampedArray(src.data)
+  const a = sourceA ? resampleImageData(sourceA, w, h) : src
+  const b = sourceB ? resampleImageData(sourceB, w, h) : src
+  const op = Math.max(0, Math.min(1, opacity))
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4
+      let [ar, ag, ab] = selectChannelValue(a.data, i, channelA)
+      let [br, bg, bb] = selectChannelValue(b.data, i, channelB)
+      if (invertA) { ar = 255 - ar; ag = 255 - ag; ab = 255 - ab }
+      if (invertB) { br = 255 - br; bg = 255 - bg; bb = 255 - bb }
+      const [r, g, bl] = pixelBlend(ar, ag, ab, br, bg, bb, blendMode)
+      const mixed = clamp8(luma(r, g, bl)) * op + clamp8(luma(ar, ag, ab)) * (1 - op)
+      const v = clamp8(mixed)
+      switch (resultChannel) {
+        case "red":   out[i] = v; break
+        case "green": out[i + 1] = v; break
+        case "blue":  out[i + 2] = v; break
+        case "alpha": out[i + 3] = v; break
+        default:      out[i] = v; out[i + 1] = v; out[i + 2] = v; out[i + 3] = src.data[i + 3] || 255
+      }
+    }
+  }
+  return new ImageData(out, w, h)
 }
 
 /* --------- REDUCE NOISE (Bilateral Filter) --------- */
@@ -2863,15 +3465,52 @@ function renderTree(src: ImageData, branches: number, leaves: boolean): ImageDat
   return new ImageData(out, src.width, src.height)
 }
 
-function displace(src: ImageData, scale: number, mode: string): ImageData {
+function displace(
+  src: ImageData,
+  scaleX: number,
+  scaleY: number,
+  map: string,
+  edgeMode: string,
+  mapImage?: ImageData | null,
+  tileMap: boolean = true,
+): ImageData {
   const out = new Uint8ClampedArray(src.data.length)
+  const mw = mapImage?.width ?? 0
+  const mh = mapImage?.height ?? 0
+  const hasImageMap = map === "image" && mapImage && mw > 0 && mh > 0
   for (let y = 0; y < src.height; y++) {
     for (let x = 0; x < src.width; x++) {
-      const n1 = fbmNoise(x / 90, y / 90, 13, 4) - 0.5
-      const n2 = fbmNoise(x / 90, y / 90, 29, 4) - 0.5
-      const sx = mode === "vertical" ? x : x + n1 * scale
-      const sy = mode === "horizontal" ? y : y + n2 * scale
-      copySample(src, out, x, y, sx, sy)
+      const i = (y * src.width + x) * 4
+      const nx = src.width <= 1 ? 0 : x / (src.width - 1)
+      const ny = src.height <= 1 ? 0 : y / (src.height - 1)
+      let dx = 0
+      let dy = 0
+      if (hasImageMap && mapImage) {
+        // Photoshop convention: red channel drives X displacement, green channel drives Y.
+        // 128 = no shift; 0 = -scale; 255 = +scale.
+        let mx: number, my: number
+        if (tileMap) {
+          mx = ((x % mw) + mw) % mw
+          my = ((y % mh) + mh) % mh
+        } else {
+          mx = Math.min(mw - 1, Math.floor(nx * (mw - 1)))
+          my = Math.min(mh - 1, Math.floor(ny * (mh - 1)))
+        }
+        const mi = (my * mw + mx) * 4
+        dx = ((mapImage.data[mi] - 128) / 127) * scaleX
+        dy = ((mapImage.data[mi + 1] - 128) / 127) * scaleY
+      } else if (map === "horizontal-gradient") {
+        dx = (nx - 0.5) * scaleX
+        dy = (ny - 0.5) * scaleY
+      } else if (map === "luminance") {
+        const lum = luma(src.data[i], src.data[i + 1], src.data[i + 2]) / 255 - 0.5
+        dx = lum * scaleX
+        dy = lum * scaleY
+      } else {
+        dx = (fbmNoise(x / 90, y / 90, 13, 4) - 0.5) * scaleX
+        dy = (fbmNoise(x / 90, y / 90, 29, 4) - 0.5) * scaleY
+      }
+      copySampleWithEdge(src, out, x, y, x + dx, y + dy, edgeMode)
     }
   }
   return new ImageData(out, src.width, src.height)
@@ -3158,6 +3797,32 @@ function copySample(src: ImageData, out: Uint8ClampedArray, x: number, y: number
   out[d + 3] = src.data[s + 3]
 }
 
+function copySampleWithEdge(src: ImageData, out: Uint8ClampedArray, x: number, y: number, sx: number, sy: number, edgeMode: string) {
+  let ix = Math.round(sx)
+  let iy = Math.round(sy)
+  const d = (y * src.width + x) * 4
+  if (edgeMode === "wrap") {
+    ix = ((ix % src.width) + src.width) % src.width
+    iy = ((iy % src.height) + src.height) % src.height
+  } else if (edgeMode === "transparent") {
+    if (ix < 0 || iy < 0 || ix >= src.width || iy >= src.height) {
+      out[d] = 0
+      out[d + 1] = 0
+      out[d + 2] = 0
+      out[d + 3] = 0
+      return
+    }
+  } else {
+    ix = Math.max(0, Math.min(src.width - 1, ix))
+    iy = Math.max(0, Math.min(src.height - 1, iy))
+  }
+  const s = (iy * src.width + ix) * 4
+  out[d] = src.data[s]
+  out[d + 1] = src.data[s + 1]
+  out[d + 2] = src.data[s + 2]
+  out[d + 3] = src.data[s + 3]
+}
+
 function parseHexColor(color: string) {
   const clean = /^#[0-9a-f]{6}$/i.test(color) ? color.slice(1) : "111827"
   return {
@@ -3379,14 +4044,34 @@ const LEGACY_GAP_FILTERS: Record<string, FilterDef> = {
     name: "Displace",
     category: "Distort",
     params: [
-      { type: "slider", key: "scale", label: "Scale", min: 0, max: 100, step: 1, default: 24 },
-      { type: "select", key: "mode", label: "Direction", options: [
-        { value: "both", label: "Horizontal and Vertical" },
-        { value: "horizontal", label: "Horizontal" },
-        { value: "vertical", label: "Vertical" },
-      ], default: "both" },
+      { type: "slider", key: "scaleX", label: "Horizontal Scale", min: -200, max: 200, step: 1, default: 24 },
+      { type: "slider", key: "scaleY", label: "Vertical Scale", min: -200, max: 200, step: 1, default: 24 },
+      { type: "select", key: "map", label: "Displacement Map", options: [
+        { value: "image", label: "Image (Displacement Map…)" },
+        { value: "noise", label: "Procedural Noise" },
+        { value: "luminance", label: "Layer Luminance" },
+        { value: "horizontal-gradient", label: "Horizontal Gradient" },
+      ], default: "image" },
+      { type: "text", key: "mapSource", label: "Map Source (doc:layer)", default: "", placeholder: "layer:<docId>:<layerId> or doc:<docId>" },
+      { type: "select", key: "tileMap", label: "Map Placement", options: [
+        { value: "tile", label: "Tile" },
+        { value: "stretch", label: "Stretch to Fit" },
+      ], default: "tile" },
+      { type: "select", key: "edgeMode", label: "Undefined Areas", options: [
+        { value: "repeat", label: "Repeat Edge Pixels" },
+        { value: "wrap", label: "Wrap Around" },
+        { value: "transparent", label: "Set to Transparent" },
+      ], default: "repeat" },
     ],
-    apply: (src, p) => displace(src, Number(p.scale), String(p.mode)),
+    apply: (src, p, ctx) => displace(
+      src,
+      Number(p.scaleX ?? (String(p.mode) === "vertical" ? 0 : p.scale ?? 24)),
+      Number(p.scaleY ?? (String(p.mode) === "horizontal" ? 0 : p.scale ?? 24)),
+      String(p.map ?? "image"),
+      String(p.edgeMode ?? "repeat"),
+      ctx?.displacementMap ?? null,
+      String(p.tileMap ?? "tile") === "tile",
+    ),
   },
   "diffuse-glow": {
     id: "diffuse-glow",
@@ -3437,7 +4122,7 @@ export const FILTERS: Record<string, FilterDef> = {
     name: "Motion Blur",
     category: "Blur",
     params: [
-      { type: "slider", key: "angle", label: "Angle", min: -180, max: 180, step: 1, default: 0, suffix: "°" },
+      { type: "slider", key: "angle", label: "Angle", min: -180, max: 180, step: 1, default: 0, suffix: "Â°" },
       { type: "slider", key: "distance", label: "Distance", min: 1, max: 100, step: 1, default: 12, suffix: "px" },
     ],
     apply: (src, p) => motionBlur(src, Number(p.distance), Number(p.angle)),
@@ -3585,7 +4270,7 @@ export const FILTERS: Record<string, FilterDef> = {
         { value: "blues", label: "Blues" },
         { value: "magentas", label: "Magentas" },
       ], default: "master" },
-      { type: "slider", key: "hue", label: "Hue", min: -180, max: 180, step: 1, default: 0, suffix: "°" },
+      { type: "slider", key: "hue", label: "Hue", min: -180, max: 180, step: 1, default: 0, suffix: "Â°" },
       { type: "slider", key: "saturation", label: "Saturation", min: -100, max: 100, step: 1, default: 0 },
       { type: "slider", key: "lightness", label: "Lightness", min: -100, max: 100, step: 1, default: 0 },
       { type: "checkbox", key: "colorize", label: "Colorize", default: false },
@@ -3634,8 +4319,16 @@ export const FILTERS: Record<string, FilterDef> = {
     category: "Adjustments",
     params: [
       { type: "slider", key: "level", label: "Threshold Level", min: 0, max: 255, step: 1, default: 128 },
+      { type: "select", key: "channel", label: "Channel", options: [
+        { value: "rgb", label: "Composite" },
+        { value: "red", label: "Red" },
+        { value: "green", label: "Green" },
+        { value: "blue", label: "Blue" },
+        { value: "alpha", label: "Alpha" },
+      ], default: "rgb" },
+      { type: "checkbox", key: "invert", label: "Invert", default: false },
     ],
-    apply: (src, p) => threshold(src, Number(p.level)),
+    apply: (src, p) => threshold(src, Number(p.level), String(p.channel ?? "rgb"), parseBool(p.invert)),
   },
   posterize: {
     id: "posterize",
@@ -3643,8 +4336,9 @@ export const FILTERS: Record<string, FilterDef> = {
     category: "Adjustments",
     params: [
       { type: "slider", key: "levels", label: "Levels", min: 2, max: 32, step: 1, default: 4 },
+      { type: "checkbox", key: "dither", label: "Dither", default: false },
     ],
-    apply: (src, p) => posterize(src, Number(p.levels)),
+    apply: (src, p) => posterize(src, Number(p.levels), parseBool(p.dither)),
   },
   vibrance: {
     id: "vibrance",
@@ -3682,7 +4376,7 @@ export const FILTERS: Record<string, FilterDef> = {
       { type: "slider", key: "blues", label: "Blues", min: -100, max: 100, step: 1, default: 0 },
       { type: "slider", key: "magentas", label: "Magentas", min: -100, max: 100, step: 1, default: 0 },
       { type: "checkbox", key: "tint", label: "Tint", default: false },
-      { type: "slider", key: "tintHue", label: "Tint Hue", min: 0, max: 360, step: 1, default: 38, suffix: "°" },
+      { type: "slider", key: "tintHue", label: "Tint Hue", min: 0, max: 360, step: 1, default: 38, suffix: "Â°" },
       { type: "slider", key: "tintSaturation", label: "Tint Saturation", min: 0, max: 100, step: 1, default: 18 },
     ],
     apply: (src, p) => blackWhiteAdvanced(
@@ -3777,15 +4471,24 @@ export const FILTERS: Record<string, FilterDef> = {
     name: "Channel Mixer",
     category: "Adjustments",
     params: [
-      { type: "slider", key: "rR", label: "Red ← Red", min: -200, max: 200, step: 1, default: 100 },
-      { type: "slider", key: "rG", label: "Red ← Green", min: -200, max: 200, step: 1, default: 0 },
-      { type: "slider", key: "rB", label: "Red ← Blue", min: -200, max: 200, step: 1, default: 0 },
-      { type: "slider", key: "gR", label: "Green ← Red", min: -200, max: 200, step: 1, default: 0 },
-      { type: "slider", key: "gG", label: "Green ← Green", min: -200, max: 200, step: 1, default: 100 },
-      { type: "slider", key: "gB", label: "Green ← Blue", min: -200, max: 200, step: 1, default: 0 },
-      { type: "slider", key: "bR", label: "Blue ← Red", min: -200, max: 200, step: 1, default: 0 },
-      { type: "slider", key: "bG", label: "Blue ← Green", min: -200, max: 200, step: 1, default: 0 },
-      { type: "slider", key: "bB", label: "Blue ← Blue", min: -200, max: 200, step: 1, default: 100 },
+      { type: "checkbox", key: "monochrome", label: "Monochrome", default: false },
+      { type: "checkbox", key: "preserveLuminosity", label: "Preserve Luminosity", default: false },
+      { type: "slider", key: "rR", label: "Red â† Red", min: -200, max: 200, step: 1, default: 100 },
+      { type: "slider", key: "rG", label: "Red â† Green", min: -200, max: 200, step: 1, default: 0 },
+      { type: "slider", key: "rB", label: "Red â† Blue", min: -200, max: 200, step: 1, default: 0 },
+      { type: "slider", key: "gR", label: "Green â† Red", min: -200, max: 200, step: 1, default: 0 },
+      { type: "slider", key: "gG", label: "Green â† Green", min: -200, max: 200, step: 1, default: 100 },
+      { type: "slider", key: "gB", label: "Green â† Blue", min: -200, max: 200, step: 1, default: 0 },
+      { type: "slider", key: "bR", label: "Blue â† Red", min: -200, max: 200, step: 1, default: 0 },
+      { type: "slider", key: "bG", label: "Blue â† Green", min: -200, max: 200, step: 1, default: 0 },
+      { type: "slider", key: "bB", label: "Blue â† Blue", min: -200, max: 200, step: 1, default: 100 },
+      { type: "slider", key: "constantR", label: "Red Constant", min: -200, max: 200, step: 1, default: 0 },
+      { type: "slider", key: "constantG", label: "Green Constant", min: -200, max: 200, step: 1, default: 0 },
+      { type: "slider", key: "constantB", label: "Blue Constant", min: -200, max: 200, step: 1, default: 0 },
+      { type: "slider", key: "grayR", label: "Gray <- Red", min: -200, max: 200, step: 1, default: 40 },
+      { type: "slider", key: "grayG", label: "Gray <- Green", min: -200, max: 200, step: 1, default: 40 },
+      { type: "slider", key: "grayB", label: "Gray <- Blue", min: -200, max: 200, step: 1, default: 20 },
+      { type: "slider", key: "constantGray", label: "Gray Constant", min: -200, max: 200, step: 1, default: 0 },
     ],
     apply: (src, p) =>
       channelMixer(
@@ -3799,6 +4502,17 @@ export const FILTERS: Record<string, FilterDef> = {
         Number(p.bR),
         Number(p.bG),
         Number(p.bB),
+        {
+          constantR: Number(p.constantR ?? 0),
+          constantG: Number(p.constantG ?? 0),
+          constantB: Number(p.constantB ?? 0),
+          monochrome: parseBool(p.monochrome),
+          grayR: Number(p.grayR ?? 40),
+          grayG: Number(p.grayG ?? 40),
+          grayB: Number(p.grayB ?? 20),
+          constantGray: Number(p.constantGray ?? 0),
+          preserveLuminosity: parseBool(p.preserveLuminosity),
+        },
       ),
   },
   "unsharp-mask": {
@@ -3839,11 +4553,20 @@ export const FILTERS: Record<string, FilterDef> = {
     name: "Replace Color",
     category: "Adjustments",
     params: [
-      { type: "slider", key: "hue", label: "Hue", min: 0, max: 360, step: 1, default: 0, suffix: "°" },
-      { type: "slider", key: "tolerance", label: "Tolerance", min: 0, max: 100, step: 1, default: 30 },
-      { type: "slider", key: "lightness", label: "Lightness", min: -100, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "sourceHue", label: "Source Hue", min: 0, max: 360, step: 1, default: 0, suffix: "deg" },
+      { type: "slider", key: "fuzziness", label: "Fuzziness", min: 1, max: 180, step: 1, default: 30, suffix: "deg" },
+      { type: "slider", key: "replacementHue", label: "Replacement Hue", min: 0, max: 360, step: 1, default: 0, suffix: "deg" },
+      { type: "slider", key: "replacementSaturation", label: "Replacement Saturation", min: -100, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "replacementLightness", label: "Replacement Lightness", min: -100, max: 100, step: 1, default: 0 },
     ],
-    apply: (src, p) => replaceColor(src, Number(p.hue), Number(p.tolerance), Number(p.lightness)),
+    apply: (src, p) => replaceColor(
+      src,
+      Number(p.sourceHue ?? p.hue ?? 0),
+      Number(p.fuzziness ?? p.tolerance ?? 30),
+      Number(p.replacementHue ?? p.hue ?? 0),
+      Number(p.replacementSaturation ?? 0),
+      Number(p.replacementLightness ?? p.lightness ?? 0),
+    ),
   },
   "match-color": {
     id: "match-color",
@@ -3865,26 +4588,150 @@ export const FILTERS: Record<string, FilterDef> = {
         parseBool(p.neutralize),
       ),
   },
+  "apply-image": {
+    id: "apply-image",
+    name: "Apply Image",
+    category: "Adjustments",
+    params: [
+      { type: "text", key: "applySource", label: "Source (doc:layer)", default: "", placeholder: "layer:<docId>:<layerId> or doc:<docId>" },
+      { type: "select", key: "channel", label: "Channel", options: [
+        { value: "rgb", label: "RGB" },
+        { value: "red", label: "Red" },
+        { value: "green", label: "Green" },
+        { value: "blue", label: "Blue" },
+        { value: "luminance", label: "Luminance" },
+        { value: "alpha", label: "Alpha" },
+      ], default: "rgb" },
+      { type: "select", key: "blend", label: "Blending", options: [
+        { value: "normal", label: "Normal" },
+        { value: "multiply", label: "Multiply" },
+        { value: "screen", label: "Screen" },
+        { value: "overlay", label: "Overlay" },
+        { value: "soft-light", label: "Soft Light" },
+        { value: "hard-light", label: "Hard Light" },
+        { value: "darken", label: "Darken" },
+        { value: "lighten", label: "Lighten" },
+        { value: "color-burn", label: "Color Burn" },
+        { value: "color-dodge", label: "Color Dodge" },
+        { value: "linear-burn", label: "Linear Burn" },
+        { value: "linear-dodge", label: "Linear Dodge (Add)" },
+        { value: "vivid-light", label: "Vivid Light" },
+        { value: "linear-light", label: "Linear Light" },
+        { value: "pin-light", label: "Pin Light" },
+        { value: "hard-mix", label: "Hard Mix" },
+        { value: "difference", label: "Difference" },
+        { value: "exclusion", label: "Exclusion" },
+        { value: "subtract", label: "Subtract" },
+        { value: "divide", label: "Divide" },
+        { value: "add", label: "Add" },
+      ], default: "multiply" },
+      { type: "slider", key: "opacity", label: "Opacity", min: 0, max: 100, step: 1, default: 100, suffix: "%" },
+      { type: "checkbox", key: "invert", label: "Invert", default: false },
+      { type: "checkbox", key: "preserveTransparency", label: "Preserve Transparency", default: true },
+    ],
+    apply: (src, p, context) =>
+      applyImageFilter(
+        src,
+        context?.applyImageSource ?? null,
+        String(p.channel ?? "rgb") as ApplyChannel,
+        String(p.blend ?? "multiply"),
+        Number(p.opacity ?? 100) / 100,
+        parseBool(p.invert),
+        parseBool(p.preserveTransparency, true),
+      ),
+  },
+  "calculations": {
+    id: "calculations",
+    name: "Calculations",
+    category: "Adjustments",
+    params: [
+      { type: "text", key: "sourceA", label: "Source 1 (doc:layer)", default: "", placeholder: "layer:<docId>:<layerId>" },
+      { type: "select", key: "channelA", label: "Channel 1", options: [
+        { value: "rgb", label: "RGB" },
+        { value: "red", label: "Red" },
+        { value: "green", label: "Green" },
+        { value: "blue", label: "Blue" },
+        { value: "luminance", label: "Gray" },
+        { value: "alpha", label: "Alpha" },
+      ], default: "luminance" },
+      { type: "checkbox", key: "invertA", label: "Invert Source 1", default: false },
+      { type: "text", key: "sourceB", label: "Source 2 (doc:layer)", default: "", placeholder: "layer:<docId>:<layerId>" },
+      { type: "select", key: "channelB", label: "Channel 2", options: [
+        { value: "rgb", label: "RGB" },
+        { value: "red", label: "Red" },
+        { value: "green", label: "Green" },
+        { value: "blue", label: "Blue" },
+        { value: "luminance", label: "Gray" },
+        { value: "alpha", label: "Alpha" },
+      ], default: "luminance" },
+      { type: "checkbox", key: "invertB", label: "Invert Source 2", default: false },
+      { type: "select", key: "blend", label: "Blending", options: [
+        { value: "multiply", label: "Multiply" },
+        { value: "screen", label: "Screen" },
+        { value: "overlay", label: "Overlay" },
+        { value: "soft-light", label: "Soft Light" },
+        { value: "hard-light", label: "Hard Light" },
+        { value: "difference", label: "Difference" },
+        { value: "subtract", label: "Subtract" },
+        { value: "add", label: "Add" },
+        { value: "divide", label: "Divide" },
+      ], default: "multiply" },
+      { type: "slider", key: "opacity", label: "Opacity", min: 0, max: 100, step: 1, default: 100, suffix: "%" },
+      { type: "select", key: "result", label: "Result", options: [
+        { value: "gray", label: "New Grayscale (replace RGB)" },
+        { value: "red", label: "Write to Red" },
+        { value: "green", label: "Write to Green" },
+        { value: "blue", label: "Write to Blue" },
+        { value: "alpha", label: "Write to Alpha" },
+      ], default: "gray" },
+    ],
+    apply: (src, p, context) =>
+      calculationsFilter(
+        src,
+        context?.calcSourceA ?? null,
+        context?.calcSourceB ?? null,
+        String(p.channelA ?? "luminance") as ApplyChannel,
+        String(p.channelB ?? "luminance") as ApplyChannel,
+        String(p.blend ?? "multiply"),
+        Number(p.opacity ?? 100) / 100,
+        parseBool(p.invertA),
+        parseBool(p.invertB),
+        String(p.result ?? "gray") as "gray" | "red" | "green" | "blue" | "alpha",
+      ),
+  },
   "selective-color": {
     id: "selective-color",
     name: "Selective Color",
     category: "Adjustments",
     params: [
-      { type: "slider", key: "cyans", label: "Cyans", min: -100, max: 100, step: 1, default: 0 },
-      { type: "slider", key: "magentas", label: "Magentas", min: -100, max: 100, step: 1, default: 0 },
-      { type: "slider", key: "yellows", label: "Yellows", min: -100, max: 100, step: 1, default: 0 },
-      { type: "slider", key: "whites", label: "Whites", min: -100, max: 100, step: 1, default: 0 },
-      { type: "slider", key: "neutrals", label: "Neutrals", min: -100, max: 100, step: 1, default: 0 },
-      { type: "slider", key: "blacks", label: "Blacks", min: -100, max: 100, step: 1, default: 0 },
+      { type: "select", key: "range", label: "Colors", options: [
+        { value: "reds", label: "Reds" },
+        { value: "yellows", label: "Yellows" },
+        { value: "greens", label: "Greens" },
+        { value: "cyans", label: "Cyans" },
+        { value: "blues", label: "Blues" },
+        { value: "magentas", label: "Magentas" },
+        { value: "whites", label: "Whites" },
+        { value: "neutrals", label: "Neutrals" },
+        { value: "blacks", label: "Blacks" },
+      ], default: "reds" },
+      { type: "slider", key: "cyan", label: "Cyan", min: -100, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "magenta", label: "Magenta", min: -100, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "yellow", label: "Yellow", min: -100, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "black", label: "Black", min: -100, max: 100, step: 1, default: 0 },
+      { type: "select", key: "method", label: "Method", options: [
+        { value: "relative", label: "Relative" },
+        { value: "absolute", label: "Absolute" },
+      ], default: "relative" },
     ],
     apply: (src, p) => selectiveColor(
       src,
-      Number(p.cyans),
-      Number(p.magentas),
-      Number(p.yellows),
-      Number(p.whites),
-      Number(p.neutrals),
-      Number(p.blacks)
+      String(p.range ?? "reds"),
+      Number(p.cyan ?? p.cyans ?? 0),
+      Number(p.magenta ?? p.magentas ?? 0),
+      Number(p.yellow ?? p.yellows ?? 0),
+      Number(p.black ?? p.blacks ?? 0),
+      String(p.method ?? "relative"),
     ),
   },
   "shadows-highlights": {
@@ -3894,9 +4741,11 @@ export const FILTERS: Record<string, FilterDef> = {
     params: [
       { type: "slider", key: "shadows", label: "Shadows", min: 0, max: 100, step: 1, default: 0 },
       { type: "slider", key: "highlights", label: "Highlights", min: 0, max: 100, step: 1, default: 0 },
-      { type: "slider", key: "midpoint", label: "Midpoint", min: 0, max: 100, step: 1, default: 50 },
+      { type: "slider", key: "tonalWidth", label: "Tonal Width", min: 1, max: 100, step: 1, default: 50, suffix: "%" },
+      { type: "slider", key: "radius", label: "Radius", min: 0, max: 40, step: 1, default: 4, suffix: "px" },
+      { type: "slider", key: "colorCorrection", label: "Color Correction", min: -100, max: 100, step: 1, default: 0 },
     ],
-    apply: (src, p) => shadowsHighlights(src, Number(p.shadows), Number(p.highlights), Number(p.midpoint)),
+    apply: (src, p) => shadowsHighlights(src, Number(p.shadows), Number(p.highlights), Number(p.tonalWidth ?? p.midpoint ?? 50), Number(p.radius ?? 4), Number(p.colorCorrection ?? 0)),
   },
   "hdr-toning": {
     id: "hdr-toning",
@@ -3913,15 +4762,28 @@ export const FILTERS: Record<string, FilterDef> = {
     name: "Color Lookup (LUT approximation)",
     category: "Adjustments",
     params: [
+      { type: "select", key: "preset", label: "Preset", options: [
+        { value: "filmic", label: "Filmic Contrast" },
+        { value: "warm", label: "Warm" },
+        { value: "cool", label: "Cool" },
+        { value: "bleach", label: "Bleach Bypass" },
+        { value: "cross-process", label: "Cross Process" },
+      ], default: "filmic" },
       { type: "slider", key: "strength", label: "Strength", min: -100, max: 100, step: 1, default: 0 },
+      { type: "text", key: "lutData", label: "Imported LUT (.cube)", default: "", multiline: true, accept: ".cube,.CUBE", placeholder: "Paste or import CUBE LUT data" },
     ],
-    apply: (src, p) => colorLookup(src, Number(p.strength)),
+    apply: (src, p) => colorLookup(src, Number(p.strength), String(p.lutData ?? ""), String(p.preset ?? "filmic")),
   },
   "gradient-map": {
     id: "gradient-map",
     name: "Gradient Map",
     category: "Adjustments",
     params: [
+      { type: "text", key: "gradient", label: "Gradient Stops", default: "0,#000000;1,#ffffff", placeholder: "0,#000000;0.5,#ff0000;1,#ffffff" },
+      { type: "select", key: "interpolation", label: "Interpolation", options: [
+        { value: "rgb", label: "RGB" },
+        { value: "hsl", label: "HSL" },
+      ], default: "rgb" },
       { type: "checkbox", key: "reverse", label: "Reverse", default: false },
       { type: "checkbox", key: "dither", label: "Dither", default: true },
     ],
@@ -3931,6 +4793,7 @@ export const FILTERS: Record<string, FilterDef> = {
         String(p.gradient ?? "0,#000000;1,#ffffff"),
         parseBool(p.reverse),
         parseBool(p.dither, true),
+        String(p.interpolation ?? "rgb"),
       ),
   },
   "sky-replacement": {
@@ -3971,15 +4834,40 @@ export const FILTERS: Record<string, FilterDef> = {
       { type: "slider", key: "right", label: "Right Plane", min: -100, max: 100, step: 1, default: 26 },
       { type: "slider", key: "depth", label: "Depth", min: -100, max: 100, step: 1, default: 45 },
       { type: "checkbox", key: "grid", label: "Show Plane Grid", default: true },
+      { type: "slider", key: "topLeftX", label: "Top Left X", min: -100, max: 100, step: 1, default: 0, suffix: "%" },
+      { type: "slider", key: "topLeftY", label: "Top Left Y", min: -100, max: 100, step: 1, default: 0, suffix: "%" },
+      { type: "slider", key: "topRightX", label: "Top Right X", min: -100, max: 100, step: 1, default: 0, suffix: "%" },
+      { type: "slider", key: "topRightY", label: "Top Right Y", min: -100, max: 100, step: 1, default: 0, suffix: "%" },
+      { type: "slider", key: "bottomRightX", label: "Bottom Right X", min: -100, max: 100, step: 1, default: 0, suffix: "%" },
+      { type: "slider", key: "bottomRightY", label: "Bottom Right Y", min: -100, max: 100, step: 1, default: 0, suffix: "%" },
+      { type: "slider", key: "bottomLeftX", label: "Bottom Left X", min: -100, max: 100, step: 1, default: 0, suffix: "%" },
+      { type: "slider", key: "bottomLeftY", label: "Bottom Left Y", min: -100, max: 100, step: 1, default: 0, suffix: "%" },
     ],
-    apply: (src, p) => vanishingPoint(src, Number(p.horizon), Number(p.left), Number(p.right), Number(p.depth), parseBool(p.grid, true)),
+    apply: (src, p) => vanishingPoint(
+      src,
+      Number(p.horizon),
+      Number(p.left),
+      Number(p.right),
+      Number(p.depth),
+      parseBool(p.grid, true),
+      {
+        topLeftX: Number(p.topLeftX ?? 0),
+        topLeftY: Number(p.topLeftY ?? 0),
+        topRightX: Number(p.topRightX ?? 0),
+        topRightY: Number(p.topRightY ?? 0),
+        bottomRightX: Number(p.bottomRightX ?? 0),
+        bottomRightY: Number(p.bottomRightY ?? 0),
+        bottomLeftX: Number(p.bottomLeftX ?? 0),
+        bottomLeftY: Number(p.bottomLeftY ?? 0),
+      },
+    ),
   },
   "twirl": {
     id: "twirl",
     name: "Twirl",
     category: "Distort",
     params: [
-      { type: "slider", key: "angle", label: "Angle", min: -999, max: 999, step: 1, default: 50, suffix: "°" },
+      { type: "slider", key: "angle", label: "Angle", min: -999, max: 999, step: 1, default: 50, suffix: "Â°" },
     ],
     apply: (src, p) => distortTwirl(src, Number(p.angle)),
   },
@@ -4137,9 +5025,15 @@ export const FILTERS: Record<string, FilterDef> = {
         { value: "wrap", label: "Wrap Around" },
         { value: "repeat", label: "Repeat Edge Pixels" },
         { value: "transparent", label: "Set to Transparent" },
+        { value: "background", label: "Set to Background Color" },
       ], default: "wrap" },
+      { type: "text", key: "fill", label: "Background Color (hex)", default: "#ffffff", placeholder: "#ffffff" },
     ],
-    apply: (src, p) => filterOffset(src, Number(p.horizontal), Number(p.vertical), String(p.wrap)),
+    apply: (src, p) => {
+      const hex = String(p.fill ?? "#ffffff")
+      const rgb = hexToRgbFilter(hex) ?? { r: 255, g: 255, b: 255 }
+      return filterOffset(src, Number(p.horizontal), Number(p.vertical), String(p.wrap), rgb.r, rgb.g, rgb.b)
+    },
   },
   "maximum": {
     id: "maximum",
@@ -4188,7 +5082,7 @@ export const FILTERS: Record<string, FilterDef> = {
     params: [
       { type: "slider", key: "radius", label: "Radius", min: 0, max: 40, step: 1, default: 10, suffix: "px" },
       { type: "slider", key: "bladeCount", label: "Blade Curvature", min: 3, max: 8, step: 1, default: 6 },
-      { type: "slider", key: "rotation", label: "Rotation", min: 0, max: 360, step: 1, default: 0, suffix: "°" },
+      { type: "slider", key: "rotation", label: "Rotation", min: 0, max: 360, step: 1, default: 0, suffix: "Â°" },
       { type: "slider", key: "brightness", label: "Specular Brightness", min: 0, max: 100, step: 1, default: 0 },
       { type: "slider", key: "threshold", label: "Specular Threshold", min: 0, max: 255, step: 1, default: 255 },
       { type: "slider", key: "noiseAmount", label: "Noise Amount", min: 0, max: 25, step: 1, default: 0 },
@@ -4223,8 +5117,10 @@ export const FILTERS: Record<string, FilterDef> = {
         { value: "good", label: "Good" },
         { value: "best", label: "Best" },
       ], default: "good" },
+      { type: "slider", key: "centerX", label: "Center X", min: 0, max: 100, step: 1, default: 50, suffix: "%" },
+      { type: "slider", key: "centerY", label: "Center Y", min: 0, max: 100, step: 1, default: 50, suffix: "%" },
     ],
-    apply: (src, p) => radialBlur(src, Number(p.amount), String(p.method), String(p.quality)),
+    apply: (src, p) => radialBlur(src, Number(p.amount), String(p.method), String(p.quality), Number(p.centerX ?? 50), Number(p.centerY ?? 50)),
   },
 
   "oil-paint": {
@@ -4261,11 +5157,44 @@ export const FILTERS: Record<string, FilterDef> = {
     name: "Lens Correction",
     category: "Distort",
     params: [
-      { type: "slider", key: "distortion", label: "Geometric Distortion", min: -100, max: 100, step: 1, default: 0 },
+      { type: "select", key: "profile", label: "Lens Profile", default: "custom", options: [
+        { value: "custom", label: "Custom (Manual)" },
+        { value: "smartphone", label: "Smartphone Wide" },
+        { value: "wide-angle", label: "Wide Angle 24mm" },
+        { value: "fisheye", label: "Fisheye 8-15mm" },
+        { value: "standard-50", label: "Standard 50mm" },
+        { value: "telephoto", label: "Telephoto 85-200mm" },
+        { value: "super-tele", label: "Super Telephoto 300mm+" },
+        { value: "drone-fpv", label: "Drone / Action Cam" },
+      ] },
+      { type: "slider", key: "distortion", label: "Geometric Distortion (k1)", min: -100, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "k2", label: "Higher-Order Distortion (k2)", min: -100, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "k3", label: "Extreme Distortion (k3)", min: -100, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "tangentialX", label: "Tangential X (p1)", min: -100, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "tangentialY", label: "Tangential Y (p2)", min: -100, max: 100, step: 1, default: 0 },
       { type: "slider", key: "vignette", label: "Vignette", min: -100, max: 100, step: 1, default: 0 },
       { type: "slider", key: "chromatic", label: "Chromatic Aberration", min: -100, max: 100, step: 1, default: 0 },
+      { type: "checkbox", key: "autoScale", label: "Auto-Scale to Fit", default: false },
+      { type: "select", key: "edgeMode", label: "Edge Handling", default: "clamp", options: [
+        { value: "clamp", label: "Clamp Edges" },
+        { value: "transparent", label: "Transparent" },
+        { value: "black", label: "Black" },
+        { value: "white", label: "White" },
+      ] },
     ],
-    apply: (src, p) => lensCorrection(src, Number(p.distortion), Number(p.vignette), Number(p.chromatic)),
+    apply: (src, p) => lensCorrection(
+      src,
+      Number(p.distortion),
+      Number(p.vignette),
+      Number(p.chromatic),
+      Number(p.k2),
+      Number(p.k3),
+      Number(p.tangentialX),
+      Number(p.tangentialY),
+      String(p.profile ?? "custom"),
+      Boolean(p.autoScale),
+      String(p.edgeMode ?? "clamp"),
+    ),
   },
 
   "color-halftone": {
@@ -4299,16 +5228,37 @@ export const FILTERS: Record<string, FilterDef> = {
     name: "Lighting Effects",
     category: "Render",
     params: [
-      { type: "select", key: "style", label: "Light Type", options: [
+      { type: "select", key: "style", label: "Light Style", options: [
         { value: "spot", label: "Spot" },
         { value: "omni", label: "Omni" },
         { value: "directional", label: "Directional" },
+        { value: "three-point", label: "Three-Point" },
+        { value: "rgb-trio", label: "RGB Trio" },
       ], default: "spot" },
       { type: "slider", key: "intensity", label: "Intensity", min: 0, max: 250, step: 1, default: 120, suffix: "%" },
       { type: "slider", key: "ambient", label: "Ambience", min: 0, max: 150, step: 1, default: 45, suffix: "%" },
       { type: "slider", key: "height", label: "Texture Height", min: 0, max: 100, step: 1, default: 35, suffix: "%" },
+      { type: "slider", key: "gloss", label: "Gloss", min: 0, max: 100, step: 1, default: 50, suffix: "%" },
+      { type: "slider", key: "shine", label: "Shine", min: 0, max: 100, step: 1, default: 60, suffix: "%" },
+      { type: "slider", key: "exposure", label: "Exposure", min: -200, max: 200, step: 1, default: 0, suffix: "/100 EV" },
+      { type: "text", key: "lights", label: "Lights JSON", default: "", multiline: true, placeholder: '[{"type":"spot","x":0.5,"y":0.4,"z":0.6,"intensity":1,"color":[255,240,210],"radius":0.6,"focus":0.4}]' },
     ],
-    apply: (src, p) => lightingEffects(src, String(p.style), Number(p.intensity), Number(p.ambient), Number(p.height)),
+    apply: (src, p) => {
+      const material: MaterialConfig = {
+        gloss: Number(p.gloss ?? 50) / 100,
+        shine: Number(p.shine ?? 60) / 100,
+        exposure: Number(p.exposure ?? 0) / 100,
+      }
+      return lightingEffects(
+        src,
+        String(p.style ?? "spot"),
+        Number(p.intensity),
+        Number(p.ambient),
+        Number(p.height),
+        p.lights ? String(p.lights) : undefined,
+        material,
+      )
+    },
   },
 
   "custom-convolution": {
@@ -4326,8 +5276,10 @@ export const FILTERS: Record<string, FilterDef> = {
       ], default: "sharpen-more" },
       { type: "slider", key: "strength", label: "Strength", min: 0, max: 200, step: 1, default: 100, suffix: "%" },
       { type: "slider", key: "bias", label: "Bias", min: -255, max: 255, step: 1, default: 0 },
+      { type: "slider", key: "divisor", label: "Scale/Divisor", min: -64, max: 64, step: 1, default: 0 },
+      { type: "text", key: "matrix", label: "Kernel Matrix", default: "", multiline: true, placeholder: "0 0 0\n0 1 0\n0 0 0" },
     ],
-    apply: (src, p) => customConvolution(src, String(p.preset), Number(p.strength), Number(p.bias)),
+    apply: (src, p) => customConvolution(src, String(p.preset), Number(p.strength), Number(p.bias), String(p.matrix ?? ""), Number(p.divisor ?? 0)),
   },
 
   "reduce-noise": {

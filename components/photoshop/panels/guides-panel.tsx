@@ -1,13 +1,10 @@
 "use client"
 
 import * as React from "react"
-import { Grid3X3, Plus, Trash2 } from "lucide-react"
+import { Eye, EyeOff, Grid3X3, Lock, Plus, Trash2, Unlock } from "lucide-react"
 import { useEditor } from "../editor-context"
 import type { Guide } from "../types"
-
-function uid(prefix: string) {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
-}
+import { uid } from "../uid"
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, Math.round(value)))
@@ -63,6 +60,11 @@ export function GuidesPanel() {
     const next: Partial<Guide> = { ...patch }
     if (patch.position !== undefined) next.position = clamp(patch.position, 0, max)
     dispatch({ type: "update-guide", id: guide.id, patch: next })
+  }
+
+  const updateGuideState = (guide: Guide, patch: Partial<Guide>) => {
+    dispatch({ type: "update-guide-state", id: guide.id, patch })
+    window.setTimeout(() => commit("Update Guide State", []), 0)
   }
 
   return (
@@ -136,11 +138,47 @@ export function GuidesPanel() {
           guides.map((guide) => {
             const max = guide.orientation === "horizontal" ? activeDoc.height : activeDoc.width
             return (
-              <div key={guide.id} className="grid grid-cols-[1fr_78px_36px_auto] items-end gap-1 border-b border-[var(--ps-divider)] p-2">
+              <div key={guide.id} className="space-y-2 border-b border-[var(--ps-divider)] p-2">
+                <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-1">
+                  <input
+                    value={guide.name ?? ""}
+                    placeholder="Guide name"
+                    onChange={(event) => updateGuideState(guide, { name: event.target.value })}
+                    className="h-7 min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px] text-[var(--ps-text)] outline-none"
+                  />
+                  <IconToggle
+                    label={guide.visible === false ? "Show guide" : "Hide guide"}
+                    active={guide.visible !== false}
+                    onClick={() => updateGuideState(guide, { visible: guide.visible === false })}
+                  >
+                    {guide.visible === false ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </IconToggle>
+                  <IconToggle
+                    label={guide.locked ? "Unlock guide" : "Lock guide"}
+                    active={!!guide.locked}
+                    onClick={() => updateGuideState(guide, { locked: !guide.locked })}
+                  >
+                    {guide.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
+                  </IconToggle>
+                  <button
+                    type="button"
+                    title={guide.locked ? "Guide is locked" : "Delete guide"}
+                    disabled={!!guide.locked}
+                    onClick={() => {
+                      dispatch({ type: "remove-guide", id: guide.id })
+                      window.setTimeout(() => commit("Remove Guide", []), 0)
+                    }}
+                    className="flex h-7 w-7 items-center justify-center rounded-sm hover:bg-[var(--ps-tool-hover)] disabled:opacity-40"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <div className="grid grid-cols-[1fr_78px_36px] items-end gap-1">
                 <label className="grid gap-1 text-[10px] text-[var(--ps-text-dim)]">
                   Type
                   <select
                     value={guide.orientation}
+                    disabled={!!guide.locked}
                     onChange={(event) => updateGuide(guide, { orientation: event.target.value as Guide["orientation"] })}
                     className="h-7 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px] text-[var(--ps-text)]"
                   >
@@ -153,6 +191,7 @@ export function GuidesPanel() {
                   <input
                     type="number"
                     value={Math.round(guide.position)}
+                    disabled={!!guide.locked}
                     onChange={(event) => updateGuide(guide, { position: clamp(Number(event.target.value) || 0, 0, max) })}
                     className="h-7 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px] text-[var(--ps-text)]"
                   />
@@ -163,17 +202,7 @@ export function GuidesPanel() {
                   onChange={(event) => updateGuide(guide, { color: event.target.value })}
                   className="h-7 w-9 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-0.5"
                 />
-                <button
-                  type="button"
-                  title="Delete guide"
-                  onClick={() => {
-                    dispatch({ type: "remove-guide", id: guide.id })
-                    window.setTimeout(() => commit("Remove Guide", []), 0)
-                  }}
-                  className="flex h-7 w-7 items-center justify-center rounded-sm hover:bg-[var(--ps-tool-hover)]"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
+                </div>
               </div>
             )
           })
@@ -212,6 +241,24 @@ function ToggleButton({ label, active, onClick }: { label: string; active: boole
       }`}
     >
       {label}
+    </button>
+  )
+}
+
+function IconToggle({ label, active, children, onClick }: { label: string; active: boolean; children: React.ReactNode; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={onClick}
+      className={`flex h-7 w-7 items-center justify-center rounded-sm border ${
+        active
+          ? "border-[var(--ps-accent)] bg-[var(--ps-tool-active)]"
+          : "border-[var(--ps-divider)] bg-[var(--ps-panel-2)] hover:bg-[var(--ps-tool-hover)]"
+      }`}
+    >
+      {children}
     </button>
   )
 }

@@ -21,7 +21,7 @@ import * as React from "react"
  * a custom predicate for dialogs that gate visibility on a different prop
  * (e.g. `filterId !== null`, `workflow !== null`).
  */
-export function lazyDialog<P extends Record<string, unknown>>(
+export function lazyDialog<P extends object>(
   loader: () => Promise<{ default: React.ComponentType<P> }>,
   isOpen: (props: P) => boolean = (p) => Boolean((p as { open?: unknown }).open),
 ): React.ComponentType<P> {

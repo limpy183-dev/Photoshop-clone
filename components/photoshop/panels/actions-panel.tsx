@@ -8,6 +8,7 @@ import { canvasFromDataUrl, downloadText } from "../document-io"
 import { MAX_CANVAS_DIMENSION, MAX_PROJECT_LAYERS } from "../canvas-limits"
 import { cn } from "@/lib/utils"
 import type { CanvasPatch, HistoryEntry, LayerSnapshot, MacroAction, SmartFilter } from "../types"
+import { uid } from "../uid"
 
 type SerializedCanvasPatch = Omit<CanvasPatch, "canvas"> & { canvasDataUrl: string | null }
 type SerializedSmartFilter = Omit<SmartFilter, "mask"> & { maskDataUrl?: string | null }
@@ -101,6 +102,8 @@ const LAYER_KEYS = new Set([
   "colorLabel",
   "smartFilters",
   "smartSource",
+  "notes",
+  "metadata",
 ])
 const CANVAS_PATCH_KEYS = new Set(["x", "y", "w", "h", "canvasDataUrl"])
 const SMART_FILTER_KEYS = new Set(["id", "filterId", "name", "enabled", "opacity", "blendMode", "params", "maskDataUrl", "maskEnabled"])
@@ -118,11 +121,14 @@ const SMART_SOURCE_KEYS = new Set([
   "status",
   "embedded",
   "updatedAt",
+  "fileHandleName",
+  "handlePermission",
+  "lastKnownModified",
+  "sourceHash",
+  "editPackage",
+  "exportedAt",
+  "relinkedAt",
 ])
-
-function uid(prefix: string) {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value)
@@ -293,6 +299,8 @@ function validateLayer(value: unknown, context: string): SerializedLayerSnapshot
     "artboard",
     "threeD",
     "video",
+    "notes",
+    "metadata",
   ] as const).forEach((key) => {
     if (value[key] !== undefined) assertBoundedJsonValue(value[key], `${context}.${key}`)
   })
@@ -380,6 +388,16 @@ function serializeSmartFilter(filter: SmartFilter): SerializedSmartFilter {
 
 function serializeSnapshot(snapshot: LayerSnapshot): SerializedLayerSnapshot {
   const { canvas, mask, canvasPatches, frame, smartFilters, smartSource, ...rest } = snapshot
+  const serializedSmartSource = smartSource
+    ? (() => {
+        const { canvas: sourceCanvas, fileHandle: _fileHandle, ...sourceRest } = smartSource
+        return {
+          ...sourceRest,
+          canvasDataUrl: canvasDataUrl(sourceCanvas),
+          canvas: undefined,
+        }
+      })()
+    : undefined
   return {
     ...rest,
     canvasDataUrl: canvasDataUrl(canvas),
@@ -396,13 +414,7 @@ function serializeSnapshot(snapshot: LayerSnapshot): SerializedLayerSnapshot {
         }
       : undefined,
     smartFilters: smartFilters?.map(serializeSmartFilter),
-    smartSource: smartSource
-      ? {
-          ...smartSource,
-          canvasDataUrl: canvasDataUrl(smartSource.canvas),
-          canvas: undefined,
-        }
-      : undefined,
+    smartSource: serializedSmartSource,
   }
 }
 
@@ -427,6 +439,25 @@ async function deserializeSmartFilter(filter: SerializedSmartFilter, width: numb
 
 async function deserializeSnapshot(snapshot: SerializedLayerSnapshot, width: number, height: number): Promise<LayerSnapshot> {
   const { canvasDataUrl, maskDataUrl, canvasPatches, frame, smartFilters, smartSource, ...rest } = snapshot
+  const smartSourceForSnapshot: LayerSnapshot["smartSource"] = smartSource
+    ? (() => {
+        const { canvasDataUrl: smartSourceDataUrl, ...sourceFields } = smartSource
+        return {
+          ...sourceFields,
+          width: smartSource.width,
+          height: smartSource.height,
+          canvas: smartSourceDataUrl
+            ? undefined
+            : null,
+        }
+      })()
+    : undefined
+  if (smartSource && smartSourceForSnapshot) {
+    const { canvasDataUrl: smartSourceDataUrl } = smartSource
+    smartSourceForSnapshot.canvas = smartSourceDataUrl
+      ? await canvasFromDataUrl(smartSourceDataUrl, smartSource.width, smartSource.height)
+      : null
+  }
   return {
     ...rest,
     canvas: canvasDataUrl ? await canvasFromDataUrl(canvasDataUrl, width, height) : null,
@@ -448,15 +479,7 @@ async function deserializeSnapshot(snapshot: SerializedLayerSnapshot, width: num
     smartFilters: smartFilters
       ? await Promise.all(smartFilters.map((filter) => deserializeSmartFilter(filter, width, height)))
       : undefined,
-    smartSource: smartSource
-      ? {
-          width: smartSource.width,
-          height: smartSource.height,
-          canvas: smartSource.canvasDataUrl
-            ? await canvasFromDataUrl(smartSource.canvasDataUrl, smartSource.width, smartSource.height)
-            : null,
-        }
-      : undefined,
+    smartSource: smartSourceForSnapshot,
   }
 }
 

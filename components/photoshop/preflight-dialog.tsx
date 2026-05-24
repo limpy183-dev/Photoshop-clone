@@ -19,6 +19,7 @@ import {
   analyzePreflightDocument,
   getPreflightFixes as getStructuredPreflightFixes,
   normalizePreflightSlice,
+  type PreflightCategory,
   type PreflightFinding,
   type PreflightStatus,
 } from "./preflight-engine"
@@ -343,6 +344,8 @@ function _analyzePreflight(doc: PsDocument): LegacyPreflightItem[] {
 
 export function PreflightDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { activeDoc, dispatch, commit, requestRender } = useEditor()
+  const [categoryFilter, setCategoryFilter] = React.useState<PreflightCategory | "All">("All")
+  const [statusFilter, setStatusFilter] = React.useState<PreflightStatus | "All">("All")
   const report = React.useMemo(() => (activeDoc ? analyzePreflightDocument(activeDoc) : null), [activeDoc])
   const items = React.useMemo<PreflightFinding[]>(() => report?.findings ?? [], [report])
   const fixes = React.useMemo(() => (activeDoc ? getStructuredPreflightFixes(activeDoc) : null), [activeDoc])
@@ -350,6 +353,12 @@ export function PreflightDialog({ open, onOpenChange }: { open: boolean; onOpenC
   const fixCandidates = fixes ?? getStructuredPreflightFixes(activeDoc)
   const counts = report?.counts ?? { pass: 0, warn: 0, error: 0, info: 0 }
   const printDefaultCount = items.some((item) => item.fixAction?.kind === "set-print-defaults") ? 1 : 0
+  const categories = ["All", ...Array.from(new Set(items.map((item) => item.category))).sort()] as Array<PreflightCategory | "All">
+  const filteredItems = items.filter((item) => {
+    if (categoryFilter !== "All" && item.category !== categoryFilter) return false
+    if (statusFilter !== "All" && item.status !== statusFilter) return false
+    return true
+  })
 
   const exportJson = () => {
     downloadText(
@@ -368,6 +377,21 @@ export function PreflightDialog({ open, onOpenChange }: { open: boolean; onOpenC
       ),
       `${activeDoc.name}-preflight.json`,
     )
+  }
+
+  const exportCsv = () => {
+    const rows = [
+      ["status", "category", "label", "detail", "fix"],
+      ...filteredItems.map((item) => [
+        item.status,
+        item.category,
+        item.label,
+        item.detail,
+        item.fixAction ? `${item.fixAction.autoFixable ? "Auto" : "Warn"}: ${item.fixAction.label}` : "",
+      ]),
+    ]
+    const csv = rows.map((row) => row.map(csvCell).join(",")).join("\n")
+    downloadText(csv, `${activeDoc.name}-preflight.csv`)
   }
 
   const finishFix = (label: string) => {
@@ -452,6 +476,14 @@ export function PreflightDialog({ open, onOpenChange }: { open: boolean; onOpenC
         <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2 text-[11px] leading-5 text-[var(--ps-text-dim)]">
           Browser document audit only. Not a certified prepress or print-provider handoff check.
         </div>
+        {report?.separationModel ? (
+          <div className="grid grid-cols-4 gap-2 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2 text-[11px]">
+            <Info label="Process" value={report.separationModel.process} />
+            <Info label="Plates" value={report.separationModel.processPlates.join(", ") || "None"} />
+            <Info label="Spot" value={`${report.separationModel.spotChannels.length}`} />
+            <Info label="Alpha" value={`${report.separationModel.savedAlphaChannels.length}`} />
+          </div>
+        ) : null}
         <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
           <div className="mb-2 text-[10px] uppercase tracking-wide text-[var(--ps-text-dim)]">Quick fixes</div>
           <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
@@ -463,8 +495,30 @@ export function PreflightDialog({ open, onOpenChange }: { open: boolean; onOpenC
             <QuickFixButton label="Print Defaults" count={printDefaultCount} onClick={setPrintDefaults} />
           </div>
         </div>
+        <div className="grid grid-cols-2 gap-2">
+          <select
+            value={categoryFilter}
+            onChange={(event) => setCategoryFilter(event.target.value as typeof categoryFilter)}
+            className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px]"
+            aria-label="Preflight category filter"
+          >
+            {categories.map((category) => <option key={category} value={category}>{category}</option>)}
+          </select>
+          <select
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}
+            className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px]"
+            aria-label="Preflight status filter"
+          >
+            <option value="All">All statuses</option>
+            <option value="pass">Pass</option>
+            <option value="warn">Warn</option>
+            <option value="fail">Fail</option>
+            <option value="info">Info</option>
+          </select>
+        </div>
         <div className="max-h-[56vh] overflow-y-auto rounded-sm border border-[var(--ps-divider)] text-[11px]">
-          {items.map((item) => (
+          {filteredItems.length ? filteredItems.map((item) => (
             <div key={item.id} className="grid grid-cols-[72px_96px_140px_1fr_150px] gap-2 border-b border-[var(--ps-divider)] px-3 py-2 last:border-b-0">
               <span className={STATUS_CLASS[item.status]}>{item.status}</span>
               <span className="text-[var(--ps-text-dim)]">{item.category}</span>
@@ -473,10 +527,12 @@ export function PreflightDialog({ open, onOpenChange }: { open: boolean; onOpenC
               <span className="text-[var(--ps-text-dim)]">
                 {item.fixAction
                   ? `${item.fixAction.autoFixable ? "Auto" : "Warn"}: ${item.fixAction.label}`
-                  : ""}
+                : ""}
               </span>
             </div>
-          ))}
+          )) : (
+            <div className="p-8 text-center text-[var(--ps-text-dim)]">No preflight findings match the active filters.</div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-document-report"))}>
@@ -484,6 +540,9 @@ export function PreflightDialog({ open, onOpenChange }: { open: boolean; onOpenC
           </Button>
           <Button variant="outline" size="sm" onClick={exportJson}>
             Export JSON
+          </Button>
+          <Button variant="outline" size="sm" onClick={exportCsv}>
+            Export CSV
           </Button>
           <Button size="sm" onClick={() => onOpenChange(false)}>
             Done
@@ -494,11 +553,24 @@ export function PreflightDialog({ open, onOpenChange }: { open: boolean; onOpenC
   )
 }
 
+function csvCell(value: string) {
+  return `"${value.replace(/"/g, "\"\"")}"`
+}
+
 function Summary({ label, value, className }: { label: string; value: number; className: string }) {
   return (
     <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-3 py-2">
       <div className="text-[10px] uppercase tracking-wide text-[var(--ps-text-dim)]">{label}</div>
       <div className={`text-lg tabular-nums ${className}`}>{value}</div>
+    </div>
+  )
+}
+
+function Info({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[10px] uppercase tracking-wide text-[var(--ps-text-dim)]">{label}</div>
+      <div className="truncate text-[var(--ps-text)]" title={value}>{value}</div>
     </div>
   )
 }

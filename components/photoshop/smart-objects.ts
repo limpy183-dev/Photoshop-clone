@@ -1,8 +1,5 @@
 import type { Layer, PsDocument, SmartFilter, SmartObjectSource } from "./types"
-
-function uid(prefix = "smart") {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
-}
+import { uid } from "./uid"
 
 function cloneCanvas(src: HTMLCanvasElement | null | undefined): HTMLCanvasElement | null {
   if (!src || typeof document === "undefined" || typeof src.getContext !== "function") return null
@@ -39,6 +36,14 @@ export function createSmartObjectSource(
     status: options.status ?? (options.linkType === "embedded" ? "embedded" : "current"),
     embedded: options.embedded ?? true,
     updatedAt: options.updatedAt ?? Date.now(),
+    fileHandle: options.fileHandle,
+    fileHandleName: options.fileHandleName,
+    handlePermission: options.handlePermission,
+    lastKnownModified: options.lastKnownModified,
+    sourceHash: options.sourceHash,
+    editPackage: options.editPackage,
+    exportedAt: options.exportedAt,
+    relinkedAt: options.relinkedAt,
     width: canvas.width,
     height: canvas.height,
     canvas: cloneCanvas(canvas),
@@ -91,6 +96,14 @@ export function markSmartObjectLinked(
       status: options.status ?? layer.smartSource?.status ?? "current",
       embedded: options.embedded ?? layer.smartSource?.embedded ?? true,
       updatedAt: options.updatedAt ?? Date.now(),
+      fileHandle: options.fileHandle ?? layer.smartSource?.fileHandle,
+      fileHandleName: options.fileHandleName ?? layer.smartSource?.fileHandleName,
+      handlePermission: options.handlePermission ?? layer.smartSource?.handlePermission,
+      lastKnownModified: options.lastKnownModified ?? layer.smartSource?.lastKnownModified,
+      sourceHash: options.sourceHash ?? layer.smartSource?.sourceHash,
+      editPackage: options.editPackage ?? layer.smartSource?.editPackage,
+      exportedAt: options.exportedAt ?? layer.smartSource?.exportedAt,
+      relinkedAt: options.relinkedAt ?? layer.smartSource?.relinkedAt,
     },
   }
 }

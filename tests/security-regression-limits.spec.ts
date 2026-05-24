@@ -12,6 +12,8 @@ import {
   clampCanvasSize,
 } from "../components/photoshop/canvas-limits"
 import { canvasFromDataUrl, deserializeProject } from "../components/photoshop/document-io"
+import { filterPersistedSettingsForHydration } from "../components/photoshop/editor-context"
+import { readRecentDocuments } from "../components/photoshop/recent-documents"
 import { installFixtureDom } from "./photoshop-fixtures"
 
 function jsonRequest(payload: unknown): Request {
@@ -101,4 +103,77 @@ test("project JSON import enforces layer, channel, and canvas payload limits", a
   await expect(canvasFromDataUrl("https://example.com/tracker.png", 1, 1)).rejects.toThrow(
     "Project contains unsupported or oversized canvas image data",
   )
+})
+
+test("recent documents strip bidi controls from display and file names", () => {
+  const store = new Map<string, string>()
+  const storage = {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => store.set(key, value),
+    removeItem: (key: string) => store.delete(key),
+  }
+  const originalWindow = globalThis.window
+  const originalLocalStorage = globalThis.localStorage
+
+  try {
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { localStorage: storage },
+    })
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: storage,
+    })
+    storage.setItem("ps-recent-documents-v1", JSON.stringify([{
+      id: "recent-1",
+      kind: "project",
+      name: "report\u202Egnp.exe-frames",
+      fileName: "report\u202Egnp.exe-frames.psprojson",
+      serialized: "{}",
+      updatedAt: Date.now(),
+    }]))
+
+    expect(readRecentDocuments()[0]).toMatchObject({
+      fileName: "reportgnp.exe-frames.psprojson",
+      name: "reportgnp.exe-frames",
+    })
+  } finally {
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: originalWindow,
+    })
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: originalLocalStorage,
+    })
+  }
+})
+
+test("persisted editor settings drop keys outside the saved settings schema", () => {
+  const filtered = filterPersistedSettingsForHydration({
+    background: "url(https://attacker.example/pixel.gif)",
+    foreground: "#102030",
+    brush: {
+      size: 42,
+      injectedField: "leak",
+      constructor: { prototype: { polluted: true } },
+    },
+    gradient: {
+      reverse: true,
+      type: "radial",
+      injectedField: "leak",
+    },
+    symmetry: {
+      axis: "horizontal",
+      enabled: true,
+      injectedField: "leak",
+    },
+  })
+
+  expect(filtered.background).toBeUndefined()
+  expect(filtered.foreground).toBe("#102030")
+  expect(filtered.brush).toMatchObject({ size: 42 })
+  expect(filtered.brush).not.toHaveProperty("injectedField")
+  expect(filtered.gradient).toEqual({ type: "radial", reverse: true })
+  expect(filtered.symmetry).toEqual({ enabled: true, axis: "horizontal" })
 })

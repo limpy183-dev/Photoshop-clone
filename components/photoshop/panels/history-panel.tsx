@@ -1,9 +1,11 @@
 "use client"
 
 import * as React from "react"
-import { Camera, RotateCcw, RotateCw, Trash2 } from "lucide-react"
+import { Camera, Download, RotateCcw, RotateCw, Search, Trash2 } from "lucide-react"
 import { useEditor } from "../editor-context"
+import { downloadText } from "../document-io"
 import { cn } from "@/lib/utils"
+import type { HistoryEntry } from "../types"
 
 export function HistoryPanel() {
   const {
@@ -18,17 +20,86 @@ export function HistoryPanel() {
     deleteHistorySnapshot,
   } = useEditor()
   const [snapshotName, setSnapshotName] = React.useState("")
+  const [query, setQuery] = React.useState("")
+  const [view, setView] = React.useState<"all" | "past" | "current" | "future">("all")
 
   const createSnapshot = () => {
     createHistorySnapshot(snapshotName.trim() || `Snapshot ${snapshots.length + 1}`)
     setSnapshotName("")
   }
 
+  const q = query.trim().toLowerCase()
+  const currentEntry = history[historyIndex]
+  const visibleSnapshots = snapshots.filter((snapshot) => !q || snapshot.name.toLowerCase().includes(q))
+  const visibleHistory = history
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry, index }) => {
+      if (view === "past" && index >= historyIndex) return false
+      if (view === "current" && index !== historyIndex) return false
+      if (view === "future" && index <= historyIndex) return false
+      return !q || entry.label.toLowerCase().includes(q)
+    })
+
+  const exportHistory = () => {
+    if (!activeDoc) return
+    downloadText(
+      JSON.stringify(
+        {
+          app: "Photoshop Web",
+          format: "ps-history-report",
+          version: 1,
+          document: activeDoc.name,
+          exportedAt: new Date().toISOString(),
+          currentIndex: historyIndex,
+          history: history.map(describeHistoryEntry),
+          snapshots: snapshots.map((snapshot) => ({
+            id: snapshot.id,
+            name: snapshot.name,
+            createdAt: snapshot.createdAt,
+            entry: describeHistoryEntry(snapshot.entry, -1),
+          })),
+        },
+        null,
+        2,
+      ),
+      `${activeDoc.name}-history.json`,
+    )
+  }
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 border-b border-[var(--ps-divider)] px-2 py-1.5 text-[10px]">
         <div className="h-7 w-7 border border-[var(--ps-divider)] ps-checker" />
-        <span className="font-medium">{activeDoc?.name ?? "-"}</span>
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-medium">{activeDoc?.name ?? "-"}</div>
+          <div className="text-[var(--ps-text-dim)]">
+            {historyIndex + 1}/{history.length} state{history.length === 1 ? "" : "s"}
+            {currentEntry ? ` - ${currentEntry.layers.length} layer${currentEntry.layers.length === 1 ? "" : "s"}` : ""}
+          </div>
+        </div>
+      </div>
+      <div className="space-y-1 border-b border-[var(--ps-divider)] px-2 py-1.5">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-1.5 top-1.5 h-3 w-3 text-[var(--ps-text-dim)]" />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search history"
+            className="h-6 w-full rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] pl-6 pr-2 text-[10px] outline-none focus:border-[var(--ps-accent)]"
+            aria-label="Search history"
+          />
+        </div>
+        <select
+          value={view}
+          onChange={(event) => setView(event.target.value as typeof view)}
+          className="h-6 w-full rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]"
+          aria-label="History view"
+        >
+          <option value="all">All states</option>
+          <option value="past">Undo states</option>
+          <option value="current">Current state</option>
+          <option value="future">Redo states</option>
+        </select>
       </div>
       <div className="grid grid-cols-[1fr_auto] gap-1 border-b border-[var(--ps-divider)] px-2 py-1">
         <input
@@ -52,10 +123,13 @@ export function HistoryPanel() {
         </button>
       </div>
       <div className="flex-1 overflow-y-auto">
-        {snapshots.length ? (
+        {visibleSnapshots.length ? (
           <div className="border-b border-[var(--ps-divider)]">
-            <div className="px-2 py-1 text-[10px] uppercase text-[var(--ps-text-dim)]">Snapshots</div>
-            {snapshots.map((snapshot) => (
+            <div className="flex items-center justify-between px-2 py-1 text-[10px] uppercase text-[var(--ps-text-dim)]">
+              <span>Snapshots</span>
+              <span>{visibleSnapshots.length}</span>
+            </div>
+            {visibleSnapshots.map((snapshot) => (
               <div
                 key={snapshot.id}
                 className="group flex items-center gap-2 border-t border-[var(--ps-divider)]/40 px-2 py-1"
@@ -88,7 +162,7 @@ export function HistoryPanel() {
           </div>
         ) : null}
 
-        {history.map((entry, index) => (
+        {visibleHistory.map(({ entry, index }) => (
           <button
             key={entry.id}
             onClick={() => jumpHistory(index)}
@@ -113,9 +187,19 @@ export function HistoryPanel() {
             ) : (
               <div className="h-6 w-6 border border-[var(--ps-divider)] bg-[var(--ps-panel-2)]" />
             )}
-            <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate">{entry.label}</span>
+              <span className="block truncate text-[9px] text-[var(--ps-text-dim)]">
+                {entry.layers.length} layer{entry.layers.length === 1 ? "" : "s"}
+                {entry.selection?.bounds ? " - selection" : ""}
+                {index > historyIndex ? " - redo" : index < historyIndex ? " - undo" : " - current"}
+              </span>
+            </span>
           </button>
         ))}
+        {visibleHistory.length === 0 && visibleSnapshots.length === 0 ? (
+          <div className="px-3 py-8 text-center text-[11px] text-[var(--ps-text-dim)]">No history states match.</div>
+        ) : null}
       </div>
       <div className="flex items-center gap-1 border-t border-[var(--ps-divider)] px-1 py-1 text-[var(--ps-text)]">
         <button
@@ -142,10 +226,39 @@ export function HistoryPanel() {
         >
           <RotateCw className="h-3.5 w-3.5" />
         </button>
+        <button
+          title="Export history report"
+          aria-label="Export history report"
+          onClick={exportHistory}
+          className="flex h-7 w-7 items-center justify-center rounded-sm hover:bg-[var(--ps-tool-hover)] disabled:opacity-40"
+          disabled={!activeDoc || history.length === 0}
+        >
+          <Download className="h-3.5 w-3.5" />
+        </button>
         <span className="ml-auto pr-1 text-[10px] text-[var(--ps-text-dim)]">
-          {history.length} state{history.length === 1 ? "" : "s"}
+          {Math.max(0, historyIndex)} undo / {Math.max(0, history.length - historyIndex - 1)} redo
         </span>
       </div>
     </div>
   )
+}
+
+function describeHistoryEntry(entry: HistoryEntry, index: number) {
+  return {
+    id: entry.id,
+    index,
+    label: entry.label,
+    width: entry.width,
+    height: entry.height,
+    layerCount: entry.layers.length,
+    selectedLayerCount: entry.selectedLayerIds.length,
+    activeLayerId: entry.activeLayerId,
+    hasThumbnail: !!entry.thumb,
+    hasSelection: !!entry.selection?.bounds,
+    guideCount: entry.guides?.length ?? 0,
+    noteCount: entry.notes?.length ?? 0,
+    sliceCount: entry.slices?.length ?? 0,
+    channelCount: entry.channels?.length ?? 0,
+    compCount: entry.comps?.length ?? 0,
+  }
 }

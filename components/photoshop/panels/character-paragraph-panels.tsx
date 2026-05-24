@@ -4,6 +4,7 @@ import * as React from "react"
 import { useEditor } from "../editor-context"
 import { rasterizeText } from "../tool-helpers"
 import type { TextAntiAliasMode } from "../types"
+import { DEFAULT_VARIABLE_AXIS_DEFINITIONS, listOpenTypeFeatureToggles } from "../typography-engine"
 import { Slider } from "@/components/ui/slider"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -43,6 +44,9 @@ export function CharacterPanel() {
       </div>
     )
   }
+
+  const axisDefinitions = text.variableAxisDefinitions?.length ? text.variableAxisDefinitions : DEFAULT_VARIABLE_AXIS_DEFINITIONS
+  const openTypeToggles = listOpenTypeFeatureToggles()
 
   return (
     <div className="overflow-y-auto text-[11px]">
@@ -184,25 +188,74 @@ export function CharacterPanel() {
 
       <div className="px-3 py-2 border-b border-[var(--ps-divider)] space-y-2">
         <label className="text-[10px] text-[var(--ps-text-dim)]">Variable Font Axes</label>
-        <CharSlider label="Weight" value={text.variableAxes?.wght ?? (text.weight === "bold" ? 700 : 400)} min={100} max={900} step={1} onChange={(v) => updateAxis("wght", v)} onCommit={() => commitChange("Variable Weight")} />
-        <CharSlider label="Width" value={text.variableAxes?.wdth ?? 100} min={50} max={200} step={1} suffix="%" onChange={(v) => updateAxis("wdth", v)} onCommit={() => commitChange("Variable Width")} />
-        <CharSlider label="Slant" value={text.variableAxes?.slnt ?? 0} min={-15} max={0} step={1} onChange={(v) => updateAxis("slnt", v)} onCommit={() => commitChange("Variable Slant")} />
-        <CharSlider label="Optical" value={text.variableAxes?.opsz ?? text.size} min={8} max={144} step={1} onChange={(v) => updateAxis("opsz", v)} onCommit={() => commitChange("Variable Optical Size")} />
+        {axisDefinitions.map((axis) => (
+          <CharSlider
+            key={axis.tag}
+            label={axis.name}
+            value={text.variableAxes?.[axis.tag] ?? axis.defaultValue}
+            min={axis.min}
+            max={axis.max}
+            step={1}
+            onChange={(v) => updateAxis(axis.tag, v)}
+            onCommit={() => commitChange(`Variable ${axis.name}`)}
+          />
+        ))}
       </div>
 
       <div className="px-3 py-2 border-b border-[var(--ps-divider)] space-y-2">
         <label className="text-[10px] text-[var(--ps-text-dim)]">OpenType</label>
         <div className="grid grid-cols-2 gap-1">
-          <CheckRow label="Ligatures" checked={text.ligatures !== false} onChange={(v) => { update({ ligatures: v }); commitChange("Ligatures") }} />
-          <CheckRow label="Discretionary" checked={text.discretionaryLigatures === true} onChange={(v) => { update({ discretionaryLigatures: v }); commitChange("Discretionary Ligatures") }} />
-          <CheckRow label="Contextual" checked={text.contextualAlternates !== false} onChange={(v) => { update({ contextualAlternates: v }); commitChange("Contextual Alternates") }} />
-          <CheckRow label="Stylistic" checked={text.stylisticAlternates === true} onChange={(v) => { update({ stylisticAlternates: v }); commitChange("Stylistic Alternates") }} />
-          <CheckRow label="Swash" checked={text.swash === true} onChange={(v) => { update({ swash: v }); commitChange("Swash") }} />
-          <CheckRow label="Ordinals" checked={text.ordinals === true} onChange={(v) => { update({ ordinals: v }); commitChange("Ordinals") }} />
-          <CheckRow label="Fractions" checked={text.fractions === true} onChange={(v) => { update({ fractions: v }); commitChange("Fractions") }} />
-          <CheckRow label="Oldstyle" checked={text.oldstyleFigures === true} onChange={(v) => { update({ oldstyleFigures: v }); commitChange("Oldstyle Figures") }} />
-          <CheckRow label="Tabular" checked={text.tabularFigures === true} onChange={(v) => { update({ tabularFigures: v }); commitChange("Tabular Figures") }} />
+          {openTypeToggles.map((toggle) => {
+            const checked = (text as unknown as Record<string, boolean | undefined>)[toggle.key] ?? text.openType?.[toggle.key] ?? toggle.defaultEnabled
+            return (
+              <CheckRow
+                key={toggle.tag}
+                label={toggle.label}
+                checked={!!checked}
+                onChange={(v) => {
+                  update({ [toggle.key]: v } as Partial<NonNullable<typeof text>>)
+                  commitChange(toggle.label)
+                }}
+              />
+            )
+          })}
         </div>
+      </div>
+
+      <div className="px-3 py-2 border-b border-[var(--ps-divider)] space-y-2">
+        <label className="text-[10px] text-[var(--ps-text-dim)]">Vertical Type</label>
+        <div className="grid grid-cols-2 gap-2">
+          <select
+            value={text.vertical ? (text.verticalWritingMode === "lr" ? "vertical-lr" : "vertical-rl") : "horizontal"}
+            onChange={(e) => {
+              const value = e.target.value
+              update({
+                vertical: value !== "horizontal",
+                verticalWritingMode: value === "vertical-lr" ? "lr" : "rl",
+              })
+              commitChange("Writing Mode")
+            }}
+            className="h-6 bg-[var(--ps-panel-2)] border border-[var(--ps-divider)] rounded-sm px-1 text-[10px]"
+          >
+            <option value="horizontal">Horizontal</option>
+            <option value="vertical-rl">Vertical RL</option>
+            <option value="vertical-lr">Vertical LR</option>
+          </select>
+          <select
+            value={text.mojikumi ?? "default"}
+            onChange={(e) => {
+              update({ mojikumi: e.target.value as NonNullable<typeof text>["mojikumi"] })
+              commitChange("Mojikumi")
+            }}
+            className="h-6 bg-[var(--ps-panel-2)] border border-[var(--ps-divider)] rounded-sm px-1 text-[10px]"
+          >
+            <option value="default">Default</option>
+            <option value="compact">Compact</option>
+            <option value="loose">Loose</option>
+            <option value="none">None</option>
+          </select>
+        </div>
+        <CheckRow label="Tate Chu Yoko" checked={text.tateChuYoko === true} onChange={(v) => { update({ tateChuYoko: v }); commitChange("Tate Chu Yoko") }} />
       </div>
 
       <div className="px-3 py-2">

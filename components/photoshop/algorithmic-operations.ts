@@ -1,4 +1,13 @@
 import type { Layer, PathPoint, PathProps, ShapeProps } from "./types"
+import { hexToRgb } from "./color-utils"
+import { autoAlignImageStack, seamCarveImageData } from "./photo-workflow-engine"
+import {
+  contractMaskData as contractMaskDataPure,
+  distanceToFeature,
+  expandMaskData as expandMaskDataPure,
+  featherMaskData as featherMaskDataPure,
+  smoothMaskData as smoothMaskDataPure,
+} from "./selection-algorithms"
 
 export interface Point {
   x: number
@@ -301,6 +310,112 @@ function applyMaskContrast(maskData: Uint8ClampedArray, contrast: number) {
   })
 }
 
+function colorDistanceToAverage(data: Uint8ClampedArray, i: number, avg: { r: number; g: number; b: number }) {
+  const dr = data[i] - avg.r
+  const dg = data[i + 1] - avg.g
+  const db = data[i + 2] - avg.b
+  return Math.sqrt(dr * dr + dg * dg + db * db)
+}
+
+function localMaskColorModels(
+  source: ImageData,
+  maskData: Uint8ClampedArray,
+  x: number,
+  y: number,
+  radius: number,
+) {
+  let inR = 0
+  let inG = 0
+  let inB = 0
+  let inW = 0
+  let outR = 0
+  let outG = 0
+  let outB = 0
+  let outW = 0
+  const w = source.width
+  const h = source.height
+  for (let dy = -radius; dy <= radius; dy++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      const nx = x + dx
+      const ny = y + dy
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+      const p = ny * w + nx
+      const i = p * 4
+      if (source.data[i + 3] <= alphaThreshold) continue
+      const weight = 1 / (1 + Math.hypot(dx, dy))
+      if (maskData[p] > 127) {
+        inR += source.data[i] * weight
+        inG += source.data[i + 1] * weight
+        inB += source.data[i + 2] * weight
+        inW += weight
+      } else {
+        outR += source.data[i] * weight
+        outG += source.data[i + 1] * weight
+        outB += source.data[i + 2] * weight
+        outW += weight
+      }
+    }
+  }
+  if (inW <= 0 || outW <= 0) return null
+  return {
+    inside: { r: inR / inW, g: inG / inW, b: inB / inW },
+    outside: { r: outR / outW, g: outG / outW, b: outB / outW },
+  }
+}
+
+function edgeAwareRefineMaskData(
+  maskData: Uint8ClampedArray,
+  width: number,
+  height: number,
+  source: ImageData,
+  radius: number,
+  smartRadius: boolean,
+) {
+  if (source.width !== width || source.height !== height || radius <= 0) return new Uint8ClampedArray(maskData)
+  const selected = new Uint8Array(width * height)
+  const outside = new Uint8Array(width * height)
+  for (let i = 0; i < selected.length; i++) {
+    selected[i] = maskData[i] > 127 ? 1 : 0
+    outside[i] = selected[i] ? 0 : 1
+  }
+  const distToSelected = distanceToFeature(selected, width, height)
+  const distToOutside = distanceToFeature(outside, width, height)
+  const edgeRadius = Math.max(1, Math.min(48, Math.round(radius)))
+  const edgeRadiusSq = edgeRadius * edgeRadius
+  const sampleRadius = Math.max(2, Math.min(8, Math.round(edgeRadius / 3) + 1))
+  const out = new Uint8ClampedArray(maskData)
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const p = y * width + x
+      const edgeDistanceSq = Math.min(distToSelected[p], distToOutside[p])
+      if (edgeDistanceSq > edgeRadiusSq) continue
+      const i = p * 4
+      if (source.data[i + 3] <= alphaThreshold) {
+        out[p] = 0
+        continue
+      }
+      const models = localMaskColorModels(source, maskData, x, y, sampleRadius)
+      if (!models) continue
+      const dInside = colorDistanceToAverage(source.data, i, models.inside)
+      const dOutside = colorDistanceToAverage(source.data, i, models.outside)
+      const gradient = localColorGradient(source.data, width, height, p)
+      const edgeStrength = smartRadius ? clamp(gradient / 96, 0.2, 1) : 0.45
+      const edgeWeight = clamp(1 - Math.sqrt(edgeDistanceSq) / Math.max(1, edgeRadius + 1), 0.15, 1)
+      const margin = 4 + edgeStrength * 10
+      const confidence = clamp(Math.abs(dOutside - dInside) / (dInside + dOutside + 1), 0, 1)
+      if (dInside + margin < dOutside) {
+        const alpha = clamp8(160 + 95 * confidence * edgeWeight * edgeStrength)
+        out[p] = Math.max(out[p], alpha)
+      } else if (dOutside + margin < dInside) {
+        const remove = clamp(confidence * edgeWeight * (0.55 + edgeStrength * 0.45), 0, 1)
+        out[p] = clamp8(out[p] * (1 - remove))
+      }
+    }
+  }
+  return out
+}
+
 export function refineSelectionMaskData(
   maskData: Uint8ClampedArray,
   width: number,
@@ -309,15 +424,23 @@ export function refineSelectionMaskData(
 ) {
   let next = new Uint8ClampedArray(maskData)
   const smoothRadius = Math.max(0, Math.round(options.smoothRadius ?? 0))
-  if (smoothRadius > 0) next = majoritySmoothMask(next, width, height, smoothRadius)
+  if (smoothRadius > 0) next = smoothMaskDataPure(next, width, height, smoothRadius, alphaThreshold)
 
   const shiftEdge = options.shiftEdge ?? 0
-  if (shiftEdge !== 0) next = shiftMaskEdge(next, width, height, shiftEdge)
-  const hardEdgeForBounds = new Uint8ClampedArray(next)
-  const hardBounds = maskDataBounds(hardEdgeForBounds, width, height, 127)
+  if (shiftEdge !== 0) {
+    const edgeScale = Math.max(1, options.edgeRadius ?? 1)
+    const shiftPixels = Math.round(Math.abs(shiftEdge) <= edgeScale ? shiftEdge : (shiftEdge / 100) * edgeScale)
+    if (shiftPixels > 0) next = expandMaskDataPure(next, width, height, shiftPixels, alphaThreshold)
+    if (shiftPixels < 0) next = contractMaskDataPure(next, width, height, Math.abs(shiftPixels), alphaThreshold)
+  }
+
+  if (options.sourceImage && (options.smartRadius || (options.edgeRadius ?? 0) > 0)) {
+    next = edgeAwareRefineMaskData(next, width, height, options.sourceImage, options.edgeRadius ?? 1, !!options.smartRadius)
+  }
+  const hardBounds = maskDataBounds(next, width, height, 0)
 
   const featherRadius = Math.max(0, Math.round(options.featherRadius ?? 0))
-  if (featherRadius > 0) next = featherMaskData(next, width, height, featherRadius)
+  if (featherRadius > 0) next = featherMaskDataPure(next, width, height, featherRadius, alphaThreshold)
 
   next = applyMaskContrast(next, Math.max(0, options.contrast ?? 0))
   if (hardBounds) {
@@ -522,29 +645,74 @@ export function shapeToMask(shape: ShapeProps, width: number, height: number): H
   canvas.height = height
   const ctx = canvas.getContext("2d")!
   ctx.fillStyle = "#fff"
+  ctx.save()
+  const rotation = shape.rotation ?? 0
+  if (rotation) {
+    const rcx = shape.x + shape.w / 2
+    const rcy = shape.y + shape.h / 2
+    ctx.translate(rcx, rcy)
+    ctx.rotate((rotation * Math.PI) / 180)
+    ctx.translate(-rcx, -rcy)
+  }
   ctx.beginPath()
   if (shape.type === "ellipse") {
     ctx.ellipse(shape.x + shape.w / 2, shape.y + shape.h / 2, Math.abs(shape.w) / 2, Math.abs(shape.h) / 2, 0, 0, Math.PI * 2)
-  } else if (shape.type === "polygon") {
-    const sides = Math.max(3, shape.sides ?? 5)
+  } else if (shape.type === "polygon" || shape.type === "star") {
+    const isStar = shape.type === "star"
+    const count = Math.max(3, (isStar ? (shape.starPoints ?? shape.sides ?? 5) : (shape.sides ?? 5)))
     const cx = shape.x + shape.w / 2
     const cy = shape.y + shape.h / 2
     const rx = Math.abs(shape.w) / 2
     const ry = Math.abs(shape.h) / 2
-    for (let i = 0; i < sides; i++) {
-      const a = -Math.PI / 2 + (Math.PI * 2 * i) / sides
-      const x = cx + Math.cos(a) * rx
-      const y = cy + Math.sin(a) * ry
+    const inner = Math.min(0.95, Math.max(0.05, shape.innerRadiusRatio ?? 0.45))
+    const totalPts = isStar ? count * 2 : count
+    for (let i = 0; i < totalPts; i++) {
+      const ratio = isStar ? (i % 2 === 0 ? 1 : inner) : 1
+      const a = -Math.PI / 2 + (Math.PI * 2 * i) / totalPts
+      const x = cx + Math.cos(a) * rx * ratio
+      const y = cy + Math.sin(a) * ry * ratio
       if (i === 0) ctx.moveTo(x, y)
       else ctx.lineTo(x, y)
     }
     ctx.closePath()
   } else {
-    const radius = Math.max(0, shape.radius ?? 0)
-    roundedRectPath(ctx, shape.x, shape.y, shape.w, shape.h, radius)
+    const fallback = Math.max(0, shape.radius ?? 0)
+    const cr = shape.cornerRadii ?? [fallback, fallback, fallback, fallback]
+    roundedRectPathPerCorner(ctx, shape.x, shape.y, shape.w, shape.h, cr)
   }
   ctx.fill()
+  ctx.restore()
   return canvas
+}
+
+function roundedRectPathPerCorner(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  radii: [number, number, number, number],
+) {
+  const halfW = Math.abs(w) / 2
+  const halfH = Math.abs(h) / 2
+  const tl = Math.min(Math.max(0, radii[0]), halfW, halfH)
+  const tr = Math.min(Math.max(0, radii[1]), halfW, halfH)
+  const br = Math.min(Math.max(0, radii[2]), halfW, halfH)
+  const bl = Math.min(Math.max(0, radii[3]), halfW, halfH)
+  if (tl === 0 && tr === 0 && br === 0 && bl === 0) {
+    ctx.rect(x, y, w, h)
+    return
+  }
+  ctx.moveTo(x + tl, y)
+  ctx.lineTo(x + w - tr, y)
+  if (tr > 0) ctx.quadraticCurveTo(x + w, y, x + w, y + tr)
+  ctx.lineTo(x + w, y + h - br)
+  if (br > 0) ctx.quadraticCurveTo(x + w, y + h, x + w - br, y + h)
+  ctx.lineTo(x + bl, y + h)
+  if (bl > 0) ctx.quadraticCurveTo(x, y + h, x, y + h - bl)
+  ctx.lineTo(x, y + tl)
+  if (tl > 0) ctx.quadraticCurveTo(x, y, x + tl, y)
+  ctx.closePath()
 }
 
 function roundedRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -620,7 +788,19 @@ function translatePathPoint(point: PathPoint, dx: number, dy: number): PathPoint
   }
 }
 
-export function autoAlignLayers(layers: Layer[], docWidth: number, docHeight: number, mode: "centers" | "edges" | "canvas-center") {
+export function autoAlignLayers(layers: Layer[], docWidth: number, docHeight: number, mode: "features" | "centers" | "edges" | "canvas-center") {
+  if (mode === "features" && layers.length >= 2) {
+    const images = layers.map((layer) => layer.canvas.getContext("2d")!.getImageData(0, 0, layer.canvas.width, layer.canvas.height))
+    const radius = Math.max(8, Math.min(96, Math.round(Math.max(docWidth, docHeight) * 0.08)))
+    const aligned = autoAlignImageStack(images, { searchRadius: radius, maxFeatures: 120 })
+    for (let i = 1; i < layers.length; i++) {
+      const placement = aligned.placements[i]
+      if (!placement) continue
+      translateLayerCanvas(layers[i], Math.round(placement.dx), Math.round(placement.dy))
+    }
+    return
+  }
+
   const target =
     mode === "canvas-center"
       ? { cx: docWidth / 2, cy: docHeight / 2, left: 0, top: 0 }
@@ -731,120 +911,64 @@ export function analyzeContentAwareScale(
   }
 }
 
-export function contentAwareScaleCanvas(canvas: HTMLCanvasElement, targetWidth: number, targetHeight: number) {
+export function contentAwareScaleCanvas(
+  canvas: HTMLCanvasElement,
+  targetWidth: number,
+  targetHeight: number,
+  options?: {
+    protectMask?: HTMLCanvasElement | ImageData | null
+    removeMask?: HTMLCanvasElement | ImageData | null
+  },
+) {
   const plan = analyzeContentAwareScale(canvas.width, canvas.height, targetWidth, targetHeight)
   const width = plan.targetWidth
   const height = plan.targetHeight
-  let work = copyCanvas(canvas)
-  if (plan.widthSeams > 0) {
-    for (let i = 0; i < plan.widthSeams; i++) work = removeVerticalSeam(work)
-  }
-  if (plan.heightSeams > 0) {
-    work = transposeCanvas(work)
-    for (let i = 0; i < plan.heightSeams; i++) work = removeVerticalSeam(work)
-    work = transposeCanvas(work)
-  }
-  if (work.width !== width || work.height !== height) {
-    const resized = document.createElement("canvas")
-    resized.width = width
-    resized.height = height
-    const ctx = resized.getContext("2d")!
-    ctx.imageSmoothingEnabled = true
-    ctx.imageSmoothingQuality = "high"
-    ctx.drawImage(work, 0, 0, width, height)
-    work = resized
-  }
+  const source = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height)
+
+  const protectMask = options?.protectMask
+    ? maskToUint8(options.protectMask, canvas.width, canvas.height)
+    : undefined
+  const removeMask = options?.removeMask
+    ? maskToUint8(options.removeMask, canvas.width, canvas.height)
+    : undefined
+
+  const carved = seamCarveImageData(source, width, height, { protectMask, removeMask })
+  const work = document.createElement("canvas")
+  work.width = carved.image.width
+  work.height = carved.image.height
+  work.getContext("2d")!.putImageData(carved.image, 0, 0)
   return work
 }
 
-function removeVerticalSeam(canvas: HTMLCanvasElement) {
-  const ctx = canvas.getContext("2d")!
-  const img = ctx.getImageData(0, 0, canvas.width, canvas.height)
-  const energy = energyMap(img)
-  const cost = new Float64Array(canvas.width * canvas.height)
-  const back = new Int8Array(canvas.width * canvas.height)
-  for (let x = 0; x < canvas.width; x++) cost[x] = energy[x]
-  for (let y = 1; y < canvas.height; y++) {
-    for (let x = 0; x < canvas.width; x++) {
-      let bestX = x
-      let best = cost[(y - 1) * canvas.width + x]
-      if (x > 0 && cost[(y - 1) * canvas.width + x - 1] < best) {
-        best = cost[(y - 1) * canvas.width + x - 1]
-        bestX = x - 1
+function maskToUint8(
+  input: HTMLCanvasElement | ImageData,
+  width: number,
+  height: number,
+): Uint8Array {
+  const data: ImageData = input instanceof HTMLCanvasElement
+    ? input.getContext("2d")!.getImageData(0, 0, input.width, input.height)
+    : input
+  const out = new Uint8Array(width * height)
+  const srcW = data.width
+  const srcH = data.height
+  const sx = srcW / width
+  const sy = srcH / height
+  for (let y = 0; y < height; y++) {
+    const yy = Math.min(srcH - 1, Math.floor(y * sy))
+    for (let x = 0; x < width; x++) {
+      const xx = Math.min(srcW - 1, Math.floor(x * sx))
+      // Use alpha channel as the mask strength; fall back to luminance if
+      // alpha is fully opaque so users can supply a B/W canvas mask.
+      const i = (yy * srcW + xx) * 4
+      const a = data.data[i + 3]
+      if (a < 250) {
+        out[y * width + x] = a
+      } else {
+        const lum = 0.299 * data.data[i] + 0.587 * data.data[i + 1] + 0.114 * data.data[i + 2]
+        out[y * width + x] = lum > 16 ? Math.round(lum) : 0
       }
-      if (x < canvas.width - 1 && cost[(y - 1) * canvas.width + x + 1] < best) {
-        best = cost[(y - 1) * canvas.width + x + 1]
-        bestX = x + 1
-      }
-      cost[y * canvas.width + x] = energy[y * canvas.width + x] + best
-      back[y * canvas.width + x] = bestX - x
     }
   }
-  let seamX = 0
-  let best = Number.POSITIVE_INFINITY
-  for (let x = 0; x < canvas.width; x++) {
-    const value = cost[(canvas.height - 1) * canvas.width + x]
-    if (value < best) {
-      best = value
-      seamX = x
-    }
-  }
-  const seam = new Int32Array(canvas.height)
-  for (let y = canvas.height - 1; y >= 0; y--) {
-    seam[y] = seamX
-    seamX += back[y * canvas.width + seamX]
-  }
-  const out = document.createElement("canvas")
-  out.width = Math.max(1, canvas.width - 1)
-  out.height = canvas.height
-  const outImg = out.getContext("2d")!.createImageData(out.width, out.height)
-  for (let y = 0; y < canvas.height; y++) {
-    let ox = 0
-    for (let x = 0; x < canvas.width; x++) {
-      if (x === seam[y]) continue
-      const si = (y * canvas.width + x) * 4
-      const oi = (y * out.width + ox) * 4
-      outImg.data[oi] = img.data[si]
-      outImg.data[oi + 1] = img.data[si + 1]
-      outImg.data[oi + 2] = img.data[si + 2]
-      outImg.data[oi + 3] = img.data[si + 3]
-      ox++
-    }
-  }
-  out.getContext("2d")!.putImageData(outImg, 0, 0)
-  return out
-}
-
-function energyMap(img: ImageData) {
-  const out = new Float64Array(img.width * img.height)
-  for (let y = 0; y < img.height; y++) {
-    for (let x = 0; x < img.width; x++) {
-      const l = lumAt(img, x - 1, y)
-      const r = lumAt(img, x + 1, y)
-      const u = lumAt(img, x, y - 1)
-      const d = lumAt(img, x, y + 1)
-      const alpha = img.data[(y * img.width + x) * 4 + 3] / 255
-      out[y * img.width + x] = (Math.abs(r - l) + Math.abs(d - u)) * (0.35 + alpha)
-    }
-  }
-  return out
-}
-
-function lumAt(img: ImageData, x: number, y: number) {
-  const sx = clamp(x, 0, img.width - 1)
-  const sy = clamp(y, 0, img.height - 1)
-  const i = (sy * img.width + sx) * 4
-  return 0.299 * img.data[i] + 0.587 * img.data[i + 1] + 0.114 * img.data[i + 2]
-}
-
-function transposeCanvas(canvas: HTMLCanvasElement) {
-  const out = document.createElement("canvas")
-  out.width = canvas.height
-  out.height = canvas.width
-  const ctx = out.getContext("2d")!
-  ctx.translate(out.width, 0)
-  ctx.rotate(Math.PI / 2)
-  ctx.drawImage(canvas, 0, 0)
   return out
 }
 
@@ -1118,12 +1242,6 @@ export function parseIccProfile(buffer: ArrayBuffer): IccProfileInfo {
     platform: text(40, 4),
     renderingIntent: view.getUint32(64),
   }
-}
-
-function hexToRgb(hex: string) {
-  const clean = hex.replace("#", "")
-  const value = Number.parseInt(clean.length === 3 ? clean.split("").map((ch) => ch + ch).join("") : clean, 16)
-  return { r: (value >> 16) & 255, g: (value >> 8) & 255, b: value & 255 }
 }
 
 function rgbToHsv(r: number, g: number, b: number) {

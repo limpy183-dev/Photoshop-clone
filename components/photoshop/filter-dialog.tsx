@@ -60,9 +60,27 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
   }, [filterId, filter, activeDoc, selectedLayers, documents])
 
   const context = React.useMemo<FilterContext>(() => {
-    if (!filter || filter.id !== "match-color") return {}
-    return { matchColorSource: matchSourceData(String(params.matchSource ?? ""), documents) }
-  }, [filter, params.matchSource, documents])
+    if (!filter) return {}
+    const ctx: FilterContext = {}
+    if (filter.id === "match-color") {
+      ctx.matchColorSource = matchSourceData(String(params.matchSource ?? ""), documents)
+    }
+    if (filter.id === "displace") {
+      const ref = String(params.mapSource ?? "")
+      if (ref) ctx.displacementMap = matchSourceData(ref, documents)
+    }
+    if (filter.id === "apply-image") {
+      const ref = String(params.applySource ?? "")
+      if (ref) ctx.applyImageSource = matchSourceData(ref, documents)
+    }
+    if (filter.id === "calculations") {
+      const refA = String(params.sourceA ?? "")
+      const refB = String(params.sourceB ?? "")
+      if (refA) ctx.calcSourceA = matchSourceData(refA, documents)
+      if (refB) ctx.calcSourceB = matchSourceData(refB, documents)
+    }
+    return ctx
+  }, [filter, params.matchSource, params.mapSource, params.applySource, params.sourceA, params.sourceB, documents])
 
   React.useEffect(() => {
     if (!filter || !activeDoc) return
@@ -407,6 +425,15 @@ function AdjustmentControls({
       return (
         <>
           <GradientStops value={String(params.gradient ?? "0,#000000;1,#ffffff")} onChange={(v) => onChange("gradient", v)} />
+          <SelectRow
+            label="Interpolation"
+            value={String(params.interpolation ?? "rgb")}
+            options={[
+              ["rgb", "RGB"],
+              ["hsl", "HSL"],
+            ]}
+            onChange={(v) => onChange("interpolation", v)}
+          />
           <CheckboxRow label="Reverse" checked={bool(params.reverse)} onChange={(v) => onChange("reverse", v)} />
           <CheckboxRow label="Dither" checked={bool(params.dither, true)} onChange={(v) => onChange("dither", v)} />
         </>
@@ -472,6 +499,18 @@ function FilterParamRow({
         label={param.label}
         value={typeof value === "string" ? value : param.default}
         options={param.options.map((o) => [o.value, o.label])}
+        onChange={onChange}
+      />
+    )
+  }
+  if (param.type === "text") {
+    return (
+      <TextRow
+        label={param.label}
+        value={typeof value === "string" ? value : param.default}
+        multiline={param.multiline}
+        placeholder={param.placeholder}
+        accept={param.accept}
         onChange={onChange}
       />
     )
@@ -563,6 +602,63 @@ function CheckboxRow({ label, checked, onChange }: { label: string; checked: boo
       <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="accent-[var(--ps-accent)]" />
       {label}
     </label>
+  )
+}
+
+function TextRow({
+  label,
+  value,
+  multiline,
+  placeholder,
+  accept,
+  onChange,
+}: {
+  label: string
+  value: string
+  multiline?: boolean
+  placeholder?: string
+  accept?: string
+  onChange: (v: string) => void
+}) {
+  const inputClass = "rounded-sm border border-border bg-background px-2 py-1 text-sm font-mono"
+  const readFile = (file: File | undefined) => {
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => onChange(String(reader.result ?? ""))
+    reader.readAsText(file)
+  }
+  return (
+    <div className="grid gap-1.5 text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <label>{label}</label>
+        {accept ? (
+          <input
+            type="file"
+            accept={accept}
+            onChange={(e) => readFile(e.currentTarget.files?.[0])}
+            className="max-w-[180px] text-xs text-muted-foreground file:mr-2 file:h-7 file:rounded-sm file:border file:border-border file:bg-background file:px-2 file:text-xs"
+          />
+        ) : null}
+      </div>
+      {multiline ? (
+        <textarea
+          value={value}
+          placeholder={placeholder}
+          onChange={(e) => onChange(e.target.value)}
+          spellCheck={false}
+          rows={6}
+          className={`${inputClass} min-h-[120px] resize-y`}
+        />
+      ) : (
+        <input
+          value={value}
+          placeholder={placeholder}
+          onChange={(e) => onChange(e.target.value)}
+          spellCheck={false}
+          className={`${inputClass} h-8`}
+        />
+      )}
+    </div>
   )
 }
 

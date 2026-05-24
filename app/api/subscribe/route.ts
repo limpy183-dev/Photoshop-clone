@@ -91,15 +91,11 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await appendRecord<SubscribeRecord>("subscribers", record, {
+    await appendRecord<SubscribeRecord>("subscribers", record, {
       ...MARKETING_LIMITS.subscribers.store,
       dedupeById: true,
     })
-    return NextResponse.json({
-      ok: true,
-      added: result.added,
-      total: result.total,
-    })
+    return NextResponse.json({ ok: true })
   } catch (error) {
     if (error instanceof MarketingStoreQuotaError) {
       return NextResponse.json(

@@ -2,8 +2,15 @@
 
 import * as React from "react"
 import { useEditor, useRenderSubscription, makeCanvas } from "../editor-context"
-import { PenTool, Trash2, MousePointer2, CircleDot } from "lucide-react"
-import { rasterizeShape } from "../tool-helpers"
+import { PenTool, Trash2, MousePointer2, CircleDot, Route } from "lucide-react"
+import {
+  pathToSelectionMask,
+  selectionFromMask,
+  selectionToPath,
+  strokePath as drawVectorPath,
+} from "../tool-helpers"
+import { appendPathToCanvas, applyShapeBooleanOperation, shapeToEditablePath } from "../vector-path-operations"
+import type { Layer, PathProps } from "../types"
 
 export function PathsPanel() {
   const { activeDoc, activeLayer, dispatch, commit, foreground, brush } = useEditor()
@@ -47,13 +54,9 @@ export function PathsPanel() {
       ctx.scale(scaleX, scaleY)
       ctx.strokeStyle = "#aaa"
       ctx.lineWidth = 1 / Math.min(scaleX, scaleY)
-      if (s.type === "ellipse") {
-        ctx.beginPath()
-        ctx.ellipse(s.x + s.w / 2, s.y + s.h / 2, s.w / 2, s.h / 2, 0, 0, Math.PI * 2)
-        ctx.stroke()
-      } else {
-        ctx.strokeRect(s.x, s.y, s.w, s.h)
-      }
+      ctx.beginPath()
+      appendPathToCanvas(ctx, shapeToEditablePath(s))
+      ctx.stroke()
       ctx.restore()
     } else if (activeLayer.path) {
       const scaleX = cv.width / activeDoc.width
@@ -64,11 +67,7 @@ export function PathsPanel() {
       ctx.lineWidth = 1 / Math.min(scaleX, scaleY)
       if (activeLayer.path.points?.length) {
         ctx.beginPath()
-        activeLayer.path.points.forEach((p: { x: number; y: number }, i: number) => {
-          if (i === 0) ctx.moveTo(p.x, p.y)
-          else ctx.lineTo(p.x, p.y)
-        })
-        if (activeLayer.path.closed) ctx.closePath()
+        appendPathToCanvas(ctx, activeLayer.path)
         ctx.stroke()
       }
       ctx.restore()
@@ -78,31 +77,32 @@ export function PathsPanel() {
   React.useEffect(() => { drawThumb() }, [drawThumb])
   useRenderSubscription(drawThumb)
 
+  const editablePathForLayer = (layer: Pick<Layer, "kind" | "path" | "shape" | "vectorMask">): PathProps | null => {
+    if (layer.path) return layer.path
+    if (layer.vectorMask) return layer.vectorMask
+    if (layer.kind === "shape" && layer.shape) return shapeToEditablePath(layer.shape)
+    return null
+  }
+
   const makeSelectionFromPath = (pathLayer: typeof paths[0]) => {
     if (!activeDoc) return
-    const shape = pathLayer.shape
-    if (!shape) return
-    if (shape.type === "ellipse") {
-      dispatch({
-        type: "set-selection",
-        selection: {
-          bounds: { x: shape.x, y: shape.y, w: shape.w, h: shape.h },
-          shape: "ellipse",
-        },
-      })
-    } else {
-      dispatch({
-        type: "set-selection",
-        selection: {
-          bounds: { x: shape.x, y: shape.y, w: shape.w, h: shape.h },
-          shape: "rect",
-        },
-      })
-    }
+    const path = editablePathForLayer(pathLayer)
+    if (!path) return
+    const mask = pathToSelectionMask(path, activeDoc.width, activeDoc.height, { strokeWidth: Math.max(1, brush.size) })
+    dispatch({ type: "set-selection", selection: selectionFromMask(mask, "freehand") })
+    setTimeout(() => commit("Make Selection from Path", []), 0)
+  }
+
+  const makePathFromSelection = () => {
+    if (!activeDoc || !activeLayer || !activeDoc.selection.bounds) return
+    const path = selectionToPath(activeDoc.selection, activeDoc.width, activeDoc.height, 1.1)
+    if (!path) return
+    dispatch({ type: "set-layer-path", id: activeLayer.id, path })
+    setTimeout(() => commit("Make Work Path from Selection", [activeLayer.id]), 0)
   }
 
   const deletePath = (layerId: string) => {
-    dispatch({ type: "set-layer-path", id: layerId, path: undefined as unknown as import("../types").PathProps })
+    dispatch({ type: "set-layer-path", id: layerId, path: undefined })
     setTimeout(() => commit("Delete Path", [layerId]), 0)
   }
 
@@ -114,85 +114,37 @@ export function PathsPanel() {
       .reverse()
       .find((layer) => layer.kind === "shape" && layer.shape)
     if (!base?.shape) return
-    const result = makeCanvas(activeDoc.width, activeDoc.height)
-    const ctx = result.getContext("2d")!
-    const baseCanvas = makeCanvas(activeDoc.width, activeDoc.height)
-    rasterizeShape(baseCanvas, base.shape)
-    const activeCanvas = makeCanvas(activeDoc.width, activeDoc.height)
-    rasterizeShape(activeCanvas, activeLayer.shape)
-    ctx.drawImage(baseCanvas, 0, 0)
-    ctx.globalCompositeOperation =
-      operation === "subtract"
-        ? "destination-out"
-        : operation === "intersect"
-          ? "source-in"
-          : operation === "exclude"
-            ? "xor"
-            : "source-over"
-    ctx.drawImage(activeCanvas, 0, 0)
+    const shape = applyShapeBooleanOperation(base.shape, activeLayer.shape, operation)
     dispatch({
       type: "set-layer-shape",
       id: base.id,
-      shape: {
-        ...base.shape,
-        booleanOperation: operation,
-      },
+      shape,
     })
-    const baseCtx = base.canvas.getContext("2d")
-    if (baseCtx) {
-      baseCtx.clearRect(0, 0, base.canvas.width, base.canvas.height)
-      baseCtx.drawImage(result, 0, 0)
-    }
     dispatch({ type: "remove-layer", id: activeLayer.id })
     setTimeout(() => commit(`Path ${operation}`, [base.id]), 0)
   }
 
   const fillPath = () => {
     if (!activeDoc || !activeLayer) return
+    const path = editablePathForLayer(activeLayer)
+    if (!path) return
     const ctx = activeLayer.canvas.getContext("2d")!
-    const _pathData = activeLayer.path ?? (activeLayer.kind === "shape" && activeLayer.shape ? null : null)
-    if (activeLayer.kind === "shape" && activeLayer.shape) {
-      const s = activeLayer.shape
-      ctx.fillStyle = foreground
-      ctx.beginPath()
-      if (s.type === "ellipse") ctx.ellipse(s.x + s.w / 2, s.y + s.h / 2, s.w / 2, s.h / 2, 0, 0, Math.PI * 2)
-      else ctx.rect(s.x, s.y, s.w, s.h)
-      ctx.fill()
-    } else if (activeLayer.path?.points?.length) {
-      ctx.fillStyle = foreground
-      ctx.beginPath()
-      activeLayer.path.points.forEach((p: { x: number; y: number }, i: number) => {
-        if (i === 0) ctx.moveTo(p.x, p.y)
-        else ctx.lineTo(p.x, p.y)
-      })
-      if (activeLayer.path.closed) ctx.closePath()
-      ctx.fill()
-    }
+    const fill = makeCanvas(activeDoc.width, activeDoc.height)
+    const fctx = fill.getContext("2d")!
+    fctx.fillStyle = foreground
+    fctx.fillRect(0, 0, fill.width, fill.height)
+    fctx.globalCompositeOperation = "destination-in"
+    fctx.drawImage(pathToSelectionMask(path, activeDoc.width, activeDoc.height, { strokeWidth: Math.max(1, brush.size) }), 0, 0)
+    ctx.drawImage(fill, 0, 0)
     setTimeout(() => commit("Fill Path", [activeLayer.id]), 0)
   }
 
   const strokePath = () => {
     if (!activeDoc || !activeLayer) return
+    const path = editablePathForLayer(activeLayer)
+    if (!path) return
     const ctx = activeLayer.canvas.getContext("2d")!
-    ctx.strokeStyle = foreground
-    ctx.lineWidth = brush.size
-    ctx.lineCap = "round"
-    ctx.lineJoin = "round"
-    if (activeLayer.kind === "shape" && activeLayer.shape) {
-      const s = activeLayer.shape
-      ctx.beginPath()
-      if (s.type === "ellipse") ctx.ellipse(s.x + s.w / 2, s.y + s.h / 2, s.w / 2, s.h / 2, 0, 0, Math.PI * 2)
-      else ctx.rect(s.x, s.y, s.w, s.h)
-      ctx.stroke()
-    } else if (activeLayer.path?.points?.length) {
-      ctx.beginPath()
-      activeLayer.path.points.forEach((p: { x: number; y: number }, i: number) => {
-        if (i === 0) ctx.moveTo(p.x, p.y)
-        else ctx.lineTo(p.x, p.y)
-      })
-      if (activeLayer.path.closed) ctx.closePath()
-      ctx.stroke()
-    }
+    drawVectorPath(ctx, path, foreground, Math.max(1, brush.size), false, foreground)
     setTimeout(() => commit("Stroke Path", [activeLayer.id]), 0)
   }
 
@@ -227,7 +179,7 @@ export function PathsPanel() {
         <button
           className="p-1 hover:bg-[var(--ps-tool-hover)] rounded-sm disabled:opacity-30"
           title="Make Selection from Path"
-          disabled={!activeLayer || !(activeLayer.kind === "shape" && activeLayer.shape)}
+          disabled={!activeLayer || !editablePathForLayer(activeLayer)}
           onClick={() => {
             const p = paths.find((p) => p.id === activeLayer?.id)
             if (p) makeSelectionFromPath(p)
@@ -237,8 +189,16 @@ export function PathsPanel() {
         </button>
         <button
           className="p-1 hover:bg-[var(--ps-tool-hover)] rounded-sm disabled:opacity-30"
+          title="Make Work Path from Selection"
+          disabled={!activeLayer || !activeDoc?.selection.bounds}
+          onClick={makePathFromSelection}
+        >
+          <Route className="w-3.5 h-3.5" />
+        </button>
+        <button
+          className="p-1 hover:bg-[var(--ps-tool-hover)] rounded-sm disabled:opacity-30"
           title="Fill Path with Foreground Color"
-          disabled={!activeLayer || !(activeLayer.path || (activeLayer.kind === "shape" && activeLayer.shape))}
+          disabled={!activeLayer || !editablePathForLayer(activeLayer)}
           onClick={fillPath}
         >
           <CircleDot className="w-3.5 h-3.5" />
@@ -246,7 +206,7 @@ export function PathsPanel() {
         <button
           className="p-1 hover:bg-[var(--ps-tool-hover)] rounded-sm disabled:opacity-30"
           title="Stroke Path with Brush"
-          disabled={!activeLayer || !(activeLayer.path || (activeLayer.kind === "shape" && activeLayer.shape))}
+          disabled={!activeLayer || !editablePathForLayer(activeLayer)}
           onClick={strokePath}
         >
           <PenTool className="w-3.5 h-3.5" />

@@ -44,3 +44,7 @@ gsap-skills-main/
 # Agent guidelines and temp local images
 SKILL.md
 
+# Dated security audit drafts (committed audit reports — e.g. vulnerabilities_report.txt
+# — should be added explicitly with `git add -f` if you want them tracked)
+security_audit_*.txt
+

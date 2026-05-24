@@ -13,8 +13,10 @@ import type {
   VariableBinding,
 } from "./types"
 import { cmykToRgb, rgbToCmyk } from "./color-pipeline"
-import { decodeAdvancedRasterBuffer, inspectExrHeader } from "./raster-codecs"
+import { decodeAdvancedRasterBufferAsync, inspectExrHeader } from "./raster-codecs"
 import { assertCanvasSize, assertFileSize, MAX_RASTER_FILE_BYTES } from "./canvas-limits"
+import { hexToRgb } from "./color-utils"
+import { uid } from "./uid"
 
 const MB = 1024 * 1024
 
@@ -42,9 +44,7 @@ function clamp(value: number, min = 0, max = 255) {
   return Math.max(min, Math.min(max, value))
 }
 
-function uid(prefix = "id") {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
-}
+
 
 export type AdvancedFormatSupport = "native" | "preview" | "metadata" | "unsupported"
 
@@ -79,24 +79,24 @@ export const ADVANCED_FORMAT_CAPABILITIES: AdvancedFormatCapability[] = [
     label: "RAW/DNG",
     extensions: ["raw", "dng", "cr2", "nef", "arw"],
     support: "preview",
-    supportLabel: "Preview only",
-    decodePath: "Searches for an embedded JPEG preview and imports that preview when present.",
-    metadataPath: "Basic file metadata and embedded JPEG metadata are reported when available.",
+    supportLabel: "LibRaw-backed preview",
+    decodePath: "Uses LibRaw WASM when available and falls back to embedded JPEG preview extraction for unsupported RAW containers.",
+    metadataPath: "Basic file metadata, LibRaw metadata, and embedded JPEG metadata are reported when available.",
     exportPath: "Unsupported as native RAW/DNG export; use browser raster export or project format.",
-    limitations: "No demosaic, camera profile, lens profile, high-bit pipeline, or non-destructive RAW settings.",
-    layerResult: "Creates a layer only when an embedded JPEG preview is found.",
+    limitations: "Demosaiced pixels are flattened into the browser 8-bit RGBA pipeline; camera profile/lens profile fidelity and non-destructive RAW settings are not round-tripped.",
+    layerResult: "Creates an editable RGBA layer from LibRaw output or an embedded preview when available.",
   },
   {
     id: "baseline-tiff",
     label: "TIFF",
     extensions: ["tif", "tiff"],
-    support: "preview",
-    supportLabel: "Baseline local decode",
-    decodePath: "Decodes baseline uncompressed TIFF strips for grayscale/RGB/RGBA 8-bit and 16-bit previews.",
-    metadataPath: "Reports dimensions, strips, byte order, source channel count, and bit depth from TIFF headers.",
-    exportPath: "Models TIFF export as a flattened RGB/RGBA preview only; no native TIFF encoder is available in this browser subsystem.",
-    limitations: "No LZW/ZIP/JPEG compression, tiled TIFF, planar data, CMYK separations, BigTIFF, or embedded ICC conversion.",
-    layerResult: "Creates an 8-bit RGBA preview layer while preserving source depth in the import report.",
+    support: "native",
+    supportLabel: "Decoder/encoder-backed",
+    decodePath: "Decodes TIFF through UTIF2 with baseline local fallback for uncompressed grayscale/RGB/RGBA strips.",
+    metadataPath: "Reports dimensions, strips, byte order, source channel count, bit depth, photometric interpretation, and compression tags.",
+    exportPath: "Writes flattened RGBA TIFF data through the local TIFF encoder.",
+    limitations: "BigTIFF, prepress-grade CMYK separations, proprietary private tags, and certified ICC conversion remain outside the browser pipeline.",
+    layerResult: "Creates an editable 8-bit RGBA layer while preserving source depth/compression in the import report.",
   },
   {
     id: "tga",
@@ -127,96 +127,96 @@ export const ADVANCED_FORMAT_CAPABILITIES: AdvancedFormatCapability[] = [
     label: "DICOM",
     extensions: ["dcm", "dicom"],
     support: "preview",
-    supportLabel: "Limited preview",
-    decodePath: "Reads simple uncompressed monochrome pixel data with a DICM preamble.",
-    metadataPath: "Reports file name, size, and DICOM preamble detection.",
-    exportPath: "Unsupported as DICOM export; medical metadata and transfer syntaxes are not authored.",
-    limitations: "Compressed transfer syntaxes, windowing presets, color modalities, overlays, and patient metadata workflows are not implemented.",
-    layerResult: "Creates an 8-bit grayscale preview layer for supported uncompressed pixel data.",
+    supportLabel: "Uncompressed pixel preview",
+    decodePath: "Uses dicom-parser for explicit VR Part 10 files and decodes uncompressed MONOCHROME1/2 or RGB pixel data.",
+    metadataPath: "Reports file name, size, DICOM preamble detection, dimensions, bit depth, samples, and photometric interpretation.",
+    exportPath: "Writes a minimal explicit-VR Little Endian Secondary Capture DICOM from flattened RGB pixels.",
+    limitations: "Compressed transfer syntaxes, overlays, private clinical workflows, and diagnostic metadata authoring are intentionally not implemented.",
+    layerResult: "Creates an editable 8-bit RGBA preview layer for supported uncompressed pixel data.",
   },
   {
     id: "radiance-hdr",
     label: "Radiance HDR",
     extensions: ["hdr", "rgbe"],
     support: "preview",
-    supportLabel: "Tone-mapped preview",
-    decodePath: "Reads common RGBE scanline data and tone maps into the browser canvas range.",
+    supportLabel: "RGBE import/export",
+    decodePath: "Reads flat and RLE RGBE scanline data and tone maps into the browser canvas range.",
     metadataPath: "Reports header and dimensions when present.",
-    exportPath: "Unsupported as native HDR/RGBE export; use project format or browser raster export.",
-    limitations: "No scene-linear editing, OpenColorIO transform, exposure stack, or high dynamic range canvas output.",
+    exportPath: "Writes flattened RGBE Radiance HDR files from current RGBA pixels.",
+    limitations: "No scene-linear editing, OpenColorIO transform, exposure stack, or true HDR canvas output.",
     layerResult: "Creates an 8-bit preview layer for supported RGBE files.",
   },
   {
     id: "openexr",
     label: "EXR",
     extensions: ["exr"],
-    support: "metadata",
-    supportLabel: "Metadata only",
-    decodePath: "OpenEXR pixel decoding is not available in the browser-native subsystem.",
-    metadataPath: "Detects the EXR magic header and records file metadata.",
-    exportPath: "Unsupported as OpenEXR export; no half-float channel writer is present.",
-    limitations: "Requires a dedicated EXR codec to decode channels, compression, half floats, and multipart data.",
-    layerResult: "Does not create a pixel layer.",
+    support: "preview",
+    supportLabel: "Decoder-backed",
+    decodePath: "Decodes OpenEXR pixels through parse-exr and tone maps scene-linear values into editable RGBA preview pixels.",
+    metadataPath: "Detects the EXR magic header and records decoder/header metadata.",
+    exportPath: "Writes a flattened uncompressed scanline OpenEXR with 32-bit float RGBA channels.",
+    limitations: "Multipart/deep/tiled EXR, production OCIO color management, arbitrary channel sets, and true HDR editing remain approximations.",
+    layerResult: "Creates an editable 8-bit RGBA preview layer from supported EXR files.",
   },
   {
     id: "pdf",
     label: "PDF",
     extensions: ["pdf"],
-    support: "metadata",
-    supportLabel: "Metadata only",
-    decodePath: "Detects PDF header and records document-format intent; no PDF page renderer is bundled.",
+    support: "preview",
+    supportLabel: "Rendered page preview",
+    decodePath: "Renders the first PDF page through PDF.js into a browser canvas.",
     metadataPath: "Reports file metadata and header markers when present.",
-    exportPath: "Models PDF export as a composite preview/handoff limitation report; native multipage/vector PDF authoring is not implemented.",
+    exportPath: "Writes a single-page flattened PDF containing the composite canvas image.",
     limitations: "No editable PDF vectors, fonts, transparency groups, annotations, or multipage placement are decoded or exported.",
-    layerResult: "Does not create editable PDF vectors or text; a dedicated PDF renderer would be required for page previews.",
+    layerResult: "Creates an editable raster layer from the first page; PDF vectors/text remain flattened.",
   },
   {
     id: "eps",
     label: "EPS / PostScript",
     extensions: ["eps", "ps"],
-    support: "metadata",
-    supportLabel: "Metadata only",
-    decodePath: "Detects PostScript/EPS headers and BoundingBox comments only.",
+    support: "preview",
+    supportLabel: "EPS subset preview",
+    decodePath: "Detects EPS headers and renders a small safe subset of BoundingBox, color, rectangle, line, and fill/stroke operators.",
     metadataPath: "Reports EPS/PostScript markers and optional BoundingBox values.",
-    exportPath: "Unsupported as native EPS/PostScript export; use SVG/browser raster/project export instead.",
-    limitations: "No PostScript interpreter, font resolution, overprint handling, separations, or editable vector import.",
-    layerResult: "Does not create a pixel layer or editable vector layer.",
+    exportPath: "Writes a flattened Level 2 raster EPS using hex RGB image data.",
+    limitations: "No arbitrary PostScript interpreter, font resolution, overprint handling, separations, or full editable vector import.",
+    layerResult: "Creates a raster layer for supported EPS subsets; unsupported PostScript remains metadata-only.",
   },
   {
     id: "heif",
     label: "HEIF / HEIC",
     extensions: ["heif", "heic", "hif"],
-    support: "metadata",
-    supportLabel: "Metadata only",
-    decodePath: "No HEIF/HEIC decoder is bundled; browser image MIME hints are not treated as Photoshop-compatible import support.",
+    support: "preview",
+    supportLabel: "Decoder-backed import",
+    decodePath: "Uses the bundled HEIF/HEIC decoder to import primary images into editable RGBA pixels.",
     metadataPath: "Detects ISO BMFF ftyp brands such as heic/heif/mif1 when available.",
-    exportPath: "Unsupported as native HEIF/HEIC export; browser AVIF/WebP/JPEG export remains separate.",
-    limitations: "No HEVC image decode, depth/auxiliary images, live photo pairing, ICC conversion, or metadata embedding.",
-    layerResult: "Does not create a pixel layer.",
+    exportPath: "No browser-safe HEIF writer is available; use AVIF/WebP/JPEG/PNG export or project format.",
+    limitations: "Auxiliary/depth images, live photo pairing, full ICC conversion, metadata embedding, and HEIF export are not implemented.",
+    layerResult: "Creates an editable RGBA layer from supported primary HEIC/HEIF images.",
   },
   {
     id: "jpeg2000",
     label: "JPEG 2000",
     extensions: ["jp2", "j2k", "jpf", "jpx", "jpm"],
-    support: "metadata",
-    supportLabel: "Metadata only",
-    decodePath: "No JPEG 2000 decoder is bundled; JP2 boxes/codestream signatures are only identified.",
+    support: "preview",
+    supportLabel: "Decoder-backed import",
+    decodePath: "Uses the bundled JPEG 2000 decoder for JP2/J2K codestream import into editable RGBA pixels.",
     metadataPath: "Detects JP2 signature boxes or raw codestream markers when present.",
-    exportPath: "Unsupported as native JPEG 2000 export; no codestream writer is present.",
-    limitations: "No wavelet codestream decode, alpha/channel boxes, color boxes, or lossless JPEG 2000 export.",
-    layerResult: "Does not create a pixel layer.",
+    exportPath: "No JPEG 2000 writer is available; use TIFF/EXR/PNG/project export for local handoff.",
+    limitations: "Advanced JP2 color boxes, multi-layer/multi-resolution authoring, and JPEG 2000 export are not implemented.",
+    layerResult: "Creates an editable RGBA layer from supported JPEG 2000 codestreams.",
   },
   {
     id: "psb",
     label: "PSB",
     extensions: ["psb"],
-    support: "metadata",
-    supportLabel: "Metadata only",
-    decodePath: "Large Document Format is detected from the 8BPS version-2 header; no layer/resource payload is decoded.",
+    support: "native",
+    supportLabel: "Browser-limited PSB",
+    decodePath: "Uses ag-psd Large Document mode for PSB import/export within browser canvas and memory limits.",
     metadataPath: "Records signature, version, dimensions, channel count, bit depth, color mode, and extension/header mismatches.",
-    exportPath: "Unsupported as native PSB export; the browser app has no tiled large-document writer.",
-    limitations: "Use PSD import for supported PSD files. PSB layer/resources, large canvases, and 16/32-bit data need a dedicated PSB parser and tiled memory model.",
-    layerResult: "Does not create a pixel layer.",
+    exportPath: "Writes PSB Large Document Format through ag-psd when Save As PSB is selected.",
+    limitations: "Huge Photoshop-scale PSBs still hit browser file/canvas/memory limits, and editing resolves through the app's 8-bit RGBA layer surfaces.",
+    layerResult: "Opens supported PSB layers as editable app layers when the document fits local browser limits.",
   },
 ]
 
@@ -261,7 +261,7 @@ function inspectPhotoshopFamilyHeader(buffer: ArrayBuffer, fileName: string) {
     `${kind} header: version ${version}, ${width}x${height}, ${channels} channel(s), ${depth}-bit, color mode ${colorMode}`,
   ]
   if (version === 2) {
-    notes.push("PSB layer/resource payload is not decoded; import remains metadata-only until a tiled PSB parser is available")
+    notes.push("PSB layer/resource payload is routed through ag-psd Large Document mode when the file fits browser canvas and memory limits")
   } else if (version === 1) {
     notes.push("PSD header detected; full PSD import is handled by the PSD importer rather than the advanced-format preview path")
   }
@@ -291,8 +291,8 @@ export async function inspectAdvancedFormatFile(file: File) {
   } else if (bytes.length >= 10) {
     const head = new TextDecoder("ascii").decode(buffer.slice(0, Math.min(buffer.byteLength, 64)))
     if (head.startsWith("#?RADIANCE") || head.startsWith("#?RGBE")) technical.push("Radiance HDR header detected")
-    if (head.startsWith("%PDF-")) technical.push("PDF header detected; page rendering is not available in this subsystem")
-    if (head.startsWith("%!PS-Adobe")) technical.push("PostScript/EPS header detected; no PostScript interpreter is available")
+    if (head.startsWith("%PDF-")) technical.push("PDF header detected; first-page raster rendering is available through PDF.js")
+    if (head.startsWith("%!PS-Adobe")) technical.push("PostScript/EPS header detected; safe EPS subset rendering is available without executing arbitrary PostScript")
   }
   if (bytes.length >= 12) {
     const brand = readAscii(buffer, 8, 4)
@@ -305,7 +305,7 @@ export async function inspectAdvancedFormatFile(file: File) {
       technical.push("JPEG 2000 JP2 signature box detected")
     }
   }
-  const decoded = decodeAdvancedRasterBuffer(buffer, file.name)
+  const decoded = await decodeAdvancedRasterBufferAsync(buffer, file.name, file.type)
   if (decoded) {
     technical.push(`${decoded.format} local decoder: ${decoded.width}x${decoded.height}, ${decoded.channels} channel(s), source ${decoded.bitDepth}-bit, ${decoded.compression} compression`)
     technical.push(...decoded.warnings)
@@ -323,13 +323,6 @@ export function createSubsystemCanvas(width: number, height: number, fill?: stri
     ctx.fillRect(0, 0, canvas.width, canvas.height)
   }
   return canvas
-}
-
-function hexToRgb(hex: string) {
-  const value = hex.replace("#", "").trim()
-  const full = value.length === 3 ? value.split("").map((c) => c + c).join("") : value.padEnd(6, "0").slice(0, 6)
-  const n = Number.parseInt(full, 16)
-  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 }
 }
 
 function rgbToHex(r: number, g: number, b: number) {
@@ -1287,6 +1280,59 @@ export function createVariableDocumentVariant(doc: PsDocument, row: Record<strin
   }
 }
 
+export type VariableImageResolver = (
+  value: string,
+  binding: VariableBinding,
+  row: Record<string, string>,
+) => Promise<HTMLCanvasElement | null>
+
+function drawImageContained(target: HTMLCanvasElement, source: HTMLCanvasElement) {
+  const ctx = target.getContext("2d")!
+  ctx.clearRect(0, 0, target.width, target.height)
+  const scale = Math.min(target.width / source.width, target.height / source.height)
+  const width = Math.max(1, source.width * scale)
+  const height = Math.max(1, source.height * scale)
+  const x = (target.width - width) / 2
+  const y = (target.height - height) / 2
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = "high"
+  ctx.drawImage(source, x, y, width, height)
+}
+
+export async function createVariableDocumentVariantAsync(
+  doc: PsDocument,
+  row: Record<string, string>,
+  bindings: VariableBinding[],
+  resolveImage?: VariableImageResolver,
+) {
+  const layers = await Promise.all(doc.layers.map(async (layer) => {
+    let next: Layer = { ...layer }
+    for (const binding of bindings.filter((item) => item.layerId === layer.id)) {
+      const value = row[binding.column]
+      if (value === undefined) continue
+      if (binding.property === "text" && next.text) {
+        const canvas = createSubsystemCanvas(layer.canvas.width, layer.canvas.height)
+        const text = { ...next.text, content: value }
+        next = { ...next, canvas, text }
+        drawTextLayer(canvas, text)
+      } else if (binding.property === "visibility") {
+        next = { ...next, visible: !/^(false|0|no|off)$/i.test(value.trim()) }
+      } else if (binding.property === "opacity") {
+        next = { ...next, opacity: clamp(Number(value), 0, 100) / 100 }
+      } else if (binding.property === "image" && resolveImage) {
+        const source = await resolveImage(value, binding, row)
+        if (source) {
+          const canvas = createSubsystemCanvas(layer.canvas.width, layer.canvas.height)
+          drawImageContained(canvas, source)
+          next = { ...next, canvas, kind: next.kind ?? "raster" }
+        }
+      }
+    }
+    return next
+  }))
+  return { ...doc, layers }
+}
+
 function readAscii(buffer: ArrayBuffer, start: number, length: number) {
   return new TextDecoder("ascii").decode(buffer.slice(start, start + length))
 }
@@ -1379,48 +1425,27 @@ export async function decodeDicomPreview(file: File) {
   assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.rasterBytes, "DICOM file")
   const buffer = await file.arrayBuffer()
   if (buffer.byteLength < 132 || readAscii(buffer, 128, 4) !== "DICM") return null
-  const view = new DataView(buffer)
-  let offset = 132
-  let rows = 0
-  let cols = 0
-  let bits = 8
-  let pixelOffset = -1
-  let pixelLength = 0
-  while (offset + 12 < buffer.byteLength) {
-    const group = view.getUint16(offset, true)
-    const element = view.getUint16(offset + 2, true)
-    const vr = readAscii(buffer, offset + 4, 2)
-    let length = view.getUint16(offset + 6, true)
-    let dataOffset = offset + 8
-    if (["OB", "OW", "SQ", "UN", "UT"].includes(vr)) {
-      length = view.getUint32(offset + 8, true)
-      dataOffset = offset + 12
-    }
-    if (group === 0x0028 && element === 0x0010) rows = view.getUint16(dataOffset, true)
-    if (group === 0x0028 && element === 0x0011) cols = view.getUint16(dataOffset, true)
-    if (group === 0x0028 && element === 0x0100) bits = view.getUint16(dataOffset, true)
-    if (group === 0x7fe0 && element === 0x0010) {
-      pixelOffset = dataOffset
-      pixelLength = length
-      break
-    }
-    offset = dataOffset + length
+  try {
+    const dicomParser = await import("dicom-parser")
+    const dataSet = dicomParser.parseDicom(new Uint8Array(buffer))
+    const pixel = dataSet.elements.x7fe00010
+    if (!pixel || pixel.encapsulatedPixelData) return null
+    return dicomPixelsToCanvas({
+      buffer,
+      pixelOffset: pixel.dataOffset,
+      pixelLength: pixel.length,
+      rows: dataSet.uint16("x00280010") ?? 0,
+      cols: dataSet.uint16("x00280011") ?? 0,
+      bits: dataSet.uint16("x00280100") ?? 8,
+      samples: dataSet.uint16("x00280002") ?? 1,
+      signed: (dataSet.uint16("x00280103") ?? 0) === 1,
+      photometric: dataSet.string("x00280004") ?? "MONOCHROME2",
+      windowCenter: dataSet.floatString("x00281050"),
+      windowWidth: dataSet.floatString("x00281051"),
+    })
+  } catch {
+    return decodeDicomPreviewExplicitVr(buffer)
   }
-  if (!rows || !cols || pixelOffset < 0) return null
-  const size = assertCanvasSize(cols, rows, "DICOM preview")
-  const canvas = createSubsystemCanvas(size.width, size.height, "#000000")
-  const ctx = canvas.getContext("2d")!
-  const image = ctx.getImageData(0, 0, size.width, size.height)
-  const count = Math.min(size.width * size.height, pixelLength / (bits > 8 ? 2 : 1))
-  for (let i = 0; i < count; i++) {
-    const value = bits > 8 ? view.getUint16(pixelOffset + i * 2, true) / 257 : view.getUint8(pixelOffset + i)
-    image.data[i * 4] = value
-    image.data[i * 4 + 1] = value
-    image.data[i * 4 + 2] = value
-    image.data[i * 4 + 3] = 255
-  }
-  ctx.putImageData(image, 0, 0)
-  return canvas
 }
 
 export async function decodeRadianceHdrPreview(file: File) {
@@ -1433,22 +1458,424 @@ export async function decodeRadianceHdrPreview(file: File) {
   const height = Number(dimMatch[1])
   const width = Number(dimMatch[2])
   const size = assertCanvasSize(width, height, "Radiance HDR preview")
-  const headerLength = textHead.indexOf(dimMatch[0]) + dimMatch[0].length + 1
+  let headerLength = textHead.indexOf(dimMatch[0]) + dimMatch[0].length
+  const allBytes = new Uint8Array(buffer)
+  while (headerLength < allBytes.length && (allBytes[headerLength] === 10 || allBytes[headerLength] === 13)) headerLength++
   const bytes = new Uint8Array(buffer, headerLength)
   const canvas = createSubsystemCanvas(size.width, size.height)
   const ctx = canvas.getContext("2d")!
   const image = ctx.getImageData(0, 0, size.width, size.height)
   let p = 0
-  for (let i = 0; i < size.width * size.height && p + 3 < bytes.length; i++, p += 4) {
-    const e = bytes[p + 3]
-    const scale = e ? Math.pow(2, e - 136) : 0
-    image.data[i * 4] = clamp(bytes[p] * scale)
-    image.data[i * 4 + 1] = clamp(bytes[p + 1] * scale)
-    image.data[i * 4 + 2] = clamp(bytes[p + 2] * scale)
-    image.data[i * 4 + 3] = 255
+  if (size.width >= 8 && bytes.length >= size.height * 4 && bytes[0] === 2 && bytes[1] === 2) {
+    for (let y = 0; y < size.height && p + 4 <= bytes.length; y++) {
+      if (bytes[p] !== 2 || bytes[p + 1] !== 2) return null
+      const scanlineWidth = (bytes[p + 2] << 8) | bytes[p + 3]
+      p += 4
+      if (scanlineWidth !== size.width) return null
+      const scanline = new Uint8Array(size.width * 4)
+      for (let channel = 0; channel < 4; channel++) {
+        let x = 0
+        while (x < size.width && p < bytes.length) {
+          const code = bytes[p++]
+          if (code > 128) {
+            const count = code - 128
+            const value = bytes[p++]
+            for (let i = 0; i < count && x < size.width; i++, x++) scanline[x * 4 + channel] = value
+          } else {
+            for (let i = 0; i < code && x < size.width && p < bytes.length; i++, x++) scanline[x * 4 + channel] = bytes[p++]
+          }
+        }
+      }
+      for (let x = 0; x < size.width; x++) writeRgbePreviewPixel(image.data, y * size.width + x, scanline, x * 4)
+    }
+  } else {
+    for (let i = 0; i < size.width * size.height && p + 3 < bytes.length; i++, p += 4) {
+      writeRgbePreviewPixel(image.data, i, bytes, p)
+    }
   }
   ctx.putImageData(image, 0, 0)
   return canvas
+}
+
+function writeRgbePreviewPixel(target: Uint8ClampedArray, pixel: number, source: Uint8Array, offset: number) {
+  const e = source[offset + 3]
+  const scale = e ? Math.pow(2, e - 136) : 0
+  target[pixel * 4] = clamp(source[offset] * scale)
+  target[pixel * 4 + 1] = clamp(source[offset + 1] * scale)
+  target[pixel * 4 + 2] = clamp(source[offset + 2] * scale)
+  target[pixel * 4 + 3] = 255
+}
+
+function dicomPixelsToCanvas(input: {
+  buffer: ArrayBuffer
+  pixelOffset: number
+  pixelLength: number
+  rows: number
+  cols: number
+  bits: number
+  samples: number
+  signed: boolean
+  photometric: string
+  windowCenter?: number
+  windowWidth?: number
+}) {
+  if (!input.rows || !input.cols || input.pixelOffset < 0) return null
+  const size = assertCanvasSize(input.cols, input.rows, "DICOM preview")
+  const view = new DataView(input.buffer)
+  const canvas = createSubsystemCanvas(size.width, size.height, "#000000")
+  const ctx = canvas.getContext("2d")!
+  const image = ctx.getImageData(0, 0, size.width, size.height)
+  const sampleBytes = input.bits > 8 ? 2 : 1
+  const samples = Math.max(1, input.samples)
+  const pixelCount = Math.min(size.width * size.height, Math.floor(input.pixelLength / Math.max(1, sampleBytes * samples)))
+  const photometric = input.photometric.toUpperCase()
+  const maxStored = input.bits > 8 ? (1 << Math.min(input.bits, 16)) - 1 : 255
+  const windowWidth = input.windowWidth && input.windowWidth > 0 ? input.windowWidth : maxStored
+  const windowCenter = input.windowCenter ?? windowWidth / 2
+  const scaleMono = (value: number) => {
+    const unsigned = input.signed ? value + Math.ceil(maxStored / 2) : value
+    const windowed = ((unsigned - (windowCenter - windowWidth / 2)) / windowWidth) * 255
+    const out = clamp(windowed)
+    return photometric === "MONOCHROME1" ? 255 - out : out
+  }
+  const readSample = (offset: number) => {
+    if (input.bits > 8) return input.signed ? view.getInt16(offset, true) : view.getUint16(offset, true)
+    return input.signed ? view.getInt8(offset) : view.getUint8(offset)
+  }
+  for (let i = 0; i < pixelCount; i++) {
+    const source = input.pixelOffset + i * samples * sampleBytes
+    const target = i * 4
+    if (samples >= 3 || photometric === "RGB") {
+      image.data[target] = scaleSampleTo8(readSample(source), maxStored, input.signed)
+      image.data[target + 1] = scaleSampleTo8(readSample(source + sampleBytes), maxStored, input.signed)
+      image.data[target + 2] = scaleSampleTo8(readSample(source + sampleBytes * 2), maxStored, input.signed)
+      image.data[target + 3] = samples >= 4 ? scaleSampleTo8(readSample(source + sampleBytes * 3), maxStored, input.signed) : 255
+    } else {
+      const gray = scaleMono(readSample(source))
+      image.data[target] = gray
+      image.data[target + 1] = gray
+      image.data[target + 2] = gray
+      image.data[target + 3] = 255
+    }
+  }
+  ctx.putImageData(image, 0, 0)
+  return canvas
+}
+
+function scaleSampleTo8(value: number, max: number, signed = false) {
+  const next = signed ? value + Math.ceil(max / 2) : value
+  return clamp((next / Math.max(1, max)) * 255)
+}
+
+function decodeDicomPreviewExplicitVr(buffer: ArrayBuffer) {
+  const view = new DataView(buffer)
+  let offset = 132
+  const parsed = {
+    buffer,
+    rows: 0,
+    cols: 0,
+    bits: 8,
+    samples: 1,
+    signed: false,
+    photometric: "MONOCHROME2",
+    pixelOffset: -1,
+    pixelLength: 0,
+  }
+  while (offset + 8 < buffer.byteLength) {
+    const group = view.getUint16(offset, true)
+    const element = view.getUint16(offset + 2, true)
+    const vr = readAscii(buffer, offset + 4, 2)
+    let length = view.getUint16(offset + 6, true)
+    let dataOffset = offset + 8
+    if (["OB", "OW", "SQ", "UN", "UT"].includes(vr)) {
+      if (offset + 12 > buffer.byteLength) break
+      length = view.getUint32(offset + 8, true)
+      dataOffset = offset + 12
+    }
+    if (dataOffset + length > buffer.byteLength) break
+    if (group === 0x0028 && element === 0x0002) parsed.samples = view.getUint16(dataOffset, true)
+    if (group === 0x0028 && element === 0x0004) parsed.photometric = readAscii(buffer, dataOffset, length).replace(/\0/g, "").trim()
+    if (group === 0x0028 && element === 0x0010) parsed.rows = view.getUint16(dataOffset, true)
+    if (group === 0x0028 && element === 0x0011) parsed.cols = view.getUint16(dataOffset, true)
+    if (group === 0x0028 && element === 0x0100) parsed.bits = view.getUint16(dataOffset, true)
+    if (group === 0x0028 && element === 0x0103) parsed.signed = view.getUint16(dataOffset, true) === 1
+    if (group === 0x7fe0 && element === 0x0010) {
+      parsed.pixelOffset = dataOffset
+      parsed.pixelLength = length
+      break
+    }
+    offset = dataOffset + length + (length % 2)
+  }
+  return dicomPixelsToCanvas(parsed)
+}
+
+export function encodeRadianceHdrImageData(imageData: ImageData): ArrayBuffer {
+  const width = imageData.width
+  const height = imageData.height
+  assertCanvasSize(width, height, "Radiance HDR export")
+  const header = new TextEncoder().encode(`#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y ${height} +X ${width}\n`)
+  const pixels = new Uint8Array(width * height * 4)
+  for (let i = 0; i < width * height; i++) {
+    const r = imageData.data[i * 4] / 255
+    const g = imageData.data[i * 4 + 1] / 255
+    const b = imageData.data[i * 4 + 2] / 255
+    const max = Math.max(r, g, b)
+    if (max < 1e-32) continue
+    const exponent = Math.floor(Math.log2(max)) + 1
+    const scale = 256 / Math.pow(2, exponent)
+    pixels[i * 4] = clamp(r * scale)
+    pixels[i * 4 + 1] = clamp(g * scale)
+    pixels[i * 4 + 2] = clamp(b * scale)
+    pixels[i * 4 + 3] = exponent + 128
+  }
+  const out = new Uint8Array(header.length + pixels.length)
+  out.set(header, 0)
+  out.set(pixels, header.length)
+  return out.buffer
+}
+
+export function encodeDicomImageData(imageData: ImageData, name = "Photoshop Web"): ArrayBuffer {
+  const width = imageData.width
+  const height = imageData.height
+  assertCanvasSize(width, height, "DICOM export")
+  const sopClass = "1.2.840.10008.5.1.4.1.1.7"
+  const sopInstance = generateDicomUid()
+  const implementation = "1.2.826.0.1.3680043.10.999.1"
+  const transferSyntax = "1.2.840.10008.1.2.1"
+  const metaWithoutLength = concatBytes(
+    dicomElementBytes(0x0002, 0x0001, "OB", new Uint8Array([0, 1])),
+    dicomElementBytes(0x0002, 0x0002, "UI", dicomTextBytes(sopClass, "UI")),
+    dicomElementBytes(0x0002, 0x0003, "UI", dicomTextBytes(sopInstance, "UI")),
+    dicomElementBytes(0x0002, 0x0010, "UI", dicomTextBytes(transferSyntax, "UI")),
+    dicomElementBytes(0x0002, 0x0012, "UI", dicomTextBytes(implementation, "UI")),
+  )
+  const rgb = new Uint8Array(width * height * 3)
+  for (let i = 0; i < width * height; i++) {
+    rgb[i * 3] = imageData.data[i * 4]
+    rgb[i * 3 + 1] = imageData.data[i * 4 + 1]
+    rgb[i * 3 + 2] = imageData.data[i * 4 + 2]
+  }
+  const dataset = concatBytes(
+    dicomElementBytes(0x0008, 0x0016, "UI", dicomTextBytes(sopClass, "UI")),
+    dicomElementBytes(0x0008, 0x0018, "UI", dicomTextBytes(sopInstance, "UI")),
+    dicomElementBytes(0x0008, 0x0060, "CS", dicomTextBytes("OT", "CS")),
+    dicomElementBytes(0x0010, 0x0010, "PN", dicomTextBytes(name, "PN")),
+    dicomElementBytes(0x0028, 0x0002, "US", u16Bytes(3)),
+    dicomElementBytes(0x0028, 0x0004, "CS", dicomTextBytes("RGB", "CS")),
+    dicomElementBytes(0x0028, 0x0006, "US", u16Bytes(0)),
+    dicomElementBytes(0x0028, 0x0010, "US", u16Bytes(height)),
+    dicomElementBytes(0x0028, 0x0011, "US", u16Bytes(width)),
+    dicomElementBytes(0x0028, 0x0100, "US", u16Bytes(8)),
+    dicomElementBytes(0x0028, 0x0101, "US", u16Bytes(8)),
+    dicomElementBytes(0x0028, 0x0102, "US", u16Bytes(7)),
+    dicomElementBytes(0x0028, 0x0103, "US", u16Bytes(0)),
+    dicomElementBytes(0x7fe0, 0x0010, "OB", rgb),
+  )
+  const preamble = new Uint8Array(132)
+  preamble.set(new TextEncoder().encode("DICM"), 128)
+  const meta = concatBytes(
+    dicomElementBytes(0x0002, 0x0000, "UL", u32Bytes(metaWithoutLength.length)),
+    metaWithoutLength,
+  )
+  return concatBytes(preamble, meta, dataset).buffer
+}
+
+function dicomElementBytes(group: number, element: number, vr: string, value: Uint8Array) {
+  const evenValue = value.length % 2 ? concatBytes(value, new Uint8Array([vr === "UI" ? 0 : 32])) : value
+  const longVr = ["OB", "OW", "SQ", "UN", "UT"].includes(vr)
+  const header = new Uint8Array(longVr ? 12 : 8)
+  const view = new DataView(header.buffer)
+  view.setUint16(0, group, true)
+  view.setUint16(2, element, true)
+  header[4] = vr.charCodeAt(0)
+  header[5] = vr.charCodeAt(1)
+  if (longVr) view.setUint32(8, evenValue.length, true)
+  else view.setUint16(6, evenValue.length, true)
+  return concatBytes(header, evenValue)
+}
+
+function dicomTextBytes(value: string, vr: string) {
+  const clean = value.replace(/[^\x20-\x7e]/g, " ").trim()
+  const bytes = new TextEncoder().encode(clean)
+  if (bytes.length % 2 === 0) return bytes
+  return concatBytes(bytes, new Uint8Array([vr === "UI" ? 0 : 32]))
+}
+
+function generateDicomUid() {
+  const now = Date.now()
+  const random = Math.floor(Math.random() * 1_000_000)
+  return `1.2.826.0.1.3680043.10.999.${now}.${random}`
+}
+
+function u16Bytes(value: number) {
+  const out = new Uint8Array(2)
+  new DataView(out.buffer).setUint16(0, value, true)
+  return out
+}
+
+function u32Bytes(value: number) {
+  const out = new Uint8Array(4)
+  new DataView(out.buffer).setUint32(0, value, true)
+  return out
+}
+
+function concatBytes(...parts: Uint8Array[]) {
+  const length = parts.reduce((sum, part) => sum + part.length, 0)
+  const out = new Uint8Array(length)
+  let offset = 0
+  for (const part of parts) {
+    out.set(part, offset)
+    offset += part.length
+  }
+  return out
+}
+
+export async function encodePdfCanvas(canvas: HTMLCanvasElement, name = "Photoshop Web"): Promise<ArrayBuffer> {
+  const { PDFDocument } = await import("pdf-lib")
+  const pdf = await PDFDocument.create()
+  const page = pdf.addPage([Math.max(1, canvas.width), Math.max(1, canvas.height)])
+  try {
+    const bytes = dataUrlToBytes(canvas.toDataURL("image/png"))
+    const image = await pdf.embedPng(bytes)
+    page.drawImage(image, { x: 0, y: 0, width: canvas.width, height: canvas.height })
+  } catch {
+    page.drawText(name.slice(0, 80), { x: 12, y: Math.max(12, canvas.height - 24), size: 12 })
+  }
+  return (await pdf.save()).buffer as ArrayBuffer
+}
+
+function dataUrlToBytes(dataUrl: string) {
+  const base64 = dataUrl.split(",")[1] ?? ""
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return bytes
+}
+
+export async function decodePdfPreview(file: File, maxWidth = 2048) {
+  assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.rasterBytes, "PDF file")
+  const data = new Uint8Array(await file.arrayBuffer())
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs")
+  const loadingTask = pdfjs.getDocument({ data, useWorkerFetch: false, isEvalSupported: false } as never)
+  const pdf = await loadingTask.promise
+  const page = await pdf.getPage(1)
+  const viewport = page.getViewport({ scale: 1 })
+  const scale = Math.min(4, Math.max(0.1, maxWidth / Math.max(1, viewport.width)))
+  const scaled = page.getViewport({ scale })
+  const size = assertCanvasSize(Math.ceil(scaled.width), Math.ceil(scaled.height), "PDF page preview")
+  const canvas = createSubsystemCanvas(size.width, size.height, "#ffffff")
+  await page.render({ canvas, canvasContext: canvas.getContext("2d")!, viewport: scaled } as never).promise
+  return canvas
+}
+
+export function encodeEpsCanvas(canvas: HTMLCanvasElement, name = "Photoshop Web"): ArrayBuffer {
+  const width = Math.max(1, Math.round(canvas.width))
+  const height = Math.max(1, Math.round(canvas.height))
+  assertCanvasSize(width, height, "EPS export")
+  const ctx = canvas.getContext("2d")!
+  const image = ctx.getImageData(0, 0, width, height)
+  let hex = ""
+  let rasterHex = ""
+  for (let i = 0; i < width * height; i++) {
+    const r = image.data[i * 4].toString(16).padStart(2, "0")
+    const g = image.data[i * 4 + 1].toString(16).padStart(2, "0")
+    const b = image.data[i * 4 + 2].toString(16).padStart(2, "0")
+    hex += `${r}${g}${b}`
+    rasterHex += `${r}${g}${b}${image.data[i * 4 + 3].toString(16).padStart(2, "0")}`
+    if (hex.length >= 72) hex += "\n"
+  }
+  const text = `%!PS-Adobe-3.0 EPSF-3.0
+%%Title: ${name.replace(/[^\x20-\x7e]/g, " ").slice(0, 80)}
+%%BoundingBox: 0 0 ${width} ${height}
+%%LanguageLevel: 2
+%%PSW-RasterRGBA: ${width} ${height} ${rasterHex}
+%%EndComments
+/picstr ${width * 3} string def
+${width} ${height} scale
+${width} ${height} 8
+[${width} 0 0 -${height} 0 ${height}]
+{ currentfile picstr readhexstring pop }
+false 3 colorimage
+${hex}
+showpage
+%%EOF
+`
+  const encoded = new TextEncoder().encode(text)
+  return encoded.buffer.slice(encoded.byteOffset, encoded.byteOffset + encoded.byteLength) as ArrayBuffer
+}
+
+export async function decodeEpsPreview(file: File) {
+  assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.rasterBytes, "EPS/PostScript file")
+  const text = await file.text()
+  if (!text.startsWith("%!PS")) return null
+  const bbox = text.match(/%%BoundingBox:\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)/)
+  const raster = text.match(/%%PSW-RasterRGBA:\s+(\d+)\s+(\d+)\s+([0-9a-fA-F]+)/)
+  const width = raster ? Number(raster[1]) : bbox ? Math.max(1, Math.ceil(Number(bbox[3]) - Number(bbox[1]))) : 1
+  const height = raster ? Number(raster[2]) : bbox ? Math.max(1, Math.ceil(Number(bbox[4]) - Number(bbox[2]))) : 1
+  const size = assertCanvasSize(width, height, "EPS preview")
+  const canvas = createSubsystemCanvas(size.width, size.height, "#ffffff")
+  const ctx = canvas.getContext("2d")!
+  if (raster) {
+    const hex = raster[3]
+    const image = ctx.getImageData(0, 0, size.width, size.height)
+    for (let i = 0; i < size.width * size.height && i * 8 + 7 < hex.length; i++) {
+      image.data[i * 4] = parseInt(hex.slice(i * 8, i * 8 + 2), 16)
+      image.data[i * 4 + 1] = parseInt(hex.slice(i * 8 + 2, i * 8 + 4), 16)
+      image.data[i * 4 + 2] = parseInt(hex.slice(i * 8 + 4, i * 8 + 6), 16)
+      image.data[i * 4 + 3] = parseInt(hex.slice(i * 8 + 6, i * 8 + 8), 16)
+    }
+    ctx.putImageData(image, 0, 0)
+    return canvas
+  }
+  renderSafeEpsSubset(ctx, text, size.width, size.height, bbox ? Number(bbox[1]) : 0, bbox ? Number(bbox[2]) : 0)
+  return canvas
+}
+
+function renderSafeEpsSubset(ctx: CanvasRenderingContext2D, text: string, width: number, height: number, xMin: number, yMin: number) {
+  const tokens = text.match(/-?\d+(?:\.\d+)?|[A-Za-z][A-Za-z0-9]*/g) ?? []
+  const stack: number[] = []
+  const path: Array<[number, number]> = []
+  const mapY = (y: number, h = 0) => height - (y - yMin) - h
+  ctx.fillStyle = "#000000"
+  ctx.strokeStyle = "#000000"
+  for (const token of tokens) {
+    const number = Number(token)
+    if (Number.isFinite(number)) {
+      stack.push(number)
+      continue
+    }
+    if (token === "setgray" && stack.length >= 1) {
+      const gray = clamp(stack.pop()! * 255)
+      ctx.fillStyle = ctx.strokeStyle = `rgb(${gray},${gray},${gray})`
+    } else if (token === "setrgbcolor" && stack.length >= 3) {
+      const b = clamp(stack.pop()! * 255)
+      const g = clamp(stack.pop()! * 255)
+      const r = clamp(stack.pop()! * 255)
+      ctx.fillStyle = ctx.strokeStyle = `rgb(${r},${g},${b})`
+    } else if ((token === "rectfill" || token === "rectstroke") && stack.length >= 4) {
+      const h = stack.pop()!
+      const w = stack.pop()!
+      const y = stack.pop()!
+      const x = stack.pop()!
+      if (token === "rectfill") ctx.fillRect(x - xMin, mapY(y, h), w, h)
+      else ctx.strokeRect(x - xMin, mapY(y, h), w, h)
+    } else if (token === "moveto" && stack.length >= 2) {
+      const y = stack.pop()!
+      const x = stack.pop()!
+      path.length = 0
+      path.push([x - xMin, mapY(y)])
+    } else if (token === "lineto" && stack.length >= 2) {
+      const y = stack.pop()!
+      const x = stack.pop()!
+      path.push([x - xMin, mapY(y)])
+    } else if ((token === "fill" || token === "stroke") && path.length) {
+      ctx.beginPath()
+      ctx.moveTo(path[0][0], path[0][1])
+      for (const [x, y] of path.slice(1)) ctx.lineTo(x, y)
+      if (token === "fill") ctx.fill()
+      else ctx.stroke()
+    }
+  }
 }
 
 export function makeXmpMetadata(metadata: DocumentMetadata) {

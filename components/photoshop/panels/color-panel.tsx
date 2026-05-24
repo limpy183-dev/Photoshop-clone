@@ -2,17 +2,7 @@
 
 import * as React from "react"
 import { useEditor } from "../editor-context"
-
-function hexToRgb(hex: string) {
-  const h = hex.replace("#", "")
-  const v = parseInt(
-    h.length === 3
-      ? h.split("").map((c) => c + c).join("")
-      : h,
-    16,
-  )
-  return { r: (v >> 16) & 255, g: (v >> 8) & 255, b: v & 255 }
-}
+import { hexToRgb } from "../color-utils"
 function rgbToHex(r: number, g: number, b: number) {
   return (
     "#" +

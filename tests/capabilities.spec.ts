@@ -13,9 +13,9 @@ import { createDocumentReport } from "../components/photoshop/document-io"
 test("capability registry classifies required report tracks", () => {
   expect(CAPABILITY_STATUS_ORDER).toEqual(["complete", "usable", "approximation", "stub", "unsupported"])
   expect(getCapability("tool.quick-selection").status).toBe("usable")
-  expect(getCapability("format.psb").status).toBe("unsupported")
-  expect(getCapability("format.openexr").status).toBe("unsupported")
-  expect(getCapability("format.baseline-tiff").status).toBe("approximation")
+  expect(getCapability("format.psb").status).toBe("usable")
+  expect(getCapability("format.openexr").status).toBe("approximation")
+  expect(getCapability("format.baseline-tiff").status).toBe("usable")
   expect(getCapability("format.tga-pnm").status).toBe("usable")
   expect(getCapability("color.high-bit-pipeline").status).toBe("approximation")
   expect(getCapability("workflow.photomerge").status).toBe("approximation")
@@ -25,7 +25,8 @@ test("capability registry classifies required report tracks", () => {
 test("capability registry exposes summaries by kind", () => {
   const summary = summarizeCapabilities(listCapabilities({ kind: "format" }))
 
-  expect(summary.unsupported).toBeGreaterThan(0)
+  expect(summary.usable).toBeGreaterThan(0)
+  expect(summary.approximation).toBeGreaterThan(0)
   expect(summary.usable + summary.approximation + summary.unsupported).toBeGreaterThan(5)
 })
 
@@ -74,17 +75,17 @@ test("document reports include capability-derived interoperability warnings", ()
 })
 
 test("advanced format strategy aligns with capability registry limits", () => {
-  expect(capabilityForAdvancedFormat("sample.psb").support).toBe("metadata")
-  expect(capabilityForAdvancedFormat("sample.exr").support).toBe("metadata")
-  expect(capabilityForAdvancedFormat("sample.pdf").support).toBe("metadata")
-  expect(capabilityForAdvancedFormat("sample.heic", "image/heic").support).toBe("metadata")
+  expect(capabilityForAdvancedFormat("sample.psb").support).toBe("native")
+  expect(capabilityForAdvancedFormat("sample.exr").support).toBe("preview")
+  expect(capabilityForAdvancedFormat("sample.pdf").support).toBe("preview")
+  expect(capabilityForAdvancedFormat("sample.heic", "image/heic").support).toBe("preview")
   expect(capabilityForAdvancedFormat("sample.hdr").support).toBe("preview")
   expect(capabilityForAdvancedFormat("sample.dng").support).toBe("preview")
 
-  expect(getCapability("format.psb").status).toBe("unsupported")
-  expect(getCapability("format.openexr").status).toBe("unsupported")
+  expect(getCapability("format.psb").status).toBe("usable")
+  expect(getCapability("format.openexr").status).toBe("approximation")
   expect(getCapability("format.pdf").status).toBe("approximation")
-  expect(getCapability("format.heif").status).toBe("unsupported")
-  expect(getCapability("format.radiance-hdr").status).toBe("approximation")
+  expect(getCapability("format.heif").status).toBe("approximation")
+  expect(getCapability("format.radiance-hdr").status).toBe("usable")
   expect(getCapability("format.raw-dng").status).toBe("approximation")
 })

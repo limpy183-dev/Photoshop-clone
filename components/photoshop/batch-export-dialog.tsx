@@ -15,11 +15,11 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { canvasToGifDataUrl, createDocumentReport, downloadBlob, downloadDataUrl, renderDocumentComposite, rasterMime } from "./document-io"
 import { useEditor, makeCanvas } from "./editor-context"
 import { canvasSizeError } from "./canvas-limits"
-import type { ExportFormat } from "./document-io"
+import type { BrowserRasterExportFormat } from "./document-io"
 import type { Layer, PsDocument, Slice, TimelineFrame } from "./types"
 
 type BatchScope = "document" | "visible-layers" | "selected-layers" | "timeline" | "slices" | "sprite-layers" | "sprite-slices" | "sprite-timeline"
-type RasterFormat = Exclude<ExportFormat, "svg">
+type RasterFormat = BrowserRasterExportFormat
 
 function safeName(name: string) {
   return name.replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "-").replace(/^-+|-+$/g, "") || "export"

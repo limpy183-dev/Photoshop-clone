@@ -1,4 +1,6 @@
 import type { BlendMode, GradientStop, Layer, LayerStyle, MultiGradient } from "./types"
+import { hexToRgb } from "./color-utils"
+import { makeCanvas } from "./canvas-utils"
 
 /* ------------------------------------------------------------------ */
 /*  Rendering helpers                                                  */
@@ -7,29 +9,8 @@ import type { BlendMode, GradientStop, Layer, LayerStyle, MultiGradient } from "
 const ALPHA_THRESHOLD = 1 / 255
 const INF = 1e20
 
-function makeCanvas(w: number, h: number): HTMLCanvasElement {
-  const c = document.createElement("canvas")
-  c.width = w
-  c.height = h
-  return c
-}
-
 function clamp(v: number, min = 0, max = 1) {
   return v < min ? min : v > max ? max : v
-}
-
-function hexToRgb(hex: string) {
-  const raw = (hex || "#000000").trim().replace("#", "")
-  const normalized =
-    raw.length === 3
-      ? raw
-          .split("")
-          .map((c) => c + c)
-          .join("")
-      : raw.padEnd(6, "0").slice(0, 6)
-  const parsed = Number.parseInt(normalized, 16)
-  const v = Number.isFinite(parsed) ? parsed : 0
-  return { r: (v >> 16) & 255, g: (v >> 8) & 255, b: v & 255 }
 }
 
 function _withAlpha(hex: string, opacity: number) {
@@ -60,10 +41,31 @@ function readAlpha(canvas: HTMLCanvasElement): Float32Array {
   return alpha
 }
 
+interface GeometryCacheEntry {
+  fingerprint: string
+  geom: AlphaGeometry
+}
+
+const geometryCache = new WeakMap<HTMLCanvasElement, GeometryCacheEntry>()
+
+function alphaFingerprint(alpha: Float32Array, w: number, h: number): string {
+  const step = Math.max(1, Math.floor(alpha.length / 48))
+  let fp = `${w}x${h}|`
+  let sum = 0
+  for (let i = 0; i < alpha.length; i += step) {
+    fp += ((alpha[i] * 255) | 0).toString(36) + "."
+    sum += alpha[i]
+  }
+  return fp + (sum | 0).toString(36)
+}
+
 function buildGeometry(canvas: HTMLCanvasElement): AlphaGeometry {
   const w = canvas.width
   const h = canvas.height
   const alpha = readAlpha(canvas)
+  const fingerprint = alphaFingerprint(alpha, w, h)
+  const cached = geometryCache.get(canvas)
+  if (cached && cached.fingerprint === fingerprint) return cached.geom
   const inside = new Uint8Array(w * h)
   const outside = new Uint8Array(w * h)
   let hasInside = false
@@ -79,7 +81,9 @@ function buildGeometry(canvas: HTMLCanvasElement): AlphaGeometry {
   }
   const distanceToInside = hasInside ? distanceToSeeds(inside, w, h) : fillDistance(w, h, INF)
   const distanceToOutside = hasOutside ? distanceToSeeds(outside, w, h) : borderDistance(w, h)
-  return { w, h, alpha, inside, distanceToInside, distanceToOutside, hasPixels: hasInside }
+  const geom: AlphaGeometry = { w, h, alpha, inside, distanceToInside, distanceToOutside, hasPixels: hasInside }
+  geometryCache.set(canvas, { fingerprint, geom })
+  return geom
 }
 
 function fillDistance(w: number, h: number, value: number) {
@@ -777,12 +781,15 @@ export function applyLayerStyle(layer: Layer, fillOpacity = 1): HTMLCanvasElemen
     )
   }
   if (style.patternOverlay?.enabled) {
+    const rawKind = style.patternOverlay.pattern
+    const patternKind: "checker" | "dots" | "lines" | "noise" =
+      rawKind === "dots" || rawKind === "lines" || rawKind === "noise" ? rawKind : "checker"
     drawPatternOverlay(
       ctx,
       geom,
-      style.patternOverlay.pattern,
+      patternKind,
       style.patternOverlay.scale,
-      style.patternOverlay.color,
+      style.patternOverlay.color ?? "#888888",
       style.patternOverlay.opacity,
     )
   }

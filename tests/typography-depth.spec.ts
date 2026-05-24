@@ -8,9 +8,12 @@ import {
   convertTextToEditablePath,
   createTextExtrusionScene,
   diagnoseDocumentFonts,
+  layoutTextOnPath,
+  listOpenTypeFeatureToggles,
   findReplaceTextLayers,
   matchFontForLayer,
   normalizeVariableAxes,
+  resolveFontSubstitutions,
 } from "../components/photoshop/typography-engine"
 import type { Layer, ShapeProps, TextProps } from "../components/photoshop/types"
 import { installFixtureDom } from "./photoshop-fixtures"
@@ -79,6 +82,22 @@ test("font preview and diagnostics identify available, missing, and substituted 
   expect(diagnostics.substitutions["Missing Serif"]).toBe("Arial")
 })
 
+test("font substitution workflow returns patched layers and preserves the original request", () => {
+  const source = [
+    layer("a", baseText({ font: "Missing Serif" })),
+    layer("b", baseText({ font: "Inter" })),
+  ]
+  const result = resolveFontSubstitutions(source, {
+    availableFonts: new Set(["Inter", "Georgia"]),
+    substitutions: { "Missing Serif": "Georgia" },
+  })
+
+  expect(result.changedLayerIds).toEqual(["a"])
+  expect(result.layers[0].text?.font).toBe("Georgia")
+  expect(result.layers[0].text?.missingFontOriginal).toBe("Missing Serif")
+  expect(result.report.substitutions["Missing Serif"]).toBe("Georgia")
+})
+
 test("match font ranks candidates deterministically from text geometry", () => {
   const result = matchFontForLayer(baseText({ content: "mmmm", boxWidth: 220 }), [
     { family: "Condensed Sans", averageGlyphWidth: 0.42, xHeight: 0.48, serif: false },
@@ -107,13 +126,20 @@ test("find and replace edits text layers across the document and returns match m
 })
 
 test("text can be constrained inside a shape and converted to editable path outlines", () => {
-  const shape: ShapeProps = { type: "ellipse", x: 10, y: 12, w: 180, h: 90, fill: "#ffffff", stroke: null }
-  const inside = applyTextInsideShape(baseText({ content: "inside a live shape" }), shape, { inset: 8 })
+  const shape: ShapeProps = { type: "rect", x: 10, y: 12, w: 180, h: 90, fill: "#ffffff", stroke: null, cornerRadii: [12, 0, 24, 6] }
+  const inside = applyTextInsideShape(baseText({ content: "inside a live shape" }), shape, {
+    inset: 8,
+    insets: { top: 6, right: 10, bottom: 12, left: 14 },
+    verticalAlign: "middle",
+  })
   const path = convertTextToEditablePath(inside)
 
-  expect(inside.textShape?.type).toBe("ellipse")
-  expect(inside.boxWidth).toBe(164)
+  expect(inside.textShape?.cornerRadii).toEqual([12, 0, 24, 6])
+  expect(inside.boxWidth).toBe(156)
+  expect(inside.textShapeInsets).toEqual({ top: 6, right: 10, bottom: 12, left: 14 })
+  expect(inside.textShapeVerticalAlign).toBe("middle")
   expect(path.closed).toBe(true)
+  expect(path.subpaths?.length).toBeGreaterThan(inside.content.replace(/\s/g, "").length)
   expect(path.points.length).toBeGreaterThan(inside.content.length * 3)
   expect(path.points.some((point) => point.cp1 || point.cp2)).toBe(true)
 })
@@ -138,6 +164,30 @@ test("OpenType controls and anti-alias modes produce browser render settings", (
   expect(features).toContain('"tnum" 1')
   expect(smooth.renderHints.textRendering).toBe("optimizeLegibility")
   expect(none.renderHints.imageSmoothingEnabled).toBe(false)
+})
+
+test("OpenType toggles are filtered by browser support hints and text-on-path layout respects offsets", () => {
+  const toggles = listOpenTypeFeatureToggles({ supportedTags: new Set(["liga", "calt", "tnum"]) })
+  const glyphs = layoutTextOnPath(baseText({
+    content: "ABC",
+    textPath: [{ x: 0, y: 0 }, { x: 120, y: 0 }],
+    textPathStartOffset: 20,
+    textPathBaselineOffset: 10,
+    textPathAlign: "start",
+  }))
+  const vertical = buildTypographyRenderPlan(baseText({
+    content: "AB12",
+    vertical: true,
+    verticalWritingMode: "lr",
+    tateChuYoko: true,
+    mojikumi: "compact",
+  }))
+
+  expect(toggles.map((toggle) => toggle.tag)).toEqual(["liga", "calt", "tnum"])
+  expect(glyphs[0].x).toBeGreaterThan(20)
+  expect(glyphs[0].baselineOffset).toBe(10)
+  expect(vertical.writingMode).toBe("vertical-lr")
+  expect(vertical.textOrientation).toBe("mixed")
 })
 
 test("3D text extrusion creates a renderable scene with per-glyph depth geometry", () => {

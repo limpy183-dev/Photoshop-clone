@@ -333,7 +333,7 @@ export function LayerStyleDialog({
         const s = style.patternOverlay ?? defaultStyle(foreground).patternOverlay!
         return (
           <FieldGrid>
-            <ColorRow label="Color" value={s.color} onChange={(v) => update("patternOverlay", { color: v })} />
+            <ColorRow label="Color" value={s.color ?? "#888888"} onChange={(v) => update("patternOverlay", { color: v })} />
             <SelectRow
               label="Pattern"
               value={s.pattern}

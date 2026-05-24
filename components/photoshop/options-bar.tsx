@@ -53,7 +53,7 @@ import {
   RotateCw,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import type { CustomShapeId, GradientStop, TextAntiAliasMode, ToolId } from "./types"
+import type { CustomShapeId, GradientStop, QuickMaskPaintMode, TextAntiAliasMode, ToolId } from "./types"
 import { WORKSPACE_PRESET_OPTIONS, type WorkspacePresetId } from "./panel-registry"
 
 const Divider = () => <div className="w-px h-5 bg-[var(--ps-divider)] mx-2" />
@@ -81,7 +81,7 @@ const SHAPE_LIBRARY: { id: CustomShapeId; label: string; Icon: React.ComponentTy
 ]
 
 export function OptionsBar() {
-  const { tool, brush, dispatch, gradient, foreground, background, eraser, cloneSource } = useEditor()
+  const { tool, brush, dispatch, gradient, foreground, background, eraser, cloneSource, activeDoc } = useEditor()
   // brush.size is loaded from localStorage post-hydrate, so the Radix
   // Slider's internal `<SliderRange right="X%">` would mismatch between
   // SSR (defaults) and the first client render (persisted). We render a
@@ -140,7 +140,7 @@ export function OptionsBar() {
         <HandOptions />
       ) : tool === "rotate-view" ? (
         <RotateViewOptions />
-      ) : tool === "shape-rect" || tool === "shape-rounded-rect" || tool === "shape-ellipse" || tool === "shape-polygon" || tool === "shape-triangle" || tool === "shape-line" ? (
+      ) : tool === "shape-rect" || tool === "shape-rounded-rect" || tool === "shape-ellipse" || tool === "shape-polygon" || tool === "shape-star" || tool === "shape-triangle" || tool === "shape-line" ? (
         <ShapeOptions />
       ) : tool === "custom-shape" ? (
         <CustomShapeOptions />
@@ -256,6 +256,29 @@ export function OptionsBar() {
           />
           <span className="text-[11px]">%</span>
         </div>
+        {activeDoc?.quickMask ? (
+          <>
+            <Divider />
+            <div className="flex items-center gap-1.5">
+              <span className={labelClass}>Quick Mask:</span>
+              <Select
+                value={activeDoc.quickMaskPaintMode ?? "auto"}
+                onValueChange={(mode) =>
+                  dispatch({ type: "set-quick-mask-paint-mode", mode: mode as QuickMaskPaintMode })
+                }
+              >
+                <SelectTrigger className="h-6 w-[92px] bg-[var(--ps-panel)] border-[var(--ps-divider)] text-[11px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">Auto</SelectItem>
+                  <SelectItem value="add">Add</SelectItem>
+                  <SelectItem value="subtract">Subtract</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </>
+        ) : null}
         {tool === "background-eraser" || tool === "magic-eraser" ? (
           <>
             <Divider />
@@ -790,6 +813,51 @@ export function OptionsBar() {
   }
 
   function ShapeOptions() {
+    type ShapeOptionKey =
+      | "strokeWidth"
+      | "radius"
+      | "sides"
+      | "innerRadiusRatio"
+      | "vertexRoundness"
+      | "rotation"
+      | "cornerRadiusTL"
+      | "cornerRadiusTR"
+      | "cornerRadiusBR"
+      | "cornerRadiusBL"
+    const [opts, setOpts] = React.useState({
+      strokeWidth: 0,
+      radius: 18,
+      sides: tool === "shape-triangle" ? 3 : 6,
+      innerRadiusRatio: 0.45,
+      vertexRoundness: 0,
+      rotation: 0,
+      cornerRadiusTL: 18,
+      cornerRadiusTR: 18,
+      cornerRadiusBR: 18,
+      cornerRadiusBL: 18,
+    })
+    React.useEffect(() => {
+      window.__psShapeOptions = opts
+    }, [opts])
+    const update = (key: ShapeOptionKey, value: number) => {
+      setOpts((current) => ({ ...current, [key]: value }))
+    }
+    const number = (label: string, key: ShapeOptionKey, min: number, max: number, step = 1, title?: string) => (
+      <label className="flex items-center gap-1" title={title}>
+        <span className={labelClass}>{label}</span>
+        <Input
+          type="number"
+          min={min}
+          max={max}
+          step={step}
+          value={opts[key]}
+          onChange={(event) => update(key, clampNumber(Number(event.target.value) || 0, min, max))}
+          className={numInputClass}
+        />
+      </label>
+    )
+    const showCorners = tool === "shape-rounded-rect"
+    const showPolygon = tool === "shape-polygon" || tool === "shape-star"
     return (
       <>
         <Square className="w-3.5 h-3.5" />
@@ -798,11 +866,44 @@ export function OptionsBar() {
         <Divider />
         <span className={labelClass}>Stroke:</span>
         <ColorChip color={background} />
-        <Input type="number" min={0} defaultValue={0} className={numInputClass} title="Stroke width" />
+        <Input
+          type="number"
+          min={0}
+          max={200}
+          value={opts.strokeWidth}
+          onChange={(event) => update("strokeWidth", clampNumber(Number(event.target.value) || 0, 0, 200))}
+          className={numInputClass}
+          title="Stroke width"
+        />
         <span className={labelClass}>px</span>
         <Divider />
-        <span className={labelClass}>Radius:</span>
-        <Input type="number" min={0} defaultValue={0} className={numInputClass} />
+        {showPolygon ? (
+          <>
+            {number(tool === "shape-star" ? "Points:" : "Sides:", "sides", 3, 64, 1)}
+            {tool === "shape-star" ? number("Inner:", "innerRadiusRatio", 0.05, 0.95, 0.01, "Inner radius ratio") : null}
+            {number("Round:", "vertexRoundness", 0, 1, 0.01, "Vertex roundness")}
+          </>
+        ) : showCorners ? (
+          <>
+            {number("TL:", "cornerRadiusTL", 0, 999)}
+            {number("TR:", "cornerRadiusTR", 0, 999)}
+            {number("BR:", "cornerRadiusBR", 0, 999)}
+            {number("BL:", "cornerRadiusBL", 0, 999)}
+          </>
+        ) : (
+          <>
+            <span className={labelClass}>Radius:</span>
+            <Input
+              type="number"
+              min={0}
+              max={999}
+              value={opts.radius}
+              onChange={(event) => update("radius", clampNumber(Number(event.target.value) || 0, 0, 999))}
+              className={numInputClass}
+            />
+          </>
+        )}
+        {number("Rot:", "rotation", -360, 360, 1)}
       </>
     )
   }
@@ -1438,6 +1539,7 @@ function ToolBadge({ tool }: { tool: ToolId }) {
     "shape-rounded-rect": { Icon: Square, name: "Rounded Rectangle" },
     "shape-ellipse": { Icon: Square, name: "Ellipse" },
     "shape-polygon": { Icon: TriangleIcon, name: "Polygon" },
+    "shape-star": { Icon: Star, name: "Star" },
     "shape-triangle": { Icon: TriangleIcon, name: "Triangle" },
     "shape-line": { Icon: Square, name: "Line" },
     "custom-shape": { Icon: Star, name: "Custom Shape" },

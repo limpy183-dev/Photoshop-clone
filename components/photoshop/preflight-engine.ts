@@ -180,6 +180,10 @@ function isSpotChannelName(name: string) {
   return /\b(spot|pantone|pms|varnish|foil|white ink|metallic|die cut|dieline)\b/i.test(name)
 }
 
+function isSpotChannel(channel: NonNullable<PsDocument["channels"]>[number]) {
+  return channel.kind === "spot" || !!channel.spotColor || isSpotChannelName(channel.name)
+}
+
 function isOverprintLikeLayer(layer: Layer) {
   const burnOrMultiply = ["multiply", "color-burn", "linear-burn", "darken", "darker-color"].includes(layer.blendMode)
   const opacityBlend = layer.opacity < 1 || (layer.fillOpacity ?? 1) < 1
@@ -224,7 +228,7 @@ export function analyzePreflightDocument(doc: PsDocument): PreflightReport {
   const slices = doc.slices ?? []
   const processPlates = processPlatesForMode(doc)
   const channels = doc.channels ?? []
-  const spotChannels = channels.filter((channel) => isSpotChannelName(channel.name)).map((channel) => channel.name)
+  const spotChannels = channels.filter(isSpotChannel).map((channel) => channel.name)
   const savedAlphaChannels = channels.filter((channel) => !isSpotChannelName(channel.name)).map((channel) => channel.name)
   const overprintLikeLayers = rasterish.filter(isOverprintLikeLayer)
   const dpi = doc.dpi ?? 72

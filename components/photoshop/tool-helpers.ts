@@ -1,33 +1,21 @@
 import type { CustomShapeId, PathProps, Selection, ShapeProps, TextProps, WarpStyle } from "./types"
-import { assertCanvasSize } from "./canvas-limits"
 import { buildCanvasFont, buildTypographyRenderPlan } from "./typography-engine"
+import { appendPathToCanvas, createDefaultShapeAppearance, shapeToEditablePath } from "./vector-path-operations"
+import { makeCanvas } from "./canvas-utils"
+import { hexToRgb } from "./color-utils"
+import {
+  borderMaskData as borderMaskDataPure,
+  contractMaskData as contractMaskDataPure,
+  expandMaskData as expandMaskDataPure,
+  extractMaskContourPaths,
+  featherMaskData as featherMaskDataPure,
+  selectionMaskToPathCandidates,
+  smoothMaskData as smoothMaskDataPure,
+  type MaskContourOptions,
+  type MaskContourPath,
+} from "./selection-algorithms"
 
-export function makeCanvas(w: number, h: number, fill?: string): HTMLCanvasElement {
-  const size = assertCanvasSize(w, h)
-  const c = document.createElement("canvas")
-  c.width = size.width
-  c.height = size.height
-  if (fill) {
-    const ctx = c.getContext("2d")!
-    ctx.fillStyle = fill
-    ctx.fillRect(0, 0, size.width, size.height)
-  }
-  return c
-}
-
-export function hexToRgb(hex: string) {
-  const h = hex.replace("#", "")
-  const v = parseInt(
-    h.length === 3
-      ? h
-          .split("")
-          .map((c) => c + c)
-          .join("")
-      : h,
-    16,
-  )
-  return { r: (v >> 16) & 255, g: (v >> 8) & 255, b: v & 255 }
-}
+export { makeCanvas, hexToRgb }
 
 /* ---------------------------------------------------------------- */
 /*  FLOOD FILL                                                        */
@@ -250,7 +238,7 @@ export function rasterizeText(canvas: HTMLCanvasElement, t: TextProps) {
 
   const lines = buildTextLines(ctx, content, t.boxWidth, trackingPx + kerningPx)
   renderTextExtrusionPreview(ctx, lines, t, effectiveSize, lineHeight, trackingPx, kerningPx, baselineOffset)
-  let cy = t.y + (t.spaceBefore ?? 0)
+  let cy = t.y + textShapeVerticalOffset(t, lineHeight, lines.length) + (t.spaceBefore ?? 0)
   for (let li = 0; li < lines.length; li++) {
     const indent = li === 0 ? (t.indentFirst ?? 0) : 0
     const leftIndent = t.indentLeft ?? 0
@@ -262,38 +250,19 @@ export function rasterizeText(canvas: HTMLCanvasElement, t: TextProps) {
   restoreClip()
 }
 
+function textShapeVerticalOffset(t: TextProps, lineHeight: number, lineCount: number) {
+  if (!t.textShape || !t.boxHeight || !t.textShapeVerticalAlign || t.textShapeVerticalAlign === "top") return 0
+  const contentHeight = lineHeight * Math.max(1, lineCount) + (t.spaceBefore ?? 0) + (t.spaceAfter ?? 0)
+  const free = Math.max(0, t.boxHeight - contentHeight)
+  return t.textShapeVerticalAlign === "middle" ? free / 2 : free
+}
+
 function appendShapePath(ctx: CanvasRenderingContext2D, s: ShapeProps) {
   ctx.beginPath()
-  if (s.type === "rect") {
-    if (s.radius && s.radius > 0) {
-      const r = Math.min(s.radius, s.w / 2, s.h / 2)
-      ctx.moveTo(s.x + r, s.y)
-      ctx.arcTo(s.x + s.w, s.y, s.x + s.w, s.y + s.h, r)
-      ctx.arcTo(s.x + s.w, s.y + s.h, s.x, s.y + s.h, r)
-      ctx.arcTo(s.x, s.y + s.h, s.x, s.y, r)
-      ctx.arcTo(s.x, s.y, s.x + s.w, s.y, r)
-      ctx.closePath()
-    } else {
-      ctx.rect(s.x, s.y, s.w, s.h)
-    }
-  } else if (s.type === "ellipse") {
-    ctx.ellipse(s.x + s.w / 2, s.y + s.h / 2, s.w / 2, s.h / 2, 0, 0, Math.PI * 2)
-  } else if (s.type === "polygon") {
-    const sides = Math.max(3, s.sides ?? 6)
-    const cx = s.x + s.w / 2
-    const cy = s.y + s.h / 2
-    const rx = s.w / 2
-    const ry = s.h / 2
-    for (let i = 0; i < sides; i++) {
-      const a = (i / sides) * Math.PI * 2 - Math.PI / 2
-      const x = cx + Math.cos(a) * rx
-      const y = cy + Math.sin(a) * ry
-      if (i === 0) ctx.moveTo(x, y)
-      else ctx.lineTo(x, y)
-    }
-    ctx.closePath()
-  } else {
+  if (s.type === "custom") {
     customShapePath(ctx, (s.customId ?? "star5") as CustomShapeId, s.x, s.y, s.w, s.h)
+  } else {
+    appendPathToCanvas(ctx, shapeToEditablePath(s))
   }
 }
 
@@ -363,25 +332,32 @@ function renderVerticalText(
 ) {
   const columns = content.split("\n")
   const columnGap = lineHeight
+  const direction = t.verticalWritingMode === "lr" ? 1 : -1
+  const punctuationTighten = t.mojikumi === "compact" ? -size * 0.08 : t.mojikumi === "loose" ? size * 0.08 : 0
   ctx.save()
   ctx.textAlign = "center"
   ctx.textBaseline = "middle"
   ctx.fillStyle = t.color
   for (let col = 0; col < columns.length; col++) {
     const column = columns[col]
-    const x = t.x + col * columnGap
+    const x = t.x + col * columnGap * direction
     let y = t.y
-    for (const ch of column) {
-      if (/[A-Za-z0-9]/.test(ch)) {
+    const units = t.tateChuYoko ? column.match(/[A-Za-z0-9]{1,4}|[^A-Za-z0-9]/g) ?? [] : [...column]
+    for (const unit of units) {
+      if (t.tateChuYoko && /^[A-Za-z0-9]{2,4}$/.test(unit)) {
+        ctx.fillText(unit, x, y + size / 2 + baselineOffset)
+        y += size + spacing + 2 + punctuationTighten
+      } else if (/^[A-Za-z0-9]$/.test(unit)) {
         ctx.save()
         ctx.translate(x, y + size / 2 + baselineOffset)
         ctx.rotate(Math.PI / 2)
-        ctx.fillText(ch, 0, 0)
+        ctx.fillText(unit, 0, 0)
         ctx.restore()
+        y += Math.max(size, ctx.measureText(unit).width) + spacing + 2
       } else {
-        ctx.fillText(ch, x, y + size / 2 + baselineOffset)
+        ctx.fillText(unit, x, y + size / 2 + baselineOffset)
+        y += Math.max(size, ctx.measureText(unit).width) + spacing + 2 + punctuationTighten
       }
-      y += Math.max(size, ctx.measureText(ch).width) + spacing + 2
       if (t.boxHeight && y > t.y + t.boxHeight) break
     }
   }
@@ -399,9 +375,12 @@ function renderTextOnPath(
 ) {
   const segments: { x1: number; y1: number; x2: number; y2: number; len: number; start: number }[] = []
   let total = 0
-  for (let i = 0; i < points.length - 1; i++) {
-    const a = points[i]
-    const b = points[i + 1]
+  const pts = t.textPathClosed && points.length >= 2
+    ? [...points, points[0]]
+    : points
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i]
+    const b = pts[i + 1]
     const len = Math.hypot(b.x - a.x, b.y - a.y)
     if (len <= 0) continue
     segments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, len, start: total })
@@ -409,12 +388,21 @@ function renderTextOnPath(
   }
   if (!segments.length) return
   const textWidth = measureLineWidth(ctx, content, spacing)
+  const align = t.textPathAlign ?? t.align
+  const startOffset = t.textPathStartOffset ?? 0
   let cursor =
-    t.align === "center"
-      ? Math.max(0, (total - textWidth) / 2)
-      : t.align === "right"
-        ? Math.max(0, total - textWidth)
-        : 0
+    align === "center" || align === "right" || align === "end"
+      ? align === "center"
+        ? Math.max(0, (total - textWidth) / 2)
+        : Math.max(0, total - textWidth)
+      : 0
+  cursor += startOffset
+  // For a closed path with negative cursor, wrap into [0, total).
+  if (t.textPathClosed) {
+    cursor = ((cursor % total) + total) % total
+  }
+  const flip = t.textPathFlip === true
+  const baselinePathOffset = (t.textPathBaselineOffset ?? 0) - baselineOffset
   ctx.save()
   ctx.textAlign = "center"
   ctx.textBaseline = "middle"
@@ -425,20 +413,34 @@ function renderTextOnPath(
       continue
     }
     const advance = ctx.measureText(ch).width + spacing
-    const mid = cursor + advance / 2
+    let mid = cursor + advance / 2
+    if (t.textPathClosed) mid = ((mid % total) + total) % total
     const seg = segmentAtLength(segments, mid)
     if (!seg) break
     const local = (mid - seg.start) / seg.len
     const x = seg.x1 + (seg.x2 - seg.x1) * local
     const y = seg.y1 + (seg.y2 - seg.y1) * local
-    const angle = Math.atan2(seg.y2 - seg.y1, seg.x2 - seg.x1)
+    let angle = Math.atan2(seg.y2 - seg.y1, seg.x2 - seg.x1)
+    if (flip) angle += Math.PI
     ctx.save()
     ctx.translate(x, y)
     ctx.rotate(angle)
-    ctx.fillText(ch, 0, -baselineOffset)
+    // Lift glyph above the path (negative = above, positive = below)
+    const lift = flip ? baselinePathOffset : -baselinePathOffset
+    ctx.fillText(ch, 0, lift)
+    if (t.underline) {
+      const w = ctx.measureText(ch).width
+      const u = size * 0.08
+      ctx.fillRect(-w / 2, lift + size * 0.45, w, u)
+    }
+    if (t.strikethrough) {
+      const w = ctx.measureText(ch).width
+      const u = size * 0.07
+      ctx.fillRect(-w / 2, lift - size * 0.05, w, u)
+    }
     ctx.restore()
     cursor += advance
-    if (cursor > total) break
+    if (!t.textPathClosed && cursor > total) break
   }
   ctx.restore()
 }
@@ -638,72 +640,78 @@ function warpOffset(style: WarpStyle, t: number, bend: number, base: number): nu
 
 export function rasterizeShape(canvas: HTMLCanvasElement, s: ShapeProps) {
   const ctx = canvas.getContext("2d")!
-
-  // Boolean operation: map ShapeProps booleanOperation to Canvas composite ops
-  const boolOp = s.booleanOperation ?? "new"
-  if (boolOp === "new") {
+  if ((s.booleanOperation ?? "new") === "new" || s.components?.length) {
     ctx.clearRect(0, 0, canvas.width, canvas.height)
   }
 
-  // Set composite operation based on boolean mode
-  ctx.save()
-  switch (boolOp) {
-    case "unite":
-      ctx.globalCompositeOperation = "source-over"
-      break
+  const components = s.components?.length
+    ? s.components
+    : [{
+        id: "component-single",
+        operation: (s.booleanOperation && s.booleanOperation !== "new" ? s.booleanOperation : "unite") as "unite" | "subtract" | "intersect" | "exclude",
+        shape: s,
+      }]
+
+  for (const component of components) {
+    ctx.save()
+    ctx.globalCompositeOperation = compositeForShapeOperation(component.operation)
+    drawShapeAppearance(ctx, component.shape, s)
+    ctx.restore()
+  }
+}
+
+function compositeForShapeOperation(operation: "unite" | "subtract" | "intersect" | "exclude"): GlobalCompositeOperation {
+  switch (operation) {
     case "subtract":
-      ctx.globalCompositeOperation = "destination-out"
-      break
+      return "destination-out"
     case "intersect":
-      ctx.globalCompositeOperation = "destination-in"
-      break
+      return "destination-in"
     case "exclude":
-      ctx.globalCompositeOperation = "xor"
-      break
+      return "xor"
+    case "unite":
     default:
-      ctx.globalCompositeOperation = "source-over"
+      return "source-over"
+  }
+}
+
+function drawShapeAppearance(ctx: CanvasRenderingContext2D, geometry: ShapeProps, appearanceSource: ShapeProps) {
+  // Apply rotation around the shape center if requested.
+  const rotation = geometry.rotation ?? 0
+  if (rotation) {
+    const rcx = geometry.x + geometry.w / 2
+    const rcy = geometry.y + geometry.h / 2
+    ctx.translate(rcx, rcy)
+    ctx.rotate((rotation * Math.PI) / 180)
+    ctx.translate(-rcx, -rcy)
   }
 
-  ctx.beginPath()
-  if (s.type === "rect") {
-    if (s.radius && s.radius > 0) {
-      const r = Math.min(s.radius, s.w / 2, s.h / 2)
-      ctx.moveTo(s.x + r, s.y)
-      ctx.arcTo(s.x + s.w, s.y, s.x + s.w, s.y + s.h, r)
-      ctx.arcTo(s.x + s.w, s.y + s.h, s.x, s.y + s.h, r)
-      ctx.arcTo(s.x, s.y + s.h, s.x, s.y, r)
-      ctx.arcTo(s.x, s.y, s.x + s.w, s.y, r)
-      ctx.closePath()
-    } else {
-      ctx.rect(s.x, s.y, s.w, s.h)
-    }
-  } else if (s.type === "ellipse") {
-    ctx.ellipse(s.x + s.w / 2, s.y + s.h / 2, s.w / 2, s.h / 2, 0, 0, Math.PI * 2)
-  } else if (s.type === "polygon") {
-    const sides = Math.max(3, s.sides ?? 6)
-    const cx = s.x + s.w / 2
-    const cy = s.y + s.h / 2
-    const rx = s.w / 2
-    const ry = s.h / 2
-    for (let i = 0; i < sides; i++) {
-      const a = (i / sides) * Math.PI * 2 - Math.PI / 2
-      const x = cx + Math.cos(a) * rx
-      const y = cy + Math.sin(a) * ry
-      if (i === 0) ctx.moveTo(x, y)
-      else ctx.lineTo(x, y)
-    }
-    ctx.closePath()
-  } else {
-    customShapePath(ctx, (s.customId ?? "star5") as CustomShapeId, s.x, s.y, s.w, s.h)
+  const appearance = createDefaultShapeAppearance(appearanceSource)
+  for (const fill of appearance.fills) {
+    if (!fill.enabled || fill.opacity <= 0) continue
+    ctx.save()
+    appendShapePath(ctx, geometry)
+    ctx.globalAlpha *= clamp(fill.opacity, 0, 1)
+    ctx.fillStyle = fill.color
+    ctx.fill()
+    ctx.restore()
   }
-  ctx.fillStyle = s.fill
-  ctx.fill()
-  if (s.stroke && s.stroke.width > 0) {
-    ctx.strokeStyle = s.stroke.color
-    ctx.lineWidth = s.stroke.width
+  for (const stroke of appearance.strokes) {
+    if (!stroke.enabled || stroke.opacity <= 0 || stroke.width <= 0) continue
+    ctx.save()
+    appendShapePath(ctx, geometry)
+    ctx.globalAlpha *= clamp(stroke.opacity, 0, 1)
+    ctx.strokeStyle = stroke.color
+    ctx.lineWidth = stroke.alignment === "inside" || stroke.alignment === "outside" ? stroke.width * 2 : stroke.width
+    ctx.lineCap = stroke.lineCap ?? "butt"
+    ctx.lineJoin = stroke.lineJoin ?? "miter"
+    if (stroke.dash?.length) ctx.setLineDash(stroke.dash)
+    if (stroke.alignment === "inside") {
+      ctx.clip()
+      appendShapePath(ctx, geometry)
+    }
     ctx.stroke()
+    ctx.restore()
   }
-  ctx.restore()
 }
 
 /** Custom-shape geometry library. Each shape is normalized to (x, y, w, h). */
@@ -875,6 +883,13 @@ export function customShapePath(
 /*  PEN PATHS                                                         */
 /* ---------------------------------------------------------------- */
 
+function tracePath(ctx: CanvasRenderingContext2D, path: PathProps) {
+  if (path.points.length < 2) return false
+  ctx.beginPath()
+  appendPathToCanvas(ctx, path)
+  return true
+}
+
 export function strokePath(
   ctx: CanvasRenderingContext2D,
   path: PathProps,
@@ -885,26 +900,10 @@ export function strokePath(
 ) {
   if (path.points.length < 2) return
   ctx.save()
-  ctx.beginPath()
-  const p0 = path.points[0]
-  ctx.moveTo(p0.x, p0.y)
-  for (let i = 1; i < path.points.length; i++) {
-    const prev = path.points[i - 1]
-    const cur = path.points[i]
-    const cp1 = prev.cp1 ?? prev
-    const cp2 = cur.cp2 ?? cur
-    ctx.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, cur.x, cur.y)
-  }
-  if (path.closed) {
-    const last = path.points[path.points.length - 1]
-    const first = path.points[0]
-    const cp1 = last.cp1 ?? last
-    const cp2 = first.cp2 ?? first
-    ctx.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, first.x, first.y)
-  }
+  tracePath(ctx, path)
   if (fill) {
     ctx.fillStyle = fillColor
-    ctx.fill()
+    ctx.fill("evenodd")
   }
   ctx.strokeStyle = color
   ctx.lineWidth = width
@@ -1110,13 +1109,37 @@ export function transformedCloneStamp(
 
   const sctx = srcCanvas.getContext("2d")
   if (!sctx) return
-  const src = sctx.getImageData(0, 0, srcCanvas.width, srcCanvas.height)
-  const dest = destCtx.getImageData(x0, y0, sw, sh)
-  const original = new Uint8ClampedArray(dest.data)
+
+  // Compute the axis-aligned bounding box of the dest rect after mapping
+  // through the source transform, so we only load that sub-region of the
+  // source canvas instead of the full image (~64MB on a 4K source).
   const scaleFactor = Math.max(0.05, scale / 100)
   const rad = (-rotation * Math.PI) / 180
   const cos = Math.cos(rad)
   const sin = Math.sin(rad)
+  const sampleFor = (docX: number, docY: number) => {
+    const relX = (docX - destAnchor.x) / scaleFactor
+    const relY = (docY - destAnchor.y) / scaleFactor
+    return {
+      x: sourceAnchor.x + relX * cos - relY * sin,
+      y: sourceAnchor.y + relX * sin + relY * cos,
+    }
+  }
+  const c00 = sampleFor(x0, y0)
+  const c10 = sampleFor(x1, y0)
+  const c01 = sampleFor(x0, y1)
+  const c11 = sampleFor(x1, y1)
+  // 1px padding to keep bilinear interpolation correct at the edges.
+  const srcMinX = Math.max(0, Math.floor(Math.min(c00.x, c10.x, c01.x, c11.x)) - 1)
+  const srcMinY = Math.max(0, Math.floor(Math.min(c00.y, c10.y, c01.y, c11.y)) - 1)
+  const srcMaxX = Math.min(srcCanvas.width, Math.ceil(Math.max(c00.x, c10.x, c01.x, c11.x)) + 1)
+  const srcMaxY = Math.min(srcCanvas.height, Math.ceil(Math.max(c00.y, c10.y, c01.y, c11.y)) + 1)
+  const subW = srcMaxX - srcMinX
+  const subH = srcMaxY - srcMinY
+  if (subW <= 0 || subH <= 0) return
+  const src = sctx.getImageData(srcMinX, srcMinY, subW, subH)
+  const dest = destCtx.getImageData(x0, y0, sw, sh)
+  const original = new Uint8ClampedArray(dest.data)
   const hard = Math.max(0, Math.min(1, hardness / 100))
 
   let dr = 0
@@ -1130,7 +1153,7 @@ export function transformedCloneStamp(
         const docY = y0 + py
         const dist = Math.hypot(docX - dx, docY - dy)
         if (dist < r * 0.78 || dist > r) continue
-        const sample = transformedCloneSample(src.data, src.width, src.height, sourceAnchor, destAnchor, docX, docY, scaleFactor, cos, sin)
+        const sample = transformedCloneSample(src.data, subW, subH, srcMinX, srcMinY, sourceAnchor, destAnchor, docX, docY, scaleFactor, cos, sin)
         const i = (py * sw + px) * 4
         dr += original[i] - sample.r
         dg += original[i + 1] - sample.g
@@ -1155,7 +1178,7 @@ export function transformedCloneStamp(
         hard >= 1 || dist <= r * hard
           ? 1
           : Math.max(0, 1 - (dist - r * hard) / Math.max(1, r * (1 - hard)))
-      const sample = transformedCloneSample(src.data, src.width, src.height, sourceAnchor, destAnchor, docX, docY, scaleFactor, cos, sin)
+      const sample = transformedCloneSample(src.data, subW, subH, srcMinX, srcMinY, sourceAnchor, destAnchor, docX, docY, scaleFactor, cos, sin)
       const i = (py * sw + px) * 4
       const mix = Math.max(0, Math.min(1, alpha * falloff * (sample.a / 255)))
       dest.data[i] = clampByte(original[i] * (1 - mix) + (sample.r + dr) * mix)
@@ -1171,6 +1194,8 @@ function transformedCloneSample(
   data: Uint8ClampedArray,
   width: number,
   height: number,
+  originX: number,
+  originY: number,
   sourceAnchor: { x: number; y: number },
   destAnchor: { x: number; y: number },
   docX: number,
@@ -1183,7 +1208,7 @@ function transformedCloneSample(
   const relY = (docY - destAnchor.y) / scaleFactor
   const sx = sourceAnchor.x + relX * cos - relY * sin
   const sy = sourceAnchor.y + relX * sin + relY * cos
-  return sampleImageData(data, width, height, sx, sy)
+  return sampleImageData(data, width, height, sx - originX, sy - originY)
 }
 
 function averageAround(
@@ -1536,6 +1561,15 @@ export function contentAwareFill(
   const candidateBudget = fillPixels.length > 80000 ? 32 : 56
   const boundaryBudget = Math.min(18, boundaryCenters.length)
 
+  // PatchMatch-style neighbour offset cache: for each filled pixel we
+  // remember the source it picked, so neighbours can propagate that
+  // offset as a candidate. This dramatically improves coherence over
+  // pure random search.
+  const matchSourceX = new Int32Array(width * height)
+  const matchSourceY = new Int32Array(width * height)
+  matchSourceX.fill(-1)
+  matchSourceY.fill(-1)
+
   for (let n = 0; n < fillPixels.length; n++) {
     const p = fillPixels[n]
     const x = p % width
@@ -1565,6 +1599,44 @@ export function contentAwareFill(
       }
     }
 
+    // PatchMatch propagation: try the offsets used by already-filled
+    // neighbours. If a neighbour at (-1,0) picked source (sx,sy), then
+    // (sx+1,sy) is a strong candidate for the current pixel.
+    for (const [ndx, ndy] of [[-1, 0], [0, -1], [1, 0], [0, 1]] as const) {
+      const np = (y + ndy) * width + (x + ndx)
+      if (np < 0 || np >= width * height) continue
+      const nSx = matchSourceX[np]
+      const nSy = matchSourceY[np]
+      if (nSx < 0) continue
+      const cx = nSx - ndx
+      const cy = nSy - ndy
+      const score = patchMatchScore(source, work, filled, fillAlpha, width, height, x, y, cx, cy, patchRadius)
+      if (score < bestScore) {
+        bestScore = score
+        best = cy * width + cx
+      }
+    }
+
+    // PatchMatch random search around the current best (expanding
+    // window halved each iteration).
+    if (best >= 0) {
+      const bx = best % width
+      const by = (best - bx) / width
+      let radius = Math.max(8, Math.floor(Math.min(width, height) / 4))
+      for (let s = 0; s < 5 && radius > 1; s++) {
+        const rx = pseudoRandomIndex(p + s * 31337 + n * 27, 1 << 16) / (1 << 15) - 1
+        const ry = pseudoRandomIndex(p + s * 17329 + n * 41, 1 << 16) / (1 << 15) - 1
+        const cx = Math.round(bx + rx * radius)
+        const cy = Math.round(by + ry * radius)
+        const score = patchMatchScore(source, work, filled, fillAlpha, width, height, x, y, cx, cy, patchRadius)
+        if (score < bestScore) {
+          bestScore = score
+          best = cy * width + cx
+        }
+        radius = Math.floor(radius / 2)
+      }
+    }
+
     const i = p * 4
     if (best >= 0 && Number.isFinite(bestScore)) {
       const bx = best % width
@@ -1580,6 +1652,8 @@ export function contentAwareFill(
       work[i + 1] = clampByte(source[bi + 1] + dg)
       work[i + 2] = clampByte(source[bi + 2] + db)
       work[i + 3] = source[bi + 3]
+      matchSourceX[p] = bx
+      matchSourceY[p] = by
     } else {
       const avg = fallbackFillColor(work, filled, width, height, x, y)
       work[i] = clampByte(avg.r)
@@ -1588,6 +1662,79 @@ export function contentAwareFill(
       work[i + 3] = clampByte(avg.a || 255)
     }
     filled[p] = 1
+  }
+
+  // Iterative coarse-to-fine refinement: re-run the patch search with
+  // the now-filled work buffer as the reference, which lets later
+  // passes pull in coherent textures from neighbouring patches.
+  const refinementPasses = fillPixels.length > 60000 ? 1 : fillPixels.length > 12000 ? 2 : 3
+  for (let pass = 0; pass < refinementPasses; pass++) {
+    const reverseStride = 1 + (pass % 2)
+    for (let n = 0; n < fillPixels.length; n += reverseStride) {
+      const idx = pass % 2 === 0 ? n : fillPixels.length - 1 - n
+      if (idx < 0 || idx >= fillPixels.length) continue
+      const p = fillPixels[idx]
+      const x = p % width
+      const y = (p - x) / width
+      let best = matchSourceY[p] >= 0 ? matchSourceY[p] * width + matchSourceX[p] : -1
+      let bestScore = best >= 0
+        ? patchMatchScore(source, work, filled, fillAlpha, width, height, x, y, matchSourceX[p], matchSourceY[p], patchRadius)
+        : Number.POSITIVE_INFINITY
+
+      for (const [ndx, ndy] of [[-1, 0], [0, -1], [1, 0], [0, 1]] as const) {
+        const np = (y + ndy) * width + (x + ndx)
+        if (np < 0 || np >= width * height) continue
+        const nSx = matchSourceX[np]
+        const nSy = matchSourceY[np]
+        if (nSx < 0) continue
+        const cx = nSx - ndx
+        const cy = nSy - ndy
+        const score = patchMatchScore(source, work, filled, fillAlpha, width, height, x, y, cx, cy, patchRadius)
+        if (score < bestScore) {
+          bestScore = score
+          best = cy * width + cx
+        }
+      }
+      // Random search around best
+      if (best >= 0) {
+        const bx0 = best % width
+        const by0 = (best - bx0) / width
+        let radius = Math.max(4, Math.floor(Math.min(width, height) / 8))
+        for (let s = 0; s < 3 && radius > 1; s++) {
+          const rx = pseudoRandomIndex(p + s * 31337 + pass * 27, 1 << 16) / (1 << 15) - 1
+          const ry = pseudoRandomIndex(p + s * 17329 + pass * 41, 1 << 16) / (1 << 15) - 1
+          const cx = Math.round(bx0 + rx * radius)
+          const cy = Math.round(by0 + ry * radius)
+          const score = patchMatchScore(source, work, filled, fillAlpha, width, height, x, y, cx, cy, patchRadius)
+          if (score < bestScore) {
+            bestScore = score
+            best = cy * width + cx
+          }
+          radius = Math.floor(radius / 2)
+        }
+      }
+
+      if (best >= 0 && Number.isFinite(bestScore)) {
+        const bx = best % width
+        const by = (best - bx) / width
+        const bi = best * 4
+        const i = p * 4
+        const targetAvg = averageAround(work, width, height, x, y, patchRadius + 2, (ap) => filled[ap] > 0)
+        const sourceAvg = averageAround(source, width, height, bx, by, patchRadius + 2, (ap) => sampling.sampleAlpha[ap] > MASK_THRESHOLD)
+        const colorAdaptation = clamp(options?.adaptation?.color ?? 0.48, 0, 1)
+        const dr = targetAvg && sourceAvg ? (targetAvg.r - sourceAvg.r) * colorAdaptation : 0
+        const dg = targetAvg && sourceAvg ? (targetAvg.g - sourceAvg.g) * colorAdaptation : 0
+        const db = targetAvg && sourceAvg ? (targetAvg.b - sourceAvg.b) * colorAdaptation : 0
+        // Cross-fade with previous pass so refinement doesn't overshoot.
+        const blend = 0.55
+        work[i] = clampByte(work[i] * (1 - blend) + (source[bi] + dr) * blend)
+        work[i + 1] = clampByte(work[i + 1] * (1 - blend) + (source[bi + 1] + dg) * blend)
+        work[i + 2] = clampByte(work[i + 2] * (1 - blend) + (source[bi + 2] + db) * blend)
+        work[i + 3] = clampByte(work[i + 3] * (1 - blend) + source[bi + 3] * blend)
+        matchSourceX[p] = bx
+        matchSourceY[p] = by
+      }
+    }
   }
 
   seamRelax(work, fillAlpha, width, height, fillBounds, 2)
@@ -1691,54 +1838,46 @@ export function blurStamp(
   const sh = Math.min(h - sy, r * 2)
   if (sw <= 0 || sh <= 0) return
   const img = ctx.getImageData(sx, sy, sw, sh)
-  // simple 3x3 box blur
-  const out = new Uint8ClampedArray(img.data)
-  for (let py = 1; py < sh - 1; py++) {
-    for (let px = 1; px < sw - 1; px++) {
-      let r0 = 0
-      let g0 = 0
-      let b0 = 0
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const i = ((py + dy) * sw + (px + dx)) * 4
-          r0 += img.data[i]
-          g0 += img.data[i + 1]
-          b0 += img.data[i + 2]
-        }
-      }
-      const i = (py * sw + px) * 4
-      out[i] = r0 / 9
-      out[i + 1] = g0 / 9
-      out[i + 2] = b0 / 9
-    }
-  }
-  // Apply only within the circular brush footprint. Without this the
-  // blur leaks into the rectangular bounding box of the stamp and
-  // produces visible square artefacts on every brush dab.
+  const src = img.data
+  const out = new Uint8ClampedArray(src)
   const cx = x - sx
   const cy = y - sy
   const r2 = r * r
-  const feather2 = Math.max(1, (r - 1) * (r - 1))
+  const feather = Math.max(1, r - 1)
+  const feather2 = feather * feather
+  const featherDelta = Math.max(1e-6, r - feather)
   for (let py = 0; py < sh; py++) {
     for (let px = 0; px < sw; px++) {
       const ddx = px + 0.5 - cx
       const ddy = py + 0.5 - cy
       const d2 = ddx * ddx + ddy * ddy
-      if (d2 > r2) {
-        // Fully outside the brush — keep original pixel.
-        const i = (py * sw + px) * 4
-        out[i] = img.data[i]
-        out[i + 1] = img.data[i + 1]
-        out[i + 2] = img.data[i + 2]
-        out[i + 3] = img.data[i + 3]
-      } else if (d2 > feather2) {
-        // Soft edge — linearly blend between blurred and original.
-        const t = (Math.sqrt(d2) - Math.sqrt(feather2)) / Math.max(1e-6, r - Math.sqrt(feather2))
+      if (d2 > r2) continue
+      if (px < 1 || py < 1 || px > sw - 2 || py > sh - 2) continue
+      let r0 = 0
+      let g0 = 0
+      let b0 = 0
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const ni = ((py + dy) * sw + (px + dx)) * 4
+          r0 += src[ni]
+          g0 += src[ni + 1]
+          b0 += src[ni + 2]
+        }
+      }
+      const i = (py * sw + px) * 4
+      const br = r0 / 9
+      const bg = g0 / 9
+      const bb = b0 / 9
+      if (d2 > feather2) {
+        const t = (Math.sqrt(d2) - feather) / featherDelta
         const k = 1 - Math.max(0, Math.min(1, t))
-        const i = (py * sw + px) * 4
-        out[i] = out[i] * k + img.data[i] * (1 - k)
-        out[i + 1] = out[i + 1] * k + img.data[i + 1] * (1 - k)
-        out[i + 2] = out[i + 2] * k + img.data[i + 2] * (1 - k)
+        out[i] = br * k + src[i] * (1 - k)
+        out[i + 1] = bg * k + src[i + 1] * (1 - k)
+        out[i + 2] = bb * k + src[i + 2] * (1 - k)
+      } else {
+        out[i] = br
+        out[i + 1] = bg
+        out[i + 2] = bb
       }
     }
   }
@@ -1763,43 +1902,33 @@ export function sharpenStamp(
   const sh = Math.min(h - sy, r * 2)
   if (sw <= 0 || sh <= 0) return
   const img = ctx.getImageData(sx, sy, sw, sh)
-  const out = new Uint8ClampedArray(img.data)
+  const src = img.data
+  const out = new Uint8ClampedArray(src)
   const k = [0, -1, 0, -1, 5, -1, 0, -1, 0]
+  const cx = x - sx
+  const cy = y - sy
+  const r2 = r * r
   for (let py = 1; py < sh - 1; py++) {
     for (let px = 1; px < sw - 1; px++) {
+      const ddx = px + 0.5 - cx
+      const ddy = py + 0.5 - cy
+      if (ddx * ddx + ddy * ddy > r2) continue
       let r0 = 0
       let g0 = 0
       let b0 = 0
       for (let dy = -1; dy <= 1; dy++) {
         for (let dx = -1; dx <= 1; dx++) {
-          const i = ((py + dy) * sw + (px + dx)) * 4
+          const ni = ((py + dy) * sw + (px + dx)) * 4
           const kk = k[(dy + 1) * 3 + (dx + 1)]
-          r0 += img.data[i] * kk
-          g0 += img.data[i + 1] * kk
-          b0 += img.data[i + 2] * kk
+          r0 += src[ni] * kk
+          g0 += src[ni + 1] * kk
+          b0 += src[ni + 2] * kk
         }
       }
       const i = (py * sw + px) * 4
       out[i] = Math.max(0, Math.min(255, r0))
       out[i + 1] = Math.max(0, Math.min(255, g0))
       out[i + 2] = Math.max(0, Math.min(255, b0))
-    }
-  }
-  // Mask outside the circular brush. Same rationale as blurStamp.
-  const cx = x - sx
-  const cy = y - sy
-  const r2 = r * r
-  for (let py = 0; py < sh; py++) {
-    for (let px = 0; px < sw; px++) {
-      const ddx = px + 0.5 - cx
-      const ddy = py + 0.5 - cy
-      if (ddx * ddx + ddy * ddy > r2) {
-        const i = (py * sw + px) * 4
-        out[i] = img.data[i]
-        out[i + 1] = img.data[i + 1]
-        out[i + 2] = img.data[i + 2]
-        out[i + 3] = img.data[i + 3]
-      }
     }
   }
   ctx.putImageData(new ImageData(out, sw, sh), sx, sy)
@@ -2158,6 +2287,28 @@ function imageDataToMask(img: ImageData) {
   return mask
 }
 
+function maskToAlphaData(mask: HTMLCanvasElement) {
+  const ctx = mask.getContext("2d")!
+  const img = ctx.getImageData(0, 0, mask.width, mask.height)
+  const out = new Uint8ClampedArray(mask.width * mask.height)
+  for (let i = 0; i < out.length; i++) out[i] = img.data[i * 4 + 3]
+  return out
+}
+
+function alphaDataToMask(alpha: Uint8ClampedArray, width: number, height: number) {
+  const mask = makeCanvas(width, height)
+  const ctx = mask.getContext("2d")!
+  const img = ctx.createImageData(width, height)
+  for (let i = 0; i < alpha.length; i++) {
+    img.data[i * 4] = 255
+    img.data[i * 4 + 1] = 255
+    img.data[i * 4 + 2] = 255
+    img.data[i * 4 + 3] = alpha[i]
+  }
+  ctx.putImageData(img, 0, 0)
+  return mask
+}
+
 function distanceTransform1d(f: Float64Array, n: number) {
   const d = new Float64Array(n)
   const v = new Int32Array(n)
@@ -2220,50 +2371,35 @@ function distanceToFeature(feature: Uint8Array, width: number, height: number) {
 }
 
 export function expandSelectionMask(mask: HTMLCanvasElement, radius: number): HTMLCanvasElement {
-  const r = Math.max(0, Math.round(radius))
-  if (r <= 0) return selectionToMaskCanvas(mask.width, mask.height, { bounds: { x: 0, y: 0, w: mask.width, h: mask.height }, shape: "rect", mask }) ?? mask
-  const w = mask.width
-  const h = mask.height
-  const bin = maskToBinary(mask)
-  const dist = distanceToFeature(bin, w, h)
-  const rr = r * r
-  const out = new Uint8Array(w * h)
-  for (let i = 0; i < out.length; i++) out[i] = dist[i] <= rr ? 1 : 0
-  return binaryToMask(out, w, h)
+  return alphaDataToMask(
+    expandMaskDataPure(maskToAlphaData(mask), mask.width, mask.height, radius, MASK_THRESHOLD),
+    mask.width,
+    mask.height,
+  )
 }
 
 export function contractSelectionMask(mask: HTMLCanvasElement, radius: number): HTMLCanvasElement {
-  const r = Math.max(0, Math.round(radius))
-  if (r <= 0) return selectionToMaskCanvas(mask.width, mask.height, { bounds: { x: 0, y: 0, w: mask.width, h: mask.height }, shape: "rect", mask }) ?? mask
-  const w = mask.width
-  const h = mask.height
-  const bin = maskToBinary(mask)
-  const outside = new Uint8Array(w * h)
-  for (let i = 0; i < bin.length; i++) outside[i] = bin[i] ? 0 : 1
-  const dist = distanceToFeature(outside, w, h)
-  const rr = r * r
-  const out = new Uint8Array(w * h)
-  for (let i = 0; i < out.length; i++) out[i] = bin[i] && dist[i] > rr ? 1 : 0
-  return binaryToMask(out, w, h)
+  return alphaDataToMask(
+    contractMaskDataPure(maskToAlphaData(mask), mask.width, mask.height, radius, MASK_THRESHOLD),
+    mask.width,
+    mask.height,
+  )
 }
 
 export function borderSelectionMask(mask: HTMLCanvasElement, width: number): HTMLCanvasElement {
-  const expanded = expandSelectionMask(mask, width)
-  const contracted = contractSelectionMask(mask, width)
-  const out = makeCanvas(mask.width, mask.height)
-  const ctx = out.getContext("2d")!
-  ctx.drawImage(expanded, 0, 0)
-  ctx.globalCompositeOperation = "destination-out"
-  ctx.drawImage(contracted, 0, 0)
-  ctx.globalCompositeOperation = "source-over"
-  return out
+  return alphaDataToMask(
+    borderMaskDataPure(maskToAlphaData(mask), mask.width, mask.height, width, MASK_THRESHOLD),
+    mask.width,
+    mask.height,
+  )
 }
 
 export function smoothSelectionMask(mask: HTMLCanvasElement, radius: number): HTMLCanvasElement {
-  const r = Math.max(1, Math.round(radius))
-  const opened = expandSelectionMask(contractSelectionMask(mask, Math.max(1, Math.floor(r / 2))), Math.max(1, Math.floor(r / 2)))
-  const closed = contractSelectionMask(expandSelectionMask(opened, r), r)
-  return featherMask(closed, 0.65)
+  return alphaDataToMask(
+    smoothMaskDataPure(maskToAlphaData(mask), mask.width, mask.height, radius, MASK_THRESHOLD),
+    mask.width,
+    mask.height,
+  )
 }
 
 export function colorRangeMask(
@@ -2296,14 +2432,56 @@ export function colorRangeMask(
 /* ---------------------------------------------------------------- */
 
 export function featherMask(mask: HTMLCanvasElement, radius: number): HTMLCanvasElement {
-  if (radius <= 0) return mask
-  const w = mask.width
-  const h = mask.height
-  const out = makeCanvas(w, h)
-  const ctx = out.getContext("2d")!
-  ctx.filter = `blur(${radius}px)`
-  ctx.drawImage(mask, 0, 0)
-  return out
+  return alphaDataToMask(
+    featherMaskDataPure(maskToAlphaData(mask), mask.width, mask.height, radius, MASK_THRESHOLD),
+    mask.width,
+    mask.height,
+  )
+}
+
+export function extractMarchingAntsPaths(
+  mask: HTMLCanvasElement,
+  options: MaskContourOptions = {},
+): MaskContourPath[] {
+  return extractMaskContourPaths(maskToAlphaData(mask), mask.width, mask.height, {
+    threshold: options.threshold ?? MASK_THRESHOLD,
+    simplifyTolerance: options.simplifyTolerance ?? 0.35,
+    minPoints: options.minPoints ?? 4,
+  })
+}
+
+function contourPathToPath(contour: MaskContourPath): PathProps {
+  const points = contour.points.map((point) => ({
+    x: Math.round(point.x * 100) / 100,
+    y: Math.round(point.y * 100) / 100,
+  }))
+  if (contour.closed && points.length > 1) {
+    const first = points[0]
+    const last = points[points.length - 1]
+    if (first.x === last.x && first.y === last.y) points.pop()
+  }
+  return { points, closed: contour.closed }
+}
+
+export function selectionToPathCandidatesFromMask(mask: HTMLCanvasElement, tolerance = 1.25): PathProps[] {
+  return selectionMaskToPathCandidates(maskToAlphaData(mask), mask.width, mask.height, {
+    threshold: MASK_THRESHOLD,
+    simplifyTolerance: tolerance,
+    minPoints: 4,
+  })
+    .map(contourPathToPath)
+    .filter((path) => path.points.length >= (path.closed ? 3 : 2))
+}
+
+export function selectionToPath(
+  selection: Selection,
+  width: number,
+  height: number,
+  tolerance = 1.25,
+): PathProps | null {
+  const mask = selectionToMaskCanvas(width, height, selection)
+  if (!mask) return null
+  return selectionToPathCandidatesFromMask(mask, tolerance)[0] ?? null
 }
 
 function cleanBinaryMask(binary: Uint8Array, width: number, height: number, closeRadius = 2, openRadius = 0) {
@@ -2815,6 +2993,47 @@ export function refineEdgeBrushMask(
     }
   }
 
+  let insideR = 0
+  let insideG = 0
+  let insideB = 0
+  let insideWeight = 0
+  let outsideR = 0
+  let outsideG = 0
+  let outsideB = 0
+  let outsideWeight = 0
+  const modelBand = Math.max(3, radius * 0.7)
+  const modelBand2 = modelBand * modelBand
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const p = y * w + x
+      const inf = influence[p]
+      if (inf <= 0) continue
+      const nearModelEdge = distToSelected[p] <= modelBand2 || distToOutside[p] <= modelBand2
+      if (!nearModelEdge) continue
+      const i = p * 4
+      if (img.data[i + 3] <= MASK_THRESHOLD) continue
+      const weight = inf * (1 + Math.min(1, localGradient(img, x, y) / 96))
+      if (bin[p]) {
+        insideR += img.data[i] * weight
+        insideG += img.data[i + 1] * weight
+        insideB += img.data[i + 2] * weight
+        insideWeight += weight
+      } else {
+        outsideR += img.data[i] * weight
+        outsideG += img.data[i + 1] * weight
+        outsideB += img.data[i + 2] * weight
+        outsideWeight += weight
+      }
+    }
+  }
+  const colorModel =
+    insideWeight > 0 && outsideWeight > 0
+      ? {
+          inside: { r: insideR / insideWeight, g: insideG / insideWeight, b: insideB / insideWeight },
+          outside: { r: outsideR / outsideWeight, g: outsideG / outsideWeight, b: outsideB / outsideWeight },
+        }
+      : null
+
   const out = new ImageData(new Uint8ClampedArray(maskImg.data), w, h)
   const edgeBand = Math.max(3, radius * 0.55)
   const edgeBand2 = edgeBand * edgeBand
@@ -2826,8 +3045,13 @@ export function refineEdgeBrushMask(
       const i = p * 4
       const nearEdge = distToSelected[p] <= edgeBand2 || distToOutside[p] <= edgeBand2
       if (!nearEdge) continue
+      const rgb = { r: img.data[i], g: img.data[i + 1], b: img.data[i + 2] }
+      const insideDistance = colorModel ? rgbDistance(rgb, colorModel.inside) : 0
+      const outsideDistance = colorModel ? rgbDistance(rgb, colorModel.outside) : 0
+      const colorLooksInside = !!colorModel && insideDistance + 10 < outsideDistance
+      const colorLooksOutside = !!colorModel && outsideDistance + 10 < insideDistance
       if (mode === "subtract") {
-        const remove = distToOutside[p] <= edgeBand2 || localGradient(img, x, y) < 18
+        const remove = colorLooksOutside || distToOutside[p] <= edgeBand2 || localGradient(img, x, y) < 18
         if (remove) out.data[i + 3] = Math.max(0, out.data[i + 3] - Math.round(255 * inf))
         continue
       }
@@ -2835,12 +3059,14 @@ export function refineEdgeBrushMask(
       if (sourceAlpha <= MASK_THRESHOLD) continue
       const grad = localGradient(img, x, y)
       const add =
+        colorLooksInside ||
         distToSelected[p] <= edgeBand2 * 0.85 ||
         grad > 18 ||
         (sourceAlpha > 80 && distToSelected[p] <= edgeBand2 * 1.2)
       if (add) {
         const feather = clamp(1 - Math.sqrt(distToSelected[p]) / Math.max(1, edgeBand * 1.2), 0.18, 1)
-        const alpha = Math.round(255 * Math.max(inf * 0.75, feather * 0.82))
+        const colorBoost = colorLooksInside ? 0.16 : 0
+        const alpha = Math.round(255 * Math.max(inf * (0.75 + colorBoost), feather * (0.82 + colorBoost)))
         out.data[i] = 255
         out.data[i + 1] = 255
         out.data[i + 2] = 255
@@ -2905,29 +3131,31 @@ export function pathToMask(
   path: PathProps,
 ): HTMLCanvasElement {
   const c = makeCanvas(width, height)
-  if (path.points.length < 3) return c
+  if (!path.closed || path.points.length < 3) return c
   const ctx = c.getContext("2d")!
   ctx.fillStyle = "#fff"
-  ctx.beginPath()
-  const p0 = path.points[0]
-  ctx.moveTo(p0.x, p0.y)
-  for (let i = 1; i < path.points.length; i++) {
-    const prev = path.points[i - 1]
-    const cur = path.points[i]
-    const cp1 = prev.cp1 ?? prev
-    const cp2 = cur.cp2 ?? cur
-    ctx.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, cur.x, cur.y)
-  }
-  if (path.closed) {
-    const last = path.points[path.points.length - 1]
-    const first = path.points[0]
-    const cp1 = last.cp1 ?? last
-    const cp2 = first.cp2 ?? first
-    ctx.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, first.x, first.y)
-    ctx.closePath()
-  }
-  ctx.fill()
+  if (tracePath(ctx, path)) ctx.fill("evenodd")
   return c
+}
+
+export function pathToSelectionMask(
+  path: PathProps,
+  width: number,
+  height: number,
+  options: { feather?: number; strokeWidth?: number } = {},
+): HTMLCanvasElement {
+  const mask = makeCanvas(width, height)
+  const ctx = mask.getContext("2d")!
+  ctx.fillStyle = "#fff"
+  ctx.strokeStyle = "#fff"
+  ctx.lineCap = "round"
+  ctx.lineJoin = "round"
+  ctx.lineWidth = Math.max(1, options.strokeWidth ?? 2)
+  if (tracePath(ctx, path)) {
+    if (path.closed && path.points.length >= 3) ctx.fill("evenodd")
+    else ctx.stroke()
+  }
+  return options.feather && options.feather > 0 ? featherMask(mask, options.feather) : mask
 }
 
 export function liquifyWarp(

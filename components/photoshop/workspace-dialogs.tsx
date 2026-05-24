@@ -19,10 +19,7 @@ import { makeCanvas, makeDocument, useEditor } from "./editor-context"
 import { loadImageFromFile } from "./document-io"
 import type { Guide, Layer } from "./types"
 import { cn } from "@/lib/utils"
-
-function uid(prefix = "id") {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
-}
+import { uid } from "./uid"
 
 function pxFromUnit(value: number, unit: string, docSize: number) {
   if (unit === "%") return (value / 100) * docSize

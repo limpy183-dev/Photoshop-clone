@@ -385,12 +385,15 @@ test("timeline panel captures opacity-aware frames and inserts tweens", async ({
   await page.keyboard.press("Enter")
   await page.getByLabel("Capture frame").click()
   await page.getByLabel("Capture frame").click()
-  await page.locator('input[value="Frame 1"]').click()
-  await page.getByRole("button", { name: "Tween" }).click()
+  await page.getByRole("button", { name: /Tween/ }).click()
+  await expect(page.getByText("Insert Tween Frames")).toBeVisible()
+  await page.getByRole("button", { name: "Insert" }).click()
   await expect(page.getByText("5 frames")).toBeVisible()
-  await expect(page.locator('input[value="Frame 1 tween 1"]')).toBeVisible()
   await expect(page.getByRole("button", { name: "Sheet" })).toBeVisible()
   await expect(page.getByRole("button", { name: "JSON" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "GIF" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "APNG" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "WebP" })).toBeVisible()
 })
 
 test("layer finder focuses search and can select matched layers", async ({ page }) => {

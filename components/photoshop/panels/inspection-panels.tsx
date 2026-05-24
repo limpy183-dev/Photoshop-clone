@@ -70,6 +70,8 @@ function paramsWithDefaults(filter: NonNullable<ReturnType<typeof getFilter>>, p
       out[param.key] = raw === true
     } else if (param.type === "select") {
       out[param.key] = param.options.some((option) => option.value === raw) ? raw : param.default
+    } else {
+      out[param.key] = typeof raw === "string" ? raw : param.default
     }
   }
   return out

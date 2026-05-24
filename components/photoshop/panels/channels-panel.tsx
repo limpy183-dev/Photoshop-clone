@@ -1,19 +1,17 @@
 "use client"
 
 import * as React from "react"
-import { Copy, Eye, Layers, Plus, Trash2, Wand2 } from "lucide-react"
+import { Copy, Droplet, Eye, Layers, Plus, Trash2, Wand2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useEditor, makeCanvas } from "../editor-context"
 import { renderDocumentComposite } from "../document-io"
 import type { AlphaChannel, PsDocument, Selection } from "../types"
 import { cn } from "@/lib/utils"
+import { uid } from "../uid"
+import { parseAlphaChannelMetadata, simulateSpotChannelPreview } from "../color-channel-ops"
 
 type PreviewChannel = "rgb" | "red" | "green" | "blue" | string
 type LoadMode = "replace" | "add" | "subtract" | "intersect"
-
-function uid(prefix = "id") {
-  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`
-}
 
 export function ChannelsPanel() {
   const { activeDoc, activeLayer, dispatch, commit } = useEditor()
@@ -28,19 +26,33 @@ export function ChannelsPanel() {
   const saveSelection = () => {
     const mask = selectionToMask(activeDoc, activeDoc.selection)
     if (!mask) return
-    dispatch({
-      type: "save-selection",
-      channel: {
-        id: uid("ch"),
-        name: `Alpha ${(activeDoc.channels?.length ?? 0) + 1}`,
-        canvas: mask,
-      },
-    })
+    const channel: AlphaChannel = {
+      id: uid("ch"),
+      name: `Alpha ${(activeDoc.channels?.length ?? 0) + 1}`,
+      canvas: mask,
+    }
+    dispatch({ type: "save-selection", channel })
+    setPreview(channel.id)
     commit("Save Alpha Channel", [])
   }
 
   const saveLuminosity = () => {
     createChannelFromComponent("luminosity")
+  }
+
+  const saveSpotChannel = () => {
+    const mask = selectionToMask(activeDoc, activeDoc.selection) ?? createLuminosityMask(activeDoc)
+    const channel: AlphaChannel = {
+      id: uid("ch"),
+      name: `Spot ${(activeDoc.channels?.length ?? 0) + 1}`,
+      kind: "spot",
+      spotColor: "#ff00ff",
+      spotOpacity: 65,
+      canvas: mask,
+    }
+    dispatch({ type: "save-selection", channel })
+    setPreview(channel.id)
+    commit("Create Spot Channel", [])
   }
 
   const createChannelFromComponent = (component: "red" | "green" | "blue" | "luminosity") => {
@@ -57,14 +69,13 @@ export function ChannelsPanel() {
       img.data[i + 3] = Math.round((value * img.data[i + 3]) / 255)
     }
     ctx.putImageData(img, 0, 0)
-    dispatch({
-      type: "save-selection",
-      channel: {
-        id: uid("ch"),
-        name: `${component[0].toUpperCase()}${component.slice(1)} ${(activeDoc.channels?.length ?? 0) + 1}`,
-        canvas: composite,
-      },
-    })
+    const channel: AlphaChannel = {
+      id: uid("ch"),
+      name: `${component[0].toUpperCase()}${component.slice(1)} ${(activeDoc.channels?.length ?? 0) + 1}`,
+      canvas: composite,
+    }
+    dispatch({ type: "save-selection", channel })
+    setPreview(channel.id)
     commit("Create Alpha Channel", [])
   }
 
@@ -72,14 +83,14 @@ export function ChannelsPanel() {
     if (!selectedAlpha) return
     const copy = makeCanvas(activeDoc.width, activeDoc.height)
     copy.getContext("2d")!.drawImage(selectedAlpha.canvas, 0, 0)
-    dispatch({
-      type: "save-selection",
-      channel: {
-        id: uid("ch"),
-        name: `${selectedAlpha.name} copy`,
-        canvas: copy,
-      },
-    })
+    const channel: AlphaChannel = {
+      ...selectedAlpha,
+      id: uid("ch"),
+      name: `${selectedAlpha.name} copy`,
+      canvas: copy,
+    }
+    dispatch({ type: "save-selection", channel })
+    setPreview(channel.id)
     commit("Duplicate Alpha Channel", [])
   }
 
@@ -104,41 +115,14 @@ export function ChannelsPanel() {
   }
 
   const loadAlpha = (channel: AlphaChannel) => {
-    if (loadMode === "replace") {
-      dispatch({ type: "load-selection", channelId: channel.id })
-      return
-    }
-    const incoming = cloneChannelMask(activeDoc, channel.canvas)
-    const existing = selectionToMask(activeDoc, activeDoc.selection)
-    const next = makeCanvas(activeDoc.width, activeDoc.height)
-    const ctx = next.getContext("2d")!
-    if (existing) ctx.drawImage(existing, 0, 0)
-    if (loadMode === "add") {
-      ctx.globalCompositeOperation = "source-over"
-      ctx.drawImage(incoming, 0, 0)
-    } else if (loadMode === "subtract") {
-      ctx.globalCompositeOperation = "destination-out"
-      ctx.drawImage(incoming, 0, 0)
-    } else {
-      if (existing) {
-        ctx.globalCompositeOperation = "destination-in"
-        ctx.drawImage(incoming, 0, 0)
-      } else {
-        ctx.drawImage(incoming, 0, 0)
-      }
-    }
-    ctx.globalCompositeOperation = "source-over"
-    const bounds = maskBounds(next)
-    dispatch({
-      type: "set-selection",
-      selection: bounds ? { bounds, shape: "freehand", mask: next } : { bounds: null, shape: "rect" },
-    })
+    dispatch({ type: "load-selection", channelId: channel.id, mode: loadMode })
+    commit("Load Alpha Channel", [])
   }
 
   return (
     <div className="flex h-full flex-col text-[11px] text-[var(--ps-text)]">
       <div className="border-b border-[var(--ps-divider)] p-2 space-y-2">
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-2">
           <Button variant="outline" size="sm" onClick={saveSelection} disabled={!hasSelection}>
             <Plus className="w-3.5 h-3.5" />
             Selection
@@ -146,6 +130,10 @@ export function ChannelsPanel() {
           <Button variant="outline" size="sm" onClick={saveLuminosity}>
             <Wand2 className="w-3.5 h-3.5" />
             Luminance
+          </Button>
+          <Button variant="outline" size="sm" onClick={saveSpotChannel}>
+            <Droplet className="w-3.5 h-3.5" />
+            Spot
           </Button>
         </div>
         <div className="grid grid-cols-3 gap-1">
@@ -196,6 +184,53 @@ export function ChannelsPanel() {
           </div>
         )}
       </div>
+
+      {selectedAlpha ? (
+        <div className="grid grid-cols-[1fr_72px_72px] items-end gap-2 border-t border-[var(--ps-divider)] p-2 text-[10px] text-[var(--ps-text-dim)]">
+          <label className="grid gap-1">
+            Type
+            <select
+              value={parseAlphaChannelMetadata(selectedAlpha).kind}
+              onChange={(event) => {
+                const kind = event.target.value as AlphaChannel["kind"]
+                dispatch({
+                  type: "update-channel",
+                  channelId: selectedAlpha.id,
+                  patch: kind === "spot"
+                    ? { kind, spotColor: selectedAlpha.spotColor ?? "#ff00ff", spotOpacity: selectedAlpha.spotOpacity ?? 65 }
+                    : { kind: "alpha", spotColor: undefined, spotOpacity: undefined },
+                })
+              }}
+              className="h-7 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px] text-[var(--ps-text)]"
+            >
+              <option value="alpha">Alpha</option>
+              <option value="spot">Spot</option>
+            </select>
+          </label>
+          <label className="grid gap-1">
+            Ink
+            <input
+              type="color"
+              value={parseAlphaChannelMetadata(selectedAlpha).spotColor ?? "#ff00ff"}
+              disabled={parseAlphaChannelMetadata(selectedAlpha).kind !== "spot"}
+              onChange={(event) => dispatch({ type: "update-channel", channelId: selectedAlpha.id, patch: { kind: "spot", spotColor: event.target.value } })}
+              className="h-7 w-full rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)]"
+            />
+          </label>
+          <label className="grid gap-1">
+            Opacity
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={parseAlphaChannelMetadata(selectedAlpha).spotOpacity ?? 50}
+              disabled={parseAlphaChannelMetadata(selectedAlpha).kind !== "spot"}
+              onChange={(event) => dispatch({ type: "update-channel", channelId: selectedAlpha.id, patch: { kind: "spot", spotOpacity: Math.max(0, Math.min(100, Number(event.target.value) || 0)) } })}
+              className="h-7 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px] text-[var(--ps-text)]"
+            />
+          </label>
+        </div>
+      ) : null}
 
       <div className="flex items-center gap-1 border-t border-[var(--ps-divider)] p-2">
         {selectedAlpha ? (
@@ -277,6 +312,7 @@ function AlphaRow({
   onLoad: () => void
   onDelete: () => void
 }) {
+  const meta = parseAlphaChannelMetadata(channel)
   return (
     <div
       className={cn(
@@ -286,10 +322,12 @@ function AlphaRow({
       onClick={onSelect}
     >
       <Eye className="w-3.5 h-3.5 text-[var(--ps-text-dim)]" />
-      <ChannelThumb doc={doc} alpha={channel.canvas} />
+      <ChannelThumb doc={doc} alpha={channel.canvas} alphaChannel={channel} />
       <button className="min-w-0 flex-1 truncate text-left" type="button" onClick={onSelect}>
-        {channel.name}
+        <span className="block truncate">{meta.baseName}</span>
+        <span className="block text-[9px] uppercase text-[var(--ps-text-dim)]">{meta.kind === "spot" ? "Spot channel" : "Alpha channel"}</span>
       </button>
+      {meta.kind === "spot" ? <span className="h-3 w-3 rounded-full border border-[var(--ps-divider)]" style={{ backgroundColor: meta.spotColor }} /> : null}
       <Button variant="ghost" size="icon-sm" onClick={(e) => { e.stopPropagation(); onLoad() }} title="Load channel as selection">
         <Wand2 className="w-3.5 h-3.5" />
       </Button>
@@ -304,10 +342,12 @@ function ChannelThumb({
   doc,
   channel,
   alpha,
+  alphaChannel,
 }: {
   doc: PsDocument
   channel?: "rgb" | "red" | "green" | "blue"
   alpha?: HTMLCanvasElement
+  alphaChannel?: AlphaChannel
 }) {
   const ref = React.useRef<HTMLCanvasElement>(null)
   React.useEffect(() => {
@@ -330,6 +370,21 @@ function ChannelThumb({
         img.data[i] = img.data[i + 1] = img.data[i + 2] = v
       }
       tctx.putImageData(img, 0, 0)
+    } else if (alpha && alphaChannel && parseAlphaChannelMetadata(alphaChannel).kind === "spot") {
+      const base = renderDocumentComposite(doc, { transparent: false, matte: "#000000" })
+      const bctx = base.getContext("2d")!
+      const mctx = tmp.getContext("2d")!
+      const preview = simulateSpotChannelPreview(
+        bctx.getImageData(0, 0, base.width, base.height),
+        mctx.getImageData(0, 0, tmp.width, tmp.height),
+        {
+          spotColor: parseAlphaChannelMetadata(alphaChannel).spotColor ?? "#ff00ff",
+          spotOpacity: parseAlphaChannelMetadata(alphaChannel).spotOpacity ?? 65,
+        },
+      )
+      tmp.width = preview.width
+      tmp.height = preview.height
+      tmp.getContext("2d")!.putImageData(preview, 0, 0)
     } else if (alpha) {
       const img = tctx.getImageData(0, 0, tmp.width, tmp.height)
       for (let i = 0; i < img.data.length; i += 4) {
@@ -342,8 +397,21 @@ function ChannelThumb({
     const w = tmp.width * scale
     const h = tmp.height * scale
     ctx.drawImage(tmp, (out.width - w) / 2, (out.height - h) / 2, w, h)
-  }, [alpha, channel, doc])
+  }, [alpha, alphaChannel, channel, doc])
   return <canvas ref={ref} className="h-7 w-[42px] rounded-sm border border-[var(--ps-divider)] bg-black" />
+}
+
+function createLuminosityMask(doc: PsDocument) {
+  const composite = renderDocumentComposite(doc, { transparent: true })
+  const ctx = composite.getContext("2d")!
+  const img = ctx.getImageData(0, 0, composite.width, composite.height)
+  for (let i = 0; i < img.data.length; i += 4) {
+    const value = Math.round(0.299 * img.data[i] + 0.587 * img.data[i + 1] + 0.114 * img.data[i + 2])
+    img.data[i] = img.data[i + 1] = img.data[i + 2] = 255
+    img.data[i + 3] = Math.round((value * img.data[i + 3]) / 255)
+  }
+  ctx.putImageData(img, 0, 0)
+  return composite
 }
 
 function cloneChannelMask(doc: PsDocument, canvas: HTMLCanvasElement) {
@@ -367,27 +435,4 @@ function selectionToMask(doc: PsDocument, selection: Selection) {
     ctx.fillRect(b.x, b.y, b.w, b.h)
   }
   return mask
-}
-
-function maskBounds(mask: HTMLCanvasElement) {
-  const ctx = mask.getContext("2d")
-  if (!ctx) return null
-  const img = ctx.getImageData(0, 0, mask.width, mask.height)
-  let minX = mask.width
-  let minY = mask.height
-  let maxX = 0
-  let maxY = 0
-  let any = false
-  for (let y = 0; y < mask.height; y++) {
-    for (let x = 0; x < mask.width; x++) {
-      if (img.data[(y * mask.width + x) * 4 + 3] > 8) {
-        any = true
-        minX = Math.min(minX, x)
-        minY = Math.min(minY, y)
-        maxX = Math.max(maxX, x)
-        maxY = Math.max(maxY, y)
-      }
-    }
-  }
-  return any ? { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 } : null
 }
