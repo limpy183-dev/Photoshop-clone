@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { useEditor, makeCanvas } from "./editor-context"
-import { downloadText, loadImageFromFile } from "./document-io"
+import { downloadText, loadRasterCanvasFromFile } from "./document-io"
 import { buildContentAwareFillPlan, contentAwareFill, focusAreaMask, rasterizeText, selectionFromMask, selectionToMaskCanvas } from "./tool-helpers"
 import {
   autoAlignLayers,
@@ -35,6 +35,7 @@ import {
   type ColorStop,
 } from "./algorithmic-operations"
 import { autoBlendImageStack } from "./photo-workflow-engine"
+import { applyPromptInpaintImageData, buildGenerativeFillPlan } from "./generative-fill-engine"
 import { findReplaceTextLayers } from "./typography-engine"
 import type { AssetLibraryItem, CountMarker, Layer, PathProps, PrintSettings, TextProps } from "./types"
 import { uid } from "./uid"
@@ -108,6 +109,16 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
   const [iccInfo, setIccInfo] = React.useState<string>("")
   const [contentSamplingMode, setContentSamplingMode] = React.useState<"auto" | "all-except-fill">("auto")
   const [contentOutputTarget, setContentOutputTarget] = React.useState<"current-layer" | "new-layer">("current-layer")
+  const [contentPatchRadius, setContentPatchRadius] = React.useState(4)
+  const [contentSearchRadius, setContentSearchRadius] = React.useState(48)
+  const [contentCandidateBudget, setContentCandidateBudget] = React.useState(56)
+  const [contentBoundaryBudget, setContentBoundaryBudget] = React.useState(18)
+  const [contentRefinementPasses, setContentRefinementPasses] = React.useState(3)
+  const [contentSeamRelaxPasses, setContentSeamRelaxPasses] = React.useState(2)
+  const [contentCoherence, setContentCoherence] = React.useState(1)
+  const [contentFillOrder, setContentFillOrder] = React.useState<"edge-first" | "center-first" | "randomized">("edge-first")
+  const [generativePrompt, setGenerativePrompt] = React.useState("remove distracting object")
+  const [generativeMode, setGenerativeMode] = React.useState<"fill" | "remove" | "expand">("remove")
   const [seamProtectSource, setSeamProtectSource] = React.useState<"none" | "selection" | "layer">("none")
   const [seamRemoveSource, setSeamRemoveSource] = React.useState<"none" | "selection" | "layer">("none")
   const [seamProtectLayerId, setSeamProtectLayerId] = React.useState<string>("")
@@ -289,17 +300,64 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
       fillBounds: padded,
       sampling: { mode: contentSamplingMode },
       adaptation: { color: 0.55 },
+      patch: {
+        patchRadius: contentPatchRadius,
+        searchRadius: contentSearchRadius,
+        candidateBudget: contentCandidateBudget,
+        boundaryCandidateBudget: contentBoundaryBudget,
+        refinementPasses: contentRefinementPasses,
+        seamRelaxPasses: contentSeamRelaxPasses,
+        coherence: contentCoherence,
+        fillOrder: contentFillOrder,
+      },
       outputTarget: contentOutputTarget,
       preview: true,
     })
-    toast.info(`Content-Aware Fill plan: ${plan.fillPixels} fill px, ${plan.samplePixels} sample px, ${plan.sampling.mode} sampling.`)
+    toast.info(`Content-Aware Fill plan: ${plan.fillPixels} fill px, ${plan.samplePixels} sample px, radius ${plan.patch.patchRadius}, ${plan.patch.refinementPasses} refinement pass(es).`)
     contentAwareFill(targetLayer.canvas, padded, undefined, {
       sampling: { mode: contentSamplingMode },
       adaptation: { color: 0.55 },
+      patch: plan.patch,
       outputTarget: contentOutputTarget,
     })
     if (contentOutputTarget === "new-layer") dispatch({ type: "add-layer", layer: targetLayer })
     finish("Content-Aware Extend", [targetLayer.id])
+  }
+
+  const runGenerativeFill = () => {
+    const doc = requireDoc()
+    const layer = requireLayer()
+    if (!doc || !layer) return
+    if (!doc.selection.bounds) {
+      toast.error("Create a selection for Generative Fill.")
+      return
+    }
+    const maskCanvas = selectionToMaskCanvas(doc.width, doc.height, doc.selection)
+    if (!maskCanvas) return
+    const maskImage = maskCanvas.getContext("2d")!.getImageData(0, 0, doc.width, doc.height)
+    const sourceImage = layer.canvas.getContext("2d")!.getImageData(0, 0, doc.width, doc.height)
+    const maskAlpha = new Uint8ClampedArray(doc.width * doc.height)
+    for (let p = 0; p < maskAlpha.length; p++) maskAlpha[p] = maskImage.data[p * 4 + 3]
+    const plan = buildGenerativeFillPlan(sourceImage, maskAlpha, {
+      prompt: generativePrompt,
+      mode: generativeMode,
+      provider: "auto",
+      outputTarget: contentOutputTarget,
+    })
+    const generated = applyPromptInpaintImageData(sourceImage, maskAlpha, plan)
+    const targetLayer = contentOutputTarget === "new-layer"
+      ? {
+          ...layer,
+          id: uid("layer"),
+          name: `${layer.name} Generative Fill`,
+          locked: false,
+          canvas: makeCanvas(doc.width, doc.height),
+        }
+      : layer
+    targetLayer.canvas.getContext("2d")!.putImageData(generated.image, 0, 0)
+    if (contentOutputTarget === "new-layer") dispatch({ type: "add-layer", layer: targetLayer })
+    toast.info(`Generative Fill: ${plan.provider.reason}`)
+    finish("Generative Fill", [targetLayer.id])
   }
 
   const definePattern = () => {
@@ -539,13 +597,13 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
     const doc = requireDoc()
     const layer = requireLayer()
     if (!doc || !layer) return
-    const img = await loadImageFromFile(file)
+    const raster = await loadRasterCanvasFromFile(file, { mode: "reduced-scale" })
     const ctx = layer.canvas.getContext("2d")!
     ctx.clearRect(0, 0, doc.width, doc.height)
-    const scale = Math.min(doc.width / img.naturalWidth, doc.height / img.naturalHeight)
-    const w = img.naturalWidth * scale
-    const h = img.naturalHeight * scale
-    ctx.drawImage(img, (doc.width - w) / 2, (doc.height - h) / 2, w, h)
+    const scale = Math.min(doc.width / raster.canvas.width, doc.height / raster.canvas.height)
+    const w = raster.canvas.width * scale
+    const h = raster.canvas.height * scale
+    ctx.drawImage(raster.canvas, (doc.width - w) / 2, (doc.height - h) / 2, w, h)
     dispatch({ type: "set-layer-smart", id: layer.id, smart: true })
     finish("Replace Smart Object Contents", [layer.id])
   }
@@ -658,6 +716,25 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
                   />
                 </ControlGrid>
                 <ControlGrid>
+                  <NumberField label="Patch radius" value={contentPatchRadius} onChange={setContentPatchRadius} min={1} max={10} />
+                  <NumberField label="Search radius" value={contentSearchRadius} onChange={setContentSearchRadius} min={1} max={512} />
+                  <NumberField label="Candidates" value={contentCandidateBudget} onChange={setContentCandidateBudget} min={1} max={256} />
+                  <NumberField label="Boundary candidates" value={contentBoundaryBudget} onChange={setContentBoundaryBudget} min={0} max={128} />
+                  <NumberField label="Refine passes" value={contentRefinementPasses} onChange={setContentRefinementPasses} min={0} max={8} />
+                  <NumberField label="Seam relax" value={contentSeamRelaxPasses} onChange={setContentSeamRelaxPasses} min={0} max={8} />
+                  <NumberField label="Coherence" value={contentCoherence} onChange={setContentCoherence} min={0} max={4} step={0.05} />
+                  <SelectField
+                    label="Fill order"
+                    value={contentFillOrder}
+                    onChange={(value) => setContentFillOrder(value as typeof contentFillOrder)}
+                    options={[
+                      { value: "edge-first", label: "Edge first" },
+                      { value: "center-first", label: "Center first" },
+                      { value: "randomized", label: "Randomized" },
+                    ]}
+                  />
+                </ControlGrid>
+                <ControlGrid>
                   <SelectField
                     label="Protect Mask"
                     value={seamProtectSource}
@@ -694,10 +771,22 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
                       options={[{ value: "", label: "(select layer)" }, ...activeDoc.layers.map((l) => ({ value: l.id, label: l.name }))]}
                     />
                   ) : null}
+                  <TextField label="Generative Prompt" value={generativePrompt} onChange={setGenerativePrompt} />
+                  <SelectField
+                    label="Generative Mode"
+                    value={generativeMode}
+                    onChange={(value) => setGenerativeMode(value as typeof generativeMode)}
+                    options={[
+                      { value: "remove", label: "Remove" },
+                      { value: "fill", label: "Fill" },
+                      { value: "expand", label: "Expand" },
+                    ]}
+                  />
                 </ControlGrid>
                 <ButtonGrid>
                   <Button size="sm" variant="secondary" onClick={runContentAwareScale}>Content-Aware Scale</Button>
                   <Button size="sm" variant="secondary" onClick={runContentAwareExtend}>Content-Aware Extend</Button>
+                  <Button size="sm" variant="secondary" onClick={runGenerativeFill}>Generative Fill</Button>
                   <Button size="sm" variant="secondary" onClick={() => dispatch({ type: "set-tool", tool: "content-aware-move" })}>Content-Aware Move Tool</Button>
                 </ButtonGrid>
               </Section>
@@ -743,12 +832,11 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
                     <div className={findPreview.error ? "text-amber-300" : "text-[var(--ps-text)]"}>
                       {findPreview.error ?? findPreview.matchCountLabel}
                     </div>
-                    {!findPreview.error && findPreview.matches.length ? (
-                      <div className="mt-2 max-h-28 space-y-1 overflow-auto">
-                        {findPreview.matches.slice(0, 8).map((match, index) => {
-                          const source = activeDoc.layers.find((layer) => layer.id === match.layerId)?.text?.content ?? ""
-                          return <FindMatchPreview key={`${match.layerId}-${match.index}-${index}`} match={match} source={source} />
-                        })}
+                    {!findPreview.error && findPreview.highlights.length ? (
+                      <div className="mt-2 max-h-40 space-y-1 overflow-auto">
+                        {findPreview.highlights.map((group) => (
+                          <FindHighlightGroupPreview key={group.layerId} group={group} />
+                        ))}
                       </div>
                     ) : null}
                   </div>
@@ -893,27 +981,25 @@ function pickText(text: TextProps, keys: (keyof TextProps)[]) {
   return Object.fromEntries(keys.map((key) => [key, text[key]]).filter(([, value]) => value !== undefined))
 }
 
-function FindMatchPreview({
-  match,
-  source,
+function FindHighlightGroupPreview({
+  group,
 }: {
-  match: ReturnType<typeof findReplaceTextLayers>["matches"][number]
-  source: string
+  group: ReturnType<typeof findReplaceTextLayers>["highlights"][number]
 }) {
-  const start = Math.max(0, match.index - 24)
-  const end = Math.min(source.length, match.index + match.length + 24)
-  const before = source.slice(start, match.index)
-  const hit = source.slice(match.index, match.index + match.length)
-  const after = source.slice(match.index + match.length, end)
   return (
     <div className="min-w-0 rounded-sm bg-[var(--ps-panel)] px-2 py-1">
-      <div className="truncate text-[9px] text-[var(--ps-text-dim)]">{match.layerName}</div>
-      <div className="truncate text-[10px]">
-        {start > 0 ? "..." : ""}
-        {before}
-        <mark className="rounded-sm bg-amber-400/30 px-0.5 text-amber-100">{hit}</mark>
-        {after}
-        {end < source.length ? "..." : ""}
+      <div className="flex items-center justify-between gap-2 text-[9px] text-[var(--ps-text-dim)]">
+        <span className="truncate">{group.layerName}</span>
+        <span className="shrink-0">{group.matchCountLabel}</span>
+      </div>
+      <div className="mt-1 whitespace-pre-wrap break-words text-[10px] leading-4">
+        {group.segments.map((segment, index) => (
+          segment.highlight ? (
+            <mark key={index} className="rounded-sm bg-amber-400/30 px-0.5 text-amber-100">{segment.text}</mark>
+          ) : (
+            <React.Fragment key={index}>{segment.text}</React.Fragment>
+          )
+        ))}
       </div>
     </div>
   )

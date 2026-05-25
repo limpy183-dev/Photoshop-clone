@@ -15,7 +15,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
-import { AlertTriangle, Download, FileImage, RefreshCw } from "lucide-react"
+import { AlertTriangle, Copy, Download, FileImage, FileJson, RefreshCw, Save, Trash2, Upload } from "lucide-react"
 import { useEditor } from "./editor-context"
 import {
   buildRasterExportCanvas,
@@ -23,6 +23,7 @@ import {
   createExportCompatibilityManifest,
   createExportLimitationReport,
   dataUrlBytes,
+  diagnoseBrowserRasterEncoders,
   downloadBlob,
   downloadDataUrl,
   downloadText,
@@ -33,6 +34,7 @@ import {
   exportSvgDataUrl,
   formatBytes,
   rasterMime,
+  type BrowserRasterEncoderDiagnostic,
   type BrowserRasterExportFormat,
   type ExportFormat,
 } from "./document-io"
@@ -40,25 +42,15 @@ import type { RasterExportMetadata, TiffCompression } from "./raster-codecs"
 import { canvasSizeError } from "./canvas-limits"
 import { cn } from "@/lib/utils"
 import type { AssetLibraryItem } from "./types"
-
-type ExportPresetPayload = Partial<{
-  dialog: "export-as"
-  format: ExportFormat
-  scale: number
-  quality: number
-  transparent: boolean
-  matte: string
-  dither: boolean
-  losslessWebp: boolean
-  includeMetadata: boolean
-  precision: number
-  tiffCompression: TiffCompression
-  tgaRle: boolean
-  metadataAuthor: string
-  metadataCopyright: string
-  metadataDescription: string
-  metadataCreationDate: string
-}>
+import {
+  deleteExportPresetAsset,
+  duplicateExportPresetAsset,
+  exportPresetAssets,
+  parseExportPresetLibrary,
+  serializeExportPresetLibrary,
+  upsertExportPresetAsset,
+  type ExportPresetPayload,
+} from "./export-presets"
 
 const EXPORT_FORMATS: Array<{ format: ExportFormat; label: string }> = [
   { format: "png", label: "PNG" },
@@ -128,6 +120,7 @@ export function ExportAsDialog({
 }) {
   const { activeDoc, dispatch, commit } = useEditor()
   const previewRef = React.useRef<HTMLCanvasElement>(null)
+  const presetImportRef = React.useRef<HTMLInputElement | null>(null)
   const [format, setFormat] = React.useState<ExportFormat>("png")
   const [scale, setScale] = React.useState(100)
   const [quality, setQuality] = React.useState(92)
@@ -148,6 +141,7 @@ export function ExportAsDialog({
   const [estimate, setEstimate] = React.useState("0 KB")
   const [selectedPresetId, setSelectedPresetId] = React.useState("")
   const [presetName, setPresetName] = React.useState("")
+  const [encoderDiagnostics, setEncoderDiagnostics] = React.useState<BrowserRasterEncoderDiagnostic[]>([])
 
   const scaleRatio = Math.max(0.01, scale / 100)
   const metadataPayload = React.useCallback((): RasterExportMetadata => ({
@@ -250,6 +244,17 @@ export function ExportAsDialog({
   }, [open, refreshPreview])
 
   React.useEffect(() => {
+    if (!open) return
+    let disposed = false
+    void diagnoseBrowserRasterEncoders(["webp", "avif"]).then((diagnostics) => {
+      if (!disposed) setEncoderDiagnostics(diagnostics)
+    })
+    return () => {
+      disposed = true
+    }
+  }, [open])
+
+  React.useEffect(() => {
     if (!open || !initial) return
     if (initial.format) setFormat(initial.format)
     const nextScale = presetScaleToPercent(initial.scale)
@@ -284,9 +289,12 @@ export function ExportAsDialog({
 
   if (!activeDoc) return null
 
-  const exportPresets = (activeDoc.assetLibrary ?? []).filter(
-    (asset) => asset.kind === "export" && (asset.payload as ExportPresetPayload)?.dialog === "export-as",
+  const exportPresets = exportPresetAssets(activeDoc.assetLibrary).filter(
+    (asset) => ((asset.payload as ExportPresetPayload)?.dialog ?? "export-as") === "export-as",
   )
+  const selectedPreset = exportPresets.find((asset) => asset.id === selectedPresetId)
+  const metadataCapable = format === "png" || format === "jpeg" || format === "tiff" || format === "webp" || format === "avif" || format === "svg" || format === "tga" || format === "ppm" || format === "pgm" || format === "pbm"
+  const browserEncoderDiagnostic = encoderDiagnostics.find((item) => item.format === format)
 
   const outW = Math.max(1, Math.round(activeDoc.width * scaleRatio))
   const outH = Math.max(1, Math.round(activeDoc.height * scaleRatio))
@@ -313,7 +321,7 @@ export function ExportAsDialog({
   })
   const visibleLimitations = limitationReport.items.filter((item) => item.status !== "info").slice(0, 6)
   const visibleManifestItems = compatibilityManifest.entries
-    .filter((item) => item.status === "unsupported" || item.status === "flattened" || item.status === "approximated")
+    .filter((item) => item.label !== "Layer structure" && (item.status === "unsupported" || item.status === "flattened" || item.status === "approximated"))
     .slice(0, 4)
   const safeName = activeDoc.name.replace(/\.[^.]+$/, "").replace(/[\\/:*?"<>|]/g, "_")
 
@@ -329,26 +337,22 @@ export function ExportAsDialog({
       toast.error(outputSizeError)
       return
     }
-    if (format === "svg") {
-      downloadDataUrl(
-        exportSvgDataUrl(activeDoc, { scale: scaleRatio, transparent, matte, includeMetadata, precision }),
-        `${safeName}.svg`,
-      )
-    } else if (format === "metadata-json") {
-      downloadDataUrl(
-        exportMetadataSidecarDataUrl(activeDoc, createDocumentReport(activeDoc, "Project Export")),
-        `${safeName}.metadata.json`,
-      )
-    } else if (format === "gif" || format === "apng" || format === "animated-webp") {
-      try {
+    try {
+      if (format === "svg") {
+        downloadDataUrl(
+          exportSvgDataUrl(activeDoc, { scale: scaleRatio, transparent, matte, includeMetadata, precision }),
+          `${safeName}.svg`,
+        )
+      } else if (format === "metadata-json") {
+        downloadDataUrl(
+          exportMetadataSidecarDataUrl(activeDoc, createDocumentReport(activeDoc, "Project Export")),
+          `${safeName}.metadata.json`,
+        )
+      } else if (format === "gif" || format === "apng" || format === "animated-webp") {
         const dataUrl = await exportAnimationDataUrl(activeDoc, format, { transparent, matte, scale: scaleRatio })
         downloadDataUrl(dataUrl, `${safeName}.${EXPORT_EXTENSIONS[format]}`)
-      } catch (err) {
-        toast.error(`Animation export failed: ${(err as Error).message}`)
-        return
-      }
-    } else {
-      const blob = await exportRasterBlob(activeDoc, {
+      } else {
+        const blob = await exportRasterBlob(activeDoc, {
           format,
           scale: scaleRatio,
           quality: losslessWebp && format === "webp" ? 1 : quality / 100,
@@ -359,10 +363,17 @@ export function ExportAsDialog({
           progressive,
           tiffCompression,
           tgaRle,
+          webpLossless: losslessWebp && format === "webp",
+          webpMethod: losslessWebp && format === "webp" ? 6 : undefined,
+          webpExactAlpha: losslessWebp && format === "webp" ? true : undefined,
           includeMetadata,
           metadata: metadataPayload(),
         })
-      downloadBlob(blob, `${safeName}.${EXPORT_EXTENSIONS[format]}`)
+        downloadBlob(blob, `${safeName}.${EXPORT_EXTENSIONS[format]}`)
+      }
+    } catch (err) {
+      toast.error(`Export failed: ${(err as Error).message}`)
+      return
     }
     onOpenChange(false)
   }
@@ -406,21 +417,73 @@ export function ExportAsDialog({
     if (typeof payload.precision === "number") setPrecision(Math.max(0, Math.min(6, payload.precision)))
   }
 
+  const setAssetLibrary = (assets: AssetLibraryItem[], label: string) => {
+    dispatch({ type: "set-asset-library", assets })
+    window.setTimeout(() => commit(label, []), 0)
+  }
+
   const savePreset = () => {
     const trimmed = presetName.trim()
     if (!trimmed) return
-    const asset: AssetLibraryItem = {
-      id: `asset_${Math.random().toString(36).slice(2, 9)}`,
+    const next = upsertExportPresetAsset(activeDoc.assetLibrary ?? [], {
       name: trimmed,
-      kind: "export",
-      group: "Export",
       payload: currentPresetPayload(),
-      createdAt: Date.now(),
-    }
-    dispatch({ type: "set-asset-library", assets: [asset, ...(activeDoc.assetLibrary ?? [])] })
-    window.setTimeout(() => commit("Save Export Preset", []), 0)
-    setSelectedPresetId(asset.id)
+    })
+    setAssetLibrary(next, "Save Export Preset")
+    setSelectedPresetId(next[0]?.id ?? "")
     toast.success("Export preset saved")
+  }
+
+  const updatePreset = () => {
+    if (!selectedPresetId) return
+    const trimmed = presetName.trim() || selectedPreset?.name || "Export Preset"
+    const next = upsertExportPresetAsset(activeDoc.assetLibrary ?? [], {
+      id: selectedPresetId,
+      name: trimmed,
+      payload: currentPresetPayload(),
+    })
+    setAssetLibrary(next, "Update Export Preset")
+    toast.success("Export preset updated")
+  }
+
+  const duplicatePreset = () => {
+    if (!selectedPresetId) return
+    const next = duplicateExportPresetAsset(activeDoc.assetLibrary ?? [], selectedPresetId)
+    setAssetLibrary(next, "Duplicate Export Preset")
+    setSelectedPresetId(next[0]?.id ?? "")
+    setPresetName(next[0]?.name ?? "")
+    toast.success("Export preset duplicated")
+  }
+
+  const deletePreset = () => {
+    if (!selectedPresetId) return
+    const next = deleteExportPresetAsset(activeDoc.assetLibrary ?? [], selectedPresetId)
+    setAssetLibrary(next, "Delete Export Preset")
+    setSelectedPresetId("")
+    toast.success("Export preset deleted")
+  }
+
+  const exportPresetLibrary = () => {
+    downloadText(serializeExportPresetLibrary(exportPresets), "export-presets.json")
+  }
+
+  const importPresetLibrary = async (file: File | undefined) => {
+    if (!file) return
+    try {
+      const imported = parseExportPresetLibrary(await file.text())
+      if (!imported.length) throw new Error("No export presets found in this file")
+      const existing = activeDoc.assetLibrary ?? []
+      const importedIds = new Set(imported.map((asset) => asset.id))
+      const next = [...imported, ...existing.filter((asset) => !importedIds.has(asset.id))]
+      setAssetLibrary(next, "Import Export Presets")
+      setSelectedPresetId(imported[0].id)
+      setPresetName(imported[0].name)
+      toast.success(`Imported ${imported.length} export preset${imported.length === 1 ? "" : "s"}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not import export presets")
+    } finally {
+      if (presetImportRef.current) presetImportRef.current.value = ""
+    }
   }
 
   return (
@@ -451,10 +514,25 @@ export function ExportAsDialog({
 
           <div className="space-y-4">
             <Panel title="Presets">
-              <div className="grid grid-cols-[1fr_auto_auto] gap-2">
+              <input
+                ref={presetImportRef}
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                onChange={(event) => {
+                  void importPresetLibrary(event.target.files?.[0])
+                }}
+              />
+              <div className="grid grid-cols-[1fr_auto] gap-2">
                 <select
                   value={selectedPresetId}
-                  onChange={(event) => setSelectedPresetId(event.target.value)}
+                  aria-label="Saved export preset"
+                  onChange={(event) => {
+                    const id = event.target.value
+                    setSelectedPresetId(id)
+                    const asset = exportPresets.find((item) => item.id === id)
+                    if (asset) setPresetName(asset.name)
+                  }}
                   className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px]"
                 >
                   <option value="">Current settings</option>
@@ -474,9 +552,6 @@ export function ExportAsDialog({
                 >
                   Apply
                 </Button>
-                <Button type="button" variant="outline" size="sm" onClick={savePreset}>
-                  Save
-                </Button>
               </div>
               <div className="mt-2 grid grid-cols-[76px_1fr] items-center gap-2">
                 <Label className="text-[11px] text-[var(--ps-text-dim)]">Preset name</Label>
@@ -490,6 +565,37 @@ export function ExportAsDialog({
                   className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
                 />
               </div>
+              <div className="mt-2 grid grid-cols-3 gap-1">
+                <Button type="button" variant="outline" size="sm" onClick={savePreset}>
+                  <Save className="h-3.5 w-3.5" />
+                  Save New
+                </Button>
+                <Button type="button" variant="outline" size="sm" disabled={!selectedPresetId} onClick={updatePreset}>
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  Update
+                </Button>
+                <Button type="button" variant="outline" size="sm" disabled={!selectedPresetId} onClick={duplicatePreset}>
+                  <Copy className="h-3.5 w-3.5" />
+                  Duplicate
+                </Button>
+                <Button type="button" variant="outline" size="sm" disabled={!selectedPresetId} onClick={deletePreset}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Delete
+                </Button>
+                <Button type="button" variant="outline" size="sm" disabled={!exportPresets.length} onClick={exportPresetLibrary}>
+                  <FileJson className="h-3.5 w-3.5" />
+                  Export JSON
+                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={() => presetImportRef.current?.click()}>
+                  <Upload className="h-3.5 w-3.5" />
+                  Import JSON
+                </Button>
+              </div>
+              {selectedPreset ? (
+                <div className="mt-2 truncate text-[10px] text-[var(--ps-text-dim)]">
+                  Selected: {selectedPreset.name}
+                </div>
+              ) : null}
             </Panel>
 
             <div className="grid grid-cols-6 gap-1">
@@ -554,8 +660,26 @@ export function ExportAsDialog({
                   <CheckRow label="Progressive JPG" checked={progressive} onCheckedChange={setProgressive} disabled={format !== "jpeg"} />
                   <CheckRow label="TGA RLE" checked={tgaRle} onCheckedChange={setTgaRle} disabled={format !== "tga"} />
                   <CheckRow label="Lossless WebP" checked={losslessWebp} onCheckedChange={setLosslessWebp} disabled={format !== "webp"} />
-                  <CheckRow label="Embed Metadata" checked={includeMetadata} onCheckedChange={setIncludeMetadata} disabled={format !== "png" && format !== "jpeg"} />
+                  <CheckRow label="Embed Metadata" checked={includeMetadata} onCheckedChange={setIncludeMetadata} disabled={!metadataCapable} />
                 </div>
+                {(format === "webp" || format === "avif") && browserEncoderDiagnostic ? (
+                  <div
+                    className={cn(
+                      "mt-3 rounded-sm border px-2 py-1.5 text-[10px]",
+                      browserEncoderDiagnostic.supported
+                        ? "border-emerald-500/35 bg-emerald-500/10 text-emerald-100"
+                        : "border-red-500/35 bg-red-500/10 text-red-100",
+                    )}
+                  >
+                    <div className="font-medium">{format.toUpperCase()} browser encoder</div>
+                    <div>{browserEncoderDiagnostic.message}</div>
+                    {includeMetadata ? (
+                      <div className="mt-1 text-[var(--ps-text-dim)]">
+                        Metadata post-processing requires the browser to return a real {browserEncoderDiagnostic.requestedMime} blob.
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 {format === "tiff" ? (
                   <div className="mt-3 grid grid-cols-[110px_1fr] items-center gap-2">
                     <Label className="text-[11px] text-[var(--ps-text-dim)]">TIFF compression</Label>
@@ -570,7 +694,7 @@ export function ExportAsDialog({
                     </select>
                   </div>
                 ) : null}
-                {includeMetadata && (format === "png" || format === "jpeg") ? (
+                {includeMetadata && metadataCapable ? (
                   <div className="mt-3 grid grid-cols-2 gap-2">
                     <Input
                       aria-label="Metadata author"

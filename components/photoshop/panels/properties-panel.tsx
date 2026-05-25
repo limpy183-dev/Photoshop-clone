@@ -11,14 +11,24 @@ import {
   applyTextInsideShape,
   buildFontSubstitutionComparison,
   buildFontPreview,
+  buildTextPathHandleModel,
+  buildVariableFontAxisControlModel,
   convertTextToEditablePath,
   createTextExtrusionScene,
   DEFAULT_VARIABLE_AXIS_DEFINITIONS,
+  deleteTextPathPoint,
   detectOpenTypeFeatureSupport,
   diagnoseDocumentFonts,
+  findEmbeddedFontForFamily,
+  insertTextPathPoint,
+  inspectVariableFont,
   listOpenTypeFeatureToggles,
+  matchFontFromImageData,
   matchFontForLayer,
+  reverseTextPath,
   resolveFontSubstitutions,
+  updateTextPathPoint,
+  type VariableFontInspection,
 } from "../typography-engine"
 import { createDefaultShapeAppearance, shapeToEditablePath } from "../vector-path-operations"
 
@@ -653,6 +663,27 @@ function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, reques
   background: string
   doc: import("../types").PsDocument
 }) {
+  const textFont = layer?.kind === "text" ? layer.text?.font : undefined
+  const textEmbeddedFont = layer?.kind === "text" && layer.text
+    ? layer.text.embeddedFont ?? findEmbeddedFontForFamily(doc.assetLibrary, layer.text.font)
+    : undefined
+  const [fontInspection, setFontInspection] = React.useState<VariableFontInspection | null>(null)
+  const [customAxisTag, setCustomAxisTag] = React.useState("")
+
+  React.useEffect(() => {
+    if (!textFont) {
+      setFontInspection(null)
+      return
+    }
+    let cancelled = false
+    inspectVariableFont(textFont, { embeddedFont: textEmbeddedFont }).then((inspection) => {
+      if (!cancelled) setFontInspection(inspection)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [textFont, textEmbeddedFont])
+
   // Text tool
   if ((tool === "type" || tool === "type-vertical" || layer?.kind === "text") && layer?.text) {
     const updateText = (patch: Partial<NonNullable<Layer["text"]>>) => {
@@ -663,6 +694,7 @@ function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, reques
     const shapeLayer = doc.layers.find((candidate: Layer) => candidate.id !== layer.id && candidate.shape)
     const diagnostics = diagnoseDocumentFonts(doc.layers)
     const fontStatus = diagnostics.diagnostics.find((item) => item.layerId === layer.id)
+    const embeddedFont = textEmbeddedFont
     const preview = buildFontPreview(layer.text.font, "Ag 123", {
       size: 20,
       weight: layer.text.weight,
@@ -671,11 +703,29 @@ function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, reques
       variableAxes: layer.text.variableAxes,
       variableAxisDefinitions: layer.text.variableAxisDefinitions,
     })
-    const axisDefinitions = layer.text.variableAxisDefinitions?.length
-      ? layer.text.variableAxisDefinitions
-      : DEFAULT_VARIABLE_AXIS_DEFINITIONS
-    const featureSupport = detectOpenTypeFeatureSupport(layer.text.font)
+    const axisModel = buildVariableFontAxisControlModel(layer.text, fontInspection)
+    const axisDefinitions = axisModel.axes.length
+      ? axisModel.axes
+      : DEFAULT_VARIABLE_AXIS_DEFINITIONS.map((axis) => ({ ...axis, value: layer.text!.variableAxes?.[axis.tag] ?? axis.defaultValue, source: "default" as const }))
+    const featureSupport = detectOpenTypeFeatureSupport(layer.text.font, { embeddedFont })
     const openTypeToggles = listOpenTypeFeatureToggles(featureSupport.supportedTags.size ? { supportedTags: featureSupport.supportedTags } : {})
+    const matchFontResult = matchFontForLayer(layer.text)
+    const imageMatchFontResult = (() => {
+      try {
+        const ctx = layer.canvas?.getContext("2d")
+        if (!ctx || !layer.canvas?.width || !layer.canvas?.height) return null
+        return matchFontFromImageData(ctx.getImageData(0, 0, layer.canvas.width, layer.canvas.height), {
+          expectedText: layer.text!.content,
+          fontSize: layer.text!.size,
+        })
+      } catch {
+        return null
+      }
+    })()
+    const activeMatchFontResult = imageMatchFontResult && imageMatchFontResult.recognition.confidence > 0.45
+      ? imageMatchFontResult
+      : matchFontResult
+    const textPathModel = buildTextPathHandleModel(layer.text)
     const comparison = buildFontSubstitutionComparison(
       layer.text.missingFontOriginal ?? layer.text.font,
       fontStatus?.substitute ?? layer.text.fontSubstitution ?? layer.text.font,
@@ -692,6 +742,27 @@ function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, reques
     const axisValue = (tag: string, fallback: number) => layer.text!.variableAxes?.[tag] ?? fallback
     const updateAxis = (tag: string, value: number) => {
       updateText({ variableAxes: { ...(layer.text!.variableAxes ?? {}), [tag]: value } })
+    }
+    const inspectActiveTextFont = async (allowLocalFontAccess = false) => {
+      const inspection = await inspectVariableFont(layer.text!.font, { allowLocalFontAccess, embeddedFont })
+      setFontInspection(inspection)
+      if (inspection.axes.length && allowLocalFontAccess) {
+        updateText({ variableAxisDefinitions: inspection.axes })
+        window.setTimeout(() => commit("Inspect Variable Font", [layer.id]), 0)
+      }
+    }
+    const addCustomAxis = () => {
+      const tag = customAxisTag.trim().slice(0, 4)
+      if (!/^[A-Za-z0-9]{4}$/.test(tag)) return
+      updateText({
+        variableAxes: { ...(layer.text!.variableAxes ?? {}), [tag]: layer.text!.variableAxes?.[tag] ?? 0 },
+        variableAxisDefinitions: [
+          ...(layer.text!.variableAxisDefinitions ?? []),
+          { tag, name: tag.toUpperCase(), min: -1000, max: 1000, defaultValue: 0 },
+        ].filter((axis, index, all) => all.findIndex((candidate) => candidate.tag === axis.tag) === index),
+      })
+      setCustomAxisTag("")
+      window.setTimeout(() => commit(`Add Variable Axis ${tag}`, [layer.id]), 0)
     }
     const updateShapeInset = (side: keyof typeof textShapeInsets, value: number) => {
       updateText({ textShapeInsets: { ...textShapeInsets, [side]: Math.max(0, value) } })
@@ -730,20 +801,32 @@ function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, reques
       window.setTimeout(() => commit("Text Inside Shape", [layer.id]), 0)
     }
     const convertToPath = () => {
-      const path = convertTextToEditablePath(layer.text!)
+      const path = convertTextToEditablePath({ ...layer.text!, embeddedFont })
       dispatch({ type: "set-layer-path", id: layer.id, path })
       dispatch({ type: "set-layer-kind", id: layer.id, kind: "shape" })
       window.setTimeout(() => commit("Convert Text to Path", [layer.id]), 0)
     }
-    const matchFont = () => {
-      const match = matchFontForLayer(layer.text!)
-      const best = match.best
+    const applyMatchedFont = (best = activeMatchFontResult.best) => {
       updateText({
         font: best.family,
         variableAxisDefinitions: best.variableAxes,
         variableAxes: best.variableAxes?.length ? { wght: layer.text!.weight === "bold" ? 700 : 400 } : layer.text!.variableAxes,
       })
       window.setTimeout(() => commit(`Match Font: ${best.family}`, [layer.id]), 0)
+    }
+    const updatePathPoint = (index: number, point: { x: number; y: number }) => {
+      updateText(updateTextPathPoint(layer.text!, index, point))
+    }
+    const addPathPoint = (index: number) => {
+      const current = layer.text!.textPath ?? []
+      const before = current[Math.max(0, index - 1)] ?? current[0] ?? { x: layer.text!.x, y: layer.text!.y }
+      const after = current[index] ?? before
+      updateText(insertTextPathPoint(layer.text!, index, { x: Math.round((before.x + after.x) / 2), y: Math.round((before.y + after.y) / 2) }))
+      window.setTimeout(() => commit("Add Type Path Point", [layer.id]), 0)
+    }
+    const removePathPoint = (index: number) => {
+      updateText(deleteTextPathPoint(layer.text!, index))
+      window.setTimeout(() => commit("Delete Type Path Point", [layer.id]), 0)
     }
     const create3DText = () => {
       const scene = createTextExtrusionScene({
@@ -871,9 +954,20 @@ function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, reques
             {[comparison.original, comparison.fallback].map((item, index) => (
               <div key={`${item.family}-${index}`} className="min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1.5 py-1">
                 <div className="truncate text-[9px] text-[var(--ps-text-dim)]">{index === 0 ? "Original" : "Fallback"} · {item.family}</div>
-                <div className="truncate text-[15px]" style={item.previewStyle as React.CSSProperties}>{item.sample}</div>
+                {item.canvasDataUrl ? (
+                  <img src={item.canvasDataUrl} alt="" className="mt-1 h-10 w-full rounded-sm object-cover" />
+                ) : (
+                  <div className="truncate text-[15px]" style={item.previewStyle as React.CSSProperties}>{item.sample}</div>
+                )}
+                <div className="mt-1 grid grid-cols-2 gap-1 text-[9px] tabular-nums text-[var(--ps-text-dim)]">
+                  <span>W {item.geometry.averageGlyphWidth.toFixed(2)}</span>
+                  <span>XH {item.geometry.xHeight.toFixed(2)}</span>
+                </div>
               </div>
             ))}
+          </div>
+          <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1 text-[9px] text-[var(--ps-text-dim)]">
+            Fallback delta: width {comparison.geometryDelta.averageGlyphWidth >= 0 ? "+" : ""}{comparison.geometryDelta.averageGlyphWidth.toFixed(2)}, x-height {comparison.geometryDelta.xHeight >= 0 ? "+" : ""}{comparison.geometryDelta.xHeight.toFixed(2)}
           </div>
           <div className="grid grid-cols-2 gap-1">
             {comparison.specimens.slice(0, 6).map((specimen) => (
@@ -972,8 +1066,14 @@ function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, reques
         </Row>
         <div className="grid grid-cols-2 gap-1">
           <QuickToggle label="Tate Chu Yoko" active={!!layer.text.tateChuYoko} onClick={() => { updateText({ tateChuYoko: !layer.text!.tateChuYoko }); commit("Type Tate Chu Yoko", [layer.id]) }} />
+          <QuickToggle label="Proportional Metrics" active={!!layer.text.verticalUseProportionalMetrics} onClick={() => { updateText({ verticalUseProportionalMetrics: !layer.text!.verticalUseProportionalMetrics }); commit("Type Vertical Metrics", [layer.id]) }} />
           <QuickToggle label="Path Flip" active={!!layer.text.textPathFlip} onClick={() => { updateText({ textPathFlip: !layer.text!.textPathFlip }); commit("Type Path Flip", [layer.id]) }} />
           <QuickToggle label="Path Closed" active={!!layer.text.textPathClosed} onClick={() => { updateText({ textPathClosed: !layer.text!.textPathClosed }); commit("Type Path Closed", [layer.id]) }} />
+        </div>
+        <div className="grid grid-cols-3 gap-1">
+          <NumberField label="Col Gap" value={Math.round(layer.text.verticalColumnGap ?? layer.text.leading ?? layer.text.size * 1.2)} onChange={(value) => updateText({ verticalColumnGap: Math.max(0, value) })} onCommit={() => commit("Type Vertical Column Gap", [layer.id])} />
+          <NumberField label="Glyph Gap" value={layer.text.verticalGlyphSpacing ?? 0} onChange={(value) => updateText({ verticalGlyphSpacing: value })} onCommit={() => commit("Type Vertical Glyph Spacing", [layer.id])} />
+          <NumberField label="Glyph %" value={Math.round((layer.text.verticalGlyphScale ?? 1) * 100)} onChange={(value) => updateText({ verticalGlyphScale: Math.max(10, Math.min(400, value)) / 100 })} onCommit={() => commit("Type Vertical Glyph Scale", [layer.id])} />
         </div>
         <Row label="Path Align">
           <select
@@ -991,6 +1091,49 @@ function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, reques
           <NumberField label="Path Start" value={layer.text.textPathStartOffset ?? 0} onChange={(value) => updateText({ textPathStartOffset: value })} onCommit={() => commit("Type Path Start", [layer.id])} />
           <NumberField label="Path Base" value={layer.text.textPathBaselineOffset ?? 0} onChange={(value) => updateText({ textPathBaselineOffset: value })} onCommit={() => commit("Type Path Baseline", [layer.id])} />
         </div>
+        {layer.text.textPath?.length ? (
+          <div className="space-y-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
+            <div className="flex items-center justify-between gap-2 text-[10px] text-[var(--ps-text-dim)]">
+              <span>Path Handles · {Math.round(textPathModel.totalLength)} px</span>
+              <button
+                type="button"
+                className="h-5 rounded-sm border border-[var(--ps-divider)] px-1.5 text-[9px] hover:bg-[var(--ps-tool-hover)]"
+                onClick={() => { updateText(reverseTextPath(layer.text!)); commit("Reverse Type Path", [layer.id]) }}
+              >
+                Reverse
+              </button>
+            </div>
+            <div className="max-h-36 space-y-1 overflow-auto">
+              {textPathModel.points.map((point) => (
+                <div key={point.index} className="grid grid-cols-[22px_1fr_1fr_22px_22px] items-end gap-1">
+                  <span className="pb-1 text-[9px] text-[var(--ps-text-dim)]">{point.label}</span>
+                  <NumberField label="X" value={Math.round(point.x)} onChange={(value) => updatePathPoint(point.index, { x: value, y: point.y })} onCommit={() => commit("Move Type Path Point", [layer.id])} />
+                  <NumberField label="Y" value={Math.round(point.y)} onChange={(value) => updatePathPoint(point.index, { x: point.x, y: value })} onCommit={() => commit("Move Type Path Point", [layer.id])} />
+                  <button
+                    type="button"
+                    className="h-6 rounded-sm border border-[var(--ps-divider)] text-[10px] hover:bg-[var(--ps-tool-hover)]"
+                    title="Insert point after this point"
+                    onClick={() => addPathPoint(point.index + 1)}
+                  >
+                    +
+                  </button>
+                  <button
+                    type="button"
+                    className="h-6 rounded-sm border border-[var(--ps-divider)] text-[10px] hover:bg-[var(--ps-tool-hover)] disabled:opacity-40"
+                    disabled={textPathModel.points.length <= 2}
+                    title="Delete this point"
+                    onClick={() => removePathPoint(point.index)}
+                  >
+                    X
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="text-[9px] text-[var(--ps-text-dim)]">
+              Start handle {Math.round(textPathModel.startHandle.x)}, {Math.round(textPathModel.startHandle.y)} · baseline {textPathModel.baselineHandle.offset}px
+            </div>
+          </div>
+        ) : null}
         <Row label="Inside Align">
           <select
             value={layer.text.textShapeVerticalAlign ?? "top"}
@@ -1009,16 +1152,80 @@ function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, reques
           <NumberField label="Inset B" value={textShapeInsets.bottom} onChange={(value) => updateShapeInset("bottom", value)} onCommit={() => commit("Text Shape Insets", [layer.id])} />
           <NumberField label="Inset L" value={textShapeInsets.left} onChange={(value) => updateShapeInset("left", value)} onCommit={() => commit("Text Shape Insets", [layer.id])} />
         </div>
-        <div className="grid grid-cols-2 gap-1">
-          {axisDefinitions.map((axis) => (
-            <NumberField
-              key={axis.tag}
-              label={`Axis ${axis.tag}`}
-              value={axisValue(axis.tag, axis.defaultValue)}
-              onChange={(value) => updateAxis(axis.tag, Math.max(axis.min, Math.min(axis.max, value)))}
-              onCommit={() => commit("Variable Font Axis", [layer.id])}
+        <div className="space-y-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
+          <div className="flex items-center justify-between gap-2 text-[10px] text-[var(--ps-text-dim)]">
+            <span>Variable Axes · {axisModel.source}</span>
+            <button
+              type="button"
+              onClick={() => void inspectActiveTextFont(true)}
+              className="h-5 rounded-sm border border-[var(--ps-divider)] px-1.5 text-[9px] hover:bg-[var(--ps-tool-hover)]"
+            >
+              Inspect
+            </button>
+          </div>
+          <div className="text-[9px] leading-snug text-[var(--ps-text-dim)]">{axisModel.status}</div>
+          {axisModel.namedInstances.length ? (
+            <select
+              value={layer.text.variableNamedInstance ?? ""}
+              onChange={(event) => {
+                const instance = axisModel.namedInstances.find((candidate) => candidate.name === event.target.value)
+                if (!instance) {
+                  updateText({ variableNamedInstance: undefined })
+                  return
+                }
+                updateText({
+                  variableAxes: instance.coordinates,
+                  variableNamedInstance: instance.name,
+                  variableAxisDefinitions: axisDefinitions,
+                })
+                window.setTimeout(() => commit(`Variable Font ${instance.name}`, [layer.id]), 0)
+              }}
+              className="h-6 w-full rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] px-1 text-[10px]"
+            >
+              <option value="">Custom instance</option>
+              {axisModel.namedInstances.map((instance) => (
+                <option key={instance.name} value={instance.name}>{instance.label} · {instance.summary}</option>
+              ))}
+            </select>
+          ) : null}
+          <div className="grid grid-cols-2 gap-1">
+            {axisDefinitions.map((axis) => (
+              <div key={axis.tag} className="space-y-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] p-1">
+                <NumberField
+                  label={`${axis.tag} ${axis.name}`}
+                  value={axisValue(axis.tag, axis.defaultValue)}
+                  onChange={(value) => updateAxis(axis.tag, Math.max(axis.min, Math.min(axis.max, value)))}
+                  onCommit={() => commit("Variable Font Axis", [layer.id])}
+                />
+                <div className="flex items-center justify-between text-[8px] text-[var(--ps-text-dim)]">
+                  <span>{axis.min}/{axis.defaultValue}/{axis.max}</span>
+                  <button
+                    type="button"
+                    className="rounded-sm border border-[var(--ps-divider)] px-1 hover:bg-[var(--ps-tool-hover)]"
+                    onClick={() => { updateAxis(axis.tag, axis.defaultValue); commit("Variable Font Axis", [layer.id]) }}
+                  >
+                    Default
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-[1fr_44px] gap-1">
+            <input
+              value={customAxisTag}
+              maxLength={4}
+              onChange={(event) => setCustomAxisTag(event.target.value)}
+              placeholder="Tag"
+              className="h-6 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] px-1 text-[10px]"
             />
-          ))}
+            <button
+              type="button"
+              onClick={addCustomAxis}
+              className="h-6 rounded-sm border border-[var(--ps-divider)] text-[10px] hover:bg-[var(--ps-tool-hover)]"
+            >
+              Add
+            </button>
+          </div>
         </div>
         <div className="grid grid-cols-2 gap-1">
           {openTypeToggles.map((toggle) => {
@@ -1037,6 +1244,26 @@ function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, reques
           })}
           <QuickToggle label="All Caps" active={!!layer.text.allCaps} onClick={() => { updateText({ allCaps: !layer.text!.allCaps }); commit("Type Case", [layer.id]) }} />
         </div>
+        <div className="space-y-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
+          <div className="flex items-center justify-between text-[10px] text-[var(--ps-text-dim)]">
+            <span>Match Font · {activeMatchFontResult.target.source}</span>
+            <span>target W {activeMatchFontResult.target.averageGlyphWidth.toFixed(2)}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-1">
+            {activeMatchFontResult.candidates.slice(0, 4).map((candidate) => (
+              <button
+                key={candidate.family}
+                type="button"
+                onClick={() => applyMatchedFont(candidate)}
+                className="min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] px-1.5 py-1 text-left hover:bg-[var(--ps-tool-hover)]"
+                title={candidate.reasons.join("; ")}
+              >
+                <span className="block truncate text-[10px]">{candidate.family}</span>
+                <span className="block truncate text-[9px] text-[var(--ps-text-dim)]">{Math.round(candidate.score * 100)}% · {candidate.geometry.source}</span>
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="grid grid-cols-2 gap-1">
           <QuickToggle label="Extrusion" active={!!layer.text.extrusion?.enabled} onClick={() => { updateText({ extrusion: { enabled: !layer.text!.extrusion?.enabled, depth: layer.text!.extrusion?.depth ?? 28, bevel: layer.text!.extrusion?.bevel ?? 3, angle: layer.text!.extrusion?.angle ?? 35, color: layer.text!.extrusion?.color ?? layer.text!.color } }); commit("Type Extrusion", [layer.id]) }} />
           <NumberField label="Depth" value={layer.text.extrusion?.depth ?? 28} onChange={(value) => updateText({ extrusion: { enabled: layer.text!.extrusion?.enabled ?? true, depth: Math.max(0, value), bevel: layer.text!.extrusion?.bevel ?? 3, angle: layer.text!.extrusion?.angle ?? 35, color: layer.text!.extrusion?.color ?? layer.text!.color } })} onCommit={() => commit("Type Extrusion", [layer.id])} />
@@ -1052,7 +1279,7 @@ function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, reques
           Attach to Active Path
         </button>
         <div className="grid grid-cols-2 gap-1">
-          <QuickBtn label="Match Font" onClick={matchFont} />
+          <QuickBtn label="Match Font" onClick={() => applyMatchedFont()} />
           <QuickBtn label="Inside Shape" onClick={putInsideShape} />
           <QuickBtn label="Convert Path" onClick={convertToPath} />
           <QuickBtn label="3D Text" onClick={create3DText} />

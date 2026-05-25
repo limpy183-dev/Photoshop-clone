@@ -9,10 +9,18 @@ class FixtureCanvas {
   getContext() {
     const context = {
       fillStyle: "#000000",
+      strokeStyle: "#000000",
+      lineWidth: 1,
+      lineJoin: "miter",
+      lineCap: "butt",
+      font: "10px sans-serif",
+      textAlign: "start",
+      textBaseline: "alphabetic",
       globalCompositeOperation: "source-over",
       fillRect: (_x: number, _y: number, _w: number, _h: number) => {
         this.fill = String(context.fillStyle ?? this.fill)
       },
+      strokeRect: () => {},
       clearRect: () => {},
       drawImage: (source: FixtureCanvas) => {
         if (source?.fill) this.fill = source.fill
@@ -20,12 +28,28 @@ class FixtureCanvas {
       save: () => {},
       restore: () => {},
       beginPath: () => {},
+      moveTo: () => {},
+      lineTo: () => {},
+      bezierCurveTo: () => {},
+      quadraticCurveTo: () => {},
+      arc: () => {},
+      arcTo: () => {},
+      closePath: () => {},
       rect: () => {},
       clip: () => {},
+      fill: () => {},
+      stroke: () => {},
       translate: () => {},
       scale: () => {},
       rotate: () => {},
+      transform: () => {},
       setTransform: () => {},
+      resetTransform: () => {},
+      setLineDash: () => {},
+      getLineDash: () => [],
+      measureText: (text: string) => ({ width: text.length * 6 }),
+      fillText: () => {},
+      strokeText: () => {},
       getImageData: () => this.imageData ?? ({ data: new Uint8ClampedArray(this.width * this.height * 4), width: this.width, height: this.height }),
       putImageData: (image: ImageData) => {
         this.imageData = image

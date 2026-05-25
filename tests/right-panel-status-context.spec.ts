@@ -48,6 +48,18 @@ test("status info bar can be hidden and restored from View menu", async ({ page 
   await expect(page.getByTestId("status-bar")).toBeVisible()
 })
 
+test("status info bar exposes browser canvas GPU and memory diagnostics", async ({ page }) => {
+  await page.goto("/")
+
+  const diagnostics = page.getByTestId("browser-diagnostics")
+  await expect(diagnostics).toBeVisible()
+  await expect(diagnostics).toContainText(/Browser limits/)
+  const title = await diagnostics.getAttribute("title")
+  expect(title).toContain("Canvas:")
+  expect(title).toContain("GPU:")
+  expect(title).toContain("Memory:")
+})
+
 test("upper panels can be hidden so layers take the full dock", async ({ page }) => {
   await page.goto("/")
 

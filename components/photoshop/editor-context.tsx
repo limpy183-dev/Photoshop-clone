@@ -3573,6 +3573,8 @@ const initialState: EditorState = {
     sampleSize: "point",
     magneticWidth: 12,
     magneticContrast: 24,
+    magneticHysteresis: 45,
+    magneticSmoothing: 35,
   },
   histories: {
     [initialDoc.id]: {

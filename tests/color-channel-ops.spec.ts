@@ -3,7 +3,9 @@ import { expect, test } from "@playwright/test"
 import {
   applyChannelMixerToImageData,
   applyImageData,
+  buildColorSeparationModel,
   calculateChannelImageData,
+  composeSeparationPreview,
   isApproximatelyOutOfGamut,
   parseAlphaChannelMetadata,
   simulateSpotChannelPreview,
@@ -129,6 +131,63 @@ test("spot preview simulates ink over the composite without replacing alpha pixe
   expect(preview.data[1]).toBeLessThan(100)
   expect(preview.data[2]).toBeLessThan(100)
   expect(preview.data[3]).toBe(255)
+})
+
+test("separation model builds typed CMYK process plates plus spot plates", () => {
+  const source = {
+    width: 2,
+    height: 1,
+    channels: 4 as const,
+    bitDepth: 16 as const,
+    colorMode: "RGB" as const,
+    storage: "uint16" as const,
+    data: new Uint16Array([
+      65535, 0, 0, 65535,
+      32768, 32768, 32768, 65535,
+    ]),
+    warnings: [],
+  }
+  const spot = imageData(2, 1, [
+    0, 0, 0, 0,
+    255, 255, 255, 255,
+  ])
+
+  const model = buildColorSeparationModel(source, {
+    mode: "CMYK",
+    processProfile: "U.S. Web Coated SWOP v2",
+    spotChannels: [{ id: "spot_v", name: "Varnish", color: "#ffaa00", opacity: 65, mask: spot }],
+  })
+  const preview = composeSeparationPreview(model, { paper: "#ffffff" })
+
+  expect(model.process).toBe("CMYK")
+  expect(model.bitDepth).toBe(16)
+  expect(model.plates.map((plate) => plate.name)).toEqual(["Cyan", "Magenta", "Yellow", "Black", "Varnish"])
+  expect(model.plates[0].data).toBeInstanceOf(Uint16Array)
+  expect(model.plates[1].data[0]).toBeGreaterThan(model.plates[0].data[0])
+  expect(model.plates[2].data[0]).toBeGreaterThan(model.plates[0].data[0])
+  expect(model.plates[3].data[1]).toBeGreaterThan(25_000)
+  expect(model.plates[4].kind).toBe("spot")
+  expect(model.coverage.totalInkMax).toBeLessThanOrEqual(320)
+  expect(preview.data[4]).toBeGreaterThan(preview.data[5])
+})
+
+test("Lab and multichannel separation plates preserve signed color axes and channel toggles", () => {
+  const source = imageData(1, 1, [42, 120, 220, 255])
+  const lab = buildColorSeparationModel(source, { mode: "Lab" })
+  const multi = buildColorSeparationModel(source, {
+    mode: "Multichannel",
+    multichannel: { red: true, green: false, blue: true },
+  })
+
+  expect(lab.process).toBe("Lab")
+  expect(lab.plates.map((plate) => plate.name)).toEqual(["Lightness", "a", "b"])
+  expect(lab.plates[0].data).toBeInstanceOf(Float32Array)
+  expect(lab.plates[1].range).toEqual([-128, 127])
+  expect(Number(lab.plates[2].data[0])).toBeLessThan(0)
+
+  expect(multi.process).toBe("Multichannel")
+  expect(multi.plates.map((plate) => plate.name)).toEqual(["Red", "Blue"])
+  expect(multi.plates.every((plate) => plate.kind === "process")).toBe(true)
 })
 
 test("gamut warning and soft-proof helpers expose explicit browser approximation behavior", () => {

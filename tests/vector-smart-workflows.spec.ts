@@ -7,9 +7,15 @@ import {
   convertAnchorPoint,
   deleteNearestAnchorPoint,
   exportPathToSvgPath,
+  fitFreeformPath,
   getRoundedRectCornerRadiusHandles,
+  hitTestPathControls,
+  movePathAnchor,
   movePathHandle,
   normalizeCornerRadii,
+  pathContainsPoint,
+  resizeShapeWithCornerRadii,
+  resolveShapeBooleanPath,
   shapeToEditablePath,
   updateRoundedRectCornerRadius,
 } from "../components/photoshop/vector-path-operations"
@@ -174,20 +180,156 @@ test("boolean shape operations remain editable and appearance stacks preserve pa
 
   expect(combined.components).toHaveLength(2)
   expect(combined.components?.[1].operation).toBe("subtract")
-  expect(shapeToEditablePath(combined).subpaths).toHaveLength(2)
+  expect(pathContainsPoint(shapeToEditablePath(combined), { x: 20, y: 20 })).toBe(true)
+  expect(pathContainsPoint(shapeToEditablePath(combined), { x: 60, y: 40 })).toBe(false)
   expect(appearance.fills.map((fill) => fill.id)).toEqual(["fill-shadow", "fill-main"])
   expect(appearance.strokes.map((stroke) => stroke.alignment)).toEqual(["inside", "outside"])
 })
 
-test("path handle editing moves incoming and outgoing handles without losing anchor data", () => {
+test("boolean shape operations resolve to filled paths for unite subtract intersect and exclude", () => {
+  const base: ShapeProps = { type: "rect", x: 0, y: 0, w: 100, h: 80, fill: "#112233", stroke: null }
+  const operand: ShapeProps = { type: "rect", x: 60, y: 20, w: 60, h: 40, fill: "#ff0000", stroke: null }
+
+  const subtract = resolveShapeBooleanPath(applyShapeBooleanOperation(base, operand, "subtract"), { tolerance: 4 })
+  const intersect = resolveShapeBooleanPath(applyShapeBooleanOperation(base, operand, "intersect"), { tolerance: 4 })
+  const exclude = resolveShapeBooleanPath(applyShapeBooleanOperation(base, operand, "exclude"), { tolerance: 4 })
+  const unite = resolveShapeBooleanPath(applyShapeBooleanOperation(base, operand, "unite"), { tolerance: 4 })
+  const hole = resolveShapeBooleanPath(
+    applyShapeBooleanOperation(base, { type: "rect", x: 40, y: 20, w: 30, h: 30, fill: "#ff0000", stroke: null }, "subtract"),
+    { tolerance: 4 },
+  )
+
+  expect(pathContainsPoint(subtract, { x: 10, y: 10 })).toBe(true)
+  expect(pathContainsPoint(subtract, { x: 70, y: 30 })).toBe(false)
+  expect(exportPathToSvgPath(hole).match(/\bM\b/g)?.length).toBeGreaterThan(1)
+  expect(pathContainsPoint(intersect, { x: 70, y: 30 })).toBe(true)
+  expect(pathContainsPoint(intersect, { x: 10, y: 10 })).toBe(false)
+  expect(pathContainsPoint(exclude, { x: 10, y: 10 })).toBe(true)
+  expect(pathContainsPoint(exclude, { x: 70, y: 30 })).toBe(false)
+  expect(pathContainsPoint(unite, { x: 110, y: 30 })).toBe(true)
+  expect(unite.points.length + (unite.subpaths?.reduce((sum, path) => sum + path.points.length, 0) ?? 0)).toBeGreaterThan(4)
+})
+
+test("boolean shape operations preserve fractional rectangle edges without grid quantization", () => {
+  const base: ShapeProps = { type: "rect", x: 0, y: 0, w: 100, h: 80, fill: "#112233", stroke: null }
+  const cutter: ShapeProps = { type: "rect", x: 33.5, y: 17.25, w: 21.5, h: 22.5, fill: "#ff0000", stroke: null }
+
+  const path = resolveShapeBooleanPath(applyShapeBooleanOperation(base, cutter, "subtract"), { tolerance: 4 })
+  const allPoints = [path, ...(path.subpaths ?? [])].flatMap((part) => part.points)
+
+  expect(pathContainsPoint(path, { x: 10, y: 10 })).toBe(true)
+  expect(pathContainsPoint(path, { x: 44, y: 28 })).toBe(false)
+  expect(allPoints).toEqual(expect.arrayContaining([
+    expect.objectContaining({ x: 33.5, y: 17.25 }),
+    expect.objectContaining({ x: 55, y: 39.75 }),
+  ]))
+})
+
+test("path handle editing supports symmetric and broken modes with subpath-aware hit testing", () => {
   const smooth = convertAnchorPoint({ closed: false, points: [{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 100, y: 0 }] }, 1).path
-  const movedIncoming = movePathHandle(smooth, 1, "in", { x: 35, y: -20 }, { mirror: true })
-  const movedOutgoing = movePathHandle(movedIncoming, 1, "out", { x: 70, y: 25 }, { mirror: false })
+  const movedIncoming = movePathHandle(smooth, 1, "in", { x: 35, y: -20 }, { mode: "symmetric" })
+  const movedOutgoing = movePathHandle(movedIncoming, 1, "out", { x: 70, y: 25 }, { mode: "broken" })
+  const compound = {
+    closed: false,
+    points: [{ x: 0, y: 0 }, { x: 5, y: 0 }],
+    subpaths: [movedOutgoing],
+  }
+  const hit = hitTestPathControls(compound, { x: 70, y: 25 }, { maxHandleDistance: 6 })
 
   expect(movedIncoming.points[1].cp1).toEqual({ x: 35, y: -20 })
   expect(movedIncoming.points[1].cp2).toEqual({ x: 65, y: 20 })
+  expect(movedIncoming.points[1].handleMode).toBe("symmetric")
   expect(movedOutgoing.points[1]).toMatchObject({ x: 50, y: 0, cp2: { x: 70, y: 25 } })
   expect(movedOutgoing.points[1].cp1).toEqual({ x: 35, y: -20 })
+  expect(movedOutgoing.points[1].handleMode).toBe("broken")
+  expect(hit).toMatchObject({ kind: "handle", subpathIndex: 0, pointIndex: 1, handle: "out" })
+})
+
+test("path anchor movement preserves relative Bezier handles for direct on-canvas edits", () => {
+  const path = {
+    closed: false,
+    points: [
+      { x: 0, y: 0 },
+      { x: 50, y: 40, cp1: { x: 35, y: 20 }, cp2: { x: 70, y: 60 }, handleMode: "broken" as const },
+      { x: 100, y: 80 },
+    ],
+  }
+
+  const moved = movePathAnchor(path, 1, { x: 64, y: 30 })
+
+  expect(moved.points[1]).toMatchObject({
+    x: 64,
+    y: 30,
+    cp1: { x: 49, y: 10 },
+    cp2: { x: 84, y: 50 },
+    handleMode: "broken",
+  })
+})
+
+test("rounded rectangle radii scale across direct resize transforms", () => {
+  const rounded: ShapeProps = {
+    type: "rect",
+    x: 10,
+    y: 20,
+    w: 100,
+    h: 80,
+    fill: "#ffffff",
+    stroke: null,
+    cornerRadii: [10, 20, 30, 40],
+  }
+
+  const doubled = resizeShapeWithCornerRadii(rounded, { x: 10, y: 20, w: 200, h: 160 })
+  const squeezed = resizeShapeWithCornerRadii(doubled, { x: 10, y: 20, w: 80, h: 60 })
+
+  expect(normalizeCornerRadii(doubled)).toEqual([20, 40, 60, 80])
+  expect(normalizeCornerRadii(squeezed)).toEqual([8, 16, 24, 30])
+  expect(shapeToEditablePath(squeezed).points.some((point) => point.cp1 || point.cp2)).toBe(true)
+})
+
+test("rounded rectangle direct resize transforms cached editable paths and handles", () => {
+  const rounded: ShapeProps = {
+    type: "rect",
+    x: 10,
+    y: 20,
+    w: 100,
+    h: 50,
+    fill: "#ffffff",
+    stroke: null,
+    cornerRadii: [10, 14, 18, 22],
+    computedPath: {
+      closed: true,
+      points: [
+        { x: 10, y: 20, cp2: { x: 25, y: 20 } },
+        { x: 110, y: 20 },
+        { x: 110, y: 70, cp1: { x: 110, y: 58 } },
+        { x: 10, y: 70 },
+      ],
+    },
+  }
+
+  const resized = resizeShapeWithCornerRadii(rounded, { x: 30, y: 40, w: 200, h: 100 })
+
+  expect(resized.computedPath?.points[0]).toMatchObject({ x: 30, y: 40, cp2: { x: 60, y: 40 } })
+  expect(resized.computedPath?.points[2]).toMatchObject({ x: 230, y: 140, cp1: { x: 230, y: 116 } })
+})
+
+test("freeform path fitting removes jitter and emits smooth Bezier handles", () => {
+  const raw = [
+    { x: 0, y: 0 },
+    { x: 2, y: 1 },
+    { x: 4, y: -1 },
+    { x: 12, y: 4 },
+    { x: 24, y: 10 },
+    { x: 38, y: 9 },
+    { x: 50, y: 16 },
+  ]
+  const fitted = fitFreeformPath(raw, { tolerance: 3, smoothness: 0.8 })
+
+  expect(fitted.length).toBeLessThan(raw.length)
+  expect(fitted.length).toBeGreaterThanOrEqual(3)
+  expect(fitted.slice(1, -1).some((point) => point.cp1 || point.cp2)).toBe(true)
+  expect(fitted[0]).toMatchObject({ x: 0, y: 0 })
+  expect(fitted[fitted.length - 1]).toMatchObject({ x: 50, y: 16 })
 })
 
 test("smart object edit document saves back to the parent layer and convert-to-layers preserves source plus filter records", () => {

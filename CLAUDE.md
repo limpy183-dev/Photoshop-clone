@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+Before proposing work on features marked impossible in the browser (Adobe cloud/AI services, native plugin runtimes, certified CMM, codecs beyond `MediaRecorder`, exact native Photoshop algorithm parity), read [BOUNDARIES.md](BOUNDARIES.md) — those are intentional non-goals, not backlog.
+
 ## Commands
 
 ```bash

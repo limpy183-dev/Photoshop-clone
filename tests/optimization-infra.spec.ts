@@ -4,6 +4,7 @@ import path from "node:path"
 import { expect, test } from "@playwright/test"
 
 import { planAutosaveDocuments, shouldMirrorAutosaveToLocalStorage } from "../components/photoshop/autosave-planner"
+import { BLUR_GALLERY_CONTROL_STATE_KEY, formatFieldBlurPins } from "../components/photoshop/blur-gallery-controls"
 import { planFilterPreviewExecution } from "../components/photoshop/filter-preview"
 import { createRenderBus, mergeRenderChanges } from "../components/photoshop/render-bus"
 
@@ -66,6 +67,23 @@ test("filter preview planner prefers cancellable worker paths for expensive full
     pixelCount: 307_200,
     previewScale: 1,
     reason: "small-preview",
+  })
+})
+
+test("filter preview planner downscales expensive blur gallery drags", () => {
+  expect(planFilterPreviewExecution("field-blur", 4096, 2048, {
+    blur: 72,
+    pins: formatFieldBlurPins([
+      { x: 15, y: 30, blur: 70 },
+      { x: 48, y: 52, blur: 64 },
+      { x: 82, y: 20, blur: 58 },
+    ]),
+    [BLUR_GALLERY_CONTROL_STATE_KEY]: JSON.stringify({ previewQuality: "interactive" }),
+  })).toEqual({
+    mode: "downsample-sync",
+    pixelCount: 8_388_608,
+    previewScale: 0.25,
+    reason: "interactive-blur-gallery-preview",
   })
 })
 

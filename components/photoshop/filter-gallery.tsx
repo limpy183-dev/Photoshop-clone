@@ -17,6 +17,8 @@ import { useEditor } from "./editor-context"
 import { Trash2, Plus, Eye, EyeOff, ChevronDown, ChevronRight, GripVertical } from "lucide-react"
 import type { BlendMode, SmartFilter } from "./types"
 import { normalizeSmartFilterMaskDensity, normalizeSmartFilterMaskFeather, smartFilterMaskToImageData } from "./smart-filter-masks"
+import { firstDirtySmartFilterPreviewIndex, smartFilterPreviewStackKeys } from "./smart-filter-preview"
+import { createBlurGalleryMeshResource, isBlurGalleryFilterId } from "./blur-gallery-controls"
 
 interface FilterStackEntry {
   id: string
@@ -99,11 +101,26 @@ export function FilterGalleryDialog({
 
   const previewCanvasRef = React.useRef<HTMLCanvasElement>(null)
   const srcDataRef = React.useRef<ImageData | null>(null)
+  const scaledPreviewRef = React.useRef<{
+    source: ImageData
+    width: number
+    height: number
+    base: ImageData
+  } | null>(null)
+  const stackPreviewCacheRef = React.useRef<{
+    width: number
+    height: number
+    keys: string[]
+    outputs: ImageData[]
+  } | null>(null)
+  const previewFrameRef = React.useRef<number | null>(null)
 
   // Load source image data when dialog opens
   React.useEffect(() => {
     if (!open || !activeLayer || !activeDoc) {
       srcDataRef.current = null
+      scaledPreviewRef.current = null
+      stackPreviewCacheRef.current = null
       return
     }
     const ctx = activeLayer.canvas.getContext("2d")!
@@ -137,34 +154,75 @@ export function FilterGalleryDialog({
     const scale = Math.min(maxPreview / src.width, maxPreview / src.height, 1)
     const pw = Math.round(src.width * scale)
     const ph = Math.round(src.height * scale)
-    cv.width = pw
-    cv.height = ph
 
-    // Scale source down for preview
-    const srcCanvas = document.createElement("canvas")
-    srcCanvas.width = src.width
-    srcCanvas.height = src.height
-    srcCanvas.getContext("2d")!.putImageData(src, 0, 0)
+    if (previewFrameRef.current !== null) cancelAnimationFrame(previewFrameRef.current)
+    previewFrameRef.current = requestAnimationFrame(() => {
+      previewFrameRef.current = null
+      if (cv.width !== pw) cv.width = pw
+      if (cv.height !== ph) cv.height = ph
 
-    const scaledCanvas = document.createElement("canvas")
-    scaledCanvas.width = pw
-    scaledCanvas.height = ph
-    const sctx = scaledCanvas.getContext("2d")!
-    sctx.drawImage(srcCanvas, 0, 0, pw, ph)
-    let current = sctx.getImageData(0, 0, pw, ph)
+      let scaled = scaledPreviewRef.current
+      if (!scaled || scaled.source !== src || scaled.width !== pw || scaled.height !== ph) {
+        const srcCanvas = document.createElement("canvas")
+        srcCanvas.width = src.width
+        srcCanvas.height = src.height
+        srcCanvas.getContext("2d")!.putImageData(src, 0, 0)
 
-    // Apply filter stack
-    for (const entry of stack) {
-      if (!entry.visible) continue
-      const filterDef = FILTERS[entry.filterId]
-      if (!filterDef) continue
-      const before = current
-      const after = filterDef.apply(before, entry.params)
-      current = compositeStackEntry(before, after, entry)
+        const scaledCanvas = document.createElement("canvas")
+        scaledCanvas.width = pw
+        scaledCanvas.height = ph
+        const sctx = scaledCanvas.getContext("2d")!
+        sctx.drawImage(srcCanvas, 0, 0, pw, ph)
+        scaled = {
+          source: src,
+          width: pw,
+          height: ph,
+          base: sctx.getImageData(0, 0, pw, ph),
+        }
+        scaledPreviewRef.current = scaled
+        stackPreviewCacheRef.current = null
+      }
+
+      const keys = smartFilterPreviewStackKeys(stack)
+      const cache = stackPreviewCacheRef.current
+      const dirtyIndex = cache && cache.width === pw && cache.height === ph
+        ? firstDirtySmartFilterPreviewIndex(cache.keys, keys)
+        : 0
+
+      if (dirtyIndex === -1 && cache) {
+        const cachedOutput = cache.outputs[cache.outputs.length - 1] ?? scaled.base
+        cv.getContext("2d")!.putImageData(cachedOutput, 0, 0)
+        return
+      }
+
+      const outputs = cache && dirtyIndex > 0 ? cache.outputs.slice(0, dirtyIndex) : []
+      let current = dirtyIndex > 0 && cache
+        ? cache.outputs[dirtyIndex - 1]
+        : new ImageData(new Uint8ClampedArray(scaled.base.data), scaled.base.width, scaled.base.height)
+
+      for (let i = Math.max(0, dirtyIndex); i < stack.length; i++) {
+        const entry = stack[i]
+        if (entry.visible) {
+          const filterDef = FILTERS[entry.filterId]
+          if (filterDef) {
+            const before = current
+            const after = filterDef.apply(before, entry.params)
+            current = compositeStackEntry(before, after, entry)
+          }
+        }
+        outputs[i] = current
+      }
+
+      cv.getContext("2d")!.putImageData(current, 0, 0)
+      stackPreviewCacheRef.current = { width: pw, height: ph, keys, outputs }
+    })
+
+    return () => {
+      if (previewFrameRef.current !== null) {
+        cancelAnimationFrame(previewFrameRef.current)
+        previewFrameRef.current = null
+      }
     }
-
-    const ctx = cv.getContext("2d")!
-    ctx.putImageData(current, 0, 0)
   }, [stack, activeDoc])
 
   const addFilter = (f: FilterDef) => {
@@ -243,6 +301,7 @@ export function FilterGalleryDialog({
         maskDensity: normalizeSmartFilterMaskDensity(entry.maskDensity),
         maskFeather: normalizeSmartFilterMaskFeather(entry.maskFeather),
         params: entry.params,
+        ...(isBlurGalleryFilterId(entry.filterId) ? { blurGalleryMesh: createBlurGalleryMeshResource(entry.filterId, entry.params) } : {}),
       }))
       dispatch({ type: "set-layer-smart-filters", id: activeLayer.id, smartFilters })
       requestRender()

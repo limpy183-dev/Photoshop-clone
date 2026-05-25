@@ -55,7 +55,7 @@ import {
   Minus,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import type { CustomShapeId, GradientStop, QuickMaskPaintMode, TextAntiAliasMode, ToolId } from "./types"
+import type { CustomShapeId, GradientStop, PathHandleMode, QuickMaskPaintMode, TextAntiAliasMode, ToolId } from "./types"
 import { WORKSPACE_PRESET_OPTIONS, type WorkspacePresetId } from "./panel-registry"
 
 const Divider = () => <div className="w-px h-5 bg-[var(--ps-divider)] mx-2" />
@@ -669,10 +669,29 @@ export function OptionsBar() {
             <span className={labelClass}>Contrast:</span>
             <Input
               type="number"
-              min={1}
+              min={0.01}
               max={512}
+              step={0.01}
               value={selectionOptions.magneticContrast ?? 24}
-              onChange={(event) => dispatch({ type: "set-selection-options", selectionOptions: { magneticContrast: Math.max(1, Math.min(512, Number(event.target.value) || 24)) } })}
+              onChange={(event) => dispatch({ type: "set-selection-options", selectionOptions: { magneticContrast: Math.max(0.01, Math.min(512, Number(event.target.value) || 24)) } })}
+              className={numInputClass}
+            />
+            <span className={labelClass}>Hyst:</span>
+            <Input
+              type="number"
+              min={10}
+              max={95}
+              value={selectionOptions.magneticHysteresis ?? 45}
+              onChange={(event) => dispatch({ type: "set-selection-options", selectionOptions: { magneticHysteresis: Math.max(10, Math.min(95, Number(event.target.value) || 45)) } })}
+              className={numInputClass}
+            />
+            <span className={labelClass}>Fit:</span>
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              value={selectionOptions.magneticSmoothing ?? 35}
+              onChange={(event) => dispatch({ type: "set-selection-options", selectionOptions: { magneticSmoothing: Math.max(0, Math.min(100, Number(event.target.value) || 0)) } })}
               className={numInputClass}
             />
           </>
@@ -1234,9 +1253,24 @@ export function OptionsBar() {
   }
 
   function DirectSelectOptions() {
+    const [handleMode, setHandleMode] = React.useState<PathHandleMode>("symmetric")
+    React.useEffect(() => {
+      window.__psPathOptions = { handleMode }
+    }, [handleMode])
     return (
       <>
-        <span className={labelClass}>Click and drag path nodes or handles.</span>
+        <MousePointer2 className="w-3.5 h-3.5" />
+        <span className={labelClass}>Handle:</span>
+        <Select value={handleMode} onValueChange={(value) => setHandleMode(value as PathHandleMode)}>
+          <SelectTrigger className="h-7 w-[118px] bg-[var(--ps-panel-2)] border-[var(--ps-divider)] text-[11px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="symmetric">Symmetric</SelectItem>
+            <SelectItem value="broken">Broken</SelectItem>
+          </SelectContent>
+        </Select>
+        <span className={labelClass}>Alt temporarily breaks handles.</span>
       </>
     )
   }

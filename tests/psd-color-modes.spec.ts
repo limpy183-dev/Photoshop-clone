@@ -15,7 +15,9 @@ import {
   psdColorModeToApp,
   serializeHighBitDepthChannelData,
 } from "../components/photoshop/psd-color-modes"
+import { serializePsd } from "../components/photoshop/document-io"
 import type { PsDocument } from "../components/photoshop/types"
+import { installFixtureDom } from "./photoshop-fixtures"
 
 const NOOP_CANVAS: PsDocument["layers"][number]["canvas"] = {
   width: 0,
@@ -105,10 +107,10 @@ test("appColorModeToPsd writes a duotone curve LUT preserving the curve coeffici
   expect(midpoint).toBeLessThan(80)
 })
 
-test("bit depth maps Bitmap to 1, forces other writes to 8 (ag-psd writer limit), projects 1→8 in app", () => {
+test("bit depth maps Bitmap to 1 and preserves native high-bit depths for PSD headers", () => {
   expect(appBitDepthToPsd(fakeDoc({ colorMode: "Bitmap" }))).toBe(1)
-  expect(appBitDepthToPsd(fakeDoc({ colorMode: "RGB", bitDepth: 16 }))).toBe(8)
-  expect(appBitDepthToPsd(fakeDoc({ colorMode: "RGB", bitDepth: 32 }))).toBe(8)
+  expect(appBitDepthToPsd(fakeDoc({ colorMode: "RGB", bitDepth: 16 }))).toBe(16)
+  expect(appBitDepthToPsd(fakeDoc({ colorMode: "RGB", bitDepth: 32 }))).toBe(32)
   expect(appBitDepthToPsd(fakeDoc({ colorMode: "RGB", bitDepth: 8 }))).toBe(8)
 
   expect(psdBitDepthToApp(1, PSD_COLOR_MODE.Bitmap)).toBe(8)
@@ -116,6 +118,59 @@ test("bit depth maps Bitmap to 1, forces other writes to 8 (ag-psd writer limit)
   expect(psdBitDepthToApp(32, PSD_COLOR_MODE.RGB)).toBe(32)
   expect(psdBitDepthToApp(8, PSD_COLOR_MODE.RGB)).toBe(8)
   expect(psdBitDepthToApp(undefined, PSD_COLOR_MODE.RGB)).toBe(8)
+})
+
+test("serializePsd emits a native 16-bit PSD header and channel planes when high-bit data exists", async () => {
+  installFixtureDom()
+  const canvas = document.createElement("canvas")
+  canvas.width = 2
+  canvas.height = 1
+  canvas.getContext("2d")!.putImageData(new ImageData(new Uint8ClampedArray([
+    128, 64, 32, 255,
+    255, 128, 64, 255,
+  ]), 2, 1), 0, 0)
+
+  const layer = {
+    id: "layer_high",
+    name: "High Source",
+    kind: "raster" as const,
+    visible: true,
+    locked: false,
+    opacity: 1,
+    blendMode: "normal" as const,
+    canvas,
+    __highBitImageData: {
+      width: 2,
+      height: 1,
+      channels: 4,
+      bitDepth: 16,
+      colorMode: "RGB",
+      storage: "uint16",
+      data: new Uint16Array([
+        32768, 16384, 8192, 65535,
+        65535, 32768, 16384, 65535,
+      ]),
+      warnings: [],
+    },
+  }
+  const doc = fakeDoc({
+    width: 2,
+    height: 1,
+    colorMode: "RGB",
+    bitDepth: 16,
+    layers: [layer],
+    activeLayerId: "layer_high",
+    selectedLayerIds: ["layer_high"],
+  })
+
+  const blob = await serializePsd(doc)
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+
+  expect(String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3])).toBe("8BPS")
+  expect(view.getUint16(22, false)).toBe(16)
+  expect(view.getUint16(24, false)).toBe(PSD_COLOR_MODE.RGB)
+  expect(bytes.includes(0x80)).toBe(true)
 })
 
 test("buildSyntheticIccProfile carries the profile name inside the ICC desc tag", () => {

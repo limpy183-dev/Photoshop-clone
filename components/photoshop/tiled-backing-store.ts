@@ -36,7 +36,7 @@ export interface TileRecord {
   storage: "memory" | "opfs"
 }
 
-export type LayerTileKind = "raster" | "smart-object" | "3d"
+export type LayerTileKind = "raster" | "smart-object" | "3d" | "text" | "shape" | "vector" | "adjustment"
 
 export interface LayerTileAddressInput {
   layerId: string

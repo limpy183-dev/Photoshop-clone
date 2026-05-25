@@ -5,13 +5,16 @@ import {
   buildDocumentForFrame,
   captureFrameFromDocument,
   generateTweenFrames,
+  makeFramesFromVideoCanvases,
   renderOnionSkinOverlay,
+  splitTimelineFrameAtPlayhead,
 } from "../components/photoshop/timeline-engine"
 import {
   collectAnimationFramesAtFps,
   encodeAnimatedGif,
   encodeAnimatedWebP,
   encodeApngFromFrames,
+  packagePngSequenceZip,
 } from "../components/photoshop/animation-encoding"
 import { createExportLimitationReport } from "../components/photoshop/document-io"
 import type { AnimatedExportFrame } from "../components/photoshop/animation-encoding"
@@ -241,6 +244,97 @@ test("timeline frame extraction samples document frames at a requested FPS", () 
   expect(sampled[1].sourceFrameId).toBe("one")
   expect(sampled[2].sourceFrameId).toBe("two")
   expect(sampled.every((item) => (item.timeMs ?? 0) % 250 === 0)).toBe(true)
+})
+
+test("timeline frame splitting divides the frame under the playhead without losing metadata", () => {
+  const frames = [
+    frame("one", { durationMs: 400 }),
+    frame("two", {
+      durationMs: 900,
+      transition: "dissolve",
+      layerOpacity: { layer_a: 1, layer_b: 0.25 },
+      audioLabel: "hit",
+    }),
+  ]
+
+  const result = splitTimelineFrameAtPlayhead(frames, 650, {
+    idFactory: (prefix) => `${prefix}_split`,
+    minDurationMs: 20,
+  })
+
+  expect(result.didSplit).toBe(true)
+  expect(result.frameIndex).toBe(1)
+  expect(result.playheadMs).toBe(650)
+  expect(result.frames.map((item) => item.durationMs)).toEqual([400, 250, 650])
+  expect(result.frames[1]).toMatchObject({
+    id: "frame_split",
+    name: "two A",
+    transition: "dissolve",
+    audioLabel: "hit",
+    layerOpacity: { layer_a: 1, layer_b: 0.25 },
+  })
+  expect(result.frames[2]).toMatchObject({
+    id: "frame_split",
+    name: "two B",
+    transition: "dissolve",
+    audioLabel: "hit",
+  })
+})
+
+test("video frame extraction creates real raster layers and matching timeline frames", () => {
+  const doc = makeDoc({
+    layers: [
+      makeLayer("background", { visible: true }),
+      makeLayer("video", { kind: "video", visible: true }),
+    ],
+  })
+  const samples = [
+    { index: 0, timeMs: 0, label: "0.00s", canvas: fixtureCanvas(4, 3, "#ff0000"), dataUrl: "data:image/png;base64,frame0" },
+    { index: 1, timeMs: 500, label: "0.50s", canvas: fixtureCanvas(4, 3, "#00ff00"), dataUrl: "data:image/png;base64,frame1" },
+  ]
+
+  const extracted = makeFramesFromVideoCanvases(doc, "video", samples, {
+    durationMs: 83,
+    idFactory: (prefix, index) => `${prefix}_${index}`,
+    namePrefix: "Clip",
+  })
+
+  expect(extracted.layers.map((layer) => layer.id)).toEqual(["video_frame_0", "video_frame_1"])
+  expect(extracted.layers.every((layer) => layer.kind === "raster" && layer.visible === false)).toBe(true)
+  expect(extracted.frames).toHaveLength(2)
+  expect(extracted.frames[0]).toMatchObject({
+    id: "frame_0",
+    name: "Clip 001 @ 0.00s",
+    durationMs: 83,
+    thumbnail: "data:image/png;base64,frame0",
+  })
+  expect(extracted.frames[0].layerVisibility).toMatchObject({
+    background: true,
+    video: false,
+    video_frame_0: true,
+    video_frame_1: false,
+  })
+  expect(extracted.frames[1].layerVisibility).toMatchObject({
+    background: true,
+    video: false,
+    video_frame_0: false,
+    video_frame_1: true,
+  })
+})
+
+test("PNG sequence packaging emits one downloadable ZIP with frames and manifest", async () => {
+  const zip = await packagePngSequenceZip([
+    { name: "frame_0001.png", bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]) },
+    { name: "frame_0002.png", bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 2]) },
+    { name: "manifest.json", bytes: new TextEncoder().encode('{"frames":2}') },
+  ])
+  const text = textFromBytes(zip)
+
+  expect(text.slice(0, 4)).toBe("PK\u0003\u0004")
+  expect(text).toContain("frame_0001.png")
+  expect(text).toContain("frame_0002.png")
+  expect(text).toContain("manifest.json")
+  expect(text).toContain("PK\u0005\u0006")
 })
 
 test("animation export reports describe native APNG and RIFF animated WebP output", () => {

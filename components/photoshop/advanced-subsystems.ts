@@ -1,5 +1,4 @@
 import type {
-  ColorManagementSettings,
   DocumentMetadata,
   DocumentModeSettings,
   Layer,
@@ -12,7 +11,13 @@ import type {
   Vec3,
   VariableBinding,
 } from "./types"
-import { cmykToRgb, rgbToCmyk } from "./color-pipeline"
+import {
+  applyIccTransformToImageData,
+  buildGamutWarningMaskImageData,
+  convertImageDataForExport,
+  softProofImageData,
+  transformRgbColor,
+} from "./color-pipeline"
 import { decodeAdvancedRasterBufferAsync, inspectExrHeader } from "./raster-codecs"
 import { assertCanvasSize, assertFileSize, MAX_RASTER_FILE_BYTES } from "./canvas-limits"
 import { hexToRgb } from "./color-utils"
@@ -94,32 +99,32 @@ export const ADVANCED_FORMAT_CAPABILITIES: AdvancedFormatCapability[] = [
     supportLabel: "Decoder/encoder-backed",
     decodePath: "Decodes TIFF through UTIF2 with local fallback for uncompressed, LZW, and Deflate grayscale/RGB/RGBA strips.",
     metadataPath: "Reports dimensions, strips, byte order, source channel count, bit depth, photometric interpretation, and compression tags.",
-    exportPath: "Writes flattened RGBA TIFF data through the local TIFF encoder with none, LZW, or Deflate compression.",
+    exportPath: "Writes flattened RGBA TIFF data through the local TIFF encoder with none, LZW, or Deflate compression; high-bit documents emit 16/32-bit typed-array samples when available.",
     limitations: "BigTIFF, prepress-grade CMYK separations, proprietary private tags, and certified ICC conversion remain outside the browser pipeline.",
-    layerResult: "Creates an editable 8-bit RGBA layer while preserving source depth/compression in the import report.",
+    layerResult: "Creates an editable 8-bit RGBA preview layer while preserving source depth/compression in the import report and project side-band data where available.",
   },
   {
     id: "tga",
     label: "TGA",
     extensions: ["tga", "vda", "icb", "vst"],
-    support: "preview",
-    supportLabel: "Local decode",
+    support: "native",
+    supportLabel: "Decoder/encoder-backed",
     decodePath: "Decodes uncompressed and RLE TGA true-color, grayscale, and indexed pixels.",
-    metadataPath: "Reports dimensions, RLE state, channel count, origin, and bit depth.",
-    exportPath: "Unsupported as native TGA export; use browser raster export or project format.",
-    limitations: "Imports to an 8-bit RGBA canvas; TGA-specific metadata is not embedded on export.",
+    metadataPath: "Reports dimensions, RLE state, channel count, origin, bit depth, and TGA 2.0 extension/developer metadata when present.",
+    exportPath: "Writes top-left 32-bit TGA from canvas pixels with optional RLE compression and TGA 2.0 extension/developer metadata records when enabled.",
+    limitations: "Imports to an 8-bit RGBA canvas; vendor-private TGA developer tags outside the app metadata record remain metadata-only.",
     layerResult: "Creates an 8-bit RGBA layer from supported TGA files.",
   },
   {
     id: "portable-anymap",
     label: "PBM/PGM/PPM/PNM",
     extensions: ["pbm", "pgm", "ppm", "pnm"],
-    support: "preview",
-    supportLabel: "Local decode",
+    support: "native",
+    supportLabel: "Decoder/encoder-backed",
     decodePath: "Decodes ASCII and binary portable anymap grayscale/RGB pixels, including 16-bit PGM/PPM tone-mapped previews.",
     metadataPath: "Reports dimensions, max value, channel count, and source bit depth.",
-    exportPath: "Unsupported as native PNM export; use browser raster export or project format.",
-    limitations: "Creates an 8-bit preview; comments and original max-value/channel depth are not re-embedded on export.",
+    exportPath: "Writes PBM/PGM/PPM binary from canvas pixels; high-bit PGM/PPM export preserves typed-array samples as 16-bit Netpbm values when available.",
+    limitations: "Canvas imports create an 8-bit preview; comments and source max-value metadata are round-tripped through Netpbm headers when metadata export is enabled.",
     layerResult: "Creates an 8-bit RGBA layer from supported portable anymap files.",
   },
   {
@@ -164,11 +169,11 @@ export const ADVANCED_FORMAT_CAPABILITIES: AdvancedFormatCapability[] = [
     extensions: ["pdf"],
     support: "preview",
     supportLabel: "Rendered page preview",
-    decodePath: "Renders the first PDF page through PDF.js into a browser canvas.",
+    decodePath: "Renders each PDF page through PDF.js into browser canvases.",
     metadataPath: "Reports file metadata and header markers when present.",
-    exportPath: "Writes a single-page flattened PDF containing the composite canvas image.",
-    limitations: "No editable PDF vectors, fonts, transparency groups, annotations, or multipage placement are decoded or exported.",
-    layerResult: "Creates an editable raster layer from the first page; PDF vectors/text remain flattened.",
+    exportPath: "Writes a single-page or multi-page flattened PDF containing composite canvas page images.",
+    limitations: "No editable PDF vectors, fonts, transparency groups, annotations, or production prepress metadata are decoded or exported.",
+    layerResult: "Creates editable raster page layers; PDF vectors/text remain flattened.",
   },
   {
     id: "eps",
@@ -190,8 +195,8 @@ export const ADVANCED_FORMAT_CAPABILITIES: AdvancedFormatCapability[] = [
     supportLabel: "Decoder-backed import",
     decodePath: "Uses the bundled HEIF/HEIC decoder to import primary images into editable RGBA pixels.",
     metadataPath: "Detects ISO BMFF ftyp brands such as heic/heif/mif1 when available.",
-    exportPath: "No browser-safe HEIF writer is available; use AVIF/WebP/JPEG/PNG export or project format.",
-    limitations: "Auxiliary/depth images, live photo pairing, full ICC conversion, metadata embedding, and HEIF export are not implemented.",
+    exportPath: "Exports AV1-in-HEIF payloads through the browser-compatible AVIF encoder path when available.",
+    limitations: "HEVC/HEIC authoring, auxiliary/depth images, live photo pairing, full ICC conversion, and native HEIF metadata embedding remain outside the browser pipeline.",
     layerResult: "Creates an editable RGBA layer from supported primary HEIC/HEIF images.",
   },
   {
@@ -202,8 +207,8 @@ export const ADVANCED_FORMAT_CAPABILITIES: AdvancedFormatCapability[] = [
     supportLabel: "Decoder-backed import",
     decodePath: "Uses the bundled JPEG 2000 decoder for JP2/J2K codestream import into editable RGBA pixels.",
     metadataPath: "Detects JP2 signature boxes or raw codestream markers when present.",
-    exportPath: "No JPEG 2000 writer is available; use TIFF/EXR/PNG/project export for local handoff.",
-    limitations: "Advanced JP2 color boxes, multi-layer/multi-resolution authoring, and JPEG 2000 export are not implemented.",
+    exportPath: "Exports flattened RGB codestreams through the browser-compatible OpenJPEG encoder.",
+    limitations: "Advanced JP2 color boxes, alpha fidelity, multi-layer/multi-resolution authoring, and archival JPX/JPM metadata remain approximations.",
     layerResult: "Creates an editable RGBA layer from supported JPEG 2000 codestreams.",
   },
   {
@@ -309,6 +314,14 @@ export async function inspectAdvancedFormatFile(file: File) {
   if (decoded) {
     technical.push(`${decoded.format} local decoder: ${decoded.width}x${decoded.height}, ${decoded.channels} channel(s), source ${decoded.bitDepth}-bit, ${decoded.compression} compression`)
     technical.push(...decoded.warnings)
+  } else if (capability.id === "heif") {
+    technical.push("Partial HEIF/HEIC import report: ISO BMFF brand/header evidence was found, but the bundled decoder did not return editable pixels. Auxiliary/depth items or unsupported codec variants may still be present.")
+  } else if (capability.id === "jpeg2000") {
+    technical.push("Partial JPEG 2000 import report: JP2/codestream signature evidence was found, but the bundled decoder did not return editable pixels. Unsupported color boxes, damaged codestreams, or advanced JPX/JPM features may still be present.")
+  } else if (capability.id === "openexr") {
+    technical.push("Partial OpenEXR import report: EXR header evidence was found, but the bundled decoder did not return editable pixels. Multipart, deep, tiled, or unsupported compression variants may still be present.")
+  } else if (capability.id === "baseline-tiff") {
+    technical.push("Partial TIFF import report: TIFF header/directory evidence was found, but no editable pixels were decoded. BigTIFF, planar data, proprietary compression, or private prepress tags may still be present.")
   }
   return { capability, technical }
 }
@@ -339,48 +352,6 @@ function mixColor(a: { r: number; g: number; b: number }, b: { r: number; g: num
 
 function luminance(r: number, g: number, b: number) {
   return 0.299 * r + 0.587 * g + 0.114 * b
-}
-
-function rgbToHsl(r: number, g: number, b: number) {
-  r /= 255
-  g /= 255
-  b /= 255
-  const max = Math.max(r, g, b)
-  const min = Math.min(r, g, b)
-  let h = 0
-  let s = 0
-  const l = (max + min) / 2
-  if (max !== min) {
-    const d = max - min
-    s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
-    if (max === r) h = (g - b) / d + (g < b ? 6 : 0)
-    else if (max === g) h = (b - r) / d + 2
-    else h = (r - g) / d + 4
-    h /= 6
-  }
-  return { h, s, l }
-}
-
-function hslToRgb(h: number, s: number, l: number) {
-  const hue2rgb = (p: number, q: number, t: number) => {
-    if (t < 0) t += 1
-    if (t > 1) t -= 1
-    if (t < 1 / 6) return p + (q - p) * 6 * t
-    if (t < 1 / 2) return q
-    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6
-    return p
-  }
-  if (s === 0) {
-    const v = l * 255
-    return { r: v, g: v, b: v }
-  }
-  const q = l < 0.5 ? l * (1 + s) : l + s - l * s
-  const p = 2 * l - q
-  return {
-    r: hue2rgb(p, q, h + 1 / 3) * 255,
-    g: hue2rgb(p, q, h) * 255,
-    b: hue2rgb(p, q, h - 1 / 3) * 255,
-  }
 }
 
 function vec(x = 0, y = 0, z = 0): Vec3 {
@@ -761,38 +732,21 @@ export function nudgeSceneVertex(scene: ThreeDScene, objectId: string, vertexInd
   }
 }
 
-function simulateCmyk(r: number, g: number, b: number, dotGain = 0.08) {
-  const cmyk = rgbToCmyk({ r, g, b }, { blackGeneration: dotGain > 0.1 ? "heavy" : "medium", totalInkLimit: dotGain > 0.1 ? 300 : 320 })
-  return cmykToRgb({ ...cmyk, k: clamp(cmyk.k * (1 + dotGain), 0, 1) })
-}
-
-function applyWorkingProfile(r: number, g: number, b: number, profile?: string) {
-  const hsl = rgbToHsl(r, g, b)
-  if (profile === "Display P3") hsl.s = clamp(hsl.s * 1.08, 0, 1)
-  if (profile === "Adobe RGB (1998)") hsl.s = clamp(hsl.s * 1.04, 0, 1)
-  if (profile === "ProPhoto RGB") hsl.s = clamp(hsl.s * 1.12, 0, 1)
-  return hslToRgb(hsl.h, hsl.s, hsl.l)
-}
-
-function isOutOfProofGamut(r: number, g: number, b: number, settings?: ColorManagementSettings) {
-  if (!settings?.gamutWarning) return false
-  const hsl = rgbToHsl(r, g, b)
-  if ((settings.proofProfile ?? "").includes("CMYK") || settings.proofProfile.includes("SWOP")) {
-    return hsl.s > 0.68 && (Math.max(r, g, b) > 220 || Math.min(r, g, b) < 35)
-  }
-  if (settings.proofProfile === "Dot Gain 20%") return hsl.s > 0.08
-  return false
-}
-
-export function applyModeAndColorManagement(source: HTMLCanvasElement, doc: Pick<PsDocument, "colorMode" | "modeSettings" | "colorManagement">) {
+export function applyModeAndColorManagement(
+  source: HTMLCanvasElement,
+  doc: Pick<PsDocument, "colorMode" | "modeSettings" | "colorManagement">,
+  options: { purpose?: "preview" | "export" } = {},
+) {
   const modeSettings = doc.modeSettings ?? { mode: doc.colorMode }
   const color = doc.colorManagement
+  const purpose = options.purpose ?? "preview"
   const active =
     doc.colorMode !== "RGB" ||
     modeSettings.mode !== "RGB" ||
     color?.proofColors ||
     color?.gamutWarning ||
-    color?.assignedProfile !== color?.workingSpace
+    color?.assignedProfile !== "sRGB IEC61966-2.1" ||
+    (purpose === "export" && color?.assignedProfile !== color?.workingSpace)
   if (!active) return source
 
   const canvas = createSubsystemCanvas(source.width, source.height)
@@ -803,8 +757,6 @@ export function applyModeAndColorManagement(source: HTMLCanvasElement, doc: Pick
   const ink2 = hexToRgb(modeSettings.duotone?.ink2 ?? "#1f80ff")
   const indexedLevels = Math.max(2, Math.round(Math.cbrt(modeSettings.indexed?.colors ?? 64)))
   const trap = modeSettings.trap?.enabled ? { width: modeSettings.trap.widthPx, strength: modeSettings.trap.strength } : null
-  const original = new Uint8ClampedArray(image.data)
-
   for (let y = 0; y < image.height; y++) {
     for (let x = 0; x < image.width; x++) {
       const i = (y * image.width + x) * 4
@@ -851,33 +803,19 @@ export function applyModeAndColorManagement(source: HTMLCanvasElement, doc: Pick
         g = channels?.g === false ? 0 : g
         b = channels?.b === false ? 0 : b
       } else if (mode === "CMYK") {
-        const cmyk = simulateCmyk(r, g, b, color?.simulateBlackInk ? 0.12 : 0.04)
-        r = cmyk.r
-        g = cmyk.g
-        b = cmyk.b
-      }
-
-      const profiled = applyWorkingProfile(r, g, b, color?.assignedProfile)
-      r = profiled.r
-      g = profiled.g
-      b = profiled.b
-
-      if (color?.proofColors && color.proofProfile !== "None") {
-        if (color.proofProfile.includes("CMYK") || color.proofProfile.includes("SWOP") || color.proofProfile.includes("Japan")) {
-          const proof = simulateCmyk(r, g, b, color.proofProfile.includes("SWOP") ? 0.13 : 0.08)
-          r = proof.r
-          g = proof.g
-          b = proof.b
-        } else if (color.proofProfile === "Dot Gain 20%") {
-          const gray = Math.pow(luminance(r, g, b) / 255, 1.16) * 255
-          r = g = b = gray
-        }
-      }
-
-      if (isOutOfProofGamut(original[i], original[i + 1], original[i + 2], color)) {
-        r = r * 0.35 + 128 * 0.65
-        g = g * 0.2 + 128 * 0.25
-        b = b * 0.35 + 255 * 0.65
+        const targetProfile = color?.workingSpace?.includes("CMYK") ? color.workingSpace : "Working CMYK"
+        const cmyk = transformRgbColor(
+          { r, g, b },
+          {
+            sourceProfile: color?.assignedProfile ?? "sRGB IEC61966-2.1",
+            targetProfile,
+            renderingIntent: color?.renderingIntent,
+            blackPointCompensation: color?.blackPointCompensation,
+          },
+        )
+        r = cmyk.rgb.r
+        g = cmyk.rgb.g
+        b = cmyk.rgb.b
       }
       image.data[i] = clamp(r)
       image.data[i + 1] = clamp(g)
@@ -885,7 +823,33 @@ export function applyModeAndColorManagement(source: HTMLCanvasElement, doc: Pick
     }
   }
   if (trap) applyTrapToImageData(image, Math.round(trap.width), trap.strength)
-  ctx.putImageData(image, 0, 0)
+  let managed = image
+  if (color) {
+    if (purpose === "export") {
+      managed = convertImageDataForExport(image, color).imageData
+    } else if (color.proofColors && color.proofProfile !== "None") {
+      managed = softProofImageData(image, color)
+    } else if (color.assignedProfile && color.assignedProfile !== "sRGB IEC61966-2.1") {
+      managed = applyIccTransformToImageData(image, {
+        sourceProfile: color.assignedProfile,
+        targetProfile: "sRGB IEC61966-2.1",
+        renderingIntent: color.renderingIntent,
+        blackPointCompensation: color.blackPointCompensation,
+      })
+    }
+
+    if (purpose === "preview" && color.gamutWarning) {
+      const mask = buildGamutWarningMaskImageData(image, color)
+      for (let i = 0; i < managed.data.length; i += 4) {
+        const alpha = mask.data[i + 3] / 255
+        if (alpha <= 0) continue
+        managed.data[i] = clamp(managed.data[i] * (1 - alpha) + mask.data[i] * alpha)
+        managed.data[i + 1] = clamp(managed.data[i + 1] * (1 - alpha) + mask.data[i + 1] * alpha)
+        managed.data[i + 2] = clamp(managed.data[i + 2] * (1 - alpha) + mask.data[i + 2] * alpha)
+      }
+    }
+  }
+  ctx.putImageData(managed, 0, 0)
   return canvas
 }
 
@@ -1730,18 +1694,35 @@ function concatBytes(...parts: Uint8Array[]) {
   return out
 }
 
-export async function encodePdfCanvas(canvas: HTMLCanvasElement, name = "Photoshop Web"): Promise<ArrayBuffer> {
+export interface DecodedPdfPage {
+  pageNumber: number
+  pageCount: number
+  canvas: HTMLCanvasElement
+}
+
+export async function encodePdfCanvases(canvases: HTMLCanvasElement[], name = "Photoshop Web"): Promise<ArrayBuffer> {
   const { PDFDocument } = await import("pdf-lib")
   const pdf = await PDFDocument.create()
-  const page = pdf.addPage([Math.max(1, canvas.width), Math.max(1, canvas.height)])
-  try {
-    const bytes = dataUrlToBytes(canvas.toDataURL("image/png"))
-    const image = await pdf.embedPng(bytes)
-    page.drawImage(image, { x: 0, y: 0, width: canvas.width, height: canvas.height })
-  } catch {
-    page.drawText(name.slice(0, 80), { x: 12, y: Math.max(12, canvas.height - 24), size: 12 })
+  const pages = canvases.length ? canvases : [createSubsystemCanvas(1, 1, "#ffffff")]
+  for (let index = 0; index < pages.length; index++) {
+    const canvas = pages[index]
+    const width = Math.max(1, canvas.width)
+    const height = Math.max(1, canvas.height)
+    const page = pdf.addPage([width, height])
+    try {
+      const bytes = dataUrlToBytes(canvas.toDataURL("image/png"))
+      const image = await pdf.embedPng(bytes)
+      page.drawImage(image, { x: 0, y: 0, width, height })
+    } catch {
+      const suffix = pages.length > 1 ? ` page ${index + 1}` : ""
+      page.drawText(`${name}${suffix}`.slice(0, 80), { x: 12, y: Math.max(12, height - 24), size: 12 })
+    }
   }
   return (await pdf.save()).buffer as ArrayBuffer
+}
+
+export async function encodePdfCanvas(canvas: HTMLCanvasElement, name = "Photoshop Web"): Promise<ArrayBuffer> {
+  return encodePdfCanvases([canvas], name)
 }
 
 function dataUrlToBytes(dataUrl: string) {
@@ -1752,20 +1733,34 @@ function dataUrlToBytes(dataUrl: string) {
   return bytes
 }
 
-export async function decodePdfPreview(file: File, maxWidth = 2048) {
+export async function decodePdfPages(file: File, options: { maxWidth?: number; maxPages?: number } = {}): Promise<DecodedPdfPage[]> {
   assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.rasterBytes, "PDF file")
+  const maxWidth = options.maxWidth ?? 2048
   const data = new Uint8Array(await file.arrayBuffer())
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs")
   const loadingTask = pdfjs.getDocument({ data, useWorkerFetch: false, isEvalSupported: false } as never)
   const pdf = await loadingTask.promise
-  const page = await pdf.getPage(1)
-  const viewport = page.getViewport({ scale: 1 })
-  const scale = Math.min(4, Math.max(0.1, maxWidth / Math.max(1, viewport.width)))
-  const scaled = page.getViewport({ scale })
-  const size = assertCanvasSize(Math.ceil(scaled.width), Math.ceil(scaled.height), "PDF page preview")
-  const canvas = createSubsystemCanvas(size.width, size.height, "#ffffff")
-  await page.render({ canvas, canvasContext: canvas.getContext("2d")!, viewport: scaled } as never).promise
-  return canvas
+  const count = Math.min(pdf.numPages, Math.max(1, options.maxPages ?? pdf.numPages))
+  const pages: DecodedPdfPage[] = []
+  for (let pageNumber = 1; pageNumber <= count; pageNumber++) {
+    const page = await pdf.getPage(pageNumber)
+    const viewport = page.getViewport({ scale: 1 })
+    const scale = Math.min(4, Math.max(0.1, maxWidth / Math.max(1, viewport.width)))
+    const scaled = page.getViewport({ scale })
+    const size = assertCanvasSize(Math.ceil(scaled.width), Math.ceil(scaled.height), "PDF page preview")
+    const canvas = createSubsystemCanvas(size.width, size.height, "#ffffff")
+    try {
+      await page.render({ canvas, canvasContext: canvas.getContext("2d")!, viewport: scaled } as never).promise
+    } catch {
+      canvas.getContext("2d")!.fillRect(0, 0, size.width, size.height)
+    }
+    pages.push({ pageNumber, pageCount: pdf.numPages, canvas })
+  }
+  return pages
+}
+
+export async function decodePdfPreview(file: File, maxWidth = 2048) {
+  return (await decodePdfPages(file, { maxWidth, maxPages: 1 }))[0]?.canvas ?? null
 }
 
 export function encodeEpsCanvas(canvas: HTMLCanvasElement, name = "Photoshop Web"): ArrayBuffer {
@@ -1834,10 +1829,30 @@ export async function decodeEpsPreview(file: File) {
 function renderSafeEpsSubset(ctx: CanvasRenderingContext2D, text: string, width: number, height: number, xMin: number, yMin: number) {
   const tokens = text.match(/-?\d+(?:\.\d+)?|[A-Za-z][A-Za-z0-9]*/g) ?? []
   const stack: number[] = []
-  const path: Array<[number, number]> = []
+  const path: Array<
+    | { op: "move" | "line"; x: number; y: number }
+    | { op: "curve"; x1: number; y1: number; x2: number; y2: number; x: number; y: number }
+    | { op: "close" }
+    | { op: "arc"; x: number; y: number; r: number; start: number; end: number }
+  > = []
   const mapY = (y: number, h = 0) => height - (y - yMin) - h
+  let currentX = 0
+  let currentY = 0
   ctx.fillStyle = "#000000"
   ctx.strokeStyle = "#000000"
+  const drawPath = (mode: "fill" | "stroke") => {
+    if (!path.length || typeof ctx.moveTo !== "function") return
+    ctx.beginPath()
+    for (const command of path) {
+      if (command.op === "move") ctx.moveTo(command.x, command.y)
+      else if (command.op === "line") ctx.lineTo(command.x, command.y)
+      else if (command.op === "curve") ctx.bezierCurveTo(command.x1, command.y1, command.x2, command.y2, command.x, command.y)
+      else if (command.op === "arc") ctx.arc(command.x, command.y, command.r, command.start, command.end)
+      else ctx.closePath()
+    }
+    if (mode === "fill") ctx.fill()
+    else ctx.stroke()
+  }
   for (const token of tokens) {
     const number = Number(token)
     if (Number.isFinite(number)) {
@@ -1852,6 +1867,19 @@ function renderSafeEpsSubset(ctx: CanvasRenderingContext2D, text: string, width:
       const g = clamp(stack.pop()! * 255)
       const r = clamp(stack.pop()! * 255)
       ctx.fillStyle = ctx.strokeStyle = `rgb(${r},${g},${b})`
+    } else if (token === "setcmykcolor" && stack.length >= 4) {
+      const k = stack.pop()!
+      const y = stack.pop()!
+      const m = stack.pop()!
+      const c = stack.pop()!
+      const r = clamp((1 - Math.min(1, c + k)) * 255)
+      const g = clamp((1 - Math.min(1, m + k)) * 255)
+      const b = clamp((1 - Math.min(1, y + k)) * 255)
+      ctx.fillStyle = ctx.strokeStyle = `rgb(${r},${g},${b})`
+    } else if (token === "setlinewidth" && stack.length >= 1) {
+      ctx.lineWidth = Math.max(0.1, stack.pop()!)
+    } else if (token === "newpath") {
+      path.length = 0
     } else if ((token === "rectfill" || token === "rectstroke") && stack.length >= 4) {
       const h = stack.pop()!
       const w = stack.pop()!
@@ -1860,20 +1888,43 @@ function renderSafeEpsSubset(ctx: CanvasRenderingContext2D, text: string, width:
       if (token === "rectfill") ctx.fillRect(x - xMin, mapY(y, h), w, h)
       else ctx.strokeRect(x - xMin, mapY(y, h), w, h)
     } else if (token === "moveto" && stack.length >= 2) {
-      const y = stack.pop()!
-      const x = stack.pop()!
-      path.length = 0
-      path.push([x - xMin, mapY(y)])
+      currentY = stack.pop()!
+      currentX = stack.pop()!
+      path.push({ op: "move", x: currentX - xMin, y: mapY(currentY) })
     } else if (token === "lineto" && stack.length >= 2) {
+      currentY = stack.pop()!
+      currentX = stack.pop()!
+      path.push({ op: "line", x: currentX - xMin, y: mapY(currentY) })
+    } else if (token === "rmoveto" && stack.length >= 2) {
+      currentY += stack.pop()!
+      currentX += stack.pop()!
+      path.push({ op: "move", x: currentX - xMin, y: mapY(currentY) })
+    } else if (token === "rlineto" && stack.length >= 2) {
+      currentY += stack.pop()!
+      currentX += stack.pop()!
+      path.push({ op: "line", x: currentX - xMin, y: mapY(currentY) })
+    } else if (token === "curveto" && stack.length >= 6) {
+      const y3 = stack.pop()!
+      const x3 = stack.pop()!
+      const y2 = stack.pop()!
+      const x2 = stack.pop()!
+      const y1 = stack.pop()!
+      const x1 = stack.pop()!
+      currentX = x3
+      currentY = y3
+      path.push({ op: "curve", x1: x1 - xMin, y1: mapY(y1), x2: x2 - xMin, y2: mapY(y2), x: x3 - xMin, y: mapY(y3) })
+    } else if (token === "arc" && stack.length >= 5) {
+      const end = stack.pop()!
+      const start = stack.pop()!
+      const r = stack.pop()!
       const y = stack.pop()!
       const x = stack.pop()!
-      path.push([x - xMin, mapY(y)])
-    } else if ((token === "fill" || token === "stroke") && path.length) {
-      ctx.beginPath()
-      ctx.moveTo(path[0][0], path[0][1])
-      for (const [x, y] of path.slice(1)) ctx.lineTo(x, y)
-      if (token === "fill") ctx.fill()
-      else ctx.stroke()
+      path.push({ op: "arc", x: x - xMin, y: mapY(y), r, start: (Math.PI / 180) * -end, end: (Math.PI / 180) * -start })
+    } else if (token === "closepath") {
+      path.push({ op: "close" })
+    } else if (token === "fill" || token === "stroke") {
+      drawPath(token)
+      path.length = 0
     }
   }
 }

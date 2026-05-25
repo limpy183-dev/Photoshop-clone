@@ -1,0 +1,1466 @@
+================================================================================
+  COMPREHENSIVE IMPLEMENTATION GAPS REPORT
+  Browser Photoshop Clone — Next.js 16 / React 19 / TypeScript / Canvas
+  Generated: May 25, 2026
+================================================================================
+
+This report catalogs every Photoshop feature that is either:
+  A) NOT IMPLEMENTED AT ALL (zero code, placeholder, or only type stubs)
+  B) PARTIALLY IMPLEMENTED (usable or approximation status, with remaining gaps)
+
+EXCLUDED from this report — per BOUNDARIES.md — are:
+  - Adobe cloud/AI services (Generative Fill, Neural Filters, Sensei, Firefly)
+  - Adobe account/auth, Creative Cloud sync, Adobe Fonts/Stock APIs
+  - Native plugin runtimes (UXP, CEP, 8BF binary execution)
+  - Exact Photoshop engine parity (brush/text/filter/PSD internals)
+  - Production color/prepress parity (certified CMM, trapping, press-ready output)
+  - Professional codec output beyond MediaRecorder (ProRes, DNxHR)
+  - Browser hardware limits (canvas max, heap limit, GPU texture size)
+
+Every gap listed below IS implementable with pure browser-side code (HTML5
+Canvas, Web Workers, WebGL, Web Audio, OPFS, etc.) — no external services or
+native binaries needed.
+
+================================================================================
+  SECTION 1: MISSING PANELS (ZERO IMPLEMENTATION)
+================================================================================
+
+These Photoshop panels have no corresponding file in components/photoshop/panels/:
+
+  1. Glyphs Panel
+     - No panel file exists
+     - Font glyph browsing, Unicode blocks, recently-used glyphs
+     - Effort: Medium (~300-400 lines UI + embedded OpenType cmap glyph listing)
+
+  2. Notes Panel
+     - No panel file exists
+     - Annotation notes list, author, timestamps, note navigation
+     - Note: Annotation data model exists in types.ts and annotations-panel.tsx
+       handles visual annotations, but there's no dedicated Notes panel UI
+     - Effort: Small (~100-150 lines)
+
+  3. Navigator Panel
+     - navigator-panel.tsx exists but was NOT listed by the file-picker
+     - VERIFY: Check if this panel is actually implemented or just a stub
+
+  4. Library Panel (Creative Cloud Libraries equivalent)
+     - No panel file exists; assets-panel.tsx handles local asset records
+     - Local library browsing/search/filtering works in assets-panel
+     - Gap: No grid/gallery-style library browser with drag-to-canvas
+     - Effort: Medium (~200-300 lines)
+
+  5. Discover Panel
+     - No dedicated panel file; learning-index.ts provides searchable index
+     - Gap: No browsable "Discover" panel UI with categories, tutorials,
+       featured workflows, command discovery
+     - Effort: Medium (~250-350 lines)
+
+  6. Learn Panel
+     - No dedicated panel file; learning-index.ts provides searchable index
+     - Gap: No sidebar "Learn" panel with contextual help, tutorials,
+       step-by-step guides
+     - Effort: Medium (~200-300 lines)
+
+================================================================================
+  SECTION 2: MISSING TOOLS (ZERO IMPLEMENTATION)
+================================================================================
+
+From Every_photoshop_feature.txt, the following tools have NO implementation
+at all (not even as a stub in the tool registry):
+
+  Selection Tools:
+  7. Single Row Marquee Tool — Not implemented
+  8. Single Column Marquee Tool — Not implemented
+  9. Object Selection Tool — Offline approximations exist but no dedicated
+     tool with on-canvas bounding box / click-to-select UX
+  10. 3D Material Eyedropper Tool — Not implemented (requires 3D surface)
+  11. Count Tool — Not implemented
+  12. Remove Tool — Not implemented as a dedicated tool; generative fill
+      workflow covers some removal use cases
+
+  Retouching Tools:
+  13. Content-Aware Move Tool — Not implemented as a dedicated tool
+  14. Red Eye Tool — Not implemented
+
+  Painting Tools:
+  15. Color Replacement Tool — Not implemented
+  16. Mixer Brush Tool — Not implemented
+
+  Clone/History Tools:
+  17. Art History Brush Tool — Not implemented
+
+  Eraser Tools:
+  18. Background Eraser Tool — Not implemented
+  19. Magic Eraser Tool — Not implemented
+
+  Gradient/Fill Tools:
+  20. 3D Material Drop Tool — Not implemented
+
+  Blur/Sharpen/Smudge Tools:
+  21. Blur Tool (painting blur) — Not implemented
+  22. Sharpen Tool (painting sharpen) — Not implemented
+  23. Smudge Tool — Not implemented
+
+  Dodge/Burn/Sponge Tools:
+  24. Dodge Tool — Not implemented
+  25. Burn Tool — Not implemented
+  26. Sponge Tool — Not implemented
+
+  Type Tools (Mask variants):
+  27. Horizontal Type Mask Tool — Not implemented
+  28. Vertical Type Mask Tool — Not implemented
+
+  Navigation Tools:
+  29. Rotate View Tool — Not implemented
+
+  Other:
+  30. Artboard Tool — Not implemented
+  31. Perspective Crop Tool — Not implemented (types possibly defined)
+  32. Note Tool — Not implemented as an on-canvas tool
+
+================================================================================
+  SECTION 3: PARTIALLY IMPLEMENTED — CAPABILITY REGISTRY (APPROXIMATION)
+================================================================================
+
+These features are registered in capabilities.ts with status "approximation"
+and have documented limitations that are still browser-fixable:
+
+  33. typography.3d-text — 3D Text Extrusion
+      Gap: Glyph meshes are editable approximations, not exact font outline
+      triangulations. Missing: proper font-outline-to-3D-mesh pipeline.
+      Effort: Large
+
+  34. 3d.advanced-import-export — Advanced 3D Import/Export
+      Gap: Exact proprietary vendor chunks (3DS/KMZ/U3D) are approximated.
+      Missing: fuller U3D block support, more 3DS material/chunk coverage.
+      Effort: Large
+
+  35. 3d.raytrace-cross-section-print — Ray Trace, Cross Section, Print
+      Gap: No GPU path tracer, vendor-grade physical renderer, or printer-
+      driver integration. CPU ray-trace is sampled, not production-grade.
+      Effort: Very Large (GPU path tracer = major sub-project)
+
+  36. format.psd — PSD Round-Trip
+      Gap: ag-psd hardcodes RGB/8bpc; high-bit/CMYK/Lab preserved as metadata
+      only. Some adjustments (shadows-highlights, hdr-toning, desaturate,
+      match-color, replace-color, equalize) use marker-name encoding.
+      Missing: native PSD descriptor emission for all adjustment types;
+      proper non-RGB/high-bit layered PSD export.
+      Effort: Very Large (limited by ag-psd capabilities)
+
+  37. psd.color-modes — PSD Color Modes & Bit Depth
+      Gap: ag-psd only encodes RGB/8bpc on disk. Non-RGB modes are metadata-
+      only. Missing: native CMYK/Grayscale/Lab/Multichannel PSD export.
+      Effort: Very Large (requires custom PSD writer for layered color modes)
+
+  38. psd.effects-adjustments — PSD Layer Effects & Adjustments
+      Gap: 6 adjustment types use marker-name fallback instead of native
+      ag-psd descriptors. Missing: native descriptor emission for all 22
+      adjustment types.
+      Effort: Medium
+
+  39. psd.vector-text — PSD Vector, Shapes, Text, Paths
+      Gap: Custom shape and extended text markers. Missing: fuller native PSD
+      text descriptor coverage (warp, advanced OpenType, paragraph styles).
+      Effort: Medium
+
+  40. psd.channels-masks — PSD Channels & Masks
+      Gap: Saved alpha channels go through hidden marker groups; spot channels
+      use naming conventions. Missing: native PSD channel/mask resource
+      emission through ag-psd where available.
+      Effort: Medium
+
+  41. psd.resources-metadata — PSD Image Resources & Metadata
+      Gap: IPTC/EXIF not surfaced by ag-psd; smart object bytes capped at
+      30MB; lossy print-settings mapping. Missing: IPTC/EXIF passthrough,
+      larger smart object payloads, richer print-settings preservation.
+      Effort: Medium
+
+  42. format.psb — PSB Large Document
+      Gap: Compositor still uses single HTML5 2D context. Missing: proper
+      tile-only mode for PSBs exceeding canvas limits; consistent "open at
+      reduced scale" UX for every import path.
+      Effort: Medium-Large
+
+  43. format.raw-dng — RAW/DNG
+      Gap: No RAW/DNG export, sidecar round-trip, camera/lens profile parity,
+      or non-destructive RAW pipeline. Missing: RAW-style export path; lens
+      profile database expansion.
+      Effort: Large
+
+  44. format.openexr — OpenEXR
+      Gap: Multipart/deep/tiled EXR, arbitrary production channel semantics,
+      OCIO transforms, true HDR editing. Missing: multipart EXR, tiled EXR,
+      OCIO-style look support.
+      Effort: Large
+
+  45. format.pdf — PDF
+      Gap: No editable vectors, embedded font editing, transparency group
+      preservation, annotations, or prepress metadata. Missing: multi-page
+      import with page selection; vector layer extraction from PDF.
+      Effort: Medium-Large
+
+  46. format.eps — EPS
+      Gap: No arbitrary PostScript, font resolution, separations, overprint,
+      or full editable vector import. Missing: broader EPS operator coverage.
+      Effort: Medium
+
+  47. format.heif — HEIF/HEIC
+      Gap: No HEVC/HEIC encoder, auxiliary/depth image handling. Missing:
+      HEVC-based HEIF export encoder.
+      Effort: Large (requires WASM encoder or WebCodecs support)
+
+  48. format.jpeg2000 — JPEG 2000
+      Gap: No JPX/JPM authoring, advanced color-box metadata, alpha channels.
+      Missing: alpha channel support in J2K export; JPX container.
+      Effort: Medium
+
+  49. format.dicom — DICOM
+      Gap: No compressed transfer syntaxes, overlays, diagnostic metadata
+      workflow, clinical validation. Missing: compressed DICOM import.
+      Effort: Medium
+
+  50. smart-object.linked — Linked Smart Objects
+      Gap: No native file watcher or external linked-document sync daemon.
+      Missing: could implement periodic file poll via File System Access API
+      handle persistence.
+      Effort: Medium
+
+  51. workflow.content-aware-scale — Content-Aware Scale
+      Gap: Large changes fall back to resampling; no protected skin-tone/
+      object models. Missing: better saliency detection for protected regions
+      in seam carving.
+      Effort: Medium
+
+  52. external.native-plugins — Plugin Runtime Compatibility
+      Gap: UXP/CEP adapters expose a documented browser subset, not full
+      Adobe host process. Missing: broader Action Manager descriptor coverage;
+      deeper UXP DOM compatibility.
+      Effort: Large
+
+================================================================================
+  SECTION 3B: CAPABILITY REGISTRY — UNSUPPORTED
+================================================================================
+
+  53. external.cloud-libraries — Creative Cloud Libraries
+      Status: unsupported (by design, per BOUNDARIES.md)
+      Local equivalent: asset-library records exist but no cloud sync
+
+  54. UNKNOWN_CAPABILITY fallback
+      Any feature not in the registry defaults to "unsupported" — this is
+      the catch-all for unregistered Photoshop features.
+
+================================================================================
+  SECTION 4: PARTIALLY IMPLEMENTED — WITH IMPLEMENTABLE REMAINING GAPS
+================================================================================
+
+These have "usable" or "approximation" status but have concrete, implementable
+gaps from the implementable-gap-report.txt and other analysis:
+
+TOOLS — Specific Gaps:
+
+  55. Polygon / Triangle Tool (tool.shape-polygon)
+      Status: usable. Missing: star mode with inset ratio slider, smooth
+      corners/indents checkboxes, star/polygon options-bar controls.
+      Effort: Small (~100 lines canvas + ~50 lines UI)
+
+  56. Quick Selection Tool (tool.quick-selection)
+      Status: usable. Missing: tolerance slider, sample size (point/3×3/5×5),
+      contiguous checkbox, grow/shrink selection buttons.
+      Effort: Small (~100 lines)
+
+  57. Freeform Pen Tool (tool.freeform-pen)
+      Status: usable. Missing: rubber-band preview while drawing, configurable
+      magnetic width/contrast hysteresis parameters in options bar.
+      Effort: Small (~80 lines)
+
+  58. Slice Select Tool (tool.slice-select)
+      Status: usable. Missing: per-slice export format/quality/filename
+      settings, "Export All Slices" batch action.
+      Effort: Medium (~150 lines UI + slice iteration)
+
+  59. Magnetic Lasso (tool.magnetic-lasso)
+      Status: usable. Implemented: Scharr gradients, non-max suppression,
+      hysteresis linking, smoothing, high-bit source support.
+      Missing: on-canvas width indicator, live preview of detected edges
+      while tracing, configurable frequency for auto-anchor placement.
+      Effort: Small (~80 lines)
+
+  60. On-Canvas Bezier Editing (tool.anchor-editing)
+      Status: usable. Implemented: anchor/handle drag, symmetric/broken
+      modes, subpath hit testing, shape computed paths.
+      Missing: multi-anchor group selection and movement, richer subpath
+      selection affordances, modifier-key parity for every native Photoshop
+      path shortcut.
+      Effort: Medium (~200-300 lines)
+
+TYPOGRAPHY — Specific Gaps:
+
+  61. Variable Font Axes (typography.variable-fonts)
+      Status: usable. Missing: interactive sliders per axis (wght, wdth,
+      opsz, slnt, ital), named instance preset dropdown, live preview.
+      Effort: Medium (~200 lines UI + font introspection)
+
+  62. Find/Replace Text (typography.text-editing)
+      Status: usable. Missing: regex/grep mode toggle, "highlight all
+      matches" across layers, match count display.
+      Effort: Small (~80 lines)
+
+  63. OpenType Controls (typography.opentype-aa)
+      Status: usable. Missing: toggle grid showing all supported OpenType
+      features for active font ("frac", "sups", "subs", "ordn", "zero",
+      "onum"), detect available features via document.fonts API.
+      Effort: Small (~100 lines)
+
+  64. Vertical Type Tool (tool.vertical-type)
+      Status: usable. Missing: text-orientation toggle (mixed/upright/
+      sideways), vertical glyph spacing controls, mojikumi settings,
+      Tate Chu Yoko controls.
+      Note: Types define these controls but full UI may not expose all.
+      Effort: Small (~80 lines)
+
+  65. Font Preview / Missing-Font Diagnostics (typography.font-diagnostics)
+      Status: usable. Missing: side-by-side substitution preview rendering,
+      font specimen rendering ("The quick brown fox..."), system fonts list
+      with visual previews.
+      Effort: Small (~150 lines UI)
+
+  66. Match Font (typography.match-font)
+      Status: usable. Missing: visual comparison of top-N candidates before
+      applying, confidence scores display.
+      Effort: Small (~100 lines)
+
+VIDEO — Specific Gaps:
+
+  67. Timeline Editing (video.timeline-editing)
+      Status: usable. Missing: frame-accurate trim handles with thumbnails
+      along timeline, split-at-playhead button with keyboard shortcuts
+      (I/O/Ctrl+K), visual trim handle model for precise scrubbing.
+      Effort: Large (~400-600 lines timeline UI)
+
+  68. Video Transitions
+      Status: data model exists (transition metadata, weights). Missing:
+      render transition previews on canvas (cross-dissolve frame blending,
+      fade in/out per-frame opacity), transition duration slider on timeline.
+      Effort: Medium (~250-350 lines)
+
+  69. Audio Export (video.audio-mixing)
+      Status: usable. OfflineAudioContext WAV export exists.
+      Missing: no real-time audio mixer UI with per-track sliders, mute/solo
+      buttons, VU meters, or waveform visualization.
+      Effort: Medium (~200-300 lines UI)
+
+  70. Frame Animation Export
+      Status: partially implemented. Encoder integration from timeline UI
+      exists. Missing: frame extraction from timeline at configurable FPS,
+      animated GIF encoder integration in timeline panel, animated WebP
+      frame assembly, progress indicator for animation encoding.
+      Effort: Large (~400-600 lines)
+
+COLOR — Specific Gaps:
+
+  71. Bit Depth Status Indicator (color.browser-rgba)
+      Status: usable. Missing: status bar indicator "Editing at 8-bit |
+      Document: 16-bit", warning badge when operations lose precision,
+      histogram panel computed from canvas data.
+      Effort: Small (~80 lines UI)
+
+  72. High-Bit Pipeline (color.high-bit-pipeline)
+      Status: usable. Missing: routing more filters through high-bit buffers
+      (levels, curves, brightness/contrast, exposure on Float32Array),
+      info panel showing actual 16/32-bit pixel values under cursor, UI
+      comparing source high-bit vs 8-bit preview values.
+      Effort: Medium (~300-400 lines)
+
+  73. ICC Conversion (color.icc-conversion)
+      Status: usable. Matrix+TRC RGB/Gray/CMYK profiles work.
+      Missing: CLUT/device-link tag *parsing* (not execution — parsing the
+      tag data for diagnostics/reporting purposes), Assign Profile and
+      Convert To Profile UI commands, export conversion pipeline with
+      profile selection.
+      Effort: Large (~500-800 lines for full pipeline)
+
+SMART OBJECTS / SMART FILTERS — Specific Gaps:
+
+  74. Smart Filter Reordering
+      Status: Implemented (drag-and-drop in Filter Gallery, Properties,
+      Layers panel). Missing: confirmation of full coverage across all
+      smart filter surfaces.
+      Effort: Small (verification + minor fixes)
+
+  75. Smart Filter Mask Editing (smart-object.filters)
+      Status: usable. On-canvas mask painting with density/feather exists.
+      Missing: smart filter mask thumbnail in layers panel showing mask
+      preview, per-filter enable/disable toggle visible as eye icon, mask
+      linking/unlinking from filter.
+      Effort: Small (~100 lines UI)
+
+  76. Smart Object Relink
+      Status: approximation (smart-object.linked). Missing: "Relink to File"
+      UI that uses File System Access API to persist file handles, periodic
+      polling for linked file modification detection, "Update Modified
+      Content" notification.
+      Effort: Medium (~250 lines)
+
+FILTERS — Specific Gaps:
+
+  77. Blur Gallery On-Canvas Pins (filter.blur-gallery)
+      Status: usable. Algorithms and on-canvas control state exist.
+      Missing: Field Blur multi-pin placement with smooth interpolation,
+      Iris Blur draggable ellipse overlay, Tilt-Shift draggable parallel
+      lines, Path Blur draggable control points, Spin Blur draggable
+      center+radius control.
+      Effort: Large (~600-1000 lines interactive overlay for all blur types)
+
+  78. Worker Filter Coverage (filter.worker-expanded)
+      Status: usable. Context-free registry filters are worker-supported.
+      Missing: systematic audit of all 60+ filters for worker compatibility,
+      batch filter operations in workers, progress callback from worker.
+      Effort: Medium (~200-300 lines audit + refactor)
+
+  79. Filter Gallery Presets & Combinations
+      Gap: No ability to combine multiple Filter Gallery filters into a
+      single non-destructive stack, no Filter Gallery preset save/load,
+      no per-layer filter visibility toggle in Filter Gallery view.
+      Effort: Medium (~200-300 lines)
+
+PERFORMANCE — Specific Gaps:
+
+  80. WebGL Compositor (webgl-compositor.ts)
+      Status: usable but limited. Implemented: WebGL layer-stack compositor
+      with fallback to Canvas 2D, all blend modes, per-layer fallback
+      reasons, tiled GPU path for large documents.
+      Missing: GPU-accelerated filter chain for compatible filters, full
+      integration with adjustment layer rendering on GPU, layer effects
+      (drop shadow, bevel, etc.) rendered through WebGL, smart filter
+      compositing on GPU.
+      Effort: Very Large (~2000+ lines — the single highest-impact gap)
+
+  81. Progressive Preview (performance.progressive-preview)
+      Status: usable. Missing: bicubic/bilinear downsampling for smoother
+      coarse pass (currently nearest-neighbor), progressive tile refinement
+      (individual tiles refined from coarse to fine), cancel existing
+      refinement pass on new interaction.
+      Effort: Small (~80 lines)
+
+  82. Dirty-Rect Tracking (performance.dirty-rect-invalidation)
+      Status: usable. Missing: per-layer dirty rects (currently per-layer
+      tracking merges across layers), layer-isolated redraw with scissor,
+      adaptive promotion threshold based on document size.
+      Effort: Medium (~200-300 lines)
+
+  83. Memory Budget (performance.memory-budget)
+      Status: usable. Missing: heap introspection via performance.memory
+      API (Chrome only, graceful fallback), GC pressure detection, status
+      bar memory usage display.
+      Effort: Small (~80 lines)
+
+  84. OffscreenCanvas Diagnostics (performance.offscreen-canvas)
+      Status: usable. Missing: diagnostics panel showing active OffscreenCanvas
+      workers, reason for transfer failures, graceful degradation indicator.
+      Effort: Small (~80 lines)
+
+  85. Canvas Pooling
+      Status: partially implemented. Missing: size-bucketed pools (separate
+      pools for small/medium/large), idle cleanup of oversized canvases,
+      pool statistics (hit/miss rate).
+      Effort: Small (~60 lines)
+
+  86. RAF Coalescer (raf-coalescer.ts)
+      Status: implemented but basic. Missing: priority levels (input > filter
+      preview > UI), coalesced filter previews (skip intermediate renders
+      during slider drag), budget-aware rendering (measure last frame time,
+      skip non-critical renders if budget exceeded).
+      Effort: Medium (~150 lines)
+
+  87. Incremental Autosave (performance.incremental-autosave)
+      Status: usable. Missing: background idle-time compaction via
+      requestIdleCallback, streaming compression of delta entries using
+      CompressionStream, smarter fingerprinting to detect near-identical
+      deltas and merge them.
+      Effort: Medium (~150-200 lines)
+
+  88. Tiled Backing Store (performance.tiled-backing-store)
+      Status: usable. Missing: tile smart object layers (render SO content
+      per tile, cache in tile store), tile 3D layer previews, tile
+      invalidation for smart objects when source changes.
+      Effort: Medium (~200-300 lines)
+
+  89. Large Documents (performance.large-documents)
+      Status: usable. Missing: consistent "open at reduced scale" UX for
+      every oversized import path, full tile-only mode for documents
+      exceeding canvas limits, per-browser canvas/GPU/memory diagnostics
+      in UI, user-facing recovery options when limits are hit mid-operation.
+      Effort: Medium-Large (~300-500 lines)
+
+FORMATS / EXPORT — Specific Gaps:
+
+  90. TIFF Compressed Export (format.baseline-tiff)
+      Status: usable. Export is uncompressed. Missing: LZW compression
+      encoder on typed arrays, Deflate via CompressionStream API, compression
+      options in export dialog.
+      Effort: Medium (~200 lines LZW encoder + UI)
+
+  91. TGA Export
+      Status: usable per capability registry. TGA encoders exist in
+      raster-codecs.ts. Verify: ensure TGA export is fully wired through
+      the export dialog and export-as-dialog.
+      Effort: Small (verification + wiring if needed)
+
+  92. PNM Export
+      Status: usable per capability registry. PNM encoders exist. Verify:
+      ensure PBM/PGM/PPM export is fully wired through the export dialog.
+      Effort: Small (verification + wiring if needed)
+
+  93. Progressive JPEG / Interlaced PNG
+      Status: partially implemented (export.browser-raster says interlaced
+      PNG and progressive JPEG exist). Verify full coverage. Missing: may
+      need UI checkboxes in export dialog for progressive/interlace toggles.
+      Effort: Small (verification)
+
+  94. Metadata Embedding in Exports
+      Status: PNG text/iTXt/XMP, JPEG XMP APP1 exist. Missing: TIFF
+      IPTC/XMP/EXIF directory authoring, WebP metadata, AVIF metadata,
+      TGA extension/developer metadata.
+      Effort: Medium (~200-300 lines across formats)
+
+  95. Export Limitation Report
+      Gap: No unified "what will be lost on export" preview before export.
+      Missing: pre-export dialog showing per-format limitations, suggested
+      alternatives, one-click "export with limitations acknowledged".
+      Effort: Small (~100 lines)
+
+  96. Multi-Page PDF Export
+      Status: partially implemented. Single-page and multi-page flattened
+      PDF export exists via pdf-lib. Missing: multi-page PDF import with
+      page selection UI, page-to-layer/document mapping.
+      Effort: Medium (~200-300 lines)
+
+WORKFLOWS — Specific Gaps:
+
+  97. Contact Sheet / Picture Package (contact-sheet.ts)
+      Status: partially implemented. Layout, labels, preview, export, auto-
+      pagination exist. Missing: picture package template presets (2×2, 4×4,
+      wallet sizes, etc.), more print/photo package presets, drag-and-drop
+      image reordering in contact sheet grid.
+      Effort: Medium (~200-300 lines)
+
+  98. Content-Aware Fill Workspace
+      Status: usable (generative-fill-engine.ts). Prompt-guided fill with
+      model endpoint contract exists. Missing: dedicated Content-Aware Fill
+      workspace UI with sampling area overlay, rotation adaptation, mirror
+      mode, scale mode, color adaptation toggles, preview with "apply"/
+      "cancel" in a non-modal panel.
+      Effort: Medium (~200-300 lines)
+
+  99. Liquify Face-Aware Controls
+      Status: liquify-engine.ts exists with basic forward warp, reconstruct,
+      twirl, pucker, bloat, push, freeze/thaw, mesh save/load.
+      Missing: face-aware liquify (auto-detect face landmarks for eyes, nose,
+      mouth, face shape controls), which requires face detection that IS
+      browser-implementable (no external API needed — could use face-api.js
+      or similar local model).
+      Effort: Large (~500 lines + face detection dependency)
+
+  100. Photomerge Advanced Controls
+       Status: usable. Missing: cylindrical/spherical preview with interactive
+       projection adjustment, lens distortion correction preview, boundary
+       warp slider, content-aware fill for transparent edges.
+       Effort: Medium (~200-300 lines)
+
+  101. HDR Merge Advanced Controls
+       Status: usable. Missing: ghost removal preview overlay (highlight
+       detected ghosts), response curve visualization, tone-mapping method
+       selector (local/gamma/reinhard), EV adjustment per source.
+       Effort: Medium (~200-300 lines)
+
+PREFERENCES — Specific Gaps:
+
+  102. Custom Canvas Cursors (preferences.cursor-tool-units)
+       Status: usable. Missing: per-tool custom cursor rendering (brush size
+       circle, crosshair with tool icon) on cursor-following canvas overlay,
+       precise vs standard cursor toggle with live preview.
+       Effort: Small (~100 lines)
+
+  103. Keyboard Shortcut Customization UI
+       Status: shortcuts.ts exists with keyboard bindings. Missing: visual
+       keyboard shortcut editor with conflict detection, searchable command
+       list, import/export shortcut sets, per-workspace shortcut overrides.
+       Effort: Medium (~300-400 lines)
+
+  104. Menu Customization
+       Gap: No ability to customize menus (hide/show menu items, reorder,
+       add custom color to menu items). Missing: menu customization dialog.
+       Effort: Medium (~200-300 lines)
+
+  105. Workspace Customization — Save/Restore Panel Positions
+       Status: workspace-layouts.ts exists. Missing: save/restore individual
+       panel positions within dock areas, panel auto-hide/collapse persistence,
+       custom workspace thumbnail preview during save.
+       Effort: Small (~100-150 lines)
+
+UI / PANEL FEATURES — Specific Gaps:
+
+  106. Navigator Panel
+       Status: navigator-panel.tsx exists. Missing: view rectangle overlay
+       on thumbnail showing current viewport, drag-to-pan via navigator,
+       zoom slider in navigator.
+       Effort: Small (~80 lines)
+
+  107. Info Panel Enhancements
+       Status: info-panel.tsx exists with basic color/pixel readouts.
+       Missing: tool-specific info (selection dimensions during marquee,
+       angle/distance during line tool, transform percentages during free
+       transform), document timing/profiling info, color proof readout.
+       Effort: Small (~100-150 lines)
+
+  108. Histogram Panel
+       Status: inspection-panels.tsx exists. Missing: live histogram that
+       updates during editing, individual channel histograms (R/G/B/L),
+       histogram with statistics (mean, std dev, median, pixels, level,
+       count, percentile, cache level).
+       Effort: Medium (~200-300 lines)
+
+  109. Styles Panel
+       Gap: No styles panel. Layer styles can be applied per-layer but
+       there's no style preset gallery/management panel. Missing: style
+       preset browser, save/load/delete styles, import/export style sets,
+       apply style to multiple layers.
+       Effort: Medium (~250-350 lines)
+
+  110. Layer Comps Panel
+       Status: layer-comps-panel.tsx exists. Missing: comp snapshot previews
+       (thumbnail of each comp), comp-to-file export, comp-to-PDF export,
+       comp update warning when layers change outside comp.
+       Effort: Small (~100-150 lines)
+
+  111. Comments Panel Enhancements
+       Status: annotations-panel.tsx exists with notes/comments/threads.
+       Missing: comment pin drag-and-drop reposition on canvas, comment
+       filtering (open/resolved/all/author), comment export as PDF review
+       annotations, @mention-style author referencing.
+       Effort: Medium (~200-300 lines)
+
+  112. Actions Panel — Conditional Actions
+       Status: actions-panel.tsx exists. Missing: conditional action steps
+       (if/then/else based on document properties), insert path in action,
+       playback speed options (accelerated/step-by-step/pause for input),
+       action set organization with folders.
+       Effort: Medium (~250-350 lines)
+
+  113. Tool Presets Panel
+       Status: tool-presets-panel.tsx exists. Missing: tool-specific preset
+       organization, preset search/filter, preset drag-and-drop reordering,
+       current tool-only filter toggle.
+       Effort: Small (~80-100 lines)
+
+  114. Swatches Panel — Color Book Support
+       Status: swatches-panel.tsx exists. Missing: color book library
+       integration (PANTONE, TOYO, etc.), swatch group organization,
+       swatch search by name, recently-used swatches section.
+       Effort: Medium (~200-300 lines)
+
+  115. Gradients Panel — Freeform Gradient Editing
+       Status: gradients-panel.tsx exists. Missing: freeform gradient editor
+       with on-gradient drag-to-add-color-stops, noise gradient generation
+       with parameter controls, gradient dither toggle, gradient preview
+       as bar + angle ring.
+       Effort: Medium (~300-400 lines)
+
+  116. Patterns Panel — Scripted Pattern Generation
+       Status: patterns-panel.tsx exists. Missing: scripted pattern
+       generation (brick fill, cross weave, etc.), pattern preview at actual
+       size tile, pattern opacity/scale/blend mode preset in panel.
+       Effort: Small (~100-150 lines)
+
+  117. Character + Paragraph Panels
+       Status: character-paragraph-panels.tsx exists. Missing: character
+       style management (create/apply/delete styles), paragraph style
+       management, style override highlighting, load/save style sets,
+       style search/filter.
+       Effort: Medium (~300-400 lines)
+
+  118. Brush Panel — Symmetry Painting
+       Status: brush-panel.tsx exists. Missing: symmetry painting mode
+       selection (vertical, horizontal, dual axis, diagonal, wavy, circle,
+       spiral, parallel lines, radial, mandala), symmetry axis count/
+       angle controls, live symmetry preview on canvas.
+       Effort: Medium (~200-300 lines)
+
+  119. Brush Panel — Erodible/Bristle Brush Tips
+       Status: brush-panel.tsx exists. Missing: erodible brush tip simulation
+       (sharp/flat tip shapes, softness, aspect ratio, angle), bristle brush
+       tip simulation (bristle length/density/thickness/stiffness), visual
+       brush tip preview updating with parameter changes.
+       Effort: Large (~500-800 lines — physics-based brush simulation)
+
+  120. Clone Source Panel
+       Status: clone-source-panel.tsx exists. Verify full implementation:
+       should include up to 5 clone sources with offset/scale/rotation per
+       source, overlay preview toggle, auto-hide overlay, invert overlay.
+       Effort: Small (verification)
+
+LAYER & COMPOSITING — Specific Gaps:
+
+  121. Layer Filtering in Layers Panel
+       Status: layers-panel.tsx exists. Missing: filter layers by kind
+       (pixel, adjustment, type, shape, smart object, video, 3D), by name
+       search, by effect (has layer style), by mode (has specific blend mode),
+       by attribute (visible/locked/empty/linked/clipped/layer mask/vector
+       mask), by color label, by selected, by artboard.
+       Effort: Medium (~200-300 lines)
+
+  122. Layer Color Coding
+       Gap: No ability to assign color labels to layers (red, orange, yellow,
+       green, blue, violet, gray) for visual organization. Missing: right-
+       click color label submenu, color indicator dot on layer entry.
+       Effort: Small (~60 lines)
+
+  123. Isolate Layers
+       Gap: No "Isolate Layers" mode that temporarily shows only the
+       selected layer(s). Missing: isolate toggle, isolated layer breadcrumb,
+       exit isolation button.
+       Effort: Small (~80 lines)
+
+  124. Layer Comps — Apply/Update/Delete
+       Status: layer-comps-panel.tsx exists. Verify: apply comp (restore
+       visibility/position/appearance), update comp (overwrite with current
+       state), delete comp, cycle comps (previous/next buttons).
+       Effort: Small (verification)
+
+  125. Knockout Blending
+       Gap: "Knockout" blending option (shallow/deep/none) in advanced
+       blending — not implemented. Missing: knockout rendering in compositor,
+       UI in layer style blending options.
+       Effort: Medium (~200-300 lines)
+
+  126. Blend If Sliders
+       Gap: "Blend If" sliders (This Layer / Underlying Layer) in advanced
+       blending options — not implemented. Missing: blend-if UI with gradient
+       sliders, split-slider (Alt-drag to split), real-time preview.
+       Effort: Medium (~250-350 lines)
+
+  127. Transparency Shapes Layer
+       Gap: "Transparency Shapes Layer" toggle in advanced blending.
+       Missing: UI toggle, compositing logic.
+       Effort: Small (~60 lines)
+
+  128. Layer Mask Hides Effects
+       Gap: "Layer Mask Hides Effects" toggle. Missing: UI toggle,
+       compositing logic.
+       Effort: Small (~60 lines)
+
+  129. Vector Mask Hides Effects
+       Gap: "Vector Mask Hides Effects" toggle. Missing: UI toggle,
+       compositing logic.
+       Effort: Small (~60 lines)
+
+  130. Auto-Blend Layers (Focus Stacking)
+       Gap: Focus stacking workflow using "Stack Mode" smart object stack.
+       Missing: focus-stacking specific blend that picks sharpest pixel
+       from each layer based on local contrast, UI for auto-blend with
+       "stack images" and "seamless tones and colors" options.
+       Effort: Medium (~200-300 lines)
+
+  131. Flatten All Layer Effects
+       Gap: "Flatten All Layer Effects" script/command — not implemented.
+       Missing: command that rasterizes all layer effects on all layers
+       into their respective layer pixels.
+       Effort: Small (~80 lines)
+
+  132. Flatten All Masks
+       Gap: "Flatten All Masks" script/command — not implemented.
+       Missing: command that applies all layer masks and vector masks.
+       Effort: Small (~80 lines)
+
+  133. Delete All Empty Layers
+       Gap: "Delete All Empty Layers" script/command — not implemented.
+       Missing: command that removes layers with no visible pixel content.
+       Effort: Small (~60 lines)
+
+VECTOR / PATH — Specific Gaps:
+
+  134. Path Operations (Combine/Subtract/Intersect/Exclude)
+       Gap: Path boolean operations as real-time shape operations.
+       Status: exact rectangle-component booleans exist; complex curved
+       operands use flattened path resolution.
+       Missing: proper bezier path boolean operations (compute intersections
+       of cubic bezier curves, split at intersections, reassemble).
+       Effort: Very Large (~1000-2000 lines — bezier boolean ops are complex)
+
+  135. Align/Distribute Path Components
+       Gap: No UI to align or distribute multiple selected path components.
+       Missing: align (left/center/right/top/middle/bottom), distribute
+       (horizontal/vertical spacing) for path components.
+       Effort: Small (~100 lines)
+
+  136. Define Custom Shape from Path
+       Gap: No "Define Custom Shape" workflow.
+       Missing: save current path as a named custom shape preset, custom
+       shape library browsing, import/export custom shape sets.
+       Effort: Medium (~200-300 lines)
+
+  137. Stroke Path with Brush
+       Gap: Stroke Path command that uses current brush settings.
+       Status: basic stroke path exists. Missing: simulate brush pressure
+       along path (varying stroke width/opacity based on brush dynamics),
+       preview of stroked path before committing.
+       Effort: Medium (~200-300 lines)
+
+SELECTION — Specific Gaps:
+
+  138. Grow / Similar Selection
+       Gap: "Grow" (expand selection to adjacent similar pixels) and
+       "Similar" (select all similar pixels in image) commands.
+       Status: not implemented. Missing: color-range-based selection
+       expansion with configurable tolerance.
+       Effort: Small (~100 lines)
+
+  139. Transform Selection
+       Gap: Transform selection boundary independently of content.
+       Missing: selection-only transform mode, selection transform handles,
+       interactive selection scaling/rotation/skew.
+       Effort: Medium (~200-300 lines)
+
+  140. Save/Load Selection
+       Gap: Save selection as alpha channel, load alpha channel as selection.
+       Status: alpha channel data model exists. Missing: "Save Selection"
+       dialog (name, channel, operation), "Load Selection" dialog with
+       channel picker and operation (new/add/subtract/intersect).
+       Effort: Small (~150 lines)
+
+  141. Focus Area Selection
+       Gap: Select in-focus areas of an image.
+       Missing: local focus detection (high-pass filter + threshold),
+       Focus Area dialog with in-focus range parameter and preview.
+       Effort: Medium (~250 lines)
+
+CHANNELS — Specific Gaps:
+
+  142. Channel Calculations
+       Gap: "Calculations" command (Image > Calculations).
+       Missing: blend two channels with blend modes and opacity to create
+       new channel or selection, dialog with source 1/source 2 (layer,
+       channel, invert), blending options, result destination.
+       Effort: Medium (~300-400 lines)
+
+  143. Apply Image
+       Gap: "Apply Image" command (Image > Apply Image).
+       Missing: blend a source layer/channel onto target with blend modes,
+       dialog with source/target/blending/mask options, preserve transparency
+       and invert options.
+       Effort: Medium (~300-400 lines)
+
+  144. Split/Merge Channels
+       Gap: Split channels into separate grayscale documents, merge channels
+       into a color document. Missing: split to separate docs, merge dialog
+       with mode selection (RGB/CMYK/Lab/Multichannel) and per-channel file
+       picker.
+       Effort: Medium (~250-350 lines)
+
+  145. Spot Channel Overprint Preview
+       Status: color-channel-ops.ts has spot overprint preview. Verify:
+       ensure spot channel color/intensity/solidity controls are exposed
+       in the channels panel UI.
+       Effort: Small (verification)
+
+MEASUREMENT — Specific Gaps:
+
+  146. Measurement Scale
+       Gap: Set measurement scale (logical units per pixel), apply scale
+       to ruler tool measurements. Missing: measurement scale dialog
+       (logical length, logical units, pixel length), scale marker placement.
+       Effort: Small (~100 lines)
+
+  147. Measurement Log
+       Gap: Record measurements panel. Missing: measurement log panel
+       showing recorded ruler/selection measurements with columns (label,
+       value, units, source).
+       Effort: Small (~100-150 lines)
+
+  148. Place Scale Marker
+       Gap: Place scale marker on image for print/microscopy use.
+       Missing: scale marker dialog (length, font, color, position),
+       render scale marker bar + text on a dedicated layer.
+       Effort: Small (~100 lines)
+
+PRINTING — Specific Gaps:
+
+  149. Print Dialog
+       Gap: No print dialog with full Photoshop-esque controls.
+       Status: may rely on browser window.print(). Missing: position & size
+       preview on page, print resolution control, scale to fit media toggle,
+       print selected area only, print marks (registration, corner crop,
+       center crop, description, labels), background color, border, bleed.
+       Effort: Medium (~300-500 lines)
+
+  150. Print Size Preview
+       Gap: "Print Size" view mode showing actual physical dimensions based
+       on screen DPI calibration. Missing: zoom-to-print-size command that
+       uses the calibration DPI to show true print dimensions on screen.
+       Effort: Small (~60 lines)
+
+MISCELLANEOUS — Specific Gaps:
+
+  151. Variables & Data Sets
+       Gap: Define document variables (visibility, text replacement, pixel
+       replacement), create data sets, apply data sets. Missing: variables
+       definition dialog, data set editor, preview/apply data set, import
+       data sets from CSV/JSON.
+       Effort: Large (~600-800 lines)
+
+  152. Trap
+       Gap: Image > Trap command for prepress trapping.
+       Missing: trap width dialog, basic trapping algorithm (spread/choke
+       at color boundaries).
+       Effort: Medium (~200-300 lines)
+
+  153. Duotone Mode
+       Gap: Convert image to duotone (monotone/duotone/tritone/quadtone)
+       with custom ink curves. Missing: duotone curve editor (per-ink
+       transfer curve), duotone preset library, ink color picker with
+       PANTONE-style naming, overprint preview.
+       Effort: Large (~500-700 lines)
+
+  154. Indexed Color Mode / Color Table
+       Gap: Convert to indexed color with custom color table/LUT.
+       Missing: color table editor (edit individual entries, load/save
+       ACT/ACO palettes), indexed color options (palette type, colors
+       count, forced colors, transparency, dither options).
+       Effort: Large (~500-700 lines)
+
+  155. Bitmap Mode
+       Gap: Convert to bitmap (1-bit) with halftone screen/diffusion dither/
+       pattern dither options. Missing: halftone screen simulator (frequency,
+       angle, shape — round/diamond/ellipse/line/square/cross), diffusion
+       dither (Floyd-Steinberg), pattern dither, threshold method.
+       Effort: Medium (~300-400 lines)
+
+  156. Multichannel Mode
+       Gap: Convert to multichannel mode. Missing: mode conversion that
+       splits channels into independent alpha/spot channels, channel
+       management for arbitrary channel counts.
+       Effort: Medium (~200-300 lines)
+
+  157. Crop and Straighten Photos (Automate)
+       Gap: Batch "Crop and Straighten Photos" from Automate menu.
+       Missing: detect individual photos in a flatbed scan via edge
+       detection, auto-crop and rotate each sub-image, output as
+       separate documents or layers.
+       Effort: Medium (~300-400 lines)
+
+  158. Fit Image (Automate)
+       Gap: "Fit Image" command that resizes document to fit within
+       specified max width/height while maintaining aspect ratio.
+       Missing: dialog with max width/height fields, constrain proportions
+       toggle, don't enlarge option.
+       Effort: Small (~60 lines)
+
+  159. Image Processor (Script)
+       Gap: Script that processes multiple images with resize, convert
+       profile, and save in multiple formats. Missing: image processor
+       dialog with source/destination folders, file type options per
+       format, resize to fit, actions to run.
+       Effort: Medium (~300-400 lines)
+
+  160. PDF Presentation (Automate)
+       Gap: Create multi-page PDF presentation from open documents.
+       Missing: source file selection (add open files / browse), output
+       options (multi-page document or presentation with transition),
+       transition options (advance timing, loop, transition type).
+       Effort: Medium (~300-400 lines)
+
+  161. Conditional Mode Change (Automate)
+       Gap: Batch convert document mode based on current mode conditions.
+       Missing: source mode condition, target mode selection, batch
+       processing integration.
+       Effort: Small (~100 lines)
+
+  162. Photomerge UI Enhancements
+       Status: usable. Missing: dedicated Photomerge dialog UI (currently
+       may be only through engine calls), source file browser, layout
+       preview with projection selection, options (blend images together,
+       vignette removal, geometric distortion correction, content-aware
+       fill transparent areas).
+       Effort: Medium (~250-350 lines)
+
+  163. Purge Commands
+       Gap: Purge (Undo, Clipboard, Histories, All, Video Cache) to
+       free memory. Missing: purge command with granular options,
+       memory freed notification.
+       Effort: Small (~60 lines)
+
+  164. Browse in Bridge
+       Gap: "Browse in Bridge" or any local file browser integration.
+       Missing: may not be needed but "Reveal in Explorer/Finder" via
+       File System Access API could show file location.
+       Effort: Small (~40 lines)
+
+  165. Color Picker Enhancements
+       Gap: HUD color picker (on-canvas popup color picker), Adobe Color
+       Picker style dialog with HSB/RGB/Lab/CMYK/Web color fields, color
+       harmony rules (complementary, analogous, etc.).
+       Effort: Medium (~300-500 lines)
+
+  166. Preset Manager
+       Gap: Centralized preset manager for brushes, swatches, gradients,
+       styles, patterns, contours, custom shapes, tools. Missing: unified
+       preset browser UI, drag-and-drop between sets, rename/delete presets,
+       load/save preset libraries.
+       Effort: Medium (~300-400 lines)
+
+  167. Screen Modes
+       Gap: Standard Screen Mode, Full Screen with Menu Bar, Full Screen.
+       Missing: screen mode toggle button(s), F key cycling, actual CSS
+       fullscreen API integration.
+       Effort: Small (~80 lines)
+
+  168. Home Screen / Start Workspace
+       Gap: Photoshop-style home screen with recent files, new document
+       presets, learning content. Missing: home screen component, recent
+       document thumbnails, "New File" quick-start grid.
+       Effort: Medium (~300-400 lines)
+
+  169. Rich Tooltips
+       Gap: Rich tooltips with animated previews showing tool usage.
+       Missing: tooltip with GIF/video-style animation, longer description,
+       "Learn more" link.
+       Effort: Medium (~250-350 lines)
+
+  170. Search (Edit > Search / Cmd+Ctrl+F)
+       Gap: In-app search for commands, tools, panels, help content.
+       Status: command-palette.tsx provides basic search. Missing: search
+       across help/learn content, search within current document (find
+       layer by name), search stock/adobe fonts (if connected).
+       Effort: Small (~100 lines extension to command palette)
+
+  171. Copy CSS / Copy SVG
+       Gap: Right-click "Copy CSS" for shape layers (generates CSS for
+       the shape), "Copy SVG" for vector/path layers.
+       Missing: CSS generator from shape properties (border-radius,
+       background, box-shadow for layer effects), SVG path data extraction.
+       Effort: Small (~100 lines)
+
+  172. Image Assets Generator
+       Gap: Adobe Generator-style auto-export by layer naming convention.
+       Missing: watch for layers named with file extension (e.g.,
+       "icon.png, 200% icon@2x.png"), auto-export on save with specified
+       scale/format.
+       Effort: Medium (~250-350 lines)
+
+  173. Flatten Transparency
+       Gap: Layer > Flatten Transparency command (makes semi-transparent
+       pixels opaque by compositing against current background color).
+       Missing: command + reducer action.
+       Effort: Small (~60 lines)
+
+  174. Rasterize Sub-Options
+       Gap: Rasterize with specific scope (Layer, Smart Object, Type,
+       Shape, Fill Content, Vector Mask, All Layers). Missing: rasterize
+       submenu with per-type rasterization that preserves only the
+       specified element type.
+       Effort: Small (~100-150 lines)
+
+  175. Convert to Profile / Assign Profile UI
+       Gap: Dedicated color profile dialogs. Missing: Assign Profile
+       dialog (don't color manage, working RGB, profile list), Convert
+       to Profile dialog (source space, destination space, engine,
+       intent, black point compensation, dither, flatten image).
+       Effort: Medium (~300-400 lines)
+
+  176. Proof Colors Per-Channel
+       Gap: Individual CMYK plate proofing (cyan, magenta, yellow, black
+       plates) plus CMY/RGB/Mac/Windows RGB/Monitor RGB proof views.
+       Missing: per-channel proof mode toggles in View menu.
+       Effort: Small (~80 lines)
+
+  177. Cache Levels & Tile Size UI
+       Gap: UI in Preferences > Performance for cache levels (1-8) and
+       cache tile size (128K-1024K). Missing: controls + apply on restart
+       warning.
+       Effort: Small (~60 lines)
+
+  178. Technology Previews
+       Gap: Preferences > Technology Previews section.
+       Missing: panel for experimental features toggles.
+       Effort: Small (~60 lines)
+
+  179. De-Interlace Filter
+       Gap: Filter > Video > De-Interlace. Missing: de-interlace algorithm
+       (odd/even fields, interpolation/duplication method).
+       Effort: Small (~80 lines)
+
+  180. NTSC Colors Filter
+       Gap: Filter > Video > NTSC Colors (restrict gamut to NTSC-safe).
+       Missing: NTSC gamut mapping algorithm.
+       Effort: Small (~80 lines)
+
+  181. Custom Filter
+       Gap: Filter > Other > Custom (user-defined convolution kernel).
+       Missing: custom kernel matrix editor UI (up to 5×5?), scale/offset
+       controls, preview.
+       Effort: Small (~120 lines)
+
+  182. Maximum / Minimum Filters
+       Gap: Filter > Other > Maximum / Minimum (dilation/erosion).
+       Status: may exist in filters.ts. Verify: morphological operations
+       with configurable radius and preserve shape (square/circle).
+       Effort: Small (verification + ~60 lines if missing)
+
+  183. Displace Filter
+       Gap: Filter > Distort > Displace (displace by map image).
+       Missing: displacement map loading UI, per-channel displacement
+       with scale controls, stretch-to-fit/tile options, undefined areas
+       (wrap/repeat edge).
+       Effort: Medium (~200-300 lines)
+
+  184. Shear Filter
+       Gap: Filter > Distort > Shear (curve-based horizontal distortion).
+       Missing: shear curve editor UI, wrap-around/repeat edge pixels
+       options.
+       Effort: Small (~100 lines)
+
+  185. Polar Coordinates Filter
+       Gap: Filter > Distort > Polar Coordinates.
+       Missing: rectangular-to-polar and polar-to-rectangular transforms.
+       Effort: Small (~100 lines)
+
+  186. ZigZag Filter
+       Gap: Filter > Distort > ZigZag (pond ripple effect).
+       Missing: amount/ridges/style (around center/out from center/
+       pond ripples) controls.
+       Effort: Small (~100 lines)
+
+  187. Diffuse Filter
+       Gap: Filter > Stylize > Diffuse.
+       Missing: diffuse mode (normal/darken only/lighten only/anisotropic).
+       Effort: Small (~80 lines)
+
+  188. Tiles Filter
+       Gap: Filter > Stylize > Tiles.
+       Missing: tile number/max offset/fill empty areas with options.
+       Effort: Small (~80 lines)
+
+  189. Extrude Filter
+       Gap: Filter > Stylize > Extrude (blocks/pyramids).
+       Missing: 3D extrusion of pixel blocks, size/depth controls,
+       solid front faces / mask incomplete blocks options.
+       Effort: Medium (~200-300 lines)
+
+  190. Wind Filter
+       Gap: Filter > Stylize > Wind.
+       Missing: wind/blast/stagger modes, direction (left/right).
+       Effort: Small (~80 lines)
+
+  191. Pointillize Filter
+       Gap: Filter > Pixelate > Pointillize.
+       Missing: dot-based pixelation with background color fill.
+       Effort: Small (~60 lines)
+
+  192. Color Halftone Filter
+       Gap: Filter > Pixelate > Color Halftone.
+       Missing: CMYK screen angles, max radius control.
+       Effort: Small (~100 lines)
+
+  193. Mezzotint Filter
+       Gap: Filter > Pixelate > Mezzotint.
+       Missing: dot/line/stroke pattern types.
+       Effort: Small (~80 lines)
+
+  194. Fragment Filter
+       Gap: Filter > Pixelate > Fragment.
+       Missing: ghosted offset composite.
+       Effort: Small (~40 lines)
+
+  195. Facet Filter
+       Gap: Filter > Pixelate > Facet (average color blocks).
+       Missing: group pixels into solid-color blocks.
+       Effort: Small (~50 lines)
+
+  196. Fibers Filter
+       Gap: Filter > Render > Fibers.
+       Missing: variance/strength/randomize controls.
+       Effort: Small (~100 lines)
+
+  197. Flame Filter
+       Gap: Filter > Render > Flame.
+       Missing: flame type/style/length/complexity controls.
+       Effort: Medium (~200-300 lines)
+
+  198. Picture Frame Filter
+       Gap: Filter > Render > Picture Frame.
+       Missing: frame pattern library, frame size/orientation controls.
+       Effort: Medium (~200-300 lines)
+
+  199. Tree Filter
+       Gap: Filter > Render > Tree.
+       Missing: tree type/leaf amount/size/light direction controls.
+       Effort: Medium (~200-300 lines)
+
+  200. Lighting Effects Filter
+       Gap: Filter > Render > Lighting Effects.
+       Missing: light type (point/spot/infinite), light position/color/
+       intensity, material properties (gloss/material/exposure/ambience),
+       texture channel (bump map), preview with draggable light handles.
+       Effort: Large (~600-1000 lines)
+
+  201. Lens Flare Filter
+       Gap: Filter > Render > Lens Flare.
+       Missing: flare center selection, brightness control, lens type
+       (50-300mm zoom/35mm prime/105mm prime/movie prime).
+       Effort: Small (~100 lines)
+
+  202. Adaptive Wide Angle Filter
+       Gap: Correct lens distortion using automated or manual controls.
+       Missing: Fisheye/Perspective/Auto/Full Spherical correction modes,
+       constraint line drawing, camera/lens profile selection.
+       Effort: Large (~500-800 lines)
+
+  203. Lens Correction Filter
+       Gap: Correct lens distortion, chromatic aberration, vignette.
+       Missing: auto-correction via camera/lens profiles, manual geometric
+       distortion/CA/vignette/transform controls, grid overlay.
+       Effort: Large (~500-700 lines)
+
+  204. Reduce Noise Filter
+       Gap: Filter > Noise > Reduce Noise.
+       Missing: strength/preserve details/reduce color noise/sharpen
+       details controls, per-channel settings, remove JPEG artifact option.
+       Effort: Medium (~200-300 lines)
+
+  205. Dust & Scratches Filter
+       Gap: Filter > Noise > Dust & Scratches.
+       Missing: radius/threshold controls.
+       Effort: Small (~60 lines)
+
+  206. Despeckle Filter
+       Gap: Filter > Noise > Despeckle (edge-preserving blur).
+       Missing: automatic detection of edges + blur non-edge areas.
+       Effort: Small (~80 lines)
+
+  207. Lens Blur Filter
+       Gap: Filter > Blur > Lens Blur.
+       Missing: depth map from alpha channel/layer mask, iris shape
+       (hexagon/octagon/etc.), blade curvature/rotation, specular
+       highlights/brightness/threshold, noise addition.
+       Effort: Medium (~250-350 lines)
+
+  208. Smart Sharpen Filter
+       Gap: Filter > Sharpen > Smart Sharpen.
+       Missing: amount/radius/reduce noise/remove (gaussian blur/lens
+       blur/motion blur) controls, per-shadow/highlight fade controls.
+       Effort: Medium (~200-300 lines)
+
+  209. Shadow/Highlight Adjustment
+       Gap: Image > Adjustments > Shadows/Highlights.
+       Status: may exist as "shadows-highlights" filter. Verify full
+       implementation with shadow amount/tonal width/radius, highlight
+       amount/tonal width/radius, color correction, midtone contrast,
+       black clip/white clip.
+       Effort: Medium (verification + ~150 lines if incomplete)
+
+  210. HDR Toning Presets & Local Adaptation
+       Gap: HDR Toning method selection (exposure & gamma/highlight
+       compression/equalize histogram/local adaptation), edge glow
+       controls, tone & detail controls.
+       Effort: Medium (~200-300 lines)
+
+  211. Match Color
+       Gap: Image > Adjustments > Match Color.
+       Missing: source selection (from open document/layer), luminance/
+       color intensity/fade controls, neutralize option, target stats.
+       Effort: Medium (~250-350 lines)
+
+  212. Replace Color
+       Gap: Image > Adjustments > Replace Color.
+       Missing: color range selection preview, fuzziness slider,
+       replacement hue/saturation/lightness controls.
+       Effort: Medium (~200-300 lines)
+
+  213. Equalize
+       Gap: Image > Adjustments > Equalize.
+       Status: equalize filter may exist. Verify: equalize entire image
+       vs equalize selection only options.
+       Effort: Small (verification)
+
+  214. Auto Tone / Auto Contrast / Auto Color
+       Gap: Auto correction commands with per-channel clipping.
+       Missing: auto algorithms with configurable clip percentages.
+       Effort: Small (~80 lines)
+
+================================================================================
+  SECTION 5: BROWSER DIAGNOSTICS PANEL (COMPLETELY MISSING)
+================================================================================
+
+  215. Browser Diagnostics Panel
+       No dedicated diagnostics panel exists. Missing:
+       - Canvas max-size diagnostics (per browser)
+       - WebGL capabilities (max texture, extensions, renderer info)
+       - OffscreenCanvas support detection
+       - Worker transfer support detection
+       - Browser encoder support (MediaRecorder codecs, image encoder caps)
+       - OPFS availability + quota usage
+       - Heap estimate (performance.memory where available)
+       - Active fallback summary (what's running in degraded mode)
+       - Copy/export diagnostics report button
+       Effort: Medium (~300-400 lines — one panel + diagnostics engine)
+
+================================================================================
+  SECTION 6: SUMMARY STATISTICS
+================================================================================
+
+Total gaps identified: 215
+
+By status:
+  - Missing panels (zero implementation): 6
+  - Missing tools (zero implementation): 26
+  - Capability registry "approximation" gaps: 20
+  - Capability registry "unsupported" gaps (in-scope, not cloud): 2
+  - Partially implemented with implementable gaps: 147
+  - Missing infrastructure panels: 1
+  - Plus browser diagnostics panel: 1
+  - Additional specific filter/tool gaps: 12
+
+By effort:
+  - Trivial (<50 lines, ~30 min): ~5
+  - Small (50-150 lines, ~1-2 hrs): ~52
+  - Medium (150-400 lines, ~4-8 hrs): ~50
+  - Large (400-1000 lines, ~1-2 weeks): ~18
+  - Very Large (1000+ lines, ~2-4 weeks): ~6
+
+================================================================================
+  SECTION 7: RECOMMENDED PRIORITY ORDER
+================================================================================
+
+Phase 1 — Quick Wins (immediate user-visible improvement, <1 day each):
+  1. Bit-depth status bar indicator (#71)
+  2. Custom canvas cursors per tool (#102)
+  3. Polygon star/smooth controls (#55)
+  4. Quick Selection tolerance slider (#56)
+  5. Missing tool implementations — Background/Magic Eraser, Blur/Sharpen/
+     Smudge, Dodge/Burn/Sponge, Red Eye, Color Replacement (#18-26)
+  6. Color coding for layers (#122)
+  7. Screen modes / fullscreen (#167)
+  8. Delete All Empty Layers command (#133)
+  9. Flatten All Layer Effects / Masks (#131-#132)
+
+Phase 2 — Panel Completion (rounds out UI, ~1 week each batch):
+  10. Glyphs Panel (#1)
+  11. Notes Panel (#2)
+  12. Library Panel with grid/filter UI (#4)
+  13. Discover + Learn panels (#5-#6)
+  14. Styles Panel (#109)
+  15. Info Panel enhancements (#107)
+  16. Histogram Panel (#108)
+  17. Navigator Panel enhancements (#106)
+  18. Preset Manager (#166)
+  19. Home Screen (#168)
+
+Phase 3 — Layer/Compositing UI Depth (~2-3 weeks):
+  20. Layer filtering in Layers Panel (#121)
+  21. Blend If sliders (#126)
+  22. Knockout blending (#125)
+  23. Transparency/Layer Mask Hides Effects (#127-#129)
+  24. Layer Comps enhancements (#110, #124)
+  25. Save/Load Selection dialogs (#140)
+  26. Channel Calculations + Apply Image (#142-#143)
+
+Phase 4 — Core Tool Completion (~2-3 weeks):
+  27. On-canvas Bezier handle editing — multi-anchor (#60)
+  28. Per-slice export settings + Export All Slices (#58)
+  29. Content-Aware Fill workspace UI (#98)
+  30. Liquify Face-Aware controls (#99)
+  31. Grow / Similar / Transform selection (#138-#139)
+
+Phase 5 — Typography Depth (~1-2 weeks):
+  32. Variable font axis sliders (#61)
+  33. OpenType feature toggle grid (#63)
+  34. Font specimen side-by-side preview (#65)
+  35. Character/Paragraph style management (#117)
+  36. Match Font candidate display (#66)
+
+Phase 6 — Filter Completion (~2-3 weeks):
+  37. Blur Gallery on-canvas interactive pins (#77)
+  38. Lighting Effects filter (#200)
+  39. Lens Correction + Adaptive Wide Angle (#202-#203)
+  40. Smart Sharpen + Lens Blur (#207-#208)
+  41. Displace, Shear, Polar Coordinates, ZigZag, Diffuse, Tiles,
+      Extrude, Wind, Pointillize, Color Halftone, Mezzotint, Fragment,
+      Facet, Fibers, Lens Flare (#183-#201)
+  42. De-Interlace + NTSC Colors (#179-#180)
+  43. Custom filter kernel editor (#181)
+  44. Reduce Noise + Dust & Scratches + Despeckle (#204-#206)
+
+Phase 7 — Advanced Color/Adjustment (~2 weeks):
+  45. Duotone mode (#153)
+  46. Bitmap mode (#155)
+  47. Indexed Color / Color Table (#154)
+  48. HDR Toning local adaptation (#210)
+  49. Match Color + Replace Color (#211-#212)
+  50. Shadows/Highlights full implementation (#209)
+
+Phase 8 — Video Timeline Depth (~2-3 weeks):
+  51. Frame-accurate timeline with thumbnails (#67)
+  52. Transition preview rendering (#68)
+  53. Audio mixer UI with waveforms (#69)
+  54. Frame animation export pipeline (#70)
+
+Phase 9 — Performance Infrastructure (~3-4 weeks):
+  55. WebGL compositor — full filter/effect/adjustment GPU path (#80)
+  56. Per-layer dirty rect tracking (#82)
+  57. Tile store for smart objects/3D (#88)
+  58. RAF coalescer priority levels (#86)
+  59. Bicubic progressive preview (#81)
+  60. Large doc tile-only mode (#89)
+  61. Background autosave compaction (#87)
+
+Phase 10 — Production/Export Depth (~2-3 weeks):
+  62. TIFF compressed export (#90)
+  63. Metadata embedding across formats (#94)
+  64. Multi-page PDF import (#96)
+  65. ICC profile assign/convert UI (#175)
+  66. Print dialog with marks/bleed (#149)
+  67. Image Processor script (#159)
+
+Phase 11 — Automation/Workflow (~2-3 weeks):
+  68. Variables & Data Sets (#151)
+  69. Actions — conditional steps (#112)
+  70. Keyboard shortcut editor (#103)
+  71. Menu customization (#104)
+  72. Photomerge dedicated UI (#162)
+  73. PDF Presentation (#160)
+
+Phase 12 — Path/Vector Depth (~2-3 weeks):
+  74. True bezier path boolean operations (#134)
+  75. Custom shape library (#136)
+  76. Stroke path with brush dynamics (#137)
+  77. Split/Merge channels (#144)
+
+Phase 13 — Infrastructure (~1-2 weeks):
+  78. Browser diagnostics panel (#215)
+  79. Color Picker HUD (#165)
+  80. Image Assets Generator (#172)
+  81. Rich tooltips (#169)
+
+================================================================================
+  SECTION 8: KEY GAPS ALREADY IN EXISTING REPORTS
+================================================================================
+
+This report consolidates and extends the following existing reports:
+  - implementable-gap-report.txt (40 items, effort-classified)
+  - implementation-status-report.md (broad overview)
+  - browser-implementable-status-report.md (focused on in-scope only)
+
+The existing reports cover ~40 items in varying detail. This report adds
+~175 additional specific gaps identified through:
+  - Full panel directory audit against Every_photoshop_feature.txt
+  - Complete capability registry analysis
+  - Missing tool cross-reference against the master feature list
+  - Specific filter/command/workflow gaps not in prior reports
+  - Layer compositing advanced blending options
+  - Missing dialog and command implementations
+  - Channel/selection/mask workflow gaps
+
+================================================================================
+  END OF REPORT
+================================================================================

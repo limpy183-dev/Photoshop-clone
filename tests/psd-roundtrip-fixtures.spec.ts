@@ -30,6 +30,57 @@ test("PSD serialization produces a Photoshop blob for fixture documents", async 
   expect(String.fromCharCode(...bytes.slice(0, 4))).toBe("8BPS")
 })
 
+test("PSD serialization emits native smart object linkedFiles and smart filter descriptors", async () => {
+  const doc = richFixtureDocument()
+  doc.colorMode = "RGB"
+  doc.bitDepth = 8
+  doc.modeSettings = { mode: "RGB" }
+  const smart = doc.layers.find((layer) => layer.id === "layer_smart")!
+  smart.smartFilters = [
+    {
+      id: "sf_native_blur",
+      filterId: "gaussian-blur",
+      name: "Gaussian Blur",
+      enabled: true,
+      opacity: 0.8,
+      blendMode: "normal",
+      params: { radius: 4 },
+      mask: fixtureMask(doc.width, doc.height),
+      maskEnabled: true,
+    },
+  ]
+
+  const blob = await serializePsd(doc)
+  const { readPsd } = await import("ag-psd")
+  const arrayBuffer = await blob.arrayBuffer()
+  const payloadText = new TextDecoder("latin1").decode(new Uint8Array(arrayBuffer))
+  const psd = readPsd(arrayBuffer, {
+    skipCompositeImageData: true,
+    skipLayerImageData: true,
+    skipThumbnail: true,
+    useImageData: false,
+  })
+  const layers: import("ag-psd").Layer[] = []
+  const visit = (children: import("ag-psd").Layer[] | undefined) => {
+    for (const child of children ?? []) {
+      layers.push(child)
+      visit(child.children)
+    }
+  }
+  visit(psd.children)
+  const smartPsdLayer = layers.find((layer) => layer.name === smart.name)
+
+  expect(smartPsdLayer?.placedLayer?.id).toBeTruthy()
+  expect(payloadText).toContain("lnk2")
+  expect(payloadText).toContain("lnkE")
+  expect(smartPsdLayer?.placedLayer?.filter?.list[0]).toMatchObject({
+    type: "gaussian blur",
+    name: "Gaussian Blur",
+    opacity: 0.8,
+  })
+  expect(smartPsdLayer?.filterEffectsMasks?.[0].id).toBe("sf_native_blur")
+})
+
 function richPsdCompatibilityFixture(): PsDocument {
   const doc = richFixtureDocument()
   const adjustment: Layer = {

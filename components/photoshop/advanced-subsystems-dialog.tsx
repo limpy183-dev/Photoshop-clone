@@ -7,8 +7,9 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { useEditor, makeCanvas } from "./editor-context"
-import { canvasToGifDataUrl, deserializePsdFile, downloadBlob, downloadDataUrl, downloadText, loadImageFromFile, rasterMime, renderDocumentComposite } from "./document-io"
+import { canvasToGifDataUrl, deserializePsdFile, downloadBlob, downloadDataUrl, downloadText, inspectImportFileDimensions, loadRasterCanvasFromFile, rasterMime, renderDocumentComposite } from "./document-io"
 import { assertCanvasSize } from "./canvas-limits"
+import { FILTERS } from "./filters"
 import { uid } from "./uid"
 import {
   ADVANCED_FILE_LIMITS,
@@ -24,11 +25,11 @@ import {
   createVariableDocumentVariantAsync,
   decodeDicomPreview,
   decodeEpsPreview,
-  decodePdfPreview,
+  decodePdfPages,
   decodeRadianceHdrPreview,
   encodeDicomImageData,
   encodeEpsCanvas,
-  encodePdfCanvas,
+  encodePdfCanvases,
   encodeRadianceHdrImageData,
   exportSceneToDae,
   exportSceneToObj,
@@ -43,8 +44,11 @@ import {
 } from "./advanced-subsystems"
 import {
   DEFAULT_AUTOMATION_OUTPUT,
+  cleanBrushPatch,
+  cleanHexColor,
   createAutomationWorkflow,
   executeCanvasWorkflow,
+  parseSafeDslCommands,
   loadAutomationWorkflows,
   parseAutomationDataRows,
   parseAutomationWorkflowImportPayload,
@@ -60,10 +64,12 @@ import {
   applyVideoTransition,
   assignPlanarUvs,
   buildAudioMixPlan,
+  buildThreeDPrintPlan,
   convertVideoTimelineToFrameAnimation,
   createThreeDCrossSection,
   createVideoGroup,
   exportAdvancedThreeDScene,
+  getVideoPresetDiagnostics,
   importAdvancedThreeDScene,
   paintThreeDSurface,
   rayTraceScene,
@@ -73,33 +79,46 @@ import {
   trimVideoClip,
   updateThreeDMaterial,
 } from "./three-d-video-engine"
-import { describeColorPipeline } from "./color-pipeline"
-import { decodeAdvancedRasterBufferAsync, decodedRasterToCanvas, encodeOpenExrImageData, encodeTiffImageDataAsync, type TiffCompression } from "./raster-codecs"
-import { getPsbTileViewMetadata, hasPsbTileViewStore, readPsbTileViewCanvas } from "./psb-tile-view"
+import { applyIccTransformToImageData, describeColorPipeline, supportedIccProfileNames } from "./color-pipeline"
+import { decodeAdvancedRasterBufferAsync, decodedRasterToCanvas, encodeHeifImageData, encodeJpeg2000ImageData, encodeOpenExrHighBitImage, encodeOpenExrImageData, encodeTiffHighBitImageDataAsync, encodeTiffImageDataAsync, type TiffCompression } from "./raster-codecs"
+import { getHighBitExportImage } from "./high-bit-document"
+import { createEmbeddedFontFromBuffer, parseOpenTypeFontMetadata } from "./typography-engine"
+import { getPsbTileViewMetadata, hasPsbTileViewStore, readPsbTileViewCanvas, writePsbTileViewCanvas } from "./psb-tile-view"
+import { createLargeDocumentInspectionDocument, createTileEditDocument, planLargeDocumentOpen } from "./large-document"
 import {
   PLUGIN_MANIFEST_FORMAT,
+  buildPluginPackagePayload,
   buildPluginExportPayload,
   buildPluginIframeSrcDoc,
   canPluginUsePermission,
   createPluginStoragePatch,
-  normalizePluginImportPayload as normalizePluginManifestImport,
+  describeNativeEightBfCompatibility,
+  describePluginHostCapabilities,
+  normalizeNativeEightBfPlugin,
+  normalizePluginActionDescriptors,
+  normalizePluginPackagePayload,
   normalizePluginUiTree,
+  permissionsForPluginActionDescriptors,
+  pluginInstallReview,
   safePluginJson,
   validatePluginPanelRequest,
   type PluginUiNode,
 } from "./plugin-system"
 import type {
   AssetLibraryItem,
+  AdjustmentType,
   AudioTrack,
   ContentCredential,
   DocumentModeSettings,
   Layer,
+  PluginActionDescriptor,
   PluginCommandDescriptor,
   PluginDescriptor,
   PluginPermission,
   PrintSettings,
   PsDocument,
   ThreeDScene,
+  ToolId,
   VariableBinding,
   VariableDataSet,
   VideoKeyframe,
@@ -488,7 +507,11 @@ function ThreeDWorkspace() {
 
   const exportAdvanced = (format: "3ds" | "kmz" | "u3d") => {
     const result = exportAdvancedThreeDScene(scene, format, activeDoc.name)
-    downloadText(typeof result.data === "string" ? result.data : new TextDecoder().decode(result.data), result.fileName, result.mime)
+    if (typeof result.data === "string") {
+      downloadText(result.data, result.fileName, result.mime)
+    } else {
+      downloadBlob(new Blob([result.data], { type: result.mime }), result.fileName)
+    }
     toast.info(result.warnings[0])
   }
 
@@ -522,6 +545,19 @@ function ThreeDWorkspace() {
     const report = analyzeThreeDPrintReadiness(scene, { minWallThickness: 0.05, maxBuildSize: { x: 10, y: 10, z: 10 } })
     setPrintReport(`${report.ready ? "Ready" : "Needs fixes"}: ${report.bounds.x.toFixed(2)} x ${report.bounds.y.toFixed(2)} x ${report.bounds.z.toFixed(2)} units; ${report.issues.length ? report.issues.map((issue) => issue.detail).join(" ") : "no print-blocking issues found."}`)
     toast[report.ready ? "success" : "warning"](report.ready ? "3D print check passed" : "3D print check found issues")
+  }
+
+  const exportPrintPlan = () => {
+    const plan = buildThreeDPrintPlan(scene, {
+      layerHeight: 0.2,
+      nozzleDiameter: 0.4,
+      filamentDiameter: 1.75,
+      maxBuildSize: { x: 10, y: 10, z: 10 },
+      baseName: activeDoc.name,
+    })
+    setPrintReport(`${plan.readiness.ready ? "Ready" : "Needs fixes"}: ${plan.slices.length} slices, ${plan.estimatedMaterialVolume.toFixed(3)} units^3 material, ${plan.estimatedPrintTimeMinutes.toFixed(1)} min estimate. ${plan.browserHandoff.detail}`)
+    downloadText(plan.gcodePreview, plan.browserHandoff.fileName, plan.browserHandoff.mime)
+    toast.info("Browser-local 3D print handoff exported")
   }
 
   return (
@@ -578,6 +614,7 @@ function ThreeDWorkspace() {
             <Button size="sm" variant="secondary" onClick={paintSurface}>Paint Surface</Button>
             <Button size="sm" variant="secondary" onClick={crossSection}>Cross Section</Button>
             <Button size="sm" variant="secondary" onClick={runPrintCheck}>3D Print Check</Button>
+            <Button size="sm" variant="secondary" onClick={exportPrintPlan}>Slice / Handoff</Button>
           </div>
           {printReport ? <p className="text-[11px] text-[var(--ps-text-dim)]">{printReport}</p> : null}
         </Panel>
@@ -617,6 +654,8 @@ function VideoWorkspace() {
   const [progress, setProgress] = React.useState("")
   const [presetId, setPresetId] = React.useState("social-1080p")
   const [frameConversion, setFrameConversion] = React.useState("")
+  const presetDiagnostics = React.useMemo(() => getVideoPresetDiagnostics(), [])
+  const currentDiagnostic = presetDiagnostics.find((entry) => entry.preset.id === presetId) ?? presetDiagnostics[0]
   if (!activeDoc) return <EmptyState text="Open a document before importing video layers." />
 
   const frames = activeDoc.timelineFrames ?? []
@@ -853,6 +892,14 @@ function VideoWorkspace() {
       </Panel>
       <Panel title="Render">
         <SelectField label="Preset" value={presetId} onChange={setPresetId} options={VIDEO_EXPORT_PRESETS.map((preset) => preset.id)} />
+        {currentDiagnostic ? (
+          <p
+            className={`mt-1 text-[11px] ${currentDiagnostic.fallbackToPackage && currentDiagnostic.deliveryMode === "muxed-media" ? "text-amber-500" : "text-[var(--ps-text-dim)]"}`}
+            title={currentDiagnostic.candidateMimeTypes.join(", ")}
+          >
+            {currentDiagnostic.reason}
+          </p>
+        ) : null}
         <Button disabled={rendering} onClick={renderVideo}>{rendering ? "Rendering..." : "Render Video"}</Button>
         <Button className="mt-2" size="sm" variant="secondary" disabled={!frames.length} onClick={convertFrames}>Convert to Frame Animation</Button>
         <Button className="mt-2" size="sm" variant="secondary" disabled={!audioTracks.length || audioRendering} onClick={exportAudioMix}>
@@ -860,6 +907,25 @@ function VideoWorkspace() {
         </Button>
         <p className="mt-2 text-[11px] text-[var(--ps-text-dim)]">{progress || "Uses H.264 MP4 when the browser exposes it, otherwise WebM."}</p>
         {frameConversion ? <p className="mt-2 text-[11px] text-[var(--ps-text-dim)]">{frameConversion}</p> : null}
+        <details className="mt-3 text-[11px] text-[var(--ps-text-dim)]">
+          <summary className="cursor-pointer">Browser codec support</summary>
+          <ul className="mt-1 space-y-0.5">
+            {presetDiagnostics.map((entry) => {
+              const status = entry.deliveryMode === "muxed-media"
+                ? entry.willMuxNatively ? "native" : "fallback"
+                : entry.deliveryMode === "animated-image" ? "gif" : "zip"
+              const statusColor = status === "native" ? "text-emerald-500"
+                : status === "fallback" ? "text-amber-500"
+                : "text-[var(--ps-text-dim)]"
+              return (
+                <li key={entry.preset.id} className="flex justify-between gap-2">
+                  <span>{entry.preset.label}</span>
+                  <span className={statusColor}>{status === "native" ? entry.resolvedMimeType : status}</span>
+                </li>
+              )
+            })}
+          </ul>
+        </details>
         <p className="mt-4 text-[11px]">Video layers: {activeDoc.layers.filter((layer) => layer.kind === "video").length}</p>
         <p className="text-[11px]">Audio tracks: {audioTracks.length}; active mix L {Math.round(audioMix.leftGain * 100)}% / R {Math.round(audioMix.rightGain * 100)}%</p>
       </Panel>
@@ -1289,7 +1355,7 @@ function ProvenanceWorkspace() {
     <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
       <Panel title="Local Content Credentials">
         <CapabilityNotice>
-          Local SHA-256 provenance manifests only. Not C2PA signed or embedded in exported images, and no certificate chain is created.
+          Local SHA-256 provenance manifests only. Embed Metadata exports include them in app XMP/metadata payloads, but they are not C2PA signed and no certificate chain is created.
         </CapabilityNotice>
         <Input value={actor} onChange={(event) => setActor(event.target.value)} className="h-8" />
         <Input value={assertion} onChange={(event) => setAssertion(event.target.value)} className="h-8" />
@@ -1417,11 +1483,15 @@ const SAMPLE_PLUGINS: PluginDescriptor[] = [
   },
 ]
 
-function clonePluginForInstall(plugin: PluginDescriptor, index: number): PluginDescriptor {
+function clonePluginForInstall(plugin: PluginDescriptor, index: number, source: PluginDescriptor["source"] = "registry"): PluginDescriptor {
   return {
     ...plugin,
     id: uid("plugin"),
     createdAt: Date.now() + index,
+    installedAt: Date.now() + index,
+    manifestVersion: 1,
+    source,
+    trusted: source === "registry" || source === "sample",
     storageDefaults: isImportRecord(plugin.storageDefaults) ? (safePluginJson(plugin.storageDefaults) as Record<string, unknown>) : undefined,
   }
 }
@@ -1448,15 +1518,20 @@ function permissionsForPluginCommand(command: PluginCommandDescriptor): PluginPe
   if (command.requiredPermissions?.length) return command.requiredPermissions
   if (command.action.type === "apply-filter") return ["filters:write"]
   if (command.action.type === "post-message") return ["commands"]
+  if (command.action.type === "batch-play") return permissionsForPluginActionDescriptors(command.action.descriptors)
+  if (command.action.type === "eval-script") return ["commands"]
   return []
 }
 
 function permissionForPanelMethod(method: string): PluginPermission | null {
+  if (method === "host.getInfo" || method === "plugin.ready" || method === "8bf.getInfo") return null
   if (method === "document.getInfo") return "document:read"
   if (method === "layers.getActive") return "layers:read"
+  if (method === "layers.create" || method === "layers.update") return "layers:write"
   if (method.startsWith("storage.")) return "storage"
   if (method.startsWith("ui.")) return "ui"
-  if (method === "commands.run") return "commands"
+  if (method === "commands.run" || method === "action.batchPlay" || method === "uxp.executeAsModal" || method.startsWith("cep.")) return "commands"
+  if (method === "8bf.run") return "filters:write"
   return null
 }
 
@@ -1494,11 +1569,266 @@ function postPluginUiEvent(
   )
 }
 
+function summarizeRuntimeLayer(layer: Layer | null) {
+  return layer
+    ? {
+        id: layer.id,
+        name: layer.name,
+        kind: layer.kind ?? "raster",
+        visible: layer.visible,
+        locked: layer.locked,
+        opacity: layer.opacity,
+        blendMode: layer.blendMode,
+        width: layer.canvas.width,
+        height: layer.canvas.height,
+      }
+    : null
+}
+
+function runtimeStringArg(value: unknown, fallback: string) {
+  return typeof value === "string" && value.trim() ? value.trim().slice(0, 120) : fallback
+}
+
+function runtimeNumberArg(value: unknown, fallback: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, typeof value === "number" && Number.isFinite(value) ? value : fallback))
+}
+
+function runtimeBooleanArg(value: unknown, fallback: boolean) {
+  return typeof value === "boolean" ? value : fallback
+}
+
+function runtimeRecord(value: unknown): Record<string, unknown> {
+  return isImportRecord(value) ? value : {}
+}
+
+function resolveRuntimeLayer(doc: PsDocument, activeLayer: Layer | null, id: unknown) {
+  const requested = typeof id === "string" ? id : ""
+  if (!requested || requested === "active" || requested === "targetEnum") return activeLayer
+  return doc.layers.find((layer) => layer.id === requested || layer.name === requested) ?? activeLayer
+}
+
+function descriptorTargetsLayer(descriptor: PluginActionDescriptor) {
+  return JSON.stringify(descriptor._target ?? descriptor).toLowerCase().includes("layer")
+}
+
+function descriptorTargetsDocument(descriptor: PluginActionDescriptor) {
+  return JSON.stringify(descriptor._target ?? descriptor).toLowerCase().includes("document")
+}
+
+function descriptorLayerId(descriptor: PluginActionDescriptor) {
+  const target = Array.isArray(descriptor._target) ? descriptor._target.find(isImportRecord) : null
+  return target && typeof target._id === "string" ? target._id : target && typeof target.name === "string" ? target.name : "active"
+}
+
+function pluginLayerPatchFromDescriptor(descriptor: PluginActionDescriptor) {
+  return runtimeRecord(descriptor.to ?? descriptor.using ?? descriptor)
+}
+
+function applyFilterIdToLayer(layer: Layer, filterId: string, params?: Record<string, number | string | boolean>) {
+  const filter = FILTERS[filterId]
+  if (!filter) throw new Error(`Unknown filter: ${filterId}`)
+  const ctx = layer.canvas.getContext("2d")
+  if (!ctx) throw new Error("Active layer canvas is unavailable.")
+  const defaults: Record<string, number | string | boolean> = {}
+  for (const param of filter.params) defaults[param.key] = param.default
+  const image = ctx.getImageData(0, 0, layer.canvas.width, layer.canvas.height)
+  ctx.putImageData(filter.apply(image, { ...defaults, ...(params ?? {}) }), 0, 0)
+}
+
+function createRuntimeLayer(doc: PsDocument, params: Record<string, unknown>): Layer {
+  return {
+    id: uid("plugin-layer"),
+    name: runtimeStringArg(params.name, "Plugin Layer"),
+    kind: "raster",
+    visible: true,
+    locked: false,
+    opacity: runtimeNumberArg(params.opacity, 1, 0, 1),
+    blendMode: "normal",
+    canvas: makeCanvas(doc.width, doc.height),
+  }
+}
+
+function runPluginActionDescriptors({
+  descriptors,
+  activeDoc,
+  activeLayer,
+  dispatch,
+  requestRender,
+  commit,
+}: {
+  descriptors: PluginActionDescriptor[]
+  activeDoc: PsDocument
+  activeLayer: Layer | null
+  dispatch: ReturnType<typeof useEditor>["dispatch"]
+  requestRender: () => void
+  commit: ReturnType<typeof useEditor>["commit"]
+}) {
+  const results: unknown[] = []
+  const touchedLayers = new Set<string>()
+  for (const descriptor of descriptors) {
+    const action = descriptor._obj.toLowerCase()
+    if (action === "get") {
+      if (descriptorTargetsDocument(descriptor)) {
+        results.push({
+          id: activeDoc.id,
+          name: activeDoc.name,
+          width: activeDoc.width,
+          height: activeDoc.height,
+          colorMode: activeDoc.colorMode,
+          bitDepth: activeDoc.bitDepth,
+          layerCount: activeDoc.layers.length,
+        })
+      } else {
+        results.push(summarizeRuntimeLayer(resolveRuntimeLayer(activeDoc, activeLayer, descriptorLayerId(descriptor))))
+      }
+      continue
+    }
+    if (action === "make" && descriptorTargetsLayer(descriptor)) {
+      const layer = createRuntimeLayer(activeDoc, pluginLayerPatchFromDescriptor(descriptor))
+      dispatch({ type: "add-layer", layer })
+      touchedLayers.add(layer.id)
+      results.push(summarizeRuntimeLayer(layer))
+      continue
+    }
+    const targetLayer = resolveRuntimeLayer(activeDoc, activeLayer, descriptorLayerId(descriptor))
+    if (!targetLayer && descriptorTargetsLayer(descriptor)) throw new Error("No target layer is available.")
+    if (action === "set" && targetLayer) {
+      const patch = pluginLayerPatchFromDescriptor(descriptor)
+      if (typeof patch.name === "string") dispatch({ type: "rename-layer", id: targetLayer.id, name: runtimeStringArg(patch.name, targetLayer.name) })
+      if (typeof patch.opacity === "number") dispatch({ type: "set-layer-opacity", id: targetLayer.id, opacity: runtimeNumberArg(patch.opacity, targetLayer.opacity, 0, 1) })
+      if (typeof patch.visible === "boolean") dispatch({ type: "set-layer-visibility", id: targetLayer.id, visible: patch.visible })
+      touchedLayers.add(targetLayer.id)
+      results.push({ ok: true, layerId: targetLayer.id })
+      continue
+    }
+    if (action === "select" && targetLayer) {
+      dispatch({ type: "set-active-layer", id: targetLayer.id })
+      results.push({ ok: true, activeLayerId: targetLayer.id })
+      continue
+    }
+    if ((action === "hide" || action === "show") && targetLayer) {
+      dispatch({ type: "set-layer-visibility", id: targetLayer.id, visible: action === "show" })
+      touchedLayers.add(targetLayer.id)
+      results.push({ ok: true, layerId: targetLayer.id, visible: action === "show" })
+      continue
+    }
+    if (action === "duplicate" && targetLayer) {
+      dispatch({ type: "duplicate-layer", id: targetLayer.id })
+      results.push({ ok: true, duplicatedLayerId: targetLayer.id })
+      continue
+    }
+    if (action === "delete" && targetLayer) {
+      dispatch({ type: "remove-layer", id: targetLayer.id })
+      results.push({ ok: true, removedLayerId: targetLayer.id })
+      continue
+    }
+    if (action === "filter" && targetLayer) {
+      const filterId = runtimeStringArg(descriptor.filter ?? descriptor.filterId, "invert")
+      applyFilterIdToLayer(targetLayer, filterId, runtimeRecord(descriptor.params) as Record<string, number | string | boolean>)
+      touchedLayers.add(targetLayer.id)
+      results.push({ ok: true, layerId: targetLayer.id, filterId })
+      continue
+    }
+    results.push({ ok: false, unsupported: descriptor._obj })
+  }
+  if (touchedLayers.size) {
+    requestRender()
+    window.setTimeout(() => commit("Plugin Action Manager", [...touchedLayers]), 0)
+  }
+  return results
+}
+
+function runCepSafeScript({
+  source,
+  activeDoc,
+  activeLayer,
+  dispatch,
+  requestRender,
+  commit,
+}: {
+  source: string
+  activeDoc: PsDocument
+  activeLayer: Layer | null
+  dispatch: ReturnType<typeof useEditor>["dispatch"]
+  requestRender: () => void
+  commit: ReturnType<typeof useEditor>["commit"]
+}) {
+  const commands = parseSafeDslCommands(source)
+  const output: string[] = []
+  const touchedLayers = new Set<string>()
+  for (const command of commands) {
+    const args = command.args
+    if (command.method === "report") output.push(String(args[0] ?? "").slice(0, 500))
+    else if (command.method === "reportDocument") output.push(`${activeDoc.name}: ${activeDoc.width} x ${activeDoc.height}px, ${activeDoc.layers.length} layers`)
+    else if (command.method === "reportActiveLayer") output.push(activeLayer ? `Active layer: ${activeLayer.name}` : "No active layer")
+    else if (command.method === "setTool") dispatch({ type: "set-tool", tool: runtimeStringArg(args[0], "move") as ToolId })
+    else if (command.method === "setForeground") dispatch({ type: "set-foreground", color: cleanHexColor(args[0]) })
+    else if (command.method === "setBackground") dispatch({ type: "set-background", color: cleanHexColor(args[0]) })
+    else if (command.method === "setBrush") dispatch({ type: "set-brush", brush: cleanBrushPatch(args[0]) })
+    else if (command.method === "renameActiveLayer" && activeLayer) {
+      dispatch({ type: "rename-layer", id: activeLayer.id, name: runtimeStringArg(args[0], activeLayer.name) })
+      touchedLayers.add(activeLayer.id)
+    } else if (command.method === "setLayerOpacity") {
+      const target = resolveRuntimeLayer(activeDoc, activeLayer, args[0])
+      if (target) {
+        dispatch({ type: "set-layer-opacity", id: target.id, opacity: runtimeNumberArg(args[1], target.opacity, 0, 1) })
+        touchedLayers.add(target.id)
+      }
+    } else if (command.method === "setLayerVisibility") {
+      const target = resolveRuntimeLayer(activeDoc, activeLayer, args[0])
+      if (target) {
+        dispatch({ type: "set-layer-visibility", id: target.id, visible: runtimeBooleanArg(args[1], target.visible) })
+        touchedLayers.add(target.id)
+      }
+    } else if (command.method === "newLayer") {
+      const layer = createRuntimeLayer(activeDoc, { name: args[0] })
+      dispatch({ type: "add-layer", layer })
+      touchedLayers.add(layer.id)
+    } else if (command.method === "createAdjustment") {
+      const adjustmentType = runtimeStringArg(args[0], "brightness-contrast") as AdjustmentType
+      const filter = FILTERS[adjustmentType]
+      if (!filter) throw new Error(`Unknown adjustment: ${adjustmentType}`)
+      const params: Record<string, number | string | boolean> = {}
+      for (const param of filter.params) params[param.key] = param.default
+      const layer: Layer = {
+        id: uid("plugin-adj"),
+        name: filter.name,
+        kind: "adjustment",
+        visible: true,
+        locked: false,
+        opacity: 1,
+        blendMode: "normal",
+        canvas: makeCanvas(activeDoc.width, activeDoc.height),
+        mask: makeCanvas(activeDoc.width, activeDoc.height, "#ffffff"),
+        adjustment: { type: adjustmentType, params },
+      }
+      dispatch({ type: "add-layer", layer })
+      touchedLayers.add(layer.id)
+    } else if (command.method === "applyFilter" && activeLayer) {
+      applyFilterIdToLayer(activeLayer, runtimeStringArg(args[0], "invert"), runtimeRecord(args[1]) as Record<string, number | string | boolean>)
+      touchedLayers.add(activeLayer.id)
+    } else if ((command.method === "invert" || command.method === "grayscale" || command.method === "desaturate" || command.method === "equalize" || command.method === "hdrToning") && activeLayer) {
+      applyFilterIdToLayer(activeLayer, command.method === "hdrToning" ? "hdr-toning" : command.method)
+      touchedLayers.add(activeLayer.id)
+    }
+  }
+  if (touchedLayers.size) {
+    requestRender()
+    window.setTimeout(() => commit("CEP evalScript", [...touchedLayers]), 0)
+  }
+  return { result: output.join("\n") || `OK (${commands.length} command${commands.length === 1 ? "" : "s"})`, commands: commands.length }
+}
+
 function PluginWorkspace() {
   const { activeDoc, activeLayer, dispatch, commit, requestRender } = useEditor()
   const [selectedId, setSelectedId] = React.useState("")
   const [hostUi, setHostUi] = React.useState<PluginUiNode | null>(null)
   const [runtimeLog, setRuntimeLog] = React.useState<string[]>([])
+  const [pendingInstall, setPendingInstall] = React.useState<{
+    plugins: PluginDescriptor[]
+    assets: AssetLibraryItem[]
+    sourceLabel: string
+  } | null>(null)
   const plugins = React.useMemo(() => activeDoc?.plugins ?? [], [activeDoc?.plugins])
   const selected = plugins.find((plugin) => plugin.id === selectedId) ?? plugins[0]
 
@@ -1554,10 +1884,24 @@ function PluginWorkspace() {
       applyPluginFilter(plugin)
       return
     }
+    if (command.action.type === "post-message") {
+      window.dispatchEvent(new CustomEvent("ps-plugin-panel-command", {
+        detail: { pluginId: plugin.id, commandId: command.id, message: command.action.message },
+      }))
+      logRuntime(`Sent ${command.title} to ${plugin.name}`)
+      return
+    }
+    if (command.action.type === "batch-play") {
+      window.dispatchEvent(new CustomEvent("ps-plugin-panel-command", {
+        detail: { pluginId: plugin.id, commandId: command.id, message: { runtime: "action", descriptors: command.action.descriptors } },
+      }))
+      logRuntime(`Queued ${command.title} Action Manager descriptors for ${plugin.name}`)
+      return
+    }
     window.dispatchEvent(new CustomEvent("ps-plugin-panel-command", {
-      detail: { pluginId: plugin.id, commandId: command.id, message: command.action.message },
+      detail: { pluginId: plugin.id, commandId: command.id, message: { runtime: "cep", source: command.action.source } },
     }))
-    logRuntime(`Sent ${command.title} to ${plugin.name}`)
+    logRuntime(`Queued ${command.title} CEP script for ${plugin.name}`)
   }, [applyPluginFilter, logRuntime])
 
   React.useEffect(() => {
@@ -1571,33 +1915,55 @@ function PluginWorkspace() {
     return () => window.removeEventListener("ps-run-plugin-command", handler)
   }, [plugins, runPluginCommand])
 
+  const stageInstall = React.useCallback((nextPlugins: PluginDescriptor[], sourceLabel: string, assets: AssetLibraryItem[] = []) => {
+    setPendingInstall({ plugins: nextPlugins, assets, sourceLabel })
+  }, [])
+
   const addSamples = () => {
     if (!activeDoc) return
-    const installed = SAMPLE_PLUGINS.map(clonePluginForInstall)
+    stageInstall(SAMPLE_PLUGINS.map((plugin, index) => clonePluginForInstall(plugin, index, "sample")), "Sample plugins")
+  }
+
+  const installPending = () => {
+    if (!activeDoc || !pendingInstall?.plugins.length) return
+    const installed = pendingInstall.plugins
     setPlugins([...installed, ...plugins])
     setSelectedId(installed[0]?.id ?? "")
+    const pluginAssets: AssetLibraryItem[] = installed.map((plugin) => ({
+      id: uid("asset"),
+      name: plugin.name,
+      kind: "plugin" as const,
+      group: "Plugins",
+      payload: plugin,
+      createdAt: Date.now(),
+    }))
     dispatch({
       type: "set-asset-library",
-      assets: [
-        ...installed.map((plugin) => ({ id: uid("asset"), name: plugin.name, kind: "plugin" as const, group: "Plugins", payload: plugin, createdAt: Date.now() })),
-        ...(activeDoc.assetLibrary ?? []),
-      ],
+      assets: [...pluginAssets, ...pendingInstall.assets, ...(activeDoc.assetLibrary ?? [])],
     })
-    toast.success(`${installed.length} sample plugins installed`)
+    setPendingInstall(null)
+    toast.success(`${installed.length} plugin${installed.length === 1 ? "" : "s"} installed`)
   }
 
   const importPlugin = async (file: File) => {
     if (!activeDoc) return
-    assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.jsonBytes, "Plugin manifest file")
+    assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.jsonBytes, "Plugin manifest or package file")
+    if (/\.8bf$/i.test(file.name)) {
+      const plugin = normalizeNativeEightBfPlugin(await file.arrayBuffer(), {
+        fileName: file.name,
+        now: Date.now(),
+        makeId: () => uid("plugin"),
+      })
+      stageInstall([plugin], file.name)
+      return
+    }
     const parsed: unknown = JSON.parse(await file.text())
-    const imported = normalizePluginManifestImport(parsed, {
+    const imported = normalizePluginPackagePayload(parsed, {
       fileSizeBytes: file.size,
       now: Date.now(),
       makeId: () => uid("plugin"),
     })
-    setPlugins([...imported, ...plugins])
-    setSelectedId(imported[0]?.id ?? "")
-    toast.success(`${imported.length} plugin${imported.length === 1 ? "" : "s"} imported`)
+    stageInstall(imported.plugins.map((plugin) => ({ ...plugin, source: imported.assets.length ? "package" : "import" })), file.name, imported.assets)
   }
 
   const exportPlugins = (scope: "selected" | "all") => {
@@ -1608,6 +1974,30 @@ function PluginWorkspace() {
       scope === "selected" && selected ? `${selected.name}.psplugin.json` : "photoshop-web-plugins.psplugin.json",
       "application/json",
     )
+  }
+
+  const exportPluginPackage = () => {
+    const chosen = selected ? [selected] : plugins
+    if (!chosen.length || !activeDoc) return
+    const packageAssets = (activeDoc.assetLibrary ?? []).filter((asset) =>
+      asset.kind === "plugin" ||
+      asset.kind === "cloud-library" ||
+      asset.kind === "stock" ||
+      asset.kind === "font" ||
+      asset.kind === "swatch",
+    )
+    downloadText(
+      JSON.stringify(buildPluginPackagePayload(chosen, { assets: packageAssets }), null, 2),
+      selected ? `${selected.name}.psplugin.json` : "photoshop-web-plugin-package.psplugin.json",
+      "application/json",
+    )
+  }
+
+  const registryPlugins = SAMPLE_PLUGINS
+
+  const toggleSelectedEnabled = () => {
+    if (!selected) return
+    setPlugins(plugins.map((plugin) => plugin.id === selected.id ? { ...plugin, enabled: !plugin.enabled } : plugin))
   }
 
   const removeSelected = () => {
@@ -1621,35 +2011,110 @@ function PluginWorkspace() {
 
   return (
     <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
-      <Panel title="Installed Local Plugins">
-        <CapabilityNotice>
-          No native 8BF, UXP, or CEP binaries are executed. Browser-safe plugins use manifest-declared permissions, project-local storage, sandboxed iframe panels, and a postMessage API.
-        </CapabilityNotice>
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          <Button size="sm" variant="secondary" onClick={addSamples}>Install Samples</Button>
-          <FileButton accept=".json,.psplugin,.psplugin.json,application/json" label="Import Manifest" onFile={importPlugin} />
-          <Button size="sm" variant="secondary" disabled={!selected} onClick={() => exportPlugins("selected")}>Export Selected</Button>
-          <Button size="sm" variant="secondary" disabled={!plugins.length} onClick={() => exportPlugins("all")}>Export All</Button>
-        </div>
-        <div className="mt-3 max-h-96 overflow-y-auto rounded-sm border border-[var(--ps-divider)]">
-          {plugins.map((plugin) => (
-            <button key={plugin.id} type="button" onClick={() => setSelectedId(plugin.id)} className={`grid w-full grid-cols-[1fr_auto] gap-2 border-b border-[var(--ps-divider)] p-2 text-left text-[11px] ${selected?.id === plugin.id ? "bg-[var(--ps-tool-active)]" : "hover:bg-[var(--ps-tool-hover)]"}`}>
-              <span className="min-w-0">
-                <span className="block truncate">{plugin.name}</span>
-                <span className="block truncate text-[var(--ps-text-dim)]">
-                  {(plugin.commands?.length ?? 0)} command{plugin.commands?.length === 1 ? "" : "s"} - {(plugin.permissions ?? []).length} permission{plugin.permissions?.length === 1 ? "" : "s"}
+      <div className="grid content-start gap-4">
+        <Panel title="Installed Local Plugins">
+          <CapabilityNotice>
+            Browser-safe UXP and CEP adapters are available through sandboxed panels, manifest permissions, CSInterface/evalScript shims, Action Manager batchPlay descriptors, and local 8BF kernel execution. Native 8BF binaries import as metadata unless paired with a safe kernel or WebAssembly adapter.
+          </CapabilityNotice>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <Button size="sm" variant="secondary" onClick={addSamples}>Review Samples</Button>
+            <FileButton accept=".json,.psplugin,.psplugin.json,.8bf,application/json" label="Import Manifest / 8BF" onFile={importPlugin} />
+            <Button size="sm" variant="secondary" disabled={!selected} onClick={() => exportPlugins("selected")}>Export Selected</Button>
+            <Button size="sm" variant="secondary" disabled={!plugins.length} onClick={() => exportPlugins("all")}>Export All</Button>
+            <Button className="col-span-2" size="sm" variant="secondary" disabled={!selected && !plugins.length} onClick={exportPluginPackage}>Export Package</Button>
+          </div>
+          <div className="mt-3 max-h-72 overflow-y-auto rounded-sm border border-[var(--ps-divider)]">
+            {plugins.map((plugin) => (
+              <button key={plugin.id} type="button" onClick={() => setSelectedId(plugin.id)} className={`grid w-full grid-cols-[1fr_auto] gap-2 border-b border-[var(--ps-divider)] p-2 text-left text-[11px] ${selected?.id === plugin.id ? "bg-[var(--ps-tool-active)]" : "hover:bg-[var(--ps-tool-hover)]"}`}>
+                <span className="min-w-0">
+                  <span className="block truncate">{plugin.name}</span>
+                  <span className="block truncate text-[var(--ps-text-dim)]">
+                    {(plugin.commands?.length ?? 0)} command{plugin.commands?.length === 1 ? "" : "s"} - {(plugin.permissions ?? []).length} permission{plugin.permissions?.length === 1 ? "" : "s"} - {plugin.enabled ? "enabled" : "disabled"}
+                  </span>
                 </span>
-              </span>
-              <span className="text-[var(--ps-text-dim)]">{plugin.kind}</span>
-            </button>
-          ))}
-          {!plugins.length ? <div className="p-3 text-[12px] text-[var(--ps-text-dim)]">No plugins installed.</div> : null}
-        </div>
-      </Panel>
+                <span className="text-[var(--ps-text-dim)]">{plugin.kind}</span>
+              </button>
+            ))}
+            {!plugins.length ? <div className="p-3 text-[12px] text-[var(--ps-text-dim)]">No plugins installed.</div> : null}
+          </div>
+          {selected ? (
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <Button size="sm" variant="secondary" onClick={toggleSelectedEnabled}>
+                {selected.enabled ? "Disable" : "Enable"}
+              </Button>
+              <Button size="sm" variant="destructive" onClick={removeSelected}>Remove</Button>
+            </div>
+          ) : null}
+        </Panel>
+
+        <Panel title="Local Plugin Registry">
+          <div className="space-y-2">
+            {registryPlugins.map((plugin, index) => {
+              const review = pluginInstallReview(plugin)
+              const installed = plugins.some((item) => item.name === plugin.name)
+              return (
+                <div key={plugin.id} className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] p-2 text-[11px]">
+                  <div className="grid grid-cols-[1fr_auto] gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate font-medium">{plugin.name}</div>
+                      <div className="text-[10px] text-[var(--ps-text-dim)]">{plugin.kind} - {review.capabilities.join(", ") || "Manifest descriptor"}</div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={installed}
+                      aria-label={installed ? undefined : `Review install for ${plugin.name}`}
+                      onClick={() => stageInstall([clonePluginForInstall(plugin, index, "registry")], "Local registry")}
+                    >
+                      {installed ? "Installed" : "Review"}
+                    </Button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </Panel>
+
+        {pendingInstall ? (
+          <Panel title="Permission review">
+            <div className="space-y-3 text-[11px]">
+              <div className="text-[var(--ps-text-dim)]">
+                {pendingInstall.sourceLabel}: {pendingInstall.plugins.length} plugin{pendingInstall.plugins.length === 1 ? "" : "s"}
+                {pendingInstall.assets.length ? ` and ${pendingInstall.assets.length} library asset${pendingInstall.assets.length === 1 ? "" : "s"}` : ""}
+              </div>
+              {pendingInstall.plugins.map((plugin) => {
+                const review = pluginInstallReview(plugin)
+                return (
+                  <div key={plugin.id} className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] p-2">
+                    <div className="font-medium">{review.name}</div>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {review.capabilities.map((capability) => (
+                        <span key={capability} className="rounded-sm border border-[var(--ps-divider)] px-1.5 py-0.5 text-[10px] text-[var(--ps-text-dim)]">{capability}</span>
+                      ))}
+                    </div>
+                    <div className="mt-2 space-y-1">
+                      {review.permissions.length ? review.permissions.map((permission) => (
+                        <div key={permission.id}>
+                          <span>{permission.label}</span>
+                          <span className="block text-[10px] text-[var(--ps-text-dim)]">{permission.description}</span>
+                        </div>
+                      )) : <span className="text-[var(--ps-text-dim)]">No privileged host permissions requested.</span>}
+                    </div>
+                  </div>
+                )
+              })}
+              <div className="grid grid-cols-2 gap-2">
+                <Button size="sm" onClick={installPending}>Install reviewed plugin</Button>
+                <Button size="sm" variant="secondary" onClick={() => setPendingInstall(null)}>Cancel</Button>
+              </div>
+            </div>
+          </Panel>
+        ) : null}
+      </div>
       <Panel title="Plugin Runtime">
         {selected ? (
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_260px]">
-            <div>
+            <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[13px] font-medium">{selected.name}</div>
@@ -1657,7 +2122,7 @@ function PluginWorkspace() {
                     {PLUGIN_MANIFEST_FORMAT} - {selected.version ?? "unversioned"} - {selected.enabled ? "enabled" : "disabled"}
                   </div>
                 </div>
-                <Button size="sm" variant="secondary" onClick={() => setPlugins(plugins.map((plugin) => plugin.id === selected.id ? { ...plugin, enabled: !plugin.enabled } : plugin))}>
+                <Button size="sm" variant="secondary" aria-label="Toggle selected plugin" onClick={toggleSelectedEnabled}>
                   {selected.enabled ? "Disable" : "Enable"}
                 </Button>
                 <Button size="sm" variant="destructive" onClick={removeSelected}>Remove</Button>
@@ -1683,6 +2148,9 @@ function PluginWorkspace() {
                   activeLayer={activeLayer ?? null}
                   storage={activeDoc.pluginStorage ?? {}}
                   dispatch={dispatch}
+                  commit={commit}
+                  requestRender={requestRender}
+                  applyPluginFilter={applyPluginFilter}
                   runPluginCommand={runPluginCommand}
                   onUiTree={setHostUi}
                   onLog={logRuntime}
@@ -1704,7 +2172,7 @@ function PluginWorkspace() {
               ) : null}
             </div>
 
-            <div className="grid content-start gap-3 text-[11px]">
+            <div className="grid min-w-0 content-start gap-3 text-[11px]">
               <div className="rounded-sm border border-[var(--ps-divider)]">
                 <div className="border-b border-[var(--ps-divider)] px-2 py-1.5 font-medium">Permissions</div>
                 {Object.entries(PLUGIN_PERMISSION_LABELS).map(([permission, label]) => {
@@ -1739,6 +2207,9 @@ function PluginIframeRuntime({
   activeLayer,
   storage,
   dispatch,
+  commit,
+  requestRender,
+  applyPluginFilter,
   runPluginCommand,
   onUiTree,
   onLog,
@@ -1748,16 +2219,22 @@ function PluginIframeRuntime({
   activeLayer: Layer | null
   storage: Record<string, Record<string, unknown>>
   dispatch: ReturnType<typeof useEditor>["dispatch"]
+  commit: ReturnType<typeof useEditor>["commit"]
+  requestRender: ReturnType<typeof useEditor>["requestRender"]
+  applyPluginFilter: (plugin: PluginDescriptor) => void
   runPluginCommand: (plugin: PluginDescriptor, command: PluginCommandDescriptor) => void
   onUiTree: (tree: PluginUiNode | null) => void
   onLog: (message: string) => void
 }) {
   const iframeRef = React.useRef<HTMLIFrameElement>(null)
   const [token, setToken] = React.useState(() => uid("plugintoken"))
+  const [runtimeState, setRuntimeState] = React.useState<"booting" | "ready" | "error">("booting")
+  const [reloadKey, setReloadKey] = React.useState(0)
   React.useEffect(() => {
     setToken(uid("plugintoken"))
+    setRuntimeState("booting")
     onUiTree(null)
-  }, [onUiTree, plugin.id])
+  }, [onUiTree, plugin.id, reloadKey])
 
   const srcDoc = React.useMemo(
     () => buildPluginIframeSrcDoc({ pluginId: plugin.id, token, html: plugin.panelHtml }),
@@ -1786,6 +2263,39 @@ function PluginIframeRuntime({
         return
       }
       try {
+        if (request.method === "plugin.ready") {
+          setRuntimeState("ready")
+          postPluginResponse(iframeRef.current, plugin, request.requestId, {
+            ok: true,
+            result: describePluginHostCapabilities(),
+          })
+          onLog(`${plugin.name} panel ready`)
+          return
+        }
+        if (request.method === "host.getInfo") {
+          postPluginResponse(iframeRef.current, plugin, request.requestId, {
+            ok: true,
+            result: {
+              ...describePluginHostCapabilities(),
+              activeDocument: {
+                id: activeDoc.id,
+                name: activeDoc.name,
+                width: activeDoc.width,
+                height: activeDoc.height,
+                colorMode: activeDoc.colorMode,
+                bitDepth: activeDoc.bitDepth,
+              },
+              plugin: {
+                id: plugin.id,
+                name: plugin.name,
+                kind: plugin.kind,
+                runtimeAdapters: plugin.runtimeAdapters ?? [],
+              },
+            },
+          })
+          onLog(`${plugin.name} read host info`)
+          return
+        }
         if (request.method === "document.getInfo") {
           postPluginResponse(iframeRef.current, plugin, request.requestId, {
             ok: true,
@@ -1806,21 +2316,82 @@ function PluginIframeRuntime({
         if (request.method === "layers.getActive") {
           postPluginResponse(iframeRef.current, plugin, request.requestId, {
             ok: true,
-            result: activeLayer
-              ? {
-                  id: activeLayer.id,
-                  name: activeLayer.name,
-                  kind: activeLayer.kind ?? "raster",
-                  visible: activeLayer.visible,
-                  locked: activeLayer.locked,
-                  opacity: activeLayer.opacity,
-                  blendMode: activeLayer.blendMode,
-                  width: activeLayer.canvas.width,
-                  height: activeLayer.canvas.height,
-                }
-              : null,
+            result: summarizeRuntimeLayer(activeLayer),
           })
           onLog(`${plugin.name} read active layer`)
+          return
+        }
+        if (request.method === "layers.create") {
+          const params = runtimeRecord(request.params)
+          const layer = createRuntimeLayer(activeDoc, params)
+          dispatch({ type: "add-layer", layer })
+          requestRender()
+          window.setTimeout(() => commit("Plugin Create Layer", [layer.id]), 0)
+          postPluginResponse(iframeRef.current, plugin, request.requestId, { ok: true, result: summarizeRuntimeLayer(layer) })
+          onLog(`${plugin.name} created layer ${layer.name}`)
+          return
+        }
+        if (request.method === "layers.update") {
+          const params = runtimeRecord(request.params)
+          const patch = runtimeRecord(params.patch)
+          const target = resolveRuntimeLayer(activeDoc, activeLayer, params.id)
+          if (!target) throw new Error("No target layer is available.")
+          if (typeof patch.name === "string") dispatch({ type: "rename-layer", id: target.id, name: runtimeStringArg(patch.name, target.name) })
+          if (typeof patch.opacity === "number") dispatch({ type: "set-layer-opacity", id: target.id, opacity: runtimeNumberArg(patch.opacity, target.opacity, 0, 1) })
+          if (typeof patch.visible === "boolean") dispatch({ type: "set-layer-visibility", id: target.id, visible: patch.visible })
+          requestRender()
+          window.setTimeout(() => commit("Plugin Update Layer", [target.id]), 0)
+          postPluginResponse(iframeRef.current, plugin, request.requestId, { ok: true, result: { ok: true, layerId: target.id } })
+          onLog(`${plugin.name} updated layer ${target.name}`)
+          return
+        }
+        if (request.method === "action.batchPlay") {
+          const params = runtimeRecord(request.params)
+          const descriptors = normalizePluginActionDescriptors(params.descriptors)
+          const missing = permissionsForPluginActionDescriptors(descriptors).filter((permission) => !canPluginUsePermission(plugin, permission))
+          if (missing.length) throw new Error(`Permission denied: ${PLUGIN_PERMISSION_LABELS[missing[0]]}`)
+          const result = runPluginActionDescriptors({ descriptors, activeDoc, activeLayer, dispatch, requestRender, commit })
+          postPluginResponse(iframeRef.current, plugin, request.requestId, { ok: true, result })
+          onLog(`${plugin.name} ran ${descriptors.length} Action Manager descriptor${descriptors.length === 1 ? "" : "s"}`)
+          return
+        }
+        if (request.method === "uxp.executeAsModal") {
+          const params = runtimeRecord(request.params)
+          postPluginResponse(iframeRef.current, plugin, request.requestId, {
+            ok: true,
+            result: {
+              commandName: runtimeStringArg(params.commandName, "Plugin Modal Command"),
+              modalBehavior: "browser-cooperative",
+              cancelled: false,
+            },
+          })
+          onLog(`${plugin.name} entered browser-safe modal scope`)
+          return
+        }
+        if (request.method === "cep.evalScript") {
+          const params = runtimeRecord(request.params)
+          const source = runtimeStringArg(params.source, "")
+          const result = runCepSafeScript({ source, activeDoc, activeLayer, dispatch, requestRender, commit })
+          postPluginResponse(iframeRef.current, plugin, request.requestId, { ok: true, result: result.result })
+          onLog(`${plugin.name} ran CEP evalScript (${result.commands} command${result.commands === 1 ? "" : "s"})`)
+          return
+        }
+        if (request.method === "cep.dispatchEvent") {
+          window.dispatchEvent(new CustomEvent("ps-plugin-cep-event", { detail: { pluginId: plugin.id, event: safePluginJson(request.params) } }))
+          postPluginResponse(iframeRef.current, plugin, request.requestId, { ok: true, result: true })
+          onLog(`${plugin.name} dispatched CEP event`)
+          return
+        }
+        if (request.method === "8bf.getInfo") {
+          postPluginResponse(iframeRef.current, plugin, request.requestId, { ok: true, result: describeNativeEightBfCompatibility(plugin) })
+          return
+        }
+        if (request.method === "8bf.run") {
+          if (!activeLayer) throw new Error("No active layer is available.")
+          const compatibility = describeNativeEightBfCompatibility(plugin)
+          if (!compatibility.executable) throw new Error(compatibility.reason)
+          applyPluginFilter(plugin)
+          postPluginResponse(iframeRef.current, plugin, request.requestId, { ok: true, result: compatibility })
           return
         }
         if (request.method === "storage.keys") {
@@ -1875,6 +2446,7 @@ function PluginIframeRuntime({
           postPluginResponse(iframeRef.current, plugin, request.requestId, { ok: true, result: true })
         }
       } catch (error) {
+        setRuntimeState("error")
         postPluginResponse(iframeRef.current, plugin, request.requestId, {
           ok: false,
           error: error instanceof Error ? error.message : "Plugin request failed",
@@ -1883,7 +2455,7 @@ function PluginIframeRuntime({
     }
     window.addEventListener("message", handler)
     return () => window.removeEventListener("message", handler)
-  }, [activeDoc, activeLayer, dispatch, onLog, onUiTree, plugin, runPluginCommand, storage, token])
+  }, [activeDoc, activeLayer, applyPluginFilter, commit, dispatch, onLog, onUiTree, plugin, requestRender, runPluginCommand, storage, token])
 
   React.useEffect(() => {
     const commandHandler = (event: Event) => {
@@ -1905,14 +2477,24 @@ function PluginIframeRuntime({
   }, [plugin.id, sendUiEvent])
 
   return (
-    <iframe
-      ref={iframeRef}
-      title={plugin.name}
-      sandbox="allow-scripts"
-      referrerPolicy="no-referrer"
-      srcDoc={srcDoc}
-      className="mt-3 h-72 w-full rounded-sm border border-[var(--ps-divider)] bg-[#171717]"
-    />
+    <div className="mt-3 overflow-hidden rounded-sm border border-[var(--ps-divider)] bg-[#171717]">
+      <div className="flex h-8 items-center border-b border-[var(--ps-divider)] px-2 text-[10px] text-[var(--ps-text-dim)]">
+        <span>Sandbox runtime: {runtimeState}</span>
+        <Button className="ml-auto h-6 px-2 text-[10px]" size="sm" variant="ghost" onClick={() => setReloadKey((value) => value + 1)}>
+          Reload
+        </Button>
+      </div>
+      <iframe
+        key={`${plugin.id}-${token}`}
+        ref={iframeRef}
+        title={plugin.name}
+        sandbox="allow-scripts"
+        referrerPolicy="no-referrer"
+        srcDoc={srcDoc}
+        onLoad={() => setRuntimeState("booting")}
+        className="h-72 w-full bg-[#171717]"
+      />
+    </div>
   )
 }
 
@@ -2022,7 +2604,21 @@ function LibrariesWorkspace() {
     const face = new FontFace(family, data)
     await face.load()
     document.fonts.add(face)
-    addAsset({ name: family, kind: "font", group: "Adobe Fonts-style Local Fonts", payload: { family, fileName: file.name } })
+    const embedded = createEmbeddedFontFromBuffer(family, file.name, data, file.type || "font/ttf")
+    const metadata = parseOpenTypeFontMetadata(data)
+    addAsset({
+      name: family,
+      kind: "font",
+      group: "Adobe Fonts-style Local Fonts",
+      payload: {
+        ...embedded,
+        axes: metadata.axes,
+        namedInstances: metadata.namedInstances,
+        featureTags: metadata.featureTags,
+        unitsPerEm: metadata.unitsPerEm,
+        glyphCount: metadata.glyphCount,
+      },
+    })
     toast.success(`Activated ${family}`)
   }
   return (
@@ -2084,6 +2680,31 @@ function ColorWorkspace() {
     dispatch({ type: "set-color-management", settings: { ...color, ...patch } })
     requestRender()
   }
+  const convertCanvasProfile = (canvas: HTMLCanvasElement, sourceProfile: typeof color.assignedProfile, targetProfile: typeof color.workingSpace) => {
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return false
+    const image = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    const converted = applyIccTransformToImageData(image, {
+      sourceProfile,
+      targetProfile,
+      renderingIntent: color.renderingIntent,
+      blackPointCompensation: color.blackPointCompensation,
+    })
+    ctx.putImageData(converted, 0, 0)
+    return true
+  }
+  const convertProfile = (scope: "active" | "all") => {
+    if (color.assignedProfile === color.workingSpace) return
+    const layers = scope === "active" && activeLayer ? [activeLayer] : activeDoc.layers.filter((layer) => layer.kind !== "group")
+    const changedIds: string[] = []
+    for (const layer of layers) {
+      if (layer.kind === "group" || typeof layer.canvas?.getContext !== "function") continue
+      if (convertCanvasProfile(layer.canvas, color.assignedProfile, color.workingSpace)) changedIds.push(layer.id)
+    }
+    dispatch({ type: "set-color-management", settings: { ...color, assignedProfile: color.workingSpace } })
+    requestRender()
+    window.setTimeout(() => commit(`Convert Profile: ${color.workingSpace}`, changedIds.length ? changedIds : "all"), 0)
+  }
   const setMode = (mode: DocumentModeSettings["mode"], patch: Partial<DocumentModeSettings> = {}) => {
     const next = { ...settings, ...patch, mode }
     setSettings(next)
@@ -2111,16 +2732,20 @@ function ColorWorkspace() {
   }
   return (
     <div className="grid gap-4 lg:grid-cols-2">
-      <Panel title="Profile Metadata & Simulated Proofing">
+      <Panel title="ICC Profiles & Proofing">
         <CapabilityNotice>
-          Profile assignment and proofing use local RGB/CMYK/Lab math for visual guidance. High-bit data can be represented in typed arrays for algorithms, but browser canvas display/export remains 8-bit RGBA and this is not ICC-accurate production proofing.
+          Profile assignment, conversion, proof preview, gamut warning, and raster export conversion use the browser-local ICC transform engine for supported profiles. High-bit documents keep typed-array sources where supported; canvas display remains an 8-bit RGBA preview.
         </CapabilityNotice>
-        <SelectField label="Assign Profile" value={color.assignedProfile} options={["sRGB IEC61966-2.1", "Display P3", "Adobe RGB (1998)", "ProPhoto RGB", "Working CMYK", "Dot Gain 20%", "Gray Gamma 2.2"]} onChange={(value) => updateColor({ assignedProfile: value as typeof color.assignedProfile })} />
-        <SelectField label="Working Space" value={color.workingSpace} options={["sRGB IEC61966-2.1", "Display P3", "Adobe RGB (1998)", "ProPhoto RGB", "Working CMYK"]} onChange={(value) => updateColor({ workingSpace: value as typeof color.workingSpace })} />
+        <SelectField label="Assign Profile" value={color.assignedProfile} options={supportedIccProfileNames()} onChange={(value) => updateColor({ assignedProfile: value as typeof color.assignedProfile })} />
+        <SelectField label="Working / Export Profile" value={color.workingSpace} options={supportedIccProfileNames()} onChange={(value) => updateColor({ workingSpace: value as typeof color.workingSpace })} />
         <SelectField label="Rendering Intent" value={color.renderingIntent} options={["perceptual", "relative-colorimetric", "saturation", "absolute-colorimetric"]} onChange={(value) => updateColor({ renderingIntent: value as typeof color.renderingIntent })} />
-        <SelectField label="Proof Profile" value={color.proofProfile} options={["None", "Working CMYK", "U.S. Web Coated SWOP v2", "Japan Color 2001 Coated", "Display P3", "Dot Gain 20%"]} onChange={(value) => updateColor({ proofProfile: value as typeof color.proofProfile })} />
+        <SelectField label="Proof Profile" value={color.proofProfile} options={["None", ...supportedIccProfileNames()]} onChange={(value) => updateColor({ proofProfile: value as typeof color.proofProfile })} />
         <CheckField label="Proof colors in canvas and exports" checked={color.proofColors} onChange={(checked) => updateColor({ proofColors: checked })} />
         <CheckField label="Gamut warning overlay" checked={color.gamutWarning} onChange={(checked) => updateColor({ gamutWarning: checked })} />
+        <div className="grid grid-cols-2 gap-2 pt-2">
+          <Button size="sm" variant="secondary" disabled={!activeLayer || color.assignedProfile === color.workingSpace} onClick={() => convertProfile("active")}>Convert Layer</Button>
+          <Button size="sm" variant="secondary" disabled={color.assignedProfile === color.workingSpace} onClick={() => convertProfile("all")}>Convert Document</Button>
+        </div>
       </Panel>
       <Panel title="Color Modes & Prepress">
         <div className="mb-3 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2 text-[11px] text-[var(--ps-text-dim)]">
@@ -2185,6 +2810,30 @@ function FormatsWorkspace() {
       }, `Import ${name}`)
     }
   }
+  const inspectLargeImport = async (file: File, reason: string, notes: string[]) => {
+    const dimensions = await inspectImportFileDimensions(file).catch(() => null)
+    if (!dimensions) return false
+    const plan = planLargeDocumentOpen({
+      fileName: file.name,
+      kind: dimensions.kind,
+      width: dimensions.width,
+      height: dimensions.height,
+      tileable: dimensions.kind === "psb",
+    })
+    const doc = createLargeDocumentInspectionDocument({
+      fileName: file.name,
+      kind: dimensions.kind,
+      width: dimensions.width,
+      height: dimensions.height,
+      reason,
+      warnings: plan.warnings,
+    })
+    createDocument(doc, "Inspect Large Import")
+    notes.push(`Opened inspection mode for ${dimensions.width}x${dimensions.height}px source`)
+    setLog([...notes, ...plan.warnings])
+    toast.info("Opened inspection mode")
+    return true
+  }
   const importAdvanced = async (file: File) => {
     const ext = file.name.split(".").pop()?.toLowerCase() ?? ""
     const notes = [`Opened ${file.name}`]
@@ -2208,19 +2857,31 @@ function FormatsWorkspace() {
         notes.push(`Decoded ${advancedRaster.format}: ${advancedRaster.width}x${advancedRaster.height}, ${advancedRaster.channels} channel(s), source ${advancedRaster.bitDepth}-bit ${advancedRaster.colorModel}`)
         notes.push(...advancedRaster.warnings)
       } else if (ext === "pdf") {
-        canvas = await decodePdfPreview(file)
-        notes.push(canvas ? "Rendered first PDF page into an editable raster layer" : "PDF header detected; page rendering failed")
+        const pages = await decodePdfPages(file)
+        if (pages.length) {
+          canvas = pages[0].canvas
+          for (const page of pages.slice(1)) addCanvas(page.canvas, `${file.name} page ${page.pageNumber}`)
+          notes.push(`Rendered ${pages.length} PDF page${pages.length === 1 ? "" : "s"} into editable flattened raster layer${pages.length === 1 ? "" : "s"}`)
+        } else {
+          notes.push("PDF header detected; page rendering failed")
+        }
       } else if (ext === "eps" || ext === "ps") {
         canvas = await decodeEpsPreview(file)
         notes.push(canvas ? "Rendered supported EPS/PostScript subset into an editable raster layer" : "EPS/PostScript metadata detected; unsupported operators prevented rendering")
       } else if (file.type.startsWith("image/")) {
         try {
-          const img = await loadImageFromFile(file)
-          canvas = createSubsystemCanvas(img.naturalWidth, img.naturalHeight)
-          canvas.getContext("2d")!.drawImage(img, 0, 0)
+          const raster = await loadRasterCanvasFromFile(file)
+          canvas = raster.canvas
           notes.push(ext === "gif" ? "Browser decoded a static GIF frame; animation frames are not imported" : "Browser decoded raster image natively")
-        } catch {
-          notes.push(`Browser could not decode ${capability.label}; no layer was created`)
+        } catch (rasterError) {
+          const raster = await loadRasterCanvasFromFile(file, { mode: "reduced-scale" }).catch(() => null)
+          if (raster) {
+            canvas = raster.canvas
+            notes.push(`Browser opened ${capability.label} at ${(raster.scale * 100).toFixed(1)}% reduced scale from ${raster.originalWidth}x${raster.originalHeight}px`)
+            notes.push(...raster.warnings)
+          } else {
+            notes.push(`Browser could not decode ${capability.label}; ${rasterError instanceof Error ? rasterError.message : "no layer was created"}`)
+          }
         }
       } else if (ext === "dcm" || ext === "dicom") {
         canvas = await decodeDicomPreview(file)
@@ -2248,6 +2909,7 @@ function FormatsWorkspace() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Advanced import failed"
       notes.push(`Import failed: ${message}`)
+      if (await inspectLargeImport(file, message, notes)) return
       setLog(notes)
       toast.error(message)
     }
@@ -2265,22 +2927,37 @@ function FormatsWorkspace() {
     const canvas = renderDocumentComposite(activeDoc, { transparent: true })
     return { canvas, imageData: canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height) }
   }
-  const exportAdvancedRaster = async (format: "tiff" | "exr" | "hdr" | "dicom" | "pdf" | "eps") => {
+  const exportAdvancedRaster = async (format: "tiff" | "exr" | "hdr" | "dicom" | "pdf" | "eps" | "heif" | "jpeg2000") => {
     if (!activeDoc) return
     try {
       const composite = compositeImageData()
       if (!composite) return
+      const highBit = activeDoc.bitDepth > 8 && (format === "tiff" || format === "exr")
+        ? getHighBitExportImage(activeDoc, { transparent: true })
+        : null
       const base = activeDoc.name.replace(/[\\/:*?"<>|]+/g, "-") || "document"
       if (format === "tiff") {
-        downloadBlob(new Blob([await encodeTiffImageDataAsync(composite.imageData, { compression: tiffCompression })], { type: "image/tiff" }), `${base}.tiff`)
+        downloadBlob(new Blob([
+          highBit
+            ? await encodeTiffHighBitImageDataAsync(highBit, { compression: tiffCompression })
+            : await encodeTiffImageDataAsync(composite.imageData, { compression: tiffCompression }),
+        ], { type: "image/tiff" }), `${base}.tiff`)
+      } else if (format === "heif") {
+        downloadBlob(new Blob([await encodeHeifImageData(composite.imageData)], { type: "image/heif" }), `${base}.heif`)
+      } else if (format === "jpeg2000") {
+        downloadBlob(new Blob([await encodeJpeg2000ImageData(composite.imageData)], { type: "image/j2k" }), `${base}.j2k`)
       } else if (format === "exr") {
-        downloadBlob(new Blob([encodeOpenExrImageData(composite.imageData)], { type: "image/x-exr" }), `${base}.exr`)
+        downloadBlob(new Blob([
+          highBit
+            ? encodeOpenExrHighBitImage(highBit, { channels: "rgba", pixelType: "float" })
+            : encodeOpenExrImageData(composite.imageData, { channels: "rgba", pixelType: "float" }),
+        ], { type: "image/x-exr" }), `${base}.exr`)
       } else if (format === "hdr") {
         downloadBlob(new Blob([encodeRadianceHdrImageData(composite.imageData)], { type: "image/vnd.radiance" }), `${base}.hdr`)
       } else if (format === "dicom") {
         downloadBlob(new Blob([encodeDicomImageData(composite.imageData, activeDoc.name)], { type: "application/dicom" }), `${base}.dcm`)
       } else if (format === "pdf") {
-        downloadBlob(new Blob([await encodePdfCanvas(composite.canvas, activeDoc.name)], { type: "application/pdf" }), `${base}.pdf`)
+        downloadBlob(new Blob([await encodePdfCanvases([composite.canvas], activeDoc.name)], { type: "application/pdf" }), `${base}.pdf`)
       } else {
         downloadBlob(new Blob([encodeEpsCanvas(composite.canvas, activeDoc.name)], { type: "application/postscript" }), `${base}.eps`)
       }
@@ -2323,51 +3000,35 @@ function FormatsWorkspace() {
       toast.error("Could not read that PSB tile")
       return
     }
-    const layer: Layer = {
-      id: uid("layer"),
-      name: `Tile ${col},${row}`,
-      kind: "raster",
-      visible: true,
-      locked: false,
-      opacity: 1,
-      blendMode: "normal",
+    const tileDoc = createTileEditDocument({
+      parentDocId: activeDoc.id,
+      sourceName: tileView.sourceName,
+      col,
+      row,
+      sourceX: col * tileView.tileSize,
+      sourceY: row * tileView.tileSize,
+      originalWidth: tileView.originalWidth,
+      originalHeight: tileView.originalHeight,
+      tileSize: tileView.tileSize,
       canvas,
-      metadata: {
-        description: `${tileView.sourceName} tile ${col},${row}`,
-        tags: ["psb", "tile-view"],
-        custom: {
-          sourceName: tileView.sourceName,
-          tileCol: col,
-          tileRow: row,
-          sourceX: col * tileView.tileSize,
-          sourceY: row * tileView.tileSize,
-          originalWidth: tileView.originalWidth,
-          originalHeight: tileView.originalHeight,
-        },
-      },
-    }
-    const tileDoc: PsDocument = {
-      id: uid("doc"),
-      name: `${tileView.sourceName} tile ${col},${row}`,
-      width: canvas.width,
-      height: canvas.height,
-      zoom: 1,
-      layers: [layer],
-      activeLayerId: layer.id,
-      selectedLayerIds: [layer.id],
-      background: "#ffffff",
-      colorMode: "RGB",
-      bitDepth: 8,
-      selection: { bounds: null, shape: "rect" },
-      metadata: {
-        title: `${tileView.sourceName} tile ${col},${row}`,
-        description: `Full-resolution PSB tile at ${col * tileView.tileSize},${row * tileView.tileSize}.`,
-        source: tileView.sourceName,
-        createdAt: new Date().toISOString(),
-      },
-    }
+    })
     createDocument(tileDoc, "Open PSB Tile")
     setLog([`Opened full-resolution tile ${col},${row} (${canvas.width} x ${canvas.height}px) from ${tileView.sourceName}`])
+  }
+  const updateActiveTileEdit = async () => {
+    if (!activeDoc?.metadata?.largeDocumentTileEdit) {
+      toast.error("Open a full-resolution tile before updating the tile cache")
+      return
+    }
+    const edit = activeDoc.metadata.largeDocumentTileEdit
+    const composite = renderDocumentComposite(activeDoc, { transparent: true })
+    const ok = await writePsbTileViewCanvas(edit.parentDocId, edit.tile.col, edit.tile.row, composite)
+    if (!ok) {
+      toast.error("The tile cache is no longer available; reopen the tile-only source")
+      return
+    }
+    setLog([`Updated source tile ${edit.tile.col},${edit.tile.row} for ${edit.sourceName}`])
+    toast.success("Tile cache updated")
   }
   return (
     <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
@@ -2378,7 +3039,7 @@ function FormatsWorkspace() {
           <FileButton accept=".psb,image/vnd.adobe.photoshop" label="PSB Tile View" onFile={(file) => importPsbLargeDocument(file, "tile-view")} />
         </div>
         <div className="mt-3 rounded-sm border border-[var(--ps-divider)] p-3 text-[11px] text-[var(--ps-text-dim)]">
-          Imports create browser 8-bit RGBA layers when a decoder path is available. TIFF/EXR/HEIC/JPEG 2000 use bundled decoders, RAW/DNG uses LibRaw or embedded previews, DICOM/HDR/PDF/EPS render flattened previews, and oversized PSB files can be opened as a 50% composite or tile overview when the full canvas exceeds browser limits.
+          Imports create browser 8-bit RGBA preview layers when a decoder path is available and retain high-bit side-band sources where the importer exposes them. TIFF/EXR/HEIC/JPEG 2000 use bundled decoders, RAW/DNG uses LibRaw or embedded previews, DICOM/HDR/PDF/EPS render flattened previews, and oversized PSB files can be opened as a 50% composite or tile overview when the full canvas exceeds browser limits.
         </div>
       </Panel>
       <Panel title="PSB Tile View">
@@ -2410,6 +3071,9 @@ function FormatsWorkspace() {
         </div>
         <Button className="mt-2 w-full" size="sm" variant="secondary" disabled={!tileView} onClick={() => void openSelectedPsbTile()}>
           Open Full-Resolution Tile
+        </Button>
+        <Button className="mt-2 w-full" size="sm" variant="secondary" disabled={!activeDoc?.metadata?.largeDocumentTileEdit} onClick={() => void updateActiveTileEdit()}>
+          Update Source Tile
         </Button>
         <p className="mt-2 text-[11px] text-[var(--ps-text-dim)]">
           {tileView
@@ -2443,6 +3107,8 @@ function FormatsWorkspace() {
             <option value="deflate">TIFF Deflate</option>
           </select>
           <Button size="sm" variant="secondary" disabled={!activeDoc} onClick={() => void exportAdvancedRaster("tiff")}>Export TIFF</Button>
+          <Button size="sm" variant="secondary" disabled={!activeDoc} onClick={() => void exportAdvancedRaster("heif")}>Export HEIF</Button>
+          <Button size="sm" variant="secondary" disabled={!activeDoc} onClick={() => void exportAdvancedRaster("jpeg2000")}>Export JPEG 2000</Button>
           <Button size="sm" variant="secondary" disabled={!activeDoc} onClick={() => void exportAdvancedRaster("exr")}>Export EXR</Button>
           <Button size="sm" variant="secondary" disabled={!activeDoc} onClick={() => void exportAdvancedRaster("hdr")}>Export HDR</Button>
           <Button size="sm" variant="secondary" disabled={!activeDoc} onClick={() => void exportAdvancedRaster("dicom")}>Export DICOM</Button>
@@ -2505,13 +3171,15 @@ function VariablesWorkspace() {
   const canvasForImageValue = async (value: string) => {
     const trimmed = value.trim()
     let img: HTMLImageElement | null = null
+    let fileCanvas: HTMLCanvasElement | null = null
     if (/^data:image\//i.test(trimmed)) {
       img = await imageFromDataUrl(trimmed)
     } else {
       const base = trimmed.split(/[\\/]/).pop()?.toLowerCase()
       const file = imageFiles.find((item) => item.name.toLowerCase() === trimmed.toLowerCase() || item.name.toLowerCase() === base)
-      if (file) img = await loadImageFromFile(file)
+      if (file) fileCanvas = (await loadRasterCanvasFromFile(file, { mode: "reduced-scale" })).canvas
     }
+    if (fileCanvas) return fileCanvas
     if (!img) return null
     const canvas = makeCanvas(img.naturalWidth || img.width, img.naturalHeight || img.height)
     canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height)

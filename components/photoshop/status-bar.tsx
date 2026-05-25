@@ -7,12 +7,39 @@ import { useEditor } from "./editor-context"
 import { createHeapMemoryMonitor, formatMemoryUsage, getGlobalMemoryBudget } from "./memory-budget"
 import { detectOffscreenCanvasCapabilities, diagnoseOffscreenCanvasTransfer } from "./offscreen-canvas"
 import { requestCanvasZoom } from "./zoom-events"
+import { diagnoseBrowserLargeDocumentLimits, type BrowserLargeDocumentDiagnostics } from "./large-document"
+
+function BrowserDiagnosticsBadge({ diagnostics }: { diagnostics: BrowserLargeDocumentDiagnostics | null }) {
+  if (!diagnostics) return null
+  const title = [
+    `Canvas: ${diagnostics.canvas.detail}`,
+    `GPU: ${diagnostics.gpu.detail}`,
+    `Memory: ${diagnostics.memory.detail}`,
+    `Offscreen: ${diagnostics.offscreen.detail}`,
+    ...diagnostics.fallbacks,
+  ].join("\n")
+  const warning =
+    diagnostics.canvas.status !== "ok" ||
+    diagnostics.gpu.status !== "ok" ||
+    diagnostics.memory.status === "limited" ||
+    diagnostics.offscreen.status !== "ok"
+  return (
+    <span
+      data-testid="browser-diagnostics"
+      title={title}
+      className={warning ? "text-amber-300" : "text-[var(--ps-text-dim)]"}
+    >
+      Browser limits
+    </span>
+  )
+}
 
 export function StatusBar({ onHide }: { onHide?: () => void }) {
   const { activeDoc, tool, brush, foreground } = useEditor()
   const [zoomInput, setZoomInput] = React.useState("")
   const [memoryUsage, setMemoryUsage] = React.useState("")
   const [clientReady, setClientReady] = React.useState(false)
+  const [browserDiagnostics, setBrowserDiagnostics] = React.useState<BrowserLargeDocumentDiagnostics | null>(null)
   const offscreenDiagnostic = React.useMemo(() => {
     const capabilities = detectOffscreenCanvasCapabilities()
     return diagnoseOffscreenCanvasTransfer({
@@ -28,11 +55,12 @@ export function StatusBar({ onHide }: { onHide?: () => void }) {
   )
   const showPrecisionWarning = clientReady && !!colorHonesty?.hasWarnings
   const editingDepthLabel = clientReady && activeDoc && activeDoc.bitDepth > 8
-    ? `Editing at 8-bit | Document: ${activeDoc.bitDepth}-bit`
+    ? `High-bit edit path | Preview: 8-bit | Document: ${activeDoc.bitDepth}-bit`
     : "Editing at 8-bit"
 
   React.useEffect(() => {
     setClientReady(true)
+    setBrowserDiagnostics(diagnoseBrowserLargeDocumentLimits())
   }, [])
 
   React.useEffect(() => {
@@ -54,6 +82,12 @@ export function StatusBar({ onHide }: { onHide?: () => void }) {
         className="h-6 bg-[var(--ps-chrome)] border-t border-[var(--ps-divider)] text-[11px] text-[var(--ps-text-dim)] px-2 flex items-center"
       >
         <span>Ready</span>
+        {browserDiagnostics ? (
+          <>
+            <span className="mx-2">|</span>
+            <BrowserDiagnosticsBadge diagnostics={browserDiagnostics} />
+          </>
+        ) : null}
         <div className="flex-1" />
         {onHide ? (
           <button
@@ -110,7 +144,7 @@ export function StatusBar({ onHide }: { onHide?: () => void }) {
       <span
         suppressHydrationWarning
         className={clientReady && activeDoc.bitDepth > 8 ? "text-amber-200" : undefined}
-        title="Browser canvas painting and display are 8-bit RGBA."
+        title="High-bit sources use typed arrays where supported; browser canvas display remains an 8-bit RGBA preview."
       >
         {editingDepthLabel}
       </span>
@@ -139,6 +173,12 @@ export function StatusBar({ onHide }: { onHide?: () => void }) {
           <span title={offscreenDiagnostic.warning ?? offscreenDiagnostic.reason} className="text-amber-300">
             {offscreenDiagnostic.badge}
           </span>
+        </>
+      ) : null}
+      {clientReady && browserDiagnostics ? (
+        <>
+          <span>|</span>
+          <BrowserDiagnosticsBadge diagnostics={browserDiagnostics} />
         </>
       ) : null}
 

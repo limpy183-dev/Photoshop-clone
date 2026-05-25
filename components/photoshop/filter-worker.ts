@@ -1,10 +1,10 @@
 /**
  * Async filter execution helpers.
  *
- * Lightweight per-pixel filters run in a Blob worker with transferable pixel
- * buffers. Filters that depend on the larger registry still use a scheduled
- * main-thread fallback so the call path stays asynchronous without overstating
- * worker coverage.
+ * Browser-local filters run in a module worker with transferable pixel buffers.
+ * A small inline worker remains as a fallback for older bundlers that cannot
+ * construct the registry worker; filters needing extra document/layer context
+ * stay on the main thread because their inputs are not a single ImageData.
  */
 
 import { FILTERS, getFilter } from "./filters"
@@ -41,7 +41,10 @@ interface FilterWorkerResponse {
 }
 
 let _worker: Worker | null = null
+let _workerKind: "registry" | "inline" | null = null
 let _workerFailed = false
+let _registryWorkerUnavailable = false
+let _inlineWorkerUnavailable = false
 let _nextId = 0
 const _pending = new Map<number, {
   resolve: (data: ImageData) => void
@@ -49,7 +52,13 @@ const _pending = new Map<number, {
   progress?: (event: FilterProgressEvent) => void
 }>()
 
-const WORKER_SUPPORTED_FILTERS = [
+const CONTEXT_REQUIRED_FILTERS = new Set([
+  "match-color",
+  "apply-image",
+  "calculations",
+])
+
+const INLINE_WORKER_SUPPORTED_FILTERS = [
   "invert",
   "grayscale",
   "desaturate",
@@ -83,9 +92,16 @@ const WORKER_SUPPORTED_FILTERS = [
   "spin-blur",
 ] as const
 
-type WorkerSupportedFilter = typeof WORKER_SUPPORTED_FILTERS[number]
+type WorkerSupportedFilter = string
 
-const WORKER_FILTER_SET = new Set<string>(WORKER_SUPPORTED_FILTERS)
+const INLINE_WORKER_FILTER_SET = new Set<string>(INLINE_WORKER_SUPPORTED_FILTERS)
+const WORKER_FILTER_SET = new Set<string>(getWorkerSupportedFilterIds())
+
+export function getWorkerSupportedFilterIds() {
+  return Object.keys(FILTERS)
+    .filter((filterId) => !CONTEXT_REQUIRED_FILTERS.has(filterId))
+    .sort()
+}
 
 export function isFilterWorkerSupported(filterId: string): filterId is WorkerSupportedFilter {
   return WORKER_FILTER_SET.has(filterId)
@@ -93,8 +109,8 @@ export function isFilterWorkerSupported(filterId: string): filterId is WorkerSup
 
 export function getFilterWorkerSupport() {
   return {
-    strategy: "worker-for-supported-filters-with-async-main-thread-fallback",
-    supportedFilters: [...WORKER_SUPPORTED_FILTERS],
+    strategy: "registry-module-worker-for-context-free-filters-with-context-main-thread-fallback",
+    supportedFilters: getWorkerSupportedFilterIds(),
   }
 }
 
@@ -109,13 +125,6 @@ export interface FilterWorkerAuditEntry {
   reason: string
 }
 
-const CONTEXT_REQUIRED_FILTERS = new Set([
-  "match-color",
-  "displace",
-  "apply-image",
-  "calculations",
-])
-
 export function getFilterWorkerAudit() {
   const entries: FilterWorkerAuditEntry[] = Object.values(FILTERS)
     .map((filter) => {
@@ -126,7 +135,7 @@ export function getFilterWorkerAudit() {
           category: filter.category,
           strategy: "worker" as const,
           transferableImageData: true,
-          reason: "Dedicated typed-array worker implementation accepts transferable ImageData buffers.",
+          reason: "Registry module worker imports the filter registry and accepts transferable ImageData buffers.",
         }
       }
       if (CONTEXT_REQUIRED_FILTERS.has(filter.id)) {
@@ -145,7 +154,7 @@ export function getFilterWorkerAudit() {
         category: filter.category,
         strategy: "main-thread-typed-array" as const,
         transferableImageData: true,
-        reason: "Pure ImageData algorithm is audited for typed-array I/O and uses async main-thread fallback until a parity worker implementation is added.",
+        reason: "Pure ImageData algorithm is audited for typed-array I/O but is not currently enabled for worker execution.",
       }
     })
     .sort((a, b) => a.filterId.localeCompare(b.filterId))
@@ -258,6 +267,40 @@ function isExpensiveFilter(filterId: string) {
   ].includes(filterId)
 }
 
+const TILE_COMPATIBLE_FILTERS = new Set([
+  "invert",
+  "grayscale",
+  "desaturate",
+  "sepia",
+  "threshold",
+  "posterize",
+  "exposure",
+  "brightness-contrast",
+  "hue-saturation",
+  "vibrance",
+  "black-white",
+  "color-balance",
+  "photo-filter",
+  "channel-mixer",
+  "color-lookup",
+  "gradient-map",
+  "gaussian-blur",
+  "box-blur",
+  "motion-blur",
+  "sharpen",
+  "unsharp-mask",
+  "noise",
+  "surface-blur",
+  "lens-blur",
+  "oil-paint",
+  "high-pass",
+  "custom-convolution",
+])
+
+function isTileCompatibleFilter(filterId: string) {
+  return TILE_COMPATIBLE_FILTERS.has(filterId)
+}
+
 export function planExpensiveFilterTiling(
   filterId: string,
   width: number,
@@ -268,7 +311,7 @@ export function planExpensiveFilterTiling(
   const tileSize = Math.max(1, Math.round(options.tileSize ?? 512))
   const grid = planTileGrid(width, height, tileSize)
   const expensive = isExpensiveFilter(filterId)
-  const shouldTile = grid.tileCount > 1 && (expensive || width * height >= 16_000_000)
+  const shouldTile = isTileCompatibleFilter(filterId) && grid.tileCount > 1 && (expensive || width * height >= 16_000_000)
   const warnings: string[] = []
 
   if (shouldTile && suggestedFilterOverlap(filterId, params) > 0) {
@@ -1302,43 +1345,78 @@ self.onmessage = (event) => {
 `
 }
 
-function getWorker(): Worker | null {
-  if (_worker) return _worker
-  if (_workerFailed || typeof Worker === "undefined" || typeof Blob === "undefined" || typeof URL === "undefined") return null
+function attachWorkerHandlers(worker: Worker) {
+  worker.onmessage = (event: MessageEvent<FilterWorkerResponse>) => {
+    const response = event.data
+    const pending = _pending.get(response.id)
+    if (!pending) return
+    if (response.progress) {
+      pending.progress?.(response.progress)
+      return
+    }
+    _pending.delete(response.id)
+    if (response.error || !response.buffer) {
+      pending.reject(new Error(response.error ?? "Filter worker returned no image data"))
+      return
+    }
+    pending.resolve(new ImageData(new Uint8ClampedArray(response.buffer), response.width, response.height))
+  }
+  worker.onerror = (event) => {
+    _workerFailed = true
+    _worker = null
+    _workerKind = null
+    worker.terminate()
+    const message = event.message || "Filter worker failed"
+    for (const [id, pending] of _pending) {
+      pending.reject(new Error(message))
+      _pending.delete(id)
+    }
+  }
+}
 
+async function createRegistryWorker(): Promise<Worker | null> {
+  if (_registryWorkerUnavailable || typeof Worker === "undefined" || typeof URL === "undefined") return null
+  try {
+    const { createRegistryFilterWorker } = await import("./filter-registry-worker-factory")
+    return createRegistryFilterWorker()
+  } catch {
+    _registryWorkerUnavailable = true
+    return null
+  }
+}
+
+function createInlineWorker(): Worker | null {
+  if (_inlineWorkerUnavailable || typeof Worker === "undefined" || typeof Blob === "undefined" || typeof URL === "undefined") return null
   try {
     const blob = new Blob([workerSource()], { type: "text/javascript" })
     const url = URL.createObjectURL(blob)
-    _worker = new Worker(url, { type: "module" })
+    const worker = new Worker(url, { type: "module" })
     URL.revokeObjectURL(url)
-    _worker.onmessage = (event: MessageEvent<FilterWorkerResponse>) => {
-      const response = event.data
-      const pending = _pending.get(response.id)
-      if (!pending) return
-      if (response.progress) {
-        pending.progress?.(response.progress)
-        return
-      }
-      _pending.delete(response.id)
-      if (response.error || !response.buffer) {
-        pending.reject(new Error(response.error ?? "Filter worker returned no image data"))
-        return
-      }
-      pending.resolve(new ImageData(new Uint8ClampedArray(response.buffer), response.width, response.height))
-    }
-    _worker.onerror = (event) => {
-      _workerFailed = true
-      const message = event.message || "Filter worker failed"
-      for (const [id, pending] of _pending) {
-        pending.reject(new Error(message))
-        _pending.delete(id)
-      }
-    }
-    return _worker
+    return worker
   } catch {
-    _workerFailed = true
+    _inlineWorkerUnavailable = true
     return null
   }
+}
+
+async function getWorker(filterId?: string): Promise<Worker | null> {
+  if (_workerFailed || typeof Worker === "undefined") return null
+  if (_worker) {
+    if (_workerKind === "inline" && (!filterId || !INLINE_WORKER_FILTER_SET.has(filterId))) return null
+    return _worker
+  }
+
+  _worker = await createRegistryWorker()
+  _workerKind = _worker ? "registry" : null
+  if (!_worker && filterId && INLINE_WORKER_FILTER_SET.has(filterId)) {
+    _worker = createInlineWorker()
+    _workerKind = _worker ? "inline" : null
+  }
+  if (_worker) {
+    attachWorkerHandlers(_worker)
+    return _worker
+  }
+  return null
 }
 
 function runFilterOnMainThread(
@@ -1377,8 +1455,9 @@ export interface FilterAsyncOptions {
 }
 
 /**
- * Apply a filter asynchronously. Supported per-pixel filters run off-main-thread
- * in a Blob worker; all other filters use a scheduled fallback.
+ * Apply a filter asynchronously. Context-free registry filters run
+ * off-main-thread; filters that need extra document context use the scheduled
+ * main-thread path from the caller that can supply that context.
  */
 export function applyFilterAsync(
   filterId: string,
@@ -1397,8 +1476,8 @@ export function applyFilterAsync(
       })
     }
 
-    const worker = getWorker()
-    if (worker) {
+    return getWorker(filterId).then((worker) => {
+      if (!worker) return runFilterOnMainThread(filterId, src, params)
       const id = _nextId++
       const buffer = new ArrayBuffer(src.data.byteLength)
       new Uint8ClampedArray(buffer).set(src.data)
@@ -1420,7 +1499,7 @@ export function applyFilterAsync(
         }
         return runFilterOnMainThread(filterId, src, params)
       })
-    }
+    })
   }
 
   return runFilterOnMainThread(filterId, src, params)
@@ -1441,7 +1520,8 @@ export async function applyFilterBatch(
   }
 
   const canUseWorker = operations.every((operation) => isFilterWorkerSupported(operation.filterId))
-  const worker = canUseWorker ? getWorker() : null
+  const canUseInlineWorker = operations.every((operation) => INLINE_WORKER_FILTER_SET.has(operation.filterId))
+  const worker = canUseWorker ? await getWorker(canUseInlineWorker ? operations[0]?.filterId : undefined) : null
   if (worker) {
     const id = _nextId++
     const buffer = new ArrayBuffer(src.data.byteLength)

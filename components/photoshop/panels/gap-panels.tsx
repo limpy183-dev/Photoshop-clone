@@ -2,10 +2,15 @@
 
 import * as React from "react"
 import { useEditor } from "../editor-context"
+import { downloadText } from "../document-io"
 import { FILTERS } from "../filters"
 import { rasterizeText } from "../tool-helpers"
 import type { AssetLibraryItem, CustomShapeId, LayerStyle, Note } from "../types"
 import { uid } from "../uid"
+import { createAssetLibraryBundle, filterAssetLibrary } from "../asset-library-bundles"
+import { appendThreadReply, createReviewReport, createReviewThread, setThreadResolved } from "../collaboration"
+import { buildLearningIndex, runLearningIndexItem, searchLearningIndex, type LearningPanelSource } from "../learning-index"
+import { normalizeImportedAssetLibrary } from "./assets-panel"
 import { TimelinePanel } from "./timeline-panel"
 
 const glyphs = "©®™•…—–°±×÷µΩπ∞≤≥≈≠∑√ƒ∂∆∫∏αβγδλ✓✕★☆"
@@ -25,6 +30,24 @@ const shapes: { id: CustomShapeId; name: string }[] = [
   { id: "polygon-tri", name: "Triangle" },
   { id: "diamond", name: "Diamond" },
 ]
+
+const learningPanels: LearningPanelSource[] = [
+  { id: "assets", label: "Assets", category: "Color and Assets", complexity: "standard", keywords: ["library", "tags", "export"] },
+  { id: "libraries", label: "Libraries", category: "Color and Assets", complexity: "advanced", keywords: ["bundle", "stock", "font"] },
+  { id: "comments", label: "Comments", category: "Collaboration and Learning", complexity: "specialized", keywords: ["review", "thread", "resolved"] },
+  { id: "annotations", label: "Annotations", category: "Collaboration and Learning", complexity: "specialized", keywords: ["geometry", "markup", "report"] },
+  { id: "selection-studio", label: "Selection", category: "Selection", complexity: "standard", keywords: ["mask", "subject", "edge"] },
+  { id: "layers", label: "Layers", category: "Core", complexity: "core", keywords: ["stack", "visibility", "metadata"] },
+  { id: "brush", label: "Brush", category: "Core", complexity: "core", keywords: ["painting", "dynamics", "preset"] },
+  { id: "timeline", label: "Timeline", category: "Motion and Automation", complexity: "advanced", keywords: ["animation", "video", "frames"] },
+  { id: "slices", label: "Slices", category: "Motion and Automation", complexity: "advanced", keywords: ["web", "export", "regions"] },
+  { id: "measurement-log", label: "Measurement Log", category: "Inspection and Guides", complexity: "specialized", keywords: ["measure", "count", "analysis"] },
+]
+
+const learningIndex = buildLearningIndex({
+  panels: learningPanels,
+  filters: Object.values(FILTERS),
+})
 
 export function GlyphsPanel() {
   const { activeLayer, dispatch, commit } = useEditor()
@@ -55,37 +78,68 @@ export function AnimationPanel() {
 
 export function LibrariesPanel() {
   const { activeDoc, dispatch, commit } = useEditor()
+  const [query, setQuery] = React.useState("")
   if (!activeDoc) return <PanelEmpty text="No document open" />
   const assets = activeDoc.assetLibrary ?? []
   const addLibrarySamples = () => {
     const samples: AssetLibraryItem[] = [
-      { id: uid("asset"), name: "Project Brand Kit", kind: "cloud-library", group: "Libraries", payload: { colors: ["#111827", "#3b82f6", "#f97316"], source: "local" }, createdAt: Date.now() },
-      { id: uid("asset"), name: "Editorial Sans", kind: "font", group: "Fonts", payload: { family: "Geist", source: "local-font" }, createdAt: Date.now() },
-      { id: uid("asset"), name: "Stock Light Sweep", kind: "stock", group: "Stock", payload: { license: "placeholder", tags: ["light", "overlay"] }, createdAt: Date.now() },
+      { id: uid("asset"), name: "Project Brand Kit", kind: "cloud-library", group: "Libraries", tags: ["brand", "colors"], payload: { colors: ["#111827", "#3b82f6", "#f97316"], source: "local" }, createdAt: Date.now() },
+      { id: uid("asset"), name: "Editorial Sans", kind: "font", group: "Fonts", tags: ["type", "editorial"], payload: { family: "Geist", source: "local-font" }, createdAt: Date.now() },
+      { id: uid("asset"), name: "Stock Light Sweep", kind: "stock", group: "Stock", tags: ["light", "overlay"], payload: { license: "placeholder", tags: ["light", "overlay"] }, createdAt: Date.now() },
     ]
     dispatch({ type: "set-asset-library", assets: [...samples, ...assets] })
     window.setTimeout(() => commit("Add Library Assets", []), 0)
   }
-  const visible = assets.filter((asset) => ["cloud-library", "font", "stock"].includes(asset.kind))
+  const libraryAssets = assets.filter((asset) => ["cloud-library", "font", "stock"].includes(asset.kind))
+  const visible = filterAssetLibrary(libraryAssets, { query })
+  const importBundle = () => {
+    const input = document.createElement("input")
+    input.type = "file"
+    input.accept = ".json,.pslibrary,application/json"
+    input.onchange = async () => {
+      const file = input.files?.[0]
+      if (!file) return
+      try {
+        const imported = normalizeImportedAssetLibrary(JSON.parse(await file.text()), { fileSizeBytes: file.size })
+          .filter((asset) => ["cloud-library", "font", "stock"].includes(asset.kind))
+        dispatch({ type: "set-asset-library", assets: [...imported, ...assets] })
+        window.setTimeout(() => commit("Import Library Bundle", []), 0)
+      } catch {
+        window.alert("Could not import that library bundle.")
+      }
+    }
+    input.click()
+  }
   return (
     <PanelShell title="Libraries">
-      <SmallButton label="Add Local Library Samples" onClick={addLibrarySamples} />
+      <div className="grid grid-cols-3 gap-1">
+        <SmallButton label="Add Local Library Samples" onClick={addLibrarySamples} />
+        <SmallButton label="Import Library Bundle" onClick={importBundle} />
+        <SmallButton
+          label="Export Library Bundle"
+          disabled={!libraryAssets.length}
+          onClick={() => downloadText(
+            JSON.stringify(createAssetLibraryBundle(libraryAssets, { name: `${activeDoc.name} Libraries`, documentName: activeDoc.name }), null, 2),
+            `${activeDoc.name}-libraries.pslibrary.json`,
+          )}
+        />
+      </div>
+      <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search local libraries" className={inputClass} />
       <AssetList assets={visible} empty="No library, stock, or font assets saved." />
     </PanelShell>
   )
 }
 
 export function LearnPanel() {
-  const lessons = [
-    { name: "Brush Dynamics", run: () => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "brush" })) },
-    { name: "Smart Filters", run: () => window.dispatchEvent(new CustomEvent("ps-open-filter-gallery")) },
-    { name: "Selections", run: () => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "selection-studio" })) },
-    { name: "Export", run: () => window.dispatchEvent(new CustomEvent("ps-open-export-as")) },
-    { name: "3D and Video", run: () => window.dispatchEvent(new CustomEvent("ps-open-3d-workspace")) },
-  ]
+  const lessons = React.useMemo(
+    () => learningIndex.filter((item) => item.type === "workflow" || item.type === "doc" || item.type === "command").slice(0, 14),
+    [],
+  )
   return (
     <PanelShell title="Learn">
-      {lessons.map((lesson) => <SmallButton key={lesson.name} label={lesson.name} onClick={lesson.run} />)}
+      {lessons.map((lesson) => (
+        <SmallButton key={lesson.id} label={`${lesson.title} - ${lesson.category}`} onClick={() => runLearningIndexItem(lesson)} />
+      ))}
     </PanelShell>
   )
 }
@@ -93,39 +147,110 @@ export function LearnPanel() {
 export function CommentsPanel() {
   const { activeDoc, dispatch, commit } = useEditor()
   const [text, setText] = React.useState("Comment")
+  const [replyText, setReplyText] = React.useState<Record<string, string>>({})
+  const [status, setStatus] = React.useState<"open" | "resolved" | "all">("open")
   if (!activeDoc) return <PanelEmpty text="No document open" />
   const add = () => {
-    const note: Note = { id: uid("comment"), x: activeDoc.width / 2, y: activeDoc.height / 2, author: "Reviewer", text, color: "#38bdf8" }
+    const note = createReviewThread({
+      id: uid("comment"),
+      x: activeDoc.width / 2,
+      y: activeDoc.height / 2,
+      author: "Reviewer",
+      text,
+      color: "#38bdf8",
+      now: Date.now(),
+    })
     dispatch({ type: "add-note", note })
     window.setTimeout(() => commit("Add Comment", []), 0)
   }
+  const allThreads = (activeDoc.notes ?? []).filter((note) => note.kind === "comment" || note.status || note.replies?.length)
+  const openCount = allThreads.filter((note) => (note.status ?? "open") !== "resolved").length
+  const resolvedCount = allThreads.filter((note) => (note.status ?? "open") === "resolved").length
+  const threads = (activeDoc.notes ?? []).filter((note) => {
+    const isThread = note.kind === "comment" || note.status || note.replies?.length
+    if (!isThread) return false
+    if (status === "all") return true
+    return (note.status ?? "open") === status
+  })
+  const patchThread = (note: Note, patch: Partial<Note>, label: string) => {
+    dispatch({ type: "update-note", id: note.id, patch })
+    window.setTimeout(() => commit(label, []), 0)
+  }
+  const addReply = (note: Note) => {
+    const reply = replyText[note.id]?.trim()
+    if (!reply) return
+    const next = appendThreadReply(note, { id: uid("reply"), author: "Reviewer", text: reply, now: Date.now() })
+    patchThread(note, { replies: next.replies, updatedAt: next.updatedAt, kind: next.kind }, "Reply to Comment")
+    setReplyText((current) => ({ ...current, [note.id]: "" }))
+  }
   return (
     <PanelShell title="Comments">
-      <div className="grid grid-cols-[1fr_auto] gap-1">
-        <input value={text} onChange={(event) => setText(event.target.value)} className={inputClass} />
-        <SmallButton label="Add" onClick={add} />
+      <div className="grid grid-cols-3 gap-1 text-[10px]">
+        <Metric label="Open" value={openCount} />
+        <Metric label="Resolved" value={resolvedCount} />
+        <Metric label="Replies" value={allThreads.reduce((sum, note) => sum + (note.replies?.length ?? 0), 0)} />
       </div>
-      {(activeDoc.notes ?? []).map((note) => (
+      <div className="text-[10px] uppercase tracking-wide text-[var(--ps-text-dim)]">Open threads</div>
+      <div className="grid grid-cols-[1fr_auto] gap-1">
+        <input aria-label="Comment text" value={text} onChange={(event) => setText(event.target.value)} className={inputClass} />
+        <SmallButton label="Add comment" onClick={add} />
+      </div>
+      <div className="grid grid-cols-[1fr_auto] gap-1">
+        <select value={status} onChange={(event) => setStatus(event.target.value as typeof status)} className={inputClass}>
+          <option value="open">Open</option>
+          <option value="resolved">Resolved</option>
+          <option value="all">All</option>
+        </select>
+        <SmallButton
+          label="Export"
+          onClick={() => downloadText(createReviewReport(activeDoc), `${activeDoc.name}-review-report.md`, "text/markdown")}
+        />
+      </div>
+      {threads.length ? threads.map((note) => (
         <div key={note.id} className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
-          <div className="text-[10px] text-[var(--ps-text-dim)]">{note.author} - {Math.round(note.x)}, {Math.round(note.y)}</div>
+          <div className="flex items-center justify-between gap-2 text-[10px] text-[var(--ps-text-dim)]">
+            <span>{note.author} - {Math.round(note.x)}, {Math.round(note.y)} - {note.status ?? "open"}</span>
+            <SmallButton
+              label={(note.status ?? "open") === "resolved" ? "Reopen" : "Resolve"}
+              ariaLabel={`${(note.status ?? "open") === "resolved" ? "Reopen" : "Resolve"} ${note.text}`}
+              onClick={() => {
+                const next = setThreadResolved(note, (note.status ?? "open") !== "resolved", { by: "Reviewer", now: Date.now() })
+                patchThread(note, { status: next.status, resolvedAt: next.resolvedAt, resolvedBy: next.resolvedBy, updatedAt: next.updatedAt }, "Update Comment")
+              }}
+            />
+          </div>
           <div>{note.text}</div>
+          {note.tags?.length ? <div className="text-[10px] text-[var(--ps-text-dim)]">#{note.tags.join(" #")}</div> : null}
+          {note.replies?.length ? (
+            <div className="space-y-1 border-l border-[var(--ps-divider)] pl-2 text-[10px]">
+              {note.replies.map((reply) => (
+                <div key={reply.id}><span className="text-[var(--ps-text-dim)]">{reply.author}:</span> {reply.text}</div>
+              ))}
+            </div>
+          ) : null}
+          <div className="grid grid-cols-[1fr_auto] gap-1">
+            <input
+              value={replyText[note.id] ?? ""}
+              onChange={(event) => setReplyText((current) => ({ ...current, [note.id]: event.target.value }))}
+              className={inputClass}
+              aria-label={`Reply to ${note.text}`}
+              placeholder="Reply"
+            />
+            <SmallButton label="Reply" ariaLabel={`Add reply to ${note.text}`} onClick={() => addReply(note)} />
+          </div>
         </div>
-      ))}
+      )) : <PanelHint text="No comments in this view." />}
     </PanelShell>
   )
 }
 
 export function DiscoverPanel() {
   const [query, setQuery] = React.useState("")
-  const commands = React.useMemo(() => [
-    ...Object.values(FILTERS).map((filter) => ({ label: filter.name, group: filter.category, run: () => window.dispatchEvent(new CustomEvent("ps-open-filter", { detail: filter.id })) })),
-    ...["layers", "channels", "paths", "brush", "histogram", "properties", "timeline", "glyphs", "styles", "libraries"].map((id) => ({ label: `${id[0].toUpperCase()}${id.slice(1)} Panel`, group: "Panel", run: () => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: id })) })),
-  ], [])
-  const visible = commands.filter((command) => `${command.label} ${command.group}`.toLowerCase().includes(query.toLowerCase())).slice(0, 60)
+  const visible = React.useMemo(() => searchLearningIndex(learningIndex, query, { limit: 80 }), [query])
   return (
     <PanelShell title="Discover">
-      <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search filters and panels" className={inputClass} />
-      {visible.map((command) => <SmallButton key={`${command.group}-${command.label}`} label={`${command.label} - ${command.group}`} onClick={command.run} />)}
+      <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commands, docs, panels, workflows" className={inputClass} />
+      {visible.map((item) => <SmallButton key={item.id} label={`${item.title} - ${item.type} - ${item.category}`} onClick={() => runLearningIndexItem(item)} />)}
     </PanelShell>
   )
 }
@@ -218,6 +343,7 @@ function AssetList({ assets, empty }: { assets: AssetLibraryItem[]; empty: strin
         <div key={asset.id} className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
           <div className="truncate text-[12px]">{asset.name}</div>
           <div className="truncate text-[10px] text-[var(--ps-text-dim)]">{asset.kind} - {asset.group ?? "Ungrouped"}</div>
+          {asset.tags?.length ? <div className="truncate text-[10px] text-[var(--ps-text-dim)]">#{asset.tags.join(" #")}</div> : null}
         </div>
       ))}
     </div>
@@ -241,9 +367,17 @@ function PanelEmpty({ text }: { text: string }) {
   return <div className="px-4 py-8 text-center text-[11px] text-[var(--ps-text-dim)]">{text}</div>
 }
 
-function SmallButton({ label, disabled, onClick }: { label: string; disabled?: boolean; onClick: () => void }) {
+function Metric({ label, value }: { label: string; value: number }) {
   return (
-    <button type="button" disabled={disabled} onClick={onClick} className="min-h-7 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1 text-left text-[10px] hover:bg-[var(--ps-tool-hover)] disabled:opacity-40">
+    <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1.5 py-1">
+      <span className="text-[var(--ps-text-dim)]">{label}</span> {value}
+    </div>
+  )
+}
+
+function SmallButton({ label, ariaLabel, disabled, onClick }: { label: string; ariaLabel?: string; disabled?: boolean; onClick: () => void }) {
+  return (
+    <button type="button" aria-label={ariaLabel} disabled={disabled} onClick={onClick} className="min-h-7 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1 text-left text-[10px] hover:bg-[var(--ps-tool-hover)] disabled:opacity-40">
       {label}
     </button>
   )

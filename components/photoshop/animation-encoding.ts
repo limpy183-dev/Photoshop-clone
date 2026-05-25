@@ -151,6 +151,101 @@ function u24LE(value: number): Uint8Array {
   return new Uint8Array([value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff])
 }
 
+export interface PngSequenceZipEntry {
+  name: string
+  bytes: Uint8Array | ArrayBuffer | Blob | string
+}
+
+function sanitizeZipPath(name: string): string {
+  const clean = name
+    .replace(/\\/g, "/")
+    .replace(/^[a-z]:/i, "")
+    .replace(/^\/+/, "")
+    .split("/")
+    .filter((part) => part && part !== "." && part !== "..")
+    .join("/")
+  return clean || "file.bin"
+}
+
+async function zipEntryBytes(input: PngSequenceZipEntry["bytes"]): Promise<Uint8Array> {
+  if (input instanceof Uint8Array) return input
+  if (input instanceof ArrayBuffer) return new Uint8Array(input)
+  if (typeof Blob !== "undefined" && input instanceof Blob) return new Uint8Array(await input.arrayBuffer())
+  if (typeof input === "string") return new TextEncoder().encode(input)
+  throw new Error("Unsupported ZIP entry bytes")
+}
+
+/**
+ * Package PNG sequence files into a single stored ZIP archive.
+ *
+ * The writer intentionally uses no compression so it works in every browser
+ * that can export the source PNG bytes and does not need a WASM dependency.
+ */
+export async function packagePngSequenceZip(entries: PngSequenceZipEntry[]): Promise<Uint8Array> {
+  if (!entries.length) throw new Error("No PNG sequence entries to package")
+  const localParts: Uint8Array[] = []
+  const centralParts: Uint8Array[] = []
+  let localOffset = 0
+
+  for (const entry of entries) {
+    const nameBytes = new TextEncoder().encode(sanitizeZipPath(entry.name))
+    const data = await zipEntryBytes(entry.bytes)
+    const crc = crc32(data)
+    const size = data.byteLength
+    const localHeader = concatUint8([
+      u32LE(0x04034b50),
+      u16LE(20),
+      u16LE(0),
+      u16LE(0),
+      u16LE(0),
+      u16LE(0),
+      u32LE(crc),
+      u32LE(size),
+      u32LE(size),
+      u16LE(nameBytes.length),
+      u16LE(0),
+      nameBytes,
+    ])
+    localParts.push(localHeader, data)
+
+    centralParts.push(concatUint8([
+      u32LE(0x02014b50),
+      u16LE(20),
+      u16LE(20),
+      u16LE(0),
+      u16LE(0),
+      u16LE(0),
+      u16LE(0),
+      u32LE(crc),
+      u32LE(size),
+      u32LE(size),
+      u16LE(nameBytes.length),
+      u16LE(0),
+      u16LE(0),
+      u16LE(0),
+      u16LE(0),
+      u32LE(0),
+      u32LE(localOffset),
+      nameBytes,
+    ]))
+    localOffset += localHeader.byteLength + data.byteLength
+  }
+
+  const local = concatUint8(localParts)
+  const central = concatUint8(centralParts)
+  const end = concatUint8([
+    u32LE(0x06054b50),
+    u16LE(0),
+    u16LE(0),
+    u16LE(entries.length),
+    u16LE(entries.length),
+    u32LE(central.byteLength),
+    u32LE(local.byteLength),
+    u16LE(0),
+  ])
+  return concatUint8([local, central, end])
+}
+
 function imageDataFromCanvas(canvas: HTMLCanvasElement): ImageData {
   const ctx = canvas.getContext("2d")
   if (!ctx) throw new Error("2D context unavailable")

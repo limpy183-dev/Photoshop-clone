@@ -2,16 +2,220 @@ import { expect, test } from "@playwright/test"
 
 import {
   PLUGIN_MANIFEST_FORMAT,
+  PLUGIN_MANIFEST_SCHEMA_VERSION,
+  PLUGIN_PACKAGE_FORMAT,
+  describePluginHostCapabilities,
+  describeNativeEightBfCompatibility,
+  buildPluginPackagePayload,
   buildPluginExportPayload,
   buildPluginIframeSrcDoc,
   canPluginUsePermission,
   createPluginStoragePatch,
+  getPluginManifestSchema,
+  normalizeNativeEightBfPlugin,
+  normalizePluginActionDescriptors,
+  normalizePluginPackagePayload,
   normalizePluginImportPayload,
   normalizePluginUiTree,
+  permissionsForPluginActionDescriptors,
+  pluginInstallReview,
   validatePluginPanelRequest,
   type PluginPanelRequest,
 } from "../components/photoshop/plugin-system"
 import type { PluginDescriptor } from "../components/photoshop/types"
+
+test("plugin contract exposes a stable manifest schema and explicit host API", () => {
+  const schema = getPluginManifestSchema()
+  const capabilities = describePluginHostCapabilities()
+
+  expect(PLUGIN_MANIFEST_SCHEMA_VERSION).toBe(1)
+  expect(schema).toMatchObject({
+    $id: "https://photoshop-web.local/schemas/plugin-manifest.v1.json",
+    type: "object",
+    required: ["format", "version", "plugins"],
+  })
+  expect(schema.properties.format.const).toBe(PLUGIN_MANIFEST_FORMAT)
+  expect(schema.properties.plugins.items.required).toEqual(["name", "kind"])
+  expect(capabilities.manifest).toMatchObject({
+    format: PLUGIN_MANIFEST_FORMAT,
+    schemaVersion: 1,
+    packageFormat: PLUGIN_PACKAGE_FORMAT,
+  })
+  expect(capabilities.messageApi.channel).toBe("photoshop-web-plugin")
+  expect(capabilities.messageApi.allowedMethods).toEqual([
+    "plugin.ready",
+    "host.getInfo",
+    "document.getInfo",
+    "layers.getActive",
+    "layers.create",
+    "layers.update",
+    "action.batchPlay",
+    "uxp.executeAsModal",
+    "cep.evalScript",
+    "cep.dispatchEvent",
+    "8bf.getInfo",
+    "8bf.run",
+    "commands.run",
+    "storage.get",
+    "storage.set",
+    "storage.remove",
+    "storage.clear",
+    "storage.keys",
+    "ui.render",
+    "ui.toast",
+  ])
+  expect(capabilities.sandbox.iframeSandbox).toBe("allow-scripts")
+  expect(capabilities.adobeCompatibility).toMatchObject({
+    uxp: { mode: "browser-compatible adapter" },
+    cep: { mode: "browser-compatible adapter" },
+    eightBf: { mode: "browser-safe descriptor executor" },
+    actionManager: { mode: "allow-listed descriptor bridge" },
+  })
+})
+
+test("plugin import adapts UXP manifests into browser-safe plugin descriptors", () => {
+  const imported = normalizePluginImportPayload(
+    {
+      manifestVersion: 5,
+      id: "com.example.document-helper",
+      name: "Document Helper",
+      version: "2.1.0",
+      host: { app: "PS", minVersion: "25.0.0" },
+      main: "index.html",
+      entrypoints: [
+        { type: "panel", id: "panel", label: { default: "Document Helper" } },
+        { type: "command", id: "renameActive", label: { default: "Rename Active Layer" } },
+      ],
+      requiredPermissions: {
+        localFileSystem: "plugin",
+        clipboard: "read",
+      },
+    },
+    { fileSizeBytes: 2048, now: 1000, makeId: (prefix, index) => `${prefix}_${index}` },
+  )
+
+  expect(imported).toEqual([
+    expect.objectContaining({
+      id: "plugin_0",
+      name: "Document Helper",
+      kind: "ux-plugin",
+      enabled: true,
+      version: "2.1.0",
+      permissions: ["storage", "ui", "commands"],
+      capabilities: expect.arrayContaining(["UXP manifest adapter", "2 UXP entrypoints"]),
+      uxpManifest: {
+        manifestVersion: 5,
+        id: "com.example.document-helper",
+        main: "index.html",
+        hostApp: "PS",
+        minVersion: "25.0.0",
+        entrypoints: [
+          { id: "panel", type: "panel", label: "Document Helper" },
+          { id: "renameActive", type: "command", label: "Rename Active Layer" },
+        ],
+      },
+      commands: [
+        { id: "panel", title: "Document Helper", group: "UXP", action: { type: "open-panel" }, requiredPermissions: ["ui"] },
+        {
+          id: "renameActive",
+          title: "Rename Active Layer",
+          group: "UXP",
+          action: { type: "post-message", message: { entrypoint: "renameActive", runtime: "uxp" } },
+          requiredPermissions: ["commands"],
+        },
+      ],
+      createdAt: 1000,
+    }),
+  ])
+})
+
+test("plugin import adapts CEP extension manifests into CSInterface descriptors", () => {
+  const imported = normalizePluginImportPayload(
+    {
+      cepManifestXml: `
+        <ExtensionManifest ExtensionBundleName="Legacy Retouch Tools" ExtensionBundleVersion="4.0">
+          <ExtensionList><Extension Id="com.example.legacy.retouch" Version="4.0"/></ExtensionList>
+          <ExecutionEnvironment>
+            <HostList><Host Name="PHXS" Version="[22.0,99.9]"/></HostList>
+          </ExecutionEnvironment>
+          <DispatchInfoList>
+            <Extension Id="com.example.legacy.retouch">
+              <DispatchInfo>
+                <Resources><MainPath>./index.html</MainPath></Resources>
+              </DispatchInfo>
+            </Extension>
+          </DispatchInfoList>
+        </ExtensionManifest>
+      `,
+    },
+    { fileSizeBytes: 2048, now: 1000, makeId: (prefix, index) => `${prefix}_${index}` },
+  )
+
+  expect(imported[0]).toMatchObject({
+    id: "plugin_0",
+    name: "Legacy Retouch Tools",
+    kind: "cep-panel",
+    enabled: true,
+    version: "4.0",
+    permissions: ["ui", "commands"],
+    capabilities: expect.arrayContaining(["CEP CSInterface adapter"]),
+    cepManifest: {
+      extensionId: "com.example.legacy.retouch",
+      bundleName: "Legacy Retouch Tools",
+      bundleVersion: "4.0",
+      host: "PHXS",
+      mainPath: "./index.html",
+    },
+    commands: [{ id: "open", title: "Open Legacy Retouch Tools", group: "CEP", action: { type: "open-panel" }, requiredPermissions: ["ui"] }],
+  })
+})
+
+test("native 8BF imports keep binary metadata and only execute safe declared kernels", () => {
+  const plugin = normalizeNativeEightBfPlugin(new Uint8Array([0x38, 0x42, 0x46, 0, 1, 2, 3, 4]).buffer, {
+    fileName: "Legacy Sharpen.8bf",
+    now: 1000,
+    makeId: (prefix, index) => `${prefix}_${index}`,
+  })
+
+  expect(plugin).toMatchObject({
+    id: "plugin_0",
+    name: "Legacy Sharpen",
+    kind: "8bf-filter",
+    enabled: false,
+    permissions: [],
+    capabilities: expect.arrayContaining(["Native 8BF binary metadata", "Requires browser-safe kernel or WebAssembly adapter"]),
+    binary8bf: {
+      fileName: "Legacy Sharpen.8bf",
+      byteLength: 8,
+      signature: "3842460001020304",
+      executable: false,
+      reason: "Native 8BF binaries cannot execute inside the browser sandbox.",
+    },
+  })
+
+  expect(describeNativeEightBfCompatibility(plugin)).toEqual({
+    executable: false,
+    mode: "metadata-only",
+    reason: "Native 8BF binaries cannot execute inside the browser sandbox.",
+  })
+})
+
+test("Action Manager bridge normalizes descriptors and infers permissions", () => {
+  const descriptors = normalizePluginActionDescriptors([
+    { _obj: "get", _target: [{ _ref: "document", _enum: "ordinal", _value: "targetEnum" }] },
+    { _obj: "set", _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }], to: { name: "Retouched", opacity: 42 } },
+    { _obj: "make", _target: [{ _ref: "layer" }], using: { name: "Plugin Layer" } },
+    { _obj: "filter", filter: "invert" },
+  ])
+
+  expect(descriptors).toEqual([
+    { _obj: "get", _target: [{ _ref: "document", _enum: "ordinal", _value: "targetEnum" }] },
+    { _obj: "set", _target: [{ _ref: "layer", _enum: "ordinal", _value: "targetEnum" }], to: { name: "Retouched", opacity: 42 } },
+    { _obj: "make", _target: [{ _ref: "layer" }], using: { name: "Plugin Layer" } },
+    { _obj: "filter", filter: "invert" },
+  ])
+  expect(permissionsForPluginActionDescriptors(descriptors)).toEqual(["document:read", "layers:read", "layers:write", "filters:write"])
+})
 
 test("plugin manifest import normalizes browser-safe manifests and legacy descriptors", () => {
   const imported = normalizePluginImportPayload(
@@ -96,6 +300,70 @@ test("plugin manifest import normalizes browser-safe manifests and legacy descri
   ])
   expect(imported[0].panelHtml).toContain("<main>Panel</main>")
   expect(imported[0].panelHtml).not.toContain("parent.location")
+})
+
+test("plugin package payloads round-trip manifests with local library assets", () => {
+  const plugin: PluginDescriptor = {
+    id: "plug_packaged",
+    name: "Packaged Helper",
+    kind: "ux-plugin",
+    enabled: true,
+    permissions: ["document:read", "storage", "ui"],
+    commands: [{ id: "open", title: "Open Helper", action: { type: "open-panel" } }],
+    panelHtml: "<main>Packaged</main>",
+    createdAt: 1000,
+  }
+
+  const payload = buildPluginPackagePayload([plugin], {
+    exportedAt: "2026-05-23T00:00:00.000Z",
+    assets: [{ id: "asset_1", name: "Brand Blue", kind: "swatch", group: "Brand", payload: { color: "#0057ff" }, createdAt: 1000 }],
+  })
+
+  expect(payload).toMatchObject({
+    app: "Photoshop Web",
+    format: PLUGIN_PACKAGE_FORMAT,
+    exportedAt: "2026-05-23T00:00:00.000Z",
+    manifest: { format: PLUGIN_MANIFEST_FORMAT, version: 1, plugins: [plugin] },
+    assets: [{ name: "Brand Blue", kind: "swatch" }],
+  })
+
+  const normalized = normalizePluginPackagePayload(payload, {
+    fileSizeBytes: 4096,
+    now: 2000,
+    makeId: (prefix, index) => `${prefix}_${index}`,
+  })
+
+  expect(normalized.plugins[0]).toMatchObject({ id: "plugin_0", name: "Packaged Helper", permissions: ["document:read", "storage", "ui"] })
+  expect(normalized.assets[0]).toMatchObject({ id: "asset_0", name: "Brand Blue", kind: "swatch", group: "Brand" })
+})
+
+test("plugin install review summarizes requested permissions and declared capabilities", () => {
+  const plugin: PluginDescriptor = {
+    id: "plug_review",
+    name: "Review Helper",
+    kind: "ux-plugin",
+    enabled: true,
+    permissions: ["document:read", "layers:read", "storage", "ui"],
+    commands: [
+      { id: "open", title: "Open Review Helper", action: { type: "open-panel" } },
+      { id: "inspect", title: "Inspect Layer", action: { type: "post-message", message: { action: "inspect" } } },
+    ],
+    panelHtml: "<main>Review</main>",
+    createdAt: 1000,
+  }
+
+  expect(pluginInstallReview(plugin)).toEqual({
+    pluginId: "plug_review",
+    name: "Review Helper",
+    requiresPrompt: true,
+    permissions: [
+      { id: "document:read", label: "Document read", description: "Read document name, dimensions, color mode, and layer count." },
+      { id: "layers:read", label: "Layer read", description: "Read active layer metadata." },
+      { id: "storage", label: "Storage", description: "Read and write the plugin's project-local storage namespace." },
+      { id: "ui", label: "Host UI", description: "Render host-native controls through message passing." },
+    ],
+    capabilities: ["Sandboxed panel", "2 manifest commands", "Project-local storage"],
+  })
 })
 
 test("plugin import rejects oversized manifests and unsupported descriptors", () => {
@@ -210,6 +478,12 @@ test("iframe srcdoc injects a sandbox API bootstrap without granting same-origin
   expect(srcDoc).toContain("connect-src 'none'")
   expect(srcDoc).toContain("secret-token")
   expect(srcDoc).toContain("photoshopWeb")
+  expect(srcDoc).toContain("function require")
+  expect(srcDoc).toContain("executeAsModal")
+  expect(srcDoc).toContain("action.batchPlay")
+  expect(srcDoc).toContain("CSInterface")
+  expect(srcDoc).toContain("cep.evalScript")
+  expect(srcDoc).toContain("eightBf")
   expect(srcDoc).toContain("<main>Plugin</main>")
 })
 

@@ -20,7 +20,7 @@ import {
 import {
   sampleImageDataBilinear,
 } from "../components/photoshop/warp-transform"
-import { magneticLassoSnap } from "../components/photoshop/tool-helpers"
+import { magneticLassoSnap, magneticLassoTrace } from "../components/photoshop/tool-helpers"
 
 class TestImageData {
   data: Uint8ClampedArray
@@ -135,8 +135,14 @@ test("filter worker audit covers the full registry and classifies fallback reaso
 
   expect(audit.totalFilters).toBe(registryIds.length)
   expect(audit.entries.map((entry) => entry.filterId).sort()).toEqual(registryIds)
-  expect(audit.workerSupportedCount).toBeGreaterThan(25)
+  expect(audit.workerSupportedCount).toBe(registryIds.length - audit.contextRequiredCount)
+  expect(audit.typedArrayFallbackCount).toBe(0)
   expect(audit.entries.find((entry) => entry.filterId === "field-blur")?.strategy).toBe("worker")
+  expect(audit.entries.find((entry) => entry.filterId === "color-lookup")?.strategy).toBe("worker")
+  expect(audit.entries.find((entry) => entry.filterId === "gradient-map")?.strategy).toBe("worker")
+  expect(audit.entries.find((entry) => entry.filterId === "lens-correction")?.strategy).toBe("worker")
+  expect(audit.entries.find((entry) => entry.filterId === "dust-scratches")?.strategy).toBe("worker")
+  expect(audit.entries.find((entry) => entry.filterId === "colored-pencil")?.strategy).toBe("worker")
   expect(audit.entries.find((entry) => entry.filterId === "match-color")?.strategy).toBe("main-thread-context")
 })
 
@@ -294,6 +300,32 @@ test("magnetic lasso snap honors width and contrast threshold options", () => {
   expect(snapped.x).toBeGreaterThanOrEqual(3)
   expect(snapped.x).toBeLessThanOrEqual(4)
   expect(rejected).toEqual({ x: 2, y: 2 })
+})
+
+test("magnetic lasso trace reports Canny-style non-maximum suppression and weak edge linking", () => {
+  const src = imageData(12, 7, Array.from({ length: 12 * 7 }, (_, index) => {
+    const x = index % 12
+    const y = Math.floor(index / 12)
+    const value = x < 4 ? 20 : y <= 3 ? 232 : 80
+    return [value, value, value, 255]
+  }).flat())
+  const canvas = {
+    width: src.width,
+    height: src.height,
+    getContext: () => ({
+      getImageData: (_x: number, _y: number, _w: number, _h: number) => src,
+    }),
+  } as unknown as HTMLCanvasElement
+
+  const traced = magneticLassoTrace(canvas, [{ x: 2, y: 3 }, { x: 10, y: 3 }], {
+    searchWidth: 5,
+    contrastThreshold: 90,
+    hysteresisRatio: 0.35,
+  })
+
+  expect(traced.diagnostics.thinnedEdgePixels).toBeGreaterThan(0)
+  expect(traced.diagnostics.weakLinkedPixels).toBeGreaterThan(0)
+  expect(traced.points.some((point) => point.x >= 4 && point.x <= 6)).toBe(true)
 })
 
 test("warp transform bilinear sampling interpolates source pixels", () => {

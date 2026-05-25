@@ -111,6 +111,31 @@ export interface DocumentMemoryBudgetPlan {
   warnings: string[]
 }
 
+export interface RuntimeMemoryPressureInput {
+  budgetMB?: number
+  declaredBytes: number
+  usedJSHeapSize?: number | null
+  totalJSHeapSize?: number | null
+  jsHeapSizeLimit?: number | null
+  softRatio?: number
+  hardRatio?: number
+}
+
+export interface RuntimeMemoryPressurePlan {
+  level: MemoryPressureLevel
+  declaredBytes: number
+  observedHeapBytes: number | null
+  totalHeapBytes: number | null
+  heapLimitBytes: number | null
+  effectiveUsedBytes: number
+  budgetBytes: number
+  softLimitBytes: number
+  hardLimitBytes: number
+  recommendedEvictBytes: number
+  actions: MemoryBudgetAction[]
+  warnings: string[]
+}
+
 export interface MemoryBudgetPlan {
   decision: "grant" | "request-eviction" | "deny"
   reason: "within-soft" | "soft-pressure" | "hard-limit-exceeded"
@@ -214,6 +239,60 @@ export function planMemoryBudget(input: MemoryBudgetPlanInput | DocumentMemoryBu
     hardLimitBytes,
     projectedBytes,
     recommendedEvictBytes: 0,
+  }
+}
+
+export function planRuntimeMemoryPressure(input: RuntimeMemoryPressureInput): RuntimeMemoryPressurePlan {
+  const budgetBytes = positiveInt(input.budgetMB, DEFAULT_BUDGET_MB) * MIB
+  const softRatio = clampRatio(input.softRatio, DEFAULT_SOFT_RATIO)
+  const hardRatio = clampRatio(input.hardRatio, DEFAULT_HARD_RATIO)
+  const softLimitBytes = Math.floor(budgetBytes * softRatio)
+  const hardLimitBytes = Math.floor(budgetBytes * Math.max(softRatio, hardRatio))
+  const declaredBytes = positiveInt(input.declaredBytes, 0)
+  const observedHeapBytes = bytes(input.usedJSHeapSize)
+  const totalHeapBytes = bytes(input.totalJSHeapSize)
+  const heapLimitBytes = bytes(input.jsHeapSizeLimit)
+  const effectiveBudgetBytes = heapLimitBytes ? Math.min(budgetBytes, heapLimitBytes) : budgetBytes
+  const effectiveSoftLimitBytes = Math.min(softLimitBytes, Math.floor(effectiveBudgetBytes * softRatio))
+  const effectiveHardLimitBytes = Math.min(hardLimitBytes, Math.floor(effectiveBudgetBytes * Math.max(softRatio, hardRatio)))
+  const effectiveUsedBytes = Math.max(declaredBytes, observedHeapBytes ?? 0)
+  const actions: MemoryBudgetAction[] = []
+  const warnings: string[] = []
+
+  let level: MemoryPressureLevel = "ok"
+  if (effectiveUsedBytes > effectiveHardLimitBytes) {
+    level = "hard"
+  } else if (effectiveUsedBytes > effectiveSoftLimitBytes) {
+    level = "soft"
+  }
+
+  if (level !== "ok") {
+    actions.push("disable-composite-cache", "compress-history")
+    warnings.push("Runtime memory pressure exceeds the soft budget.")
+  }
+  if (level === "hard") {
+    actions.push("use-tiled-backing-store", "spill-scratch-to-opfs", "reject-allocation")
+    warnings.push("Runtime memory pressure exceeds the hard budget; new full-frame allocations should be rejected.")
+  } else if (observedHeapBytes !== null && observedHeapBytes > declaredBytes) {
+    actions.push("spill-scratch-to-opfs")
+  }
+  if (heapLimitBytes !== null && heapLimitBytes < budgetBytes) {
+    warnings.push("Browser heap limit is lower than the configured memory budget.")
+  }
+
+  return {
+    level,
+    declaredBytes,
+    observedHeapBytes,
+    totalHeapBytes,
+    heapLimitBytes,
+    effectiveUsedBytes,
+    budgetBytes,
+    softLimitBytes: effectiveSoftLimitBytes,
+    hardLimitBytes: effectiveHardLimitBytes,
+    recommendedEvictBytes: level === "ok" ? 0 : Math.max(0, effectiveUsedBytes - effectiveSoftLimitBytes),
+    actions: [...new Set(actions)],
+    warnings,
   }
 }
 

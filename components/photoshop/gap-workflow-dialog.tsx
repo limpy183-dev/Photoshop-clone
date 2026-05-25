@@ -11,8 +11,17 @@ import {
   type PixelChannel,
 } from "./color-channel-ops"
 import { makeCanvas, makeDocument, useEditor } from "./editor-context"
-import { downloadText, loadImageFromFile } from "./document-io"
-import { focusStackImageData, mergeHdrImageStack, photomergeImageStack } from "./photo-workflow-engine"
+import { downloadText, loadRasterCanvasFromFile } from "./document-io"
+import {
+  focusStackImageData,
+  mergeHdrSceneLinearImageStack,
+  photomergeImageStack,
+  type HdrDeghostMode,
+  type HdrExposureWeighting,
+  type PanoramaAlignmentModel,
+  type PanoramaProjection,
+} from "./photo-workflow-engine"
+import type { HighBitImage } from "./color-pipeline"
 import type { AlphaChannel, BlendMode, Layer } from "./types"
 import { uid } from "./uid"
 
@@ -31,6 +40,10 @@ export type GapWorkflowKind =
 const blendModes: BlendMode[] = ["normal", "multiply", "screen", "overlay", "soft-light", "difference", "darken", "lighten"]
 const sourceChannels: PixelChannel[] = ["rgb", "gray", "red", "green", "blue", "alpha"]
 const targetChannels: ApplyImageTargetChannel[] = ["rgb", "red", "green", "blue", "alpha"]
+
+type WorkflowCanvas = HTMLCanvasElement & {
+  __highBitImageData?: HighBitImage
+}
 
 
 export function GapWorkflowDialog({
@@ -53,6 +66,18 @@ export function GapWorkflowDialog({
   const [files, setFiles] = React.useState<File[]>([])
   const [stat, setStat] = React.useState<"mean" | "median" | "min" | "max">("median")
   const [pattern, setPattern] = React.useState<"brick" | "cross-weave" | "random-fill">("brick")
+  const [photomergeAlignment, setPhotomergeAlignment] = React.useState<PanoramaAlignmentModel>("similarity")
+  const [photomergeProjection, setPhotomergeProjection] = React.useState<PanoramaProjection>("planar")
+  const [photomergeBlendMode, setPhotomergeBlendMode] = React.useState<"feather" | "multiband">("multiband")
+  const [photomergeLensModel, setPhotomergeLensModel] = React.useState<"none" | "wide" | "phone">("none")
+  const [photomergeFocalLength, setPhotomergeFocalLength] = React.useState(0)
+  const [hdrDeghost, setHdrDeghost] = React.useState<HdrDeghostMode>("medium")
+  const [hdrWeighting, setHdrWeighting] = React.useState<HdrExposureWeighting>("balanced")
+  const [hdrExposureStep, setHdrExposureStep] = React.useState(1)
+  const [hdrToneExposure, setHdrToneExposure] = React.useState(0)
+  const [hdrToneCompression, setHdrToneCompression] = React.useState(1)
+  const [hdrToneGamma, setHdrToneGamma] = React.useState(2.2)
+  const [hdrReferenceIndex, setHdrReferenceIndex] = React.useState(0)
   const [busy, setBusy] = React.useState(false)
   const open = workflow !== null
 
@@ -114,10 +139,8 @@ export function GapWorkflowDialog({
   const loadCanvases = async () => {
     const loaded = []
     for (const file of files) {
-      const img = await loadImageFromFile(file)
-      const canvas = makeCanvas(img.naturalWidth, img.naturalHeight)
-      canvas.getContext("2d")!.drawImage(img, 0, 0)
-      loaded.push({ name: file.name, canvas })
+      const raster = await loadRasterCanvasFromFile(file, { mode: "reduced-scale" })
+      loaded.push({ name: file.name, canvas: raster.canvas })
     }
     return loaded
   }
@@ -134,18 +157,44 @@ export function GapWorkflowDialog({
         return
       }
       const result = workflow === "photomerge"
-        ? photomerge(loaded)
+        ? photomerge(loaded, {
+            alignmentModel: photomergeAlignment,
+            projection: photomergeProjection,
+            blendMode: photomergeBlendMode,
+            lensModel: photomergeLensModel,
+            projectionFocalLength: photomergeFocalLength > 0 ? photomergeFocalLength : undefined,
+          })
         : workflow === "hdr-merge"
-          ? mergeHdr(loaded)
+          ? mergeHdr(loaded, {
+              deghost: hdrDeghost,
+              exposureWeighting: hdrWeighting,
+              exposureStep: hdrExposureStep,
+              referenceIndex: hdrReferenceIndex,
+              toneMapping: {
+                exposure: hdrToneExposure,
+                compression: hdrToneCompression,
+                gamma: hdrToneGamma,
+              },
+            })
           : workflow === "focus-stack"
             ? focusStack(loaded)
             : workflow === "stack-statistics"
               ? mergeStack(loaded, stat)
               : null
       if (result) {
-        const doc = makeDocument(titleForWorkflow(workflow), result.width, result.height, "transparent")
+        const workflowCanvas = result as WorkflowCanvas
+        const doc = makeDocument(titleForWorkflow(workflow), workflowCanvas.width, workflowCanvas.height, "transparent")
+        if (workflowCanvas.__highBitImageData) {
+          doc.bitDepth = 32
+          ;(doc as typeof doc & { __highBitImageData?: HighBitImage }).__highBitImageData = workflowCanvas.__highBitImageData
+        }
         const layer = doc.layers.find((candidate) => candidate.id === doc.activeLayerId)
-        if (layer) layer.canvas.getContext("2d")!.drawImage(result, 0, 0)
+        if (layer) {
+          layer.canvas.getContext("2d")!.drawImage(workflowCanvas, 0, 0)
+          if (workflowCanvas.__highBitImageData) {
+            ;(layer as Layer & { __highBitImageData?: HighBitImage }).__highBitImageData = workflowCanvas.__highBitImageData
+          }
+        }
         createDocument(doc, titleForWorkflow(workflow))
       } else {
         const width = Math.max(...loaded.map((item) => item.canvas.width))
@@ -256,6 +305,76 @@ export function GapWorkflowDialog({
                 </select>
               </Field>
             ) : null}
+            {workflow === "photomerge" ? (
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Alignment">
+                  <select value={photomergeAlignment} onChange={(event) => setPhotomergeAlignment(event.target.value as PanoramaAlignmentModel)} className={selectClass}>
+                    <option value="translation">Translation</option>
+                    <option value="similarity">Similarity</option>
+                    <option value="affine">Affine</option>
+                    <option value="homography">Homography</option>
+                  </select>
+                </Field>
+                <Field label="Projection">
+                  <select value={photomergeProjection} onChange={(event) => setPhotomergeProjection(event.target.value as PanoramaProjection)} className={selectClass}>
+                    <option value="planar">Planar</option>
+                    <option value="cylindrical">Cylindrical</option>
+                    <option value="spherical">Spherical</option>
+                  </select>
+                </Field>
+                <Field label="Blend">
+                  <select value={photomergeBlendMode} onChange={(event) => setPhotomergeBlendMode(event.target.value as typeof photomergeBlendMode)} className={selectClass}>
+                    <option value="multiband">Multiband</option>
+                    <option value="feather">Feather</option>
+                  </select>
+                </Field>
+                <Field label="Lens model">
+                  <select value={photomergeLensModel} onChange={(event) => setPhotomergeLensModel(event.target.value as typeof photomergeLensModel)} className={selectClass}>
+                    <option value="none">None</option>
+                    <option value="wide">Wide rectilinear</option>
+                    <option value="phone">Phone wide</option>
+                  </select>
+                </Field>
+                <Field label="Focal length px">
+                  <input type="number" min={0} step={1} value={photomergeFocalLength} onChange={(event) => setPhotomergeFocalLength(Math.max(0, Number(event.target.value) || 0))} className={inputClass} />
+                </Field>
+              </div>
+            ) : null}
+            {workflow === "hdr-merge" ? (
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Deghost">
+                  <select value={hdrDeghost} onChange={(event) => setHdrDeghost(event.target.value as HdrDeghostMode)} className={selectClass}>
+                    <option value="off">Off</option>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </select>
+                </Field>
+                <Field label="Exposure weighting">
+                  <select value={hdrWeighting} onChange={(event) => setHdrWeighting(event.target.value as HdrExposureWeighting)} className={selectClass}>
+                    <option value="balanced">Balanced</option>
+                    <option value="shadow-priority">Shadow priority</option>
+                    <option value="highlight-priority">Highlight priority</option>
+                    <option value="manual">Manual EV weights</option>
+                  </select>
+                </Field>
+                <Field label="EV step">
+                  <input type="number" min={0.1} max={4} step={0.1} value={hdrExposureStep} onChange={(event) => setHdrExposureStep(Math.max(0.1, Math.min(4, Number(event.target.value) || 1)))} className={inputClass} />
+                </Field>
+                <Field label="Reference frame">
+                  <input type="number" min={0} max={Math.max(0, files.length - 1)} step={1} value={hdrReferenceIndex} onChange={(event) => setHdrReferenceIndex(Math.max(0, Math.min(Math.max(0, files.length - 1), Number(event.target.value) || 0)))} className={inputClass} />
+                </Field>
+                <Field label="Tone exposure">
+                  <input type="number" min={-4} max={4} step={0.1} value={hdrToneExposure} onChange={(event) => setHdrToneExposure(Math.max(-4, Math.min(4, Number(event.target.value) || 0)))} className={inputClass} />
+                </Field>
+                <Field label="Compression">
+                  <input type="number" min={0.05} max={4} step={0.05} value={hdrToneCompression} onChange={(event) => setHdrToneCompression(Math.max(0.05, Math.min(4, Number(event.target.value) || 1)))} className={inputClass} />
+                </Field>
+                <Field label="Gamma">
+                  <input type="number" min={0.2} max={5} step={0.05} value={hdrToneGamma} onChange={(event) => setHdrToneGamma(Math.max(0.2, Math.min(5, Number(event.target.value) || 2.2)))} className={inputClass} />
+                </Field>
+              </div>
+            ) : null}
             <div className="text-[var(--ps-text-dim)]">{files.length} file{files.length === 1 ? "" : "s"} selected</div>
           </div>
         )}
@@ -308,10 +427,33 @@ function channelLabel(channel: PixelChannel | ApplyImageTargetChannel) {
   return `${channel[0].toUpperCase()}${channel.slice(1)}`
 }
 
-function photomerge(items: { name: string; canvas: HTMLCanvasElement }[]) {
+function photomerge(
+  items: { name: string; canvas: HTMLCanvasElement }[],
+  options: {
+    alignmentModel: PanoramaAlignmentModel
+    projection: PanoramaProjection
+    projectionFocalLength?: number
+    blendMode: "feather" | "multiband"
+    lensModel: "none" | "wide" | "phone"
+  },
+) {
   const images = items.map((item) => canvasImageData(item.canvas))
   const radius = workflowSearchRadius(items)
-  const result = photomergeImageStack(images, { searchRadius: radius, maxFeatures: 120 })
+  const lens =
+    options.lensModel === "phone"
+      ? { k1: -0.035, k2: 0.01, p1: 0.001, p2: -0.001 }
+      : options.lensModel === "wide"
+        ? { k1: -0.018, k2: 0.004, p1: 0, p2: 0 }
+        : undefined
+  const result = photomergeImageStack(images, {
+    searchRadius: radius,
+    maxFeatures: 120,
+    alignmentModel: options.alignmentModel,
+    projection: options.projection,
+    projectionFocalLength: options.projectionFocalLength,
+    blendMode: options.blendMode,
+    cameraModel: lens ? { focalLengthPx: options.projectionFocalLength, lens } : undefined,
+  })
   return imageDataCanvas(result.image)
 }
 
@@ -348,14 +490,40 @@ function imageDataCentered(canvas: HTMLCanvasElement, width: number, height: num
   return tmp.getContext("2d")!.getImageData(0, 0, width, height)
 }
 
-function mergeHdr(items: { canvas: HTMLCanvasElement }[]) {
+function mergeHdr(
+  items: { canvas: HTMLCanvasElement }[],
+  options: {
+    deghost: HdrDeghostMode
+    exposureWeighting: HdrExposureWeighting
+    exposureStep: number
+    referenceIndex: number
+    toneMapping: { exposure: number; compression: number; gamma: number }
+  },
+) {
   const width = Math.max(...items.map((item) => item.canvas.width))
   const height = Math.max(...items.map((item) => item.canvas.height))
   const data = items.map((item) => imageDataCentered(item.canvas, width, height))
   const midpoint = (items.length - 1) / 2
-  const exposures = items.map((_, index) => ({ ev: index - midpoint }))
+  const exposures = items.map((_, index) => ({ ev: (index - midpoint) * options.exposureStep }))
   const radius = workflowSearchRadius(items)
-  return imageDataCanvas(mergeHdrImageStack(data, exposures, { align: true, searchRadius: radius, maxFeatures: 120 }).image)
+  const scene = mergeHdrSceneLinearImageStack(
+    data.map((image, index) => ({ image, ev: exposures[index].ev, sourceKind: "rendered" as const })),
+    {
+      align: true,
+      searchRadius: radius,
+      maxFeatures: 120,
+      deghost: options.deghost,
+      referenceIndex: options.referenceIndex,
+      exposureWeighting: options.exposureWeighting,
+      manualExposureWeights: options.exposureWeighting === "manual"
+        ? exposures.map((exposure) => Math.max(0.1, 1 + exposure.ev * 0.2))
+        : undefined,
+      toneMapping: options.toneMapping,
+    },
+  )
+  const canvas = imageDataCanvas(scene.preview) as WorkflowCanvas
+  canvas.__highBitImageData = scene.highBitImage
+  return canvas
 }
 
 function canvasImageData(canvas: HTMLCanvasElement) {

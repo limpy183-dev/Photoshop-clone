@@ -16,6 +16,7 @@ import {
   downloadText,
   type CompatibilityTarget,
 } from "./document-io"
+import { createPsdExportActionPlan } from "./psd-compatibility"
 import { useEditor } from "./editor-context"
 import type { DocumentReport } from "./types"
 
@@ -42,6 +43,7 @@ export function DocumentReportDialog({
 
   const reports = activeDoc.reports ?? []
   const manifest = createCompatibilityManifest(activeDoc, target)
+  const psdActionPlan = target === "psd" ? createPsdExportActionPlan(activeDoc) : null
   const reportSources = ["All", ...Array.from(new Set(reports.map((report) => report.source)))] as Array<DocumentReport["source"] | "All">
   const visibleReports = reports.filter((report) => {
     if (sourceFilter !== "All" && report.source !== sourceFilter) return false
@@ -107,6 +109,28 @@ export function DocumentReportDialog({
           <Summary label="Flattened" value={manifest.totals.flattened} className="text-orange-300" />
           <Summary label="Unsupported" value={manifest.totals.unsupported} className="text-red-300" />
         </div>
+        {psdActionPlan ? (
+          <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2 text-[11px]">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="font-medium text-[var(--ps-text)]">PSD Export Action Plan</div>
+              <div className="text-[10px] text-[var(--ps-text-dim)]">{psdActionPlan.summary}</div>
+            </div>
+            <div className="grid max-h-36 gap-1 overflow-y-auto">
+              {psdActionPlan.items.slice(0, 8).map((item) => (
+                <div key={item.id} className="grid grid-cols-[92px_120px_1fr] gap-2">
+                  <span className={item.status === "rasterized" ? "text-orange-300" : item.status === "approximated" ? "text-amber-300" : item.status === "project-only" ? "text-sky-300" : item.status === "unsupported" ? "text-red-300" : "text-emerald-300"}>
+                    {item.status}
+                  </span>
+                  <span className="truncate text-[var(--ps-text)]">{item.layerName ?? item.label}</span>
+                  <span className="text-[var(--ps-text-dim)]">{item.label}: {item.detail}</span>
+                </div>
+              ))}
+              {!psdActionPlan.items.length ? (
+                <div className="text-[var(--ps-text-dim)]">No rasterized, approximated, project-only, or unsupported PSD elements detected.</div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
         <div className="grid grid-cols-2 gap-2">
           <select
             value={sourceFilter}

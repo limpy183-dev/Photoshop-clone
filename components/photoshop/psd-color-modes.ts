@@ -189,9 +189,9 @@ function buildIndexedPalette(colors: number): RGB[] {
   return palette
 }
 
-export function appBitDepthToPsd(doc: PsDocument): 1 | 8 {
+export function appBitDepthToPsd(doc: PsDocument): 1 | 8 | 16 | 32 {
   if (doc.colorMode === "Bitmap") return 1
-  return 8
+  return doc.bitDepth === 16 || doc.bitDepth === 32 ? doc.bitDepth : 8
 }
 
 export function psdBitDepthToApp(psdBits: 1 | 8 | 16 | 32 | undefined, colorMode: number): PsDocument["bitDepth"] {

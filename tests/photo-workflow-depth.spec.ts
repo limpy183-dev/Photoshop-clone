@@ -1,11 +1,27 @@
 import { expect, test } from "@playwright/test"
 
 import {
+  CAMERA_RAW_CAMERA_PROFILES,
+  CAMERA_RAW_LENS_PROFILE_DATABASE,
   CAMERA_RAW_PRESETS,
+  CAMERA_RAW_LENS_PROFILES,
+  applyCameraRawHighBitImage,
   applyCameraRawBatch,
   applyCameraRawImageData,
+  applyCameraRawPreset,
+  createCameraRawDevelopRecipe,
+  createCameraRawPreset,
   createCameraRawSnapshot,
+  deleteCameraRawSnapshot,
+  duplicateCameraRawSnapshot,
+  matchCameraRawLensProfile,
+  normalizeCameraRawPresetLibrary,
+  parseCameraRawSidecar,
+  promoteCameraRawSnapshotToPreset,
+  renameCameraRawSnapshot,
+  serializeCameraRawSidecar,
 } from "../components/photoshop/camera-raw-engine"
+import type { HighBitImage } from "../components/photoshop/color-pipeline"
 import { getFilter } from "../components/photoshop/filters"
 import { applyFilterTiled } from "../components/photoshop/filter-worker"
 
@@ -112,4 +128,98 @@ test("Camera Raw engine applies HSL, optics, masks, snapshots, presets, and batc
   expect(Array.from(masked.data.slice(4, 8))).toEqual(Array.from(src.data.slice(4, 8)))
   expect(batch).toHaveLength(2)
   expect(Array.from(batch[0].data)).toEqual(Array.from(applyCameraRawImageData(src, snapshot.settings).data))
+})
+
+test("Camera Raw manages user presets, snapshots, and local lens profiles", () => {
+  const src = gradientFixture(5, 5)
+  const baseSettings = {
+    ...CAMERA_RAW_PRESETS.portrait.settings,
+    optics: {
+      profileId: "phone-wide" as const,
+      profileStrength: 80,
+      distortion: -8,
+      vignette: 14,
+      chromaticAberration: 12,
+      defringe: 35,
+    },
+  }
+
+  const preset = createCameraRawPreset("Phone portrait cleanup", baseSettings, "User")
+  const library = normalizeCameraRawPresetLibrary([preset])
+  const applied = applyCameraRawPreset(CAMERA_RAW_PRESETS.neutral.settings, preset, "replace")
+  const snapshot = createCameraRawSnapshot("Before crop", applied)
+  const renamed = renameCameraRawSnapshot(snapshot, "Before crop refined")
+  const duplicate = duplicateCameraRawSnapshot(renamed, "Before crop copy")
+  const promoted = promoteCameraRawSnapshotToPreset(duplicate, "Copied preset")
+  const remaining = deleteCameraRawSnapshot([renamed, duplicate], renamed.id)
+  const corrected = applyCameraRawImageData(src, applied)
+
+  expect(CAMERA_RAW_LENS_PROFILES["phone-wide"].description).toContain("phone")
+  expect(library.user).toHaveLength(1)
+  expect(library.builtIn.map((item) => item.id)).toContain("portrait")
+  expect(applied.optics?.profileId).toBe("phone-wide")
+  expect(renamed.name).toBe("Before crop refined")
+  expect(duplicate.id).not.toBe(renamed.id)
+  expect(promoted.settings.optics?.profileStrength).toBe(80)
+  expect(remaining.map((item) => item.id)).toEqual([duplicate.id])
+  expect(Array.from(corrected.data)).not.toEqual(Array.from(src.data))
+
+  const lensFilter = getFilter("lens-correction")!
+  expect(lensFilter.params.find((param) => param.key === "profileStrength")).toBeTruthy()
+  expect(lensFilter.params.find((param) => param.key === "defringe")).toBeTruthy()
+  expect(lensFilter.params.find((param) => param.key === "profile")?.type).toBe("select")
+})
+
+test("Camera Raw keeps RAW-backed high-bit recipes, sidecars, camera profiles, and lens database matches", () => {
+  const rawSource: HighBitImage = {
+    width: 2,
+    height: 2,
+    channels: 4,
+    bitDepth: 32,
+    colorMode: "RGB",
+    profile: "Camera Linear",
+    storage: "float32",
+    data: new Float32Array([
+      0.08, 0.09, 0.1, 1,
+      0.22, 0.18, 0.16, 1,
+      0.36, 0.32, 0.28, 1,
+      0.74, 0.7, 0.66, 1,
+    ]),
+    warnings: [],
+  }
+  const settings = {
+    ...CAMERA_RAW_PRESETS.landscape.settings,
+    exposure: 0.5,
+    cameraProfileId: "adobe-color" as const,
+    optics: { profileId: "phone-wide" as const, profileStrength: 75 },
+  }
+  const matchedLens = matchCameraRawLensProfile({
+    cameraMake: "Apple",
+    cameraModel: "iPhone",
+    lensModel: "Phone Wide",
+    focalLengthMm: 26,
+  })
+  const recipe = createCameraRawDevelopRecipe(rawSource, settings, {
+    fileName: "fixture.dng",
+    cameraMake: "Apple",
+    cameraModel: "iPhone",
+    lensModel: "Phone Wide",
+    focalLengthMm: 26,
+  })
+  const sidecar = serializeCameraRawSidecar(recipe)
+  const parsed = parseCameraRawSidecar(sidecar)
+  const adjusted = applyCameraRawHighBitImage(rawSource, parsed.settings)
+
+  expect(CAMERA_RAW_CAMERA_PROFILES["adobe-color"].toneCurve).toBe("medium-contrast")
+  expect(CAMERA_RAW_LENS_PROFILE_DATABASE.some((profile) => profile.profileId === "phone-wide")).toBe(true)
+  expect(matchedLens?.profileId).toBe("phone-wide")
+  expect(recipe.nonDestructive).toBe(true)
+  expect(recipe.source).toBe(rawSource)
+  expect(sidecar).toContain("crs:Version")
+  expect(parsed.settings.cameraProfileId).toBe("adobe-color")
+  expect(parsed.metadata.fileName).toBe("fixture.dng")
+  expect(adjusted.storage).toBe("float32")
+  expect(adjusted.data).toBeInstanceOf(Float32Array)
+  expect((adjusted.data as Float32Array)[0]).toBeGreaterThan((rawSource.data as Float32Array)[0])
+  expect(Array.from(rawSource.data as Float32Array)).not.toEqual(Array.from(adjusted.data as Float32Array))
 })

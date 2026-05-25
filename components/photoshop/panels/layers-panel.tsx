@@ -31,6 +31,7 @@ import {
   Image as ImageIcon,
   PenTool,
   Palette,
+  GripVertical,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
@@ -150,6 +151,9 @@ export function LayersPanel() {
   const [altClipLayerId, setAltClipLayerId] = React.useState<string | null>(null)
   const [contextMenu, setContextMenu] = React.useState<{ layerId: string; x: number; y: number } | null>(null)
   const [smartFilterContextMenu, setSmartFilterContextMenu] = React.useState<{ layerId: string; filterId: string; x: number; y: number } | null>(null)
+  const [draggedSmartFilter, setDraggedSmartFilter] = React.useState<{ layerId: string; filterId: string } | null>(null)
+  const draggedSmartFilterRef = React.useRef<{ layerId: string; filterId: string } | null>(null)
+  const mouseSmartFilterDragRef = React.useRef<{ layerId: string; filterId: string } | null>(null)
   const searchRef = React.useRef<HTMLInputElement>(null)
 
   React.useEffect(() => {
@@ -292,6 +296,20 @@ export function LayersPanel() {
     setTimeout(() => commit(label, [layer.id]), 0)
   }
 
+  const moveSmartFilterByDrop = (layer: Layer, fromFilterId: string | null, toFilterId: string) => {
+    if (!fromFilterId || fromFilterId === toFilterId || layerLocked(layer)) return
+    const filters = layer.smartFilters ?? []
+    const from = filters.findIndex((filter) => filter.id === fromFilterId)
+    const to = filters.findIndex((filter) => filter.id === toFilterId)
+    if (from < 0 || to < 0 || from === to) return
+    const next = filters.slice()
+    const [entry] = next.splice(from, 1)
+    next.splice(to, 0, entry)
+    dispatch({ type: "set-layer-smart-filters", id: layer.id, smartFilters: next })
+    requestRender()
+    setTimeout(() => commit("Reorder Smart Filter", [layer.id]), 0)
+  }
+
   const editSmartFilterMask = (layer: Layer, filterId: string) => {
     if (layerLocked(layer)) return
     const filter = layer.smartFilters?.find((candidate) => candidate.id === filterId)
@@ -412,6 +430,7 @@ export function LayersPanel() {
       return (
         <div
           key={`${layer.id}-${filter.id}`}
+          draggable={!layerLocked(layer)}
           data-testid={`layer-smart-filter-row-${layer.name}-${filter.name}`}
           data-smart-filter-enabled={enabled ? "true" : "false"}
           data-smart-filter-mask-editing={editing ? "true" : "false"}
@@ -430,7 +449,54 @@ export function LayersPanel() {
             dispatch({ type: "set-active-layer", id: layer.id })
             setSmartFilterContextMenu({ layerId: layer.id, filterId: filter.id, x: e.clientX, y: e.clientY })
           }}
+          onMouseDown={(e) => {
+            if (e.button !== 0 || layerLocked(layer)) return
+            if ((e.target as HTMLElement).closest("button")) return
+            mouseSmartFilterDragRef.current = { layerId: layer.id, filterId: filter.id }
+          }}
+          onMouseUp={() => {
+            const source = mouseSmartFilterDragRef.current
+            mouseSmartFilterDragRef.current = null
+            if (!source || source.layerId !== layer.id || source.filterId === filter.id) return
+            moveSmartFilterByDrop(layer, source.filterId, filter.id)
+          }}
+          onDragStart={(e) => {
+            if (layerLocked(layer)) {
+              e.preventDefault()
+              return
+            }
+            e.stopPropagation()
+            const source = { layerId: layer.id, filterId: filter.id }
+            draggedSmartFilterRef.current = source
+            setDraggedSmartFilter(source)
+            e.dataTransfer.setData("application/x-ps-smart-filter-layer-id", layer.id)
+            e.dataTransfer.setData("application/x-ps-smart-filter-id", filter.id)
+            e.dataTransfer.effectAllowed = "move"
+          }}
+          onDragOver={(e) => {
+            const sourceLayerId = e.dataTransfer.getData("application/x-ps-smart-filter-layer-id") || draggedSmartFilterRef.current?.layerId || draggedSmartFilter?.layerId
+            const sourceFilterId = e.dataTransfer.getData("application/x-ps-smart-filter-id") || draggedSmartFilterRef.current?.filterId || draggedSmartFilter?.filterId
+            if (sourceLayerId !== layer.id || !sourceFilterId || sourceFilterId === filter.id || layerLocked(layer)) return
+            e.preventDefault()
+            e.stopPropagation()
+            e.dataTransfer.dropEffect = "move"
+          }}
+          onDrop={(e) => {
+            const sourceLayerId = e.dataTransfer.getData("application/x-ps-smart-filter-layer-id") || draggedSmartFilterRef.current?.layerId || draggedSmartFilter?.layerId
+            const sourceFilterId = e.dataTransfer.getData("application/x-ps-smart-filter-id") || draggedSmartFilterRef.current?.filterId || draggedSmartFilter?.filterId || null
+            if (sourceLayerId !== layer.id) return
+            e.preventDefault()
+            e.stopPropagation()
+            moveSmartFilterByDrop(layer, sourceFilterId, filter.id)
+            draggedSmartFilterRef.current = null
+            setDraggedSmartFilter(null)
+          }}
+          onDragEnd={() => {
+            draggedSmartFilterRef.current = null
+            setDraggedSmartFilter(null)
+          }}
         >
+          <GripVertical className="h-3 w-3 shrink-0 cursor-grab text-[var(--ps-text-dim)]" aria-hidden="true" />
           <button
             type="button"
             aria-label={`${enabled ? "Disable" : "Enable"} ${filter.name} smart filter`}

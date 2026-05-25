@@ -2,7 +2,9 @@
 
 import * as React from "react"
 import { useEditor } from "../editor-context"
-import type { CountMarker, Note } from "../types"
+import { downloadText } from "../document-io"
+import { createReviewReport, createReviewThread, describeAnnotationGeometry, normalizeAnnotationGeometry } from "../collaboration"
+import type { AnnotationGeometry, CountMarker, Note } from "../types"
 import { uid } from "../uid"
 
 function clampPoint(value: number, max: number) {
@@ -13,6 +15,9 @@ export function AnnotationsPanel() {
   const { activeDoc, dispatch, commit } = useEditor()
   const [noteText, setNoteText] = React.useState("Review note")
   const [noteColor, setNoteColor] = React.useState("#facc15")
+  const [geometryKind, setGeometryKind] = React.useState<AnnotationGeometry["kind"]>("pin")
+  const [geometryW, setGeometryW] = React.useState(160)
+  const [geometryH, setGeometryH] = React.useState(96)
 
   if (!activeDoc) return <PanelEmpty text="No document open" />
 
@@ -25,14 +30,36 @@ export function AnnotationsPanel() {
     return totals
   }, {})
 
+  const annotationGeometry = (): AnnotationGeometry => {
+    const x = Math.round(activeDoc.width / 2)
+    const y = Math.round(activeDoc.height / 2)
+    const w = Math.min(Math.max(1, geometryW), activeDoc.width)
+    const h = Math.min(Math.max(1, geometryH), activeDoc.height)
+    const raw =
+      geometryKind === "rect" || geometryKind === "ellipse"
+        ? { kind: geometryKind, x: x - Math.round(w / 2), y: y - Math.round(h / 2), w, h }
+        : geometryKind === "arrow"
+          ? { kind: "arrow", x1: x - Math.round(w / 2), y1: y - Math.round(h / 2), x2: x + Math.round(w / 2), y2: y + Math.round(h / 2) }
+          : geometryKind === "freehand"
+            ? { kind: "freehand", points: [{ x: x - w / 2, y }, { x, y: y - h / 2 }, { x: x + w / 2, y }, { x, y: y + h / 2 }], closed: true }
+            : { kind: "pin", x, y }
+    return normalizeAnnotationGeometry(raw, { width: activeDoc.width, height: activeDoc.height, anchor: { x, y } })
+  }
+
   const addNote = () => {
+    const geometry = annotationGeometry()
     const note: Note = {
-      id: uid("note"),
-      x: Math.round(activeDoc.width / 2),
-      y: Math.round(activeDoc.height / 2),
-      author: "Reviewer",
-      text: noteText.trim() || "Review note",
-      color: noteColor,
+      ...createReviewThread({
+        id: uid("note"),
+        x: Math.round(activeDoc.width / 2),
+        y: Math.round(activeDoc.height / 2),
+        author: "Reviewer",
+        text: noteText.trim() || "Review note",
+        color: noteColor,
+        kind: "annotation",
+        geometry,
+        now: Date.now(),
+      }),
     }
     dispatch({ type: "add-note", note })
     window.setTimeout(() => commit("Add Note", []), 0)
@@ -82,6 +109,37 @@ export function AnnotationsPanel() {
             />
             <SmallButton label="Add" onClick={addNote} />
           </div>
+          <div className="grid grid-cols-[1fr_64px_64px_auto] gap-1">
+            <select
+              value={geometryKind}
+              onChange={(event) => setGeometryKind(event.target.value as AnnotationGeometry["kind"])}
+              className="h-7 min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 outline-none"
+            >
+              <option value="pin">Pin</option>
+              <option value="rect">Rectangle</option>
+              <option value="ellipse">Ellipse</option>
+              <option value="arrow">Arrow</option>
+              <option value="freehand">Freehand</option>
+            </select>
+            <input
+              type="number"
+              value={geometryW}
+              onChange={(event) => setGeometryW(Number(event.target.value) || 1)}
+              className="h-7 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px] outline-none"
+              aria-label="Annotation width"
+            />
+            <input
+              type="number"
+              value={geometryH}
+              onChange={(event) => setGeometryH(Number(event.target.value) || 1)}
+              className="h-7 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px] outline-none"
+              aria-label="Annotation height"
+            />
+            <SmallButton
+              label="Report"
+              onClick={() => downloadText(createReviewReport(activeDoc), `${activeDoc.name}-review-report.md`, "text/markdown")}
+            />
+          </div>
           <div className="divide-y divide-[var(--ps-divider)] rounded-sm border border-[var(--ps-divider)]">
             {notes.length === 0 ? (
               <div className="px-2 py-3 text-center text-[var(--ps-text-dim)]">No notes</div>
@@ -92,6 +150,7 @@ export function AnnotationsPanel() {
                     <span className="h-4 w-4 rounded-sm border border-[var(--ps-divider)]" style={{ backgroundColor: note.color }} />
                     <span className="truncate text-[var(--ps-text-dim)]">
                       {Math.round(note.x)}, {Math.round(note.y)}
+                      {note.geometry ? ` - ${describeAnnotationGeometry(note.geometry)}` : ""}
                     </span>
                     <SmallButton label="Delete" onClick={() => dispatch({ type: "remove-note", id: note.id })} />
                   </div>

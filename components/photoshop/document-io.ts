@@ -30,11 +30,13 @@ import {
 import type {
   AlphaChannel,
   BlendMode,
+  ColorProfileName,
   DocumentMetadata,
   DocumentModeSettings,
   DocumentReport,
   Guide,
   Layer,
+  PsdParsedStructureMetadata,
   PsDocument,
   Selection,
   SmartFilter,
@@ -52,8 +54,11 @@ import {
   appBitDepthToPsd,
   appColorModeToPsd,
   applyIccProfileToPsd,
+  buildSyntheticIccProfile,
   COLOR_MODE_CAPABILITY,
   extractIccProfile,
+  injectIccIntoJpeg,
+  injectIccIntoPng,
   psdBitDepthToApp,
   psdColorModeData,
   psdColorModeToApp,
@@ -116,19 +121,47 @@ import {
 } from "./psd-resources-metadata"
 import { uid } from "./uid"
 import { exportRasterImageDataToBlob } from "./export-worker"
+import { collectEmbeddedTypographyFonts } from "./typography-engine"
 import { TiledBackingStore } from "./tiled-backing-store"
 import { PSB_TILE_VIEW_LAYER_ID, PSB_TILE_VIEW_SOURCE_VERSION, registerPsbTileViewStore } from "./psb-tile-view"
 import {
   encodeJpegImageData,
   encodePngImageData,
+  encodePnmHighBitImage,
   encodePnmImageData,
   encodeTgaImageData,
+  encodeTiffHighBitImageData,
+  encodeTiffHighBitImageDataAsync,
   encodeTiffImageData,
   encodeTiffImageDataAsync,
+  injectAvifIccProfile,
+  injectAvifXmpMetadata,
+  injectWebpIccProfile,
+  injectWebpXmpMetadata,
   planPsbLargeDocumentOpen,
   type RasterExportMetadata,
   type TiffCompression,
 } from "./raster-codecs"
+import { planLargeDocumentOpen, type LargeDocumentOpenMode } from "./large-document"
+import {
+  applyPsdAppPreservationPayload,
+  createPsdNativeSourceSnapshot,
+  createPsdAppPreservationPayload,
+  createPsdRepairPlanFromParsedPsd,
+  embedPsdAppPreservationInXmp,
+  extractPsdAppPreservationFromXmp,
+  restorePsdNativeSourceSnapshot,
+} from "./psd-compatibility"
+import {
+  deserializeHighBitImagePayload,
+  getHighBitExportImage,
+  renderDocumentHighBitPreviewCanvas,
+  serializeHighBitImagePayload,
+  type HighBitDocument,
+  type HighBitLayer,
+} from "./high-bit-document"
+import { writeNativeCompositePsd } from "./psd-native-writer"
+import { createHighBitImageFromImageData } from "./color-pipeline"
 
 function loadPsdCodec() {
   return import("ag-psd")
@@ -158,6 +191,16 @@ export interface RasterExportOptions {
   progressive?: boolean
   tiffCompression?: TiffCompression
   tgaRle?: boolean
+  webpLossless?: boolean
+  webpNearLossless?: number
+  webpMethod?: number
+  webpExactAlpha?: boolean
+  avifLossless?: boolean
+  avifSpeed?: number
+  avifBitDepth?: number
+  avifChromaSubsampling?: string
+  avifTileRowsLog2?: number
+  avifTileColsLog2?: number
   includeMetadata?: boolean
   metadata?: RasterExportMetadata
 }
@@ -339,10 +382,28 @@ function validatePsdHeaderDimensions(buffer: ArrayBuffer, fileName = "PSD canvas
   throw new Error(error)
 }
 
-export type PsbLargeDocumentMode = "full" | "downscale-50" | "tile-view"
+export type PsbLargeDocumentMode = "full" | "downscale-50" | "reduced-scale" | "tile-view"
 
 export interface PsdDeserializeOptions {
   psbLargeDocumentMode?: PsbLargeDocumentMode
+}
+
+export interface ImportFileDimensions extends ImageHeaderDimensions {
+  kind: "raster" | "psd" | "psb"
+}
+
+export interface LoadRasterCanvasOptions {
+  mode?: Extract<LargeDocumentOpenMode, "full" | "reduced-scale">
+  memoryBudgetMB?: number
+}
+
+export interface LoadedRasterCanvas {
+  canvas: HTMLCanvasElement
+  originalWidth: number
+  originalHeight: number
+  scale: number
+  mode: "full" | "reduced-scale"
+  warnings: string[]
 }
 
 function sniffPngDimensions(bytes: Uint8Array): ImageHeaderDimensions | null {
@@ -498,6 +559,85 @@ async function assertRasterHeaderCanvasSize(file: File) {
   const headerBytes = await file.slice(0, Math.min(file.size, RASTER_HEADER_BYTES)).arrayBuffer()
   const dimensions = sniffRasterDimensions(new Uint8Array(headerBytes))
   if (dimensions) assertCanvasSize(dimensions.width, dimensions.height, "Image canvas")
+}
+
+export async function inspectImportFileDimensions(file: File): Promise<ImportFileDimensions | null> {
+  const headerBytes = await file.slice(0, Math.min(file.size, RASTER_HEADER_BYTES)).arrayBuffer()
+  const psd = readPsdHeaderDimensions(headerBytes)
+  if (psd) return { ...psd, kind: psd.version === 2 ? "psb" : "psd" }
+  const raster = sniffRasterDimensions(new Uint8Array(headerBytes))
+  if (raster) return { ...raster, kind: "raster" }
+  return null
+}
+
+export interface PsdRecoveryInspection {
+  kind: "psd" | "psb"
+  width: number
+  height: number
+  parsedStructure: PsdParsedStructureMetadata
+  parseError?: string
+}
+
+function psdColorModeLabel(mode: unknown): string {
+  switch (mode) {
+    case 0: return "Bitmap"
+    case 1: return "Grayscale"
+    case 2: return "Indexed"
+    case 3: return "RGB"
+    case 4: return "CMYK"
+    case 7: return "Multichannel"
+    case 8: return "Duotone"
+    case 9: return "Lab"
+    default: return "Unknown"
+  }
+}
+
+function parsedStructureFromPsd(psd: Psd, fallbackLayerCount = 0): PsdParsedStructureMetadata {
+  const repairPlan = createPsdRepairPlanFromParsedPsd(psd)
+  const imageResources = psd.imageResources as Record<string, unknown> | undefined
+  const resources = Object.keys(imageResources ?? {}).filter((key) => imageResources?.[key] != null)
+  return {
+    layerCount: countPsdLayers(psd.children) || fallbackLayerCount,
+    colorMode: psdColorModeLabel(psd.colorMode),
+    bitDepth: typeof psd.bitsPerChannel === "number" ? psd.bitsPerChannel : undefined,
+    resources,
+    repairableItems: repairPlan.actions.map((action) => `${action.label} -> ${action.localRepresentation}`),
+  }
+}
+
+export async function inspectPsdRecoveryFile(file: File): Promise<PsdRecoveryInspection | null> {
+  assertFileSize(file, MAX_PSD_FILE_BYTES, "PSD file")
+  const buffer = await file.arrayBuffer()
+  const header = readPsdHeaderDimensions(buffer)
+  if (!header) return null
+  try {
+    const { readPsd } = await loadPsdCodec()
+    const psd = readPsd(buffer, {
+      skipLayerImageData: true,
+      skipCompositeImageData: true,
+      skipThumbnail: true,
+      skipLinkedFilesData: true,
+      useImageData: false,
+    })
+    return {
+      kind: header.version === 2 ? "psb" : "psd",
+      width: header.width,
+      height: header.height,
+      parsedStructure: parsedStructureFromPsd(psd),
+    }
+  } catch (error) {
+    return {
+      kind: header.version === 2 ? "psb" : "psd",
+      width: header.width,
+      height: header.height,
+      parsedStructure: {
+        colorMode: "Unknown",
+        resources: [],
+        repairableItems: [],
+      },
+      parseError: error instanceof Error ? error.message : "PSD structure could not be parsed safely.",
+    }
+  }
 }
 
 function cleanText(value: unknown, fallback: string, maxLength = 120) {
@@ -734,8 +874,13 @@ function applyAdjustmentForIo(ctx: CanvasRenderingContext2D, layer: Layer, width
 
 export function renderDocumentComposite(
   doc: PsDocument,
-  options: { transparent?: boolean; matte?: string } = {},
+  options: { transparent?: boolean; matte?: string; colorPurpose?: "preview" | "export" } = {},
 ) {
+  if (doc.bitDepth > 8 || (doc as HighBitDocument).__highBitImageData || doc.layers.some((layer) => !!(layer as HighBitLayer).__highBitImageData || !!(layer as HighBitLayer).__highBitDepthData)) {
+    const highBit = renderDocumentHighBitPreviewCanvas(doc, options)
+    if (highBit) return applyModeAndColorManagement(highBit.canvas, doc, { purpose: options.colorPurpose ?? "preview" })
+  }
+
   const flat = makeIoCanvas(doc.width, doc.height)
   const ctx = flat.getContext("2d")!
   const transparent = options.transparent ?? false
@@ -764,7 +909,7 @@ export function renderDocumentComposite(
     const toDraw = withLayerMask(renderableLayer(layer), clipMask)
     compositeLayer(ctx, toDraw, layer.blendMode, layer.opacity, layer.style ? 1 : layer.fillOpacity ?? 1)
   }
-  return applyModeAndColorManagement(flat, doc)
+  return applyModeAndColorManagement(flat, doc, { purpose: options.colorPurpose ?? "preview" })
 }
 
 /**
@@ -798,6 +943,7 @@ export function buildRasterExportCanvas(doc: PsDocument, options: RasterExportOp
   const base = renderDocumentComposite(doc, {
     transparent: !needsMatte,
     matte: options.matte,
+    colorPurpose: "export",
   })
   const scaled = options.scale === 1 ? base : scaledCopy(base, options.scale, needsMatte ? options.matte : undefined)
   if (!options.dither || options.format === "jpeg") return scaled
@@ -821,6 +967,84 @@ export function rasterMime(format: BrowserRasterExportFormat) {
   if (format === "avif") return "image/avif"
   if (format === "gif") return "image/gif"
   return "image/png"
+}
+
+export interface BrowserRasterEncoderDiagnostic {
+  format: BrowserRasterExportFormat
+  requestedMime: string
+  returnedMime: string
+  byteLength: number
+  supported: boolean
+  message: string
+}
+
+export interface BrowserRasterEncoderDiagnosticOptions {
+  createCanvas?: () => HTMLCanvasElement
+}
+
+export async function diagnoseBrowserRasterEncoderSupport(
+  format: BrowserRasterExportFormat,
+  options: BrowserRasterEncoderDiagnosticOptions = {},
+): Promise<BrowserRasterEncoderDiagnostic> {
+  const requestedMime = rasterMime(format)
+  const makeCanvas = options.createCanvas ?? (() => document.createElement("canvas"))
+  let canvas: HTMLCanvasElement
+  try {
+    canvas = makeCanvas()
+    canvas.width = canvas.width || 1
+    canvas.height = canvas.height || 1
+  } catch (error) {
+    return {
+      format,
+      requestedMime,
+      returnedMime: "",
+      byteLength: 0,
+      supported: false,
+      message: `Could not create a diagnostic canvas: ${(error as Error).message}`,
+    }
+  }
+  if (typeof canvas.toBlob !== "function") {
+    return {
+      format,
+      requestedMime,
+      returnedMime: "",
+      byteLength: 0,
+      supported: false,
+      message: "Canvas.toBlob is unavailable in this browser context.",
+    }
+  }
+  const blob = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob(resolve, requestedMime, 0.82)
+  })
+  if (!blob) {
+    return {
+      format,
+      requestedMime,
+      returnedMime: "",
+      byteLength: 0,
+      supported: false,
+      message: `${format.toUpperCase()} encoder returned no blob for ${requestedMime}.`,
+    }
+  }
+  const returnedMime = (blob.type || "").toLowerCase()
+  const supported = returnedMime === requestedMime || (!returnedMime && blob.size > 0 && format !== "webp" && format !== "avif")
+  return {
+    format,
+    requestedMime,
+    returnedMime,
+    byteLength: blob.size,
+    supported,
+    message: supported
+      ? `${format.toUpperCase()} encoder returned ${returnedMime || "an untyped blob"} (${formatBytes(blob.size)}).`
+      : `${format.toUpperCase()} encoder requested ${requestedMime} but returned ${returnedMime || "an untyped blob"}.`,
+  }
+}
+
+export function diagnoseBrowserRasterEncoders(
+  formats: readonly BrowserRasterExportFormat[] = ["webp", "avif"],
+  options: BrowserRasterEncoderDiagnosticOptions = {},
+) {
+  return Promise.all(formats.map((format) => diagnoseBrowserRasterEncoderSupport(format, options)))
 }
 
 export function dataUrlBytes(dataUrl: string) {
@@ -858,6 +1082,40 @@ function dataUrlFromBytes(mime: string, bytes: Uint8Array) {
   return `data:${mime};base64,${bytesToBase64(bytes)}`
 }
 
+function dataUrlToBytes(dataUrl: string) {
+  const body = dataUrl.split(",")[1] ?? ""
+  const binary = atob(body)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return bytes
+}
+
+function dataUrlMime(dataUrl: string) {
+  return /^data:([^;]+)/i.exec(dataUrl)?.[1]?.toLowerCase() ?? ""
+}
+
+function rasterExportOutputProfile(doc: PsDocument): ColorProfileName | null {
+  const color = doc.colorManagement
+  if (!color) return null
+  if (color.proofColors && color.proofProfile !== "None") return color.proofProfile
+  return color.workingSpace ?? color.assignedProfile ?? "sRGB IEC61966-2.1"
+}
+
+function injectIccIntoRasterBytes(bytes: Uint8Array, format: AppRasterExportFormat, profile: ColorProfileName | null) {
+  if (!profile) return bytes
+  const icc = buildSyntheticIccProfile(profile)
+  if (format === "png") return injectIccIntoPng(bytes, icc, profile)
+  if (format === "jpeg") return injectIccIntoJpeg(bytes, icc)
+  if (format === "webp") return injectWebpIccProfile(bytes, icc, profile)
+  if (format === "avif") return injectAvifIccProfile(bytes, icc, profile)
+  return bytes
+}
+
+function injectIccIntoRasterDataUrl(dataUrl: string, format: AppRasterExportFormat, profile: ColorProfileName | null) {
+  if (!profile || (format !== "png" && format !== "jpeg" && format !== "webp" && format !== "avif")) return dataUrl
+  return dataUrlFromBytes(rasterMime(format), injectIccIntoRasterBytes(dataUrlToBytes(dataUrl), format, profile))
+}
+
 function textDataUrl(mime: string, text: string) {
   return dataUrlFromBytes(mime, new TextEncoder().encode(text))
 }
@@ -867,17 +1125,25 @@ function canvasImageData(canvas: HTMLCanvasElement) {
   return ctx.getImageData(0, 0, canvas.width, canvas.height)
 }
 
-function canvasToTgaDataUrl(canvas: HTMLCanvasElement, rle = false) {
-  return dataUrlFromBytes("image/x-tga", new Uint8Array(encodeTgaImageData(canvasImageData(canvas), { rle })))
+function canvasToTgaDataUrl(canvas: HTMLCanvasElement, rle = false, metadata?: RasterExportMetadata) {
+  return dataUrlFromBytes("image/x-tga", new Uint8Array(encodeTgaImageData(canvasImageData(canvas), { rle, metadata })))
 }
 
-function canvasToPnmDataUrl(canvas: HTMLCanvasElement, format: "ppm" | "pgm" | "pbm") {
+function canvasToPnmDataUrl(canvas: HTMLCanvasElement, format: "ppm" | "pgm" | "pbm", metadata?: RasterExportMetadata) {
   const mime = format === "ppm" ? "image/x-portable-pixmap" : format === "pgm" ? "image/x-portable-graymap" : "image/x-portable-bitmap"
-  return dataUrlFromBytes(mime, new Uint8Array(encodePnmImageData(canvasImageData(canvas), format)))
+  return dataUrlFromBytes(mime, new Uint8Array(encodePnmImageData(canvasImageData(canvas), format, { metadata })))
 }
 
-function canvasToTiffDataUrl(canvas: HTMLCanvasElement, compression: Exclude<TiffCompression, "deflate"> = "none") {
-  return dataUrlFromBytes("image/tiff", new Uint8Array(encodeTiffImageData(canvasImageData(canvas), { compression })))
+function canvasToTiffDataUrl(
+  canvas: HTMLCanvasElement,
+  compression: Exclude<TiffCompression, "deflate"> = "none",
+  metadata?: RasterExportMetadata,
+) {
+  return dataUrlFromBytes("image/tiff", new Uint8Array(encodeTiffImageData(canvasImageData(canvas), { compression, metadata })))
+}
+
+function highBitToTiffDataUrl(image: NonNullable<ReturnType<typeof getHighBitExportImage>>, compression: Exclude<TiffCompression, "deflate"> = "none", metadata?: RasterExportMetadata) {
+  return dataUrlFromBytes("image/tiff", new Uint8Array(encodeTiffHighBitImageData(image, { compression, metadata })))
 }
 
 function gifPaletteColor(index: number) {
@@ -968,25 +1234,46 @@ export function canvasToGifDataUrl(canvas: HTMLCanvasElement, transparent: boole
 }
 
 export function exportRasterDataUrl(doc: PsDocument, options: RasterExportOptions) {
+  const metadata = rasterExportMetadata(doc, options)
+  const highBit = getHighBitExportImage(doc, {
+    transparent: options.transparent,
+    matte: options.matte,
+  })
+  if (highBit && options.format === "tiff" && options.tiffCompression !== "deflate") {
+    return highBitToTiffDataUrl(highBit, options.tiffCompression === "lzw" ? "lzw" : "none", metadata)
+  }
+  if (highBit && (options.format === "ppm" || options.format === "pgm" || options.format === "pbm")) {
+    const mime = options.format === "ppm" ? "image/x-portable-pixmap" : options.format === "pgm" ? "image/x-portable-graymap" : "image/x-portable-bitmap"
+    return dataUrlFromBytes(mime, new Uint8Array(encodePnmHighBitImage(highBit, options.format, { metadata })))
+  }
   const canvas = buildRasterExportCanvas(doc, options)
   if (options.format === "gif") return canvasToGifDataUrl(canvas, options.transparent)
-  if (options.format === "tiff") return canvasToTiffDataUrl(canvas, options.tiffCompression === "lzw" ? "lzw" : "none")
-  if (options.format === "tga") return canvasToTgaDataUrl(canvas, !!options.tgaRle)
+  if (options.format === "tiff") return canvasToTiffDataUrl(canvas, options.tiffCompression === "lzw" ? "lzw" : "none", metadata)
+  if (options.format === "tga") return canvasToTgaDataUrl(canvas, !!options.tgaRle, metadata)
   if (options.format === "ppm" || options.format === "pgm" || options.format === "pbm") {
-    return canvasToPnmDataUrl(canvas, options.format)
+    return canvasToPnmDataUrl(canvas, options.format, metadata)
   }
+  const outputProfile = rasterExportOutputProfile(doc)
   if (options.format === "png" && (options.interlaced || options.includeMetadata)) {
-    return canvas.toDataURL(rasterMime(options.format), options.quality)
+    return injectIccIntoRasterDataUrl(canvas.toDataURL(rasterMime(options.format), options.quality), options.format, outputProfile)
   }
   if (options.format === "jpeg" && (options.progressive || options.includeMetadata)) {
-    return canvas.toDataURL(rasterMime(options.format), options.quality)
+    return injectIccIntoRasterDataUrl(canvas.toDataURL(rasterMime(options.format), options.quality), options.format, outputProfile)
   }
-  const dataUrl = canvas.toDataURL(rasterMime(options.format), options.quality)
+  let dataUrl = canvas.toDataURL(rasterMime(options.format), options.quality)
   // Inject EXIF metadata into JPEG exports
   if (options.format === "jpeg" && options.includeMetadata && doc.metadata) {
-    return injectJpegExif(dataUrl, doc)
+    dataUrl = injectJpegExif(dataUrl, doc)
   }
-  return dataUrl
+  if (metadata && (options.format === "webp" || options.format === "avif") && dataUrlMime(dataUrl) === rasterMime(options.format)) {
+    const bytes = dataUrlToBytes(dataUrl)
+    const injected = options.format === "webp"
+      ? injectWebpIccProfile(injectWebpXmpMetadata(bytes, metadata), metadata.iccProfile, metadata.iccProfileName)
+      : injectAvifIccProfile(injectAvifXmpMetadata(bytes, metadata), metadata.iccProfile, metadata.iccProfileName)
+    dataUrl = dataUrlFromBytes(rasterMime(options.format), injected)
+  }
+  if (metadata?.iccProfile && (options.format === "webp" || options.format === "avif")) return dataUrl
+  return injectIccIntoRasterDataUrl(dataUrl, options.format, outputProfile)
 }
 
 function dataUrlToBlob(dataUrl: string) {
@@ -1001,49 +1288,141 @@ function dataUrlToBlob(dataUrl: string) {
 function canvasToBlobAsync(canvas: HTMLCanvasElement, format: BrowserRasterExportFormat, quality: number) {
   return new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((blob) => {
-      if (blob) resolve(blob)
-      else reject(new Error("Canvas export returned no blob"))
+      if (!blob) {
+        reject(new Error("Canvas export returned no blob"))
+        return
+      }
+      try {
+        assertBrowserRasterBlob(blob, format)
+        resolve(blob)
+      } catch (error) {
+        reject(error)
+      }
     }, rasterMime(format), quality)
   })
 }
 
-function rasterExportMetadata(doc: PsDocument, options: RasterExportOptions): RasterExportMetadata | undefined {
-  if (!options.includeMetadata) return undefined
-  const metadata = options.metadata ?? {}
-  const docMetadata = doc.metadata ?? {}
-  return {
-    author: metadata.author ?? docMetadata.author,
-    copyright: metadata.copyright ?? docMetadata.copyright,
-    description: metadata.description ?? docMetadata.description,
-    creationDate: metadata.creationDate ?? docMetadata.createdAt ?? new Date().toISOString(),
-    xmp: metadata.xmp,
+function assertBrowserRasterBlob(blob: Blob, format: BrowserRasterExportFormat) {
+  if (format !== "webp" && format !== "avif") return
+  const expected = rasterMime(format)
+  const returned = blob.type.toLowerCase()
+  if (returned && returned !== expected) {
+    throw new Error(`${format.toUpperCase()} encoder is not available in this browser; requested ${expected} but received ${returned}.`)
   }
 }
 
+async function postProcessBrowserRasterBlob(
+  blob: Blob,
+  doc: PsDocument,
+  options: RasterExportOptions,
+): Promise<Blob> {
+  if (options.format !== "webp" && options.format !== "avif") {
+    assertBrowserRasterBlob(blob, options.format as BrowserRasterExportFormat)
+    return blob
+  }
+  assertBrowserRasterBlob(blob, options.format)
+  const metadata = rasterExportMetadata(doc, options)
+  if (!metadata) return blob
+  let injected: Uint8Array<ArrayBufferLike> = new Uint8Array(await blob.arrayBuffer())
+  injected = options.format === "webp"
+    ? injectWebpXmpMetadata(injected, metadata)
+    : injectAvifXmpMetadata(injected, metadata)
+  injected = options.format === "webp"
+    ? injectWebpIccProfile(injected, metadata.iccProfile, metadata.iccProfileName)
+    : injectAvifIccProfile(injected, metadata.iccProfile, metadata.iccProfileName)
+  return new Blob([injected], { type: rasterMime(options.format) })
+}
+
+export function buildRasterExportMetadata(doc: PsDocument, options: RasterExportOptions): RasterExportMetadata | undefined {
+  const outputProfile = rasterExportOutputProfile(doc)
+  if (!options.includeMetadata && !outputProfile) return undefined
+  const metadata = options.metadata ?? {}
+  const docMetadata = doc.metadata ?? {}
+  const includeMetadata = !!options.includeMetadata
+  const fonts = includeMetadata ? collectEmbeddedTypographyFonts(doc) : []
+  return {
+    title: includeMetadata ? metadata.title ?? docMetadata.title ?? doc.name : undefined,
+    author: includeMetadata ? metadata.author ?? docMetadata.author : undefined,
+    copyright: includeMetadata ? metadata.copyright ?? docMetadata.copyright : undefined,
+    description: includeMetadata ? metadata.description ?? docMetadata.description : undefined,
+    creationDate: includeMetadata ? metadata.creationDate ?? docMetadata.createdAt ?? new Date().toISOString() : undefined,
+    keywords: includeMetadata ? metadata.keywords ?? docMetadata.keywords : undefined,
+    credit: includeMetadata ? metadata.credit ?? docMetadata.credit : undefined,
+    source: includeMetadata ? metadata.source ?? docMetadata.source : undefined,
+    contentCredentials: includeMetadata ? metadata.contentCredentials ?? docMetadata.contentCredentials : undefined,
+    fonts: includeMetadata ? (fonts.length ? fonts : metadata.fonts) : undefined,
+    iccProfileName: outputProfile ?? metadata.iccProfileName,
+    iccProfile: outputProfile ? buildSyntheticIccProfile(outputProfile) : metadata.iccProfile,
+    webp: options.format === "webp"
+      ? {
+          quality: options.quality,
+          lossless: options.webpLossless,
+          nearLossless: options.webpNearLossless,
+          method: options.webpMethod,
+          exactAlpha: options.webpExactAlpha,
+          ...metadata.webp,
+        }
+      : metadata.webp,
+    avif: options.format === "avif"
+      ? {
+          quality: options.quality,
+          lossless: options.avifLossless,
+          speed: options.avifSpeed,
+          bitDepth: options.avifBitDepth,
+          chromaSubsampling: options.avifChromaSubsampling,
+          tileRowsLog2: options.avifTileRowsLog2,
+          tileColsLog2: options.avifTileColsLog2,
+          ...metadata.avif,
+        }
+      : metadata.avif,
+    netpbm: includeMetadata ? metadata.netpbm : undefined,
+    xmp: includeMetadata ? metadata.xmp : undefined,
+  }
+}
+
+function rasterExportMetadata(doc: PsDocument, options: RasterExportOptions): RasterExportMetadata | undefined {
+  return buildRasterExportMetadata(doc, options)
+}
+
 export async function exportRasterBlob(doc: PsDocument, options: RasterExportOptions): Promise<Blob> {
+  const metadata = rasterExportMetadata(doc, options)
+  const highBit = getHighBitExportImage(doc, {
+    transparent: options.transparent,
+    matte: options.matte,
+  })
+  if (highBit && options.format === "tiff") {
+    const buffer = await encodeTiffHighBitImageDataAsync(highBit, { compression: options.tiffCompression ?? "none", metadata })
+    return new Blob([buffer], { type: "image/tiff" })
+  }
+  if (highBit && (options.format === "ppm" || options.format === "pgm" || options.format === "pbm")) {
+    const mime = options.format === "ppm" ? "image/x-portable-pixmap" : options.format === "pgm" ? "image/x-portable-graymap" : "image/x-portable-bitmap"
+    return new Blob([encodePnmHighBitImage(highBit, options.format, { metadata })], { type: mime })
+  }
+
   const specialCanvasFormats = new Set<AppRasterExportFormat>(["tiff", "tga", "ppm", "pgm", "pbm"])
+  const outputProfile = rasterExportOutputProfile(doc)
   if (
     specialCanvasFormats.has(options.format) ||
     (options.format === "png" && (options.interlaced || options.includeMetadata)) ||
-    (options.format === "jpeg" && (options.progressive || options.includeMetadata))
+    (options.format === "jpeg" && (options.progressive || options.includeMetadata)) ||
+    (!!outputProfile && (options.format === "png" || options.format === "jpeg"))
   ) {
     const canvas = buildRasterExportCanvas(doc, options)
     const image = canvasImageData(canvas)
-    const metadata = rasterExportMetadata(doc, options)
     if (options.format === "tiff") {
-      const buffer = await encodeTiffImageDataAsync(image, { compression: options.tiffCompression ?? "none" })
+      const buffer = await encodeTiffImageDataAsync(image, { compression: options.tiffCompression ?? "none", metadata })
       return new Blob([buffer], { type: "image/tiff" })
     }
     if (options.format === "tga") {
-      return new Blob([encodeTgaImageData(image, { rle: !!options.tgaRle })], { type: "image/x-tga" })
+      return new Blob([encodeTgaImageData(image, { rle: !!options.tgaRle, metadata })], { type: "image/x-tga" })
     }
     if (options.format === "ppm" || options.format === "pgm" || options.format === "pbm") {
       const mime = options.format === "ppm" ? "image/x-portable-pixmap" : options.format === "pgm" ? "image/x-portable-graymap" : "image/x-portable-bitmap"
-      return new Blob([encodePnmImageData(image, options.format)], { type: mime })
+      return new Blob([encodePnmImageData(image, options.format, { metadata })], { type: mime })
     }
     if (options.format === "png") {
       const buffer = await encodePngImageData(image, { interlaced: !!options.interlaced, metadata })
-      return new Blob([buffer], { type: "image/png" })
+      return new Blob([injectIccIntoRasterBytes(new Uint8Array(buffer), options.format, outputProfile)], { type: "image/png" })
     }
     if (options.format === "jpeg") {
       const buffer = await encodeJpegImageData(image, {
@@ -1051,7 +1430,7 @@ export async function exportRasterBlob(doc: PsDocument, options: RasterExportOpt
         progressive: !!options.progressive,
         metadata,
       })
-      return new Blob([buffer], { type: "image/jpeg" })
+      return new Blob([injectIccIntoRasterBytes(new Uint8Array(buffer), options.format, outputProfile)], { type: "image/jpeg" })
     }
   }
 
@@ -1066,12 +1445,13 @@ export async function exportRasterBlob(doc: PsDocument, options: RasterExportOpt
   const base = renderDocumentComposite(doc, {
     transparent: !needsMatte,
     matte: options.matte,
+    colorPurpose: "export",
   })
   const ctx = base.getContext("2d")
   if (ctx) {
     try {
       const image = ctx.getImageData(0, 0, base.width, base.height)
-      return await exportRasterImageDataToBlob(image, options)
+      return await postProcessBrowserRasterBlob(await exportRasterImageDataToBlob(image, options), doc, options)
     } catch {
       // Fall back to the existing synchronous canvas pipeline below.
     }
@@ -1079,7 +1459,7 @@ export async function exportRasterBlob(doc: PsDocument, options: RasterExportOpt
 
   const canvas = buildRasterExportCanvas(doc, options)
   if (options.format === "png" || options.format === "jpeg" || options.format === "webp" || options.format === "avif") {
-    return canvasToBlobAsync(canvas, options.format, options.quality)
+    return postProcessBrowserRasterBlob(await canvasToBlobAsync(canvas, options.format, options.quality), doc, options)
   }
   return dataUrlToBlob(exportRasterDataUrl(doc, options))
 }
@@ -1631,6 +2011,7 @@ function serializeLayer(layer: Layer) {
     : undefined
   return {
     ...rest,
+    highBitImageData: serializeHighBitImagePayload((layer as HighBitLayer).__highBitImageData),
     canvasDataUrl: canvasDataUrl(canvas),
     maskDataUrl: canvasDataUrl(mask),
     frame: frame
@@ -1658,6 +2039,7 @@ export function serializeProject(doc: PsDocument) {
       },
       document: {
         ...rest,
+        highBitImageData: serializeHighBitImagePayload((doc as HighBitDocument).__highBitImageData),
         selection: serializeSelection(selection),
         quickMaskCanvasDataUrl: canvasDataUrl(quickMaskCanvas),
         layers: layers.map(serializeLayer),
@@ -1757,12 +2139,12 @@ export function createCompatibilityManifest(
   })
   if (textLayers) add("Text layers", "preserved", "preserved", "flattened", {
     project: `${reportPlural(textLayers, "editable text layer")} retain typography, OpenType, path, shape, and extrusion metadata.`,
-    psd: `${reportPlural(textLayers, "editable text layer")} round-trip through native PSD text engine descriptors; extended properties (variable axes, OpenType features, on-path geometry) ag-psd lacks fields for are appended to the layer name as "__pstext:<base64-json>__" markers, stripped on display and decoded on import.`,
+    psd: `${reportPlural(textLayers, "editable text layer")} round-trip through native PSD text engine descriptors; extended properties (variable axes, OpenType features, on-path geometry) are mirrored into the PSD XMP app-preservation payload, with layer-name markers retained only as a legacy fallback.`,
     "browser-raster": "Text is rasterized into the flattened export surface.",
   })
   if (shapeLayers) add("Shape layers", "preserved", "preserved", "flattened", {
     project: `${reportPlural(shapeLayers, "shape layer")} retain geometry, stroke, fill, radius, and custom-shape metadata.`,
-    psd: `${reportPlural(shapeLayers, "shape layer")} round-trip as vector masks with native fill/stroke descriptors; custom-shape parameters and per-subpath metadata are appended to the layer name as "__psshape:<base64-json>__" and "__pspath:<kind>:<base64-json>__" markers (hidden from the layer label on display, decoded back into the editable shape on import).`,
+    psd: `${reportPlural(shapeLayers, "shape layer")} round-trip as vector masks with native fill/stroke descriptors; custom-shape parameters and per-subpath metadata are mirrored into the PSD XMP app-preservation payload, with name markers retained only as a fallback.`,
     "browser-raster": "Vector shape geometry is rasterized into the flattened export surface.",
   })
   if (groupLayers) add("Groups", "preserved", "approximated", "flattened", {
@@ -1780,9 +2162,9 @@ export function createCompatibilityManifest(
     psd: "Layer mask pixels are exported where compatible; vector/app mask metadata is approximated.",
     "browser-raster": "Masks affect the composite only; editable masks are not exported.",
   })
-  if (layerNotes || layerMetadata) add("Layer notes and metadata", "preserved", "unsupported", "unsupported", {
+  if (layerNotes || layerMetadata) add("Layer notes and metadata", "preserved", "preserved", "unsupported", {
     project: `${reportPlural(layerNotes, "layer note")} and ${reportPlural(layerMetadata, "metadata-bearing layer")} retain searchable app-only annotations, tags, and custom key/value fields.`,
-    psd: "Layer-level notes, tags, and custom key/value metadata are app-only and are reported rather than written as native PSD layer records.",
+    psd: "Layer-level notes, tags, and custom key/value metadata are restored by this app from the PSD XMP app-preservation payload; they are not Photoshop-native layer records.",
     "browser-raster": "Layer-level notes and metadata are editor metadata and are omitted from flattened image exports.",
   })
   if (styledLayers) add("Layer styles", "preserved", "preserved", "flattened", {
@@ -1792,12 +2174,12 @@ export function createCompatibilityManifest(
   })
   if (adjustmentLayers) add("Adjustment layers", "preserved", "approximated", "flattened", {
     project: `${reportPlural(adjustmentLayers, "adjustment layer")} retain non-destructive settings.`,
-    psd: `${reportPlural(adjustmentLayers, "adjustment layer")} round-trip; 16 types (brightness-contrast, levels, curves, exposure, vibrance, hue-saturation, color-balance, black-white, photo-filter, channel-mixer, color-lookup, invert, posterize, threshold, gradient-map, selective-color) use native ag-psd descriptors. 6 unsupported types (shadows-highlights, hdr-toning, desaturate, match-color, replace-color, equalize) encode params as "__adj:<type>:<base64-of-encodeURIComponent(json)>__" tokens appended to the layer name; the marker is stripped from the visible name and decoded back into the live adjustment on import.`,
+    psd: `${reportPlural(adjustmentLayers, "adjustment layer")} round-trip; 16 types (brightness-contrast, levels, curves, exposure, vibrance, hue-saturation, color-balance, black-white, photo-filter, channel-mixer, color-lookup, invert, posterize, threshold, gradient-map, selective-color) use native ag-psd descriptors. 6 unsupported types (shadows-highlights, hdr-toning, desaturate, match-color, replace-color, equalize) preserve editable params in the PSD XMP app-preservation payload, with layer-name tokens retained as fallback.`,
     "browser-raster": "Adjustments are baked into the flattened export pixels.",
   })
   if (smartFilters) add("Smart filters", "preserved", "approximated", "flattened", {
     project: `${reportPlural(smartFilters, "smart filter")} retain filter id, parameters, stack order, masks, opacity, blend mode, mask density, and mask feather${smartFilterMasks ? `, including ${reportPlural(smartFilterMasks, "filter mask state")}` : ""}.`,
-    psd: `${reportPlural(smartFilters, "smart filter")} bake their visual result into the layer pixels for native compatibility; editable filter id, parameters, mask data, opacity, blend mode, density, feather, and order round-trip only via the companion project (.psd-web) file, not the PSD itself.`,
+    psd: `${reportPlural(smartFilters, "smart filter")} bake their visual result into the layer pixels for native compatibility; editable filter id, parameters, mask data, opacity, blend mode, density, feather, and order restore in this app from the PSD XMP app-preservation payload.`,
     "browser-raster": "Smart filters are baked into the flattened export pixels.",
   })
   if (smartObjectLayers.length) add("Smart objects", "preserved", "approximated", "flattened", {
@@ -1865,10 +2247,10 @@ export function createCompatibilityManifest(
     psd: "Variable data sets are app-only metadata in this implementation.",
     "browser-raster": "Variable data is omitted from flattened image exports.",
   })
-  if (doc.metadata) add("File metadata", "preserved", "preserved", "unsupported", {
+  if (doc.metadata) add("File metadata", "preserved", "preserved", "approximated", {
     project: "IPTC-style metadata and local content credentials are serialized.",
     psd: "Document metadata round-trips through the native PSD XMP image resource; IPTC/EXIF blobs are built for sidecar use but not surfaced by ag-psd's public ImageResources type.",
-    "browser-raster": "Browser encoders generally do not embed IPTC/XMP/content-credential metadata.",
+    "browser-raster": "Raster exports embed supported metadata when Embed Metadata is enabled: PNG/JPEG/TIFF/WebP/AVIF use XMP-style payloads, TIFF also writes IPTC/EXIF directories, and TGA/Netpbm use native comments/developer metadata.",
   })
   if (doc.printSettings) add("Print settings", "preserved", "preserved", "unsupported", {
     project: `${doc.printSettings.paperSize} print setup, marks, bleed, and color-handling metadata retained.`,
@@ -1887,8 +2269,10 @@ export function createCompatibilityManifest(
   })
   if (doc.colorManagement || specialMode) add("Color and bit depth", "preserved", "approximated", "approximated", {
     project: `${doc.colorMode}/${doc.bitDepth}-bit intent${profile ? ` with ${profile}` : ""} is retained as document metadata.`,
-    psd: `${doc.colorMode}/${doc.bitDepth}-bit metadata round-trips through colorMode/bitsPerChannel; ICC profile bytes round-trip through the iccProfile resource. Browser pixel rendering remains 8-bit RGBA regardless.`,
-    "browser-raster": `${doc.colorMode}/${doc.bitDepth}-bit intent is converted through browser 8-bit RGBA export; ICC transforms are not embedded.`,
+    psd: `${doc.colorMode}/${doc.bitDepth}-bit metadata round-trips through colorMode/bitsPerChannel; ICC profile bytes round-trip through the iccProfile resource. High-bit side-band pixels are retained by the project format while PSD-compatible pixels are rasterized for native handoff.`,
+    "browser-raster": doc.bitDepth > 8
+      ? `${doc.colorMode}/${doc.bitDepth}-bit typed-array pixels are preserved by TIFF/PNM high-bit export paths where supported; browser-native formats use the 8-bit preview.`
+      : `${doc.colorMode}/${doc.bitDepth}-bit intent is converted through browser RGBA export; ICC profiles are embedded for PNG/JPEG/TIFF/WebP and recorded in AVIF/TGA/Netpbm metadata where requested.`,
   })
 
   const totals = reportTotals(entries)
@@ -1909,6 +2293,11 @@ export function createExportLimitationReport(
   const highBitOrNonRgb = doc.bitDepth > 8 || doc.colorMode !== "RGB"
   const metadataRequested = !!options.includeMetadata
   const profile = doc.colorManagement?.assignedProfile
+  const highBitPreservingFormat = doc.bitDepth > 8 && (
+    format === "tiff" ||
+    format === "ppm" ||
+    format === "pgm"
+  )
 
   const add = (label: string, status: ReportStatus, detail: string) => {
     items.push({ label, status, detail })
@@ -1935,39 +2324,99 @@ export function createExportLimitationReport(
       ? "SVG export embeds the rendered document for visual reliability and emits simple shape/text layer elements where browser-safe geometry is available."
       : "Shape and vector-mask geometry is baked into browser raster pixels.")
   }
-  if (highBitOrNonRgb) {
-    add("8-bit RGBA export path", "approximated", `${doc.colorMode}/${doc.bitDepth}-bit document intent is flattened through browser 8-bit RGBA canvas data.`)
+  if (doc.bitDepth > 8 && highBitPreservingFormat) {
+    add(
+      "High-bit sample export",
+      format === "tiff" ? "preserved" : "approximated",
+      format === "tiff"
+        ? `${doc.bitDepth}-bit typed-array pixels are encoded directly into TIFF sample data before any 8-bit preview fallback.`
+        : `${doc.bitDepth}-bit typed-array pixels are encoded into 16-bit Netpbm samples, preserving more precision than the browser canvas preview.`,
+    )
+  }
+  if (doc.colorMode !== "RGB" || (highBitOrNonRgb && !highBitPreservingFormat)) {
+    add(
+      "RGBA export conversion",
+      "approximated",
+      doc.bitDepth > 8 && !highBitPreservingFormat
+        ? `${doc.colorMode}/${doc.bitDepth}-bit document intent is flattened through browser 8-bit RGBA canvas data.`
+        : `${doc.colorMode} document intent is composited into RGB export pixels; editable source color-model channels are not embedded.`,
+    )
   }
   if (hasExtraChannels) {
     add("Spot and extra channels", "unsupported", "Spot, alpha, and multichannel data are not embedded by browser raster encoders.")
   }
   if (profile || doc.colorManagement) {
-    add("ICC profile embedding", "unsupported", `${profile ?? "Document"} profile metadata is tracked by the app but browser encoders do not embed native ICC payloads here.`)
+    const outputProfile = rasterExportOutputProfile(doc) ?? profile ?? "sRGB IEC61966-2.1"
+    add("ICC profile conversion", "preserved", `Export pixels are converted from ${profile ?? "sRGB IEC61966-2.1"} to ${outputProfile} through the browser-local ICC transform engine before encoding.`)
+    add(
+      "ICC profile embedding",
+      format === "png" || format === "jpeg" || format === "tiff" || format === "webp" || format === "avif" || format === "tga" || format === "ppm" || format === "pgm" || format === "pbm" ? "preserved" : "unsupported",
+      format === "png"
+        ? `${outputProfile} is embedded in an iCCP chunk alongside the converted pixels.`
+        : format === "jpeg"
+          ? `${outputProfile} is embedded in JPEG APP2 ICC_PROFILE segment(s) alongside the converted pixels.`
+          : format === "tiff"
+            ? `${outputProfile} is embedded in TIFF tag 34675 alongside the converted pixels.`
+            : format === "webp"
+              ? `${outputProfile} is embedded in a WebP ICCP chunk and the VP8X ICC flag is set when available.`
+              : format === "avif"
+                ? `${outputProfile} is embedded in an AVIF UUID metadata box alongside the encoded payload.`
+                : format === "tga"
+                  ? `${outputProfile} is recorded in TGA developer metadata alongside the exported pixels.`
+                  : format === "ppm" || format === "pgm" || format === "pbm"
+                    ? `${outputProfile} is recorded in Netpbm comments alongside the exported samples.`
+                    : `${outputProfile} conversion is applied to pixels, but this export encoder does not carry an ICC profile payload.`,
+    )
   }
   if (metadataRequested) {
-    add("Metadata embedding", format === "png" || format === "jpeg" ? "preserved" : format === "svg" ? "approximated" : "unsupported", format === "png"
+    add("Metadata embedding", format === "png" || format === "jpeg" || format === "tiff" || format === "webp" || format === "avif" || format === "tga" || format === "ppm" || format === "pgm" || format === "pbm" ? "preserved" : format === "svg" ? "approximated" : "unsupported", format === "png"
       ? "PNG export embeds author, copyright, description, creation date, and XMP text chunks."
       : format === "jpeg"
         ? "JPEG export embeds XMP APP1 metadata for author, copyright, description, and creation date."
+        : format === "tiff"
+          ? "TIFF export embeds baseline text tags, IPTC tag 33723, XMP tag 700, EXIF IFD tag 34665, ICC tag 34675, and local content credentials."
+          : format === "webp"
+            ? "WebP export injects XMP and ICC RIFF chunks when the browser returns a real WebP container."
+            : format === "avif"
+              ? "AVIF export appends XMP and ICC UUID boxes when the browser returns a real AVIF container."
+              : format === "tga"
+                ? "TGA export writes a TGA 2.0 extension area plus a developer metadata record."
+                : format === "ppm" || format === "pgm" || format === "pbm"
+                  ? "Netpbm export writes comments and source max-value metadata in the file header."
         : format === "svg"
           ? "SVG export includes a compact app metadata block, not full IPTC/XMP/content-credential payloads."
           : "This format does not carry the app's export metadata fields.")
+    if (doc.metadata?.contentCredentials?.length) {
+      add("Content Credentials", "preserved", `${reportPlural(doc.metadata.contentCredentials.length, "local content credential")} are embedded as app XMP/metadata payloads; they are not C2PA-signed certificate chains.`)
+    }
   }
 
   if (format === "png") {
     if (options.interlaced) add("Interlaced PNG", "preserved", "The app writes Adam7 interlaced PNG scan passes with its typed-array PNG encoder.")
-    add("PNG color chunks", "unsupported", "PNG export does not author gAMA/cHRM/iCCP color chunks in this path.")
+    add("PNG color chunks", profile || doc.colorManagement ? "preserved" : "unsupported", profile || doc.colorManagement
+      ? "PNG export authors an iCCP profile chunk for the selected output profile."
+      : "PNG export does not author gAMA/cHRM/iCCP color chunks without an assigned output profile.")
   } else if (format === "jpeg") {
     if (options.progressive) add("Progressive JPEG", "preserved", "The app routes JPEG export through the MozJPEG progressive encoder.")
     if (options.transparent !== false) add("Alpha transparency", "flattened", "JPEG has no alpha channel; transparent pixels are composited against the selected matte.")
     add("JPEG quality", "approximated", `Requested quality ${Math.round(Number(options.quality ?? 92))}% is passed to the selected JPEG encoder; exact quantization remains encoder-defined.`)
   } else if (format === "tiff") {
-    add("TIFF encoder", "preserved", `Exports baseline RGBA TIFF strips with ${(options.tiffCompression ?? "none").toUpperCase()} compression.`)
-    add("TIFF metadata", "unsupported", "TIFF IPTC/XMP/EXIF directories are not authored by this export path.")
+    add("TIFF encoder", "preserved", doc.bitDepth > 8
+      ? `Exports typed-array RGBA TIFF strips at ${doc.bitDepth} bits per channel with ${(options.tiffCompression ?? "none").toUpperCase()} compression.`
+      : `Exports baseline RGBA TIFF strips with ${(options.tiffCompression ?? "none").toUpperCase()} compression.`)
+    add("TIFF metadata", metadataRequested ? "preserved" : "info", metadataRequested
+      ? "TIFF export writes ImageDescription, DateTime, Artist, Copyright, and XMP metadata tags."
+      : "Enable metadata to write TIFF ImageDescription, DateTime, Artist, Copyright, and XMP tags.")
   } else if (format === "webp") {
-    add("WebP encoder controls", "approximated", "Browser WebP exposes quality but not full lossless/near-lossless, metadata, or chunk-level controls.")
+    add("WebP encoder controls", "approximated", "Browser WebP exposes quality to the encoder; lossless, near-lossless, method, and exact-alpha intent are authored into the XMP encoder-control record for downstream tools.")
+    add("WebP metadata", metadataRequested ? "preserved" : "info", metadataRequested
+      ? "The app post-processes browser WebP bytes to add an XMP RIFF chunk and set the VP8X metadata flag when possible."
+      : "Enable metadata to post-process real browser WebP bytes with an XMP RIFF chunk.")
   } else if (format === "avif") {
-    add("AVIF encoder controls", "approximated", "Browser AVIF exposes limited quality intent and no native color/metadata authoring controls here.")
+    add("AVIF encoder controls", "approximated", "Browser AVIF exposes limited quality intent; lossless, speed, bit-depth, chroma, and tile intent are authored into the XMP encoder-control record for downstream tools.")
+    add("AVIF metadata", metadataRequested ? "preserved" : "info", metadataRequested
+      ? "The app appends an XMP UUID box to AVIF ISOBMFF output when the browser encoder returns AVIF bytes."
+      : "Enable metadata to append an XMP UUID metadata box to real browser AVIF bytes.")
   } else if (format === "gif") {
     add("GIF palette", "approximated", "GIF export quantizes to a 256-color indexed palette with limited transparency.")
     if (doc.timelineFrames?.length) add("Frame animation", "approximated", "Timeline frames can be converted to GIF frames, but advanced video/audio metadata is not retained.")
@@ -1978,10 +2427,16 @@ export function createExportLimitationReport(
       : "Enable metadata to include document dimensions and layer descriptors.")
   } else if (format === "tga") {
     add("TGA encoder", "preserved", options.tgaRle ? "Exports RLE-compressed 32-bit top-left TGA pixels with alpha." : "Exports uncompressed 32-bit top-left TGA pixels with alpha.")
-    add("TGA metadata", "unsupported", "TGA-specific extension areas and developer metadata are not authored.")
+    add("TGA metadata", metadataRequested ? "preserved" : "info", metadataRequested
+      ? "TGA export writes a 2.0 extension area and a developer-directory JSON metadata record."
+      : "Enable metadata to write a TGA 2.0 extension area and developer-directory metadata.")
   } else if (format === "ppm" || format === "pgm" || format === "pbm") {
-    add("Portable AnyMap encoder", "preserved", `${format.toUpperCase()} export writes binary browser-generated pixels in the matching Netpbm family format.`)
-    add("Portable AnyMap metadata", "unsupported", "Netpbm comments and original source max-value metadata are not embedded.")
+    add("Portable AnyMap encoder", "preserved", doc.bitDepth > 8 && format !== "pbm"
+      ? `${format.toUpperCase()} export writes binary high-bit typed-array samples in the matching Netpbm family format.`
+      : `${format.toUpperCase()} export writes binary browser-generated pixels in the matching Netpbm family format.`)
+    add("Portable AnyMap metadata", metadataRequested ? "preserved" : "info", metadataRequested
+      ? "Netpbm export writes comments and source max-value metadata in the header."
+      : "Enable metadata to write Netpbm comments and source max-value metadata.")
   } else if (format === "apng") {
     add("APNG encoder", "preserved", "Exports PNG/APNG chunks with RGBA frames and per-frame delays.")
     add("Frame animation", "preserved", doc.timelineFrames?.length
@@ -2019,11 +2474,31 @@ export function createExportCompatibilityManifest(
   if ((options.quality ?? 100) < 70 && ["jpeg", "webp", "avif"].includes(options.format)) {
     warnings.push(`${options.format.toUpperCase()} quality is below 70; visible compression artifacts are likely.`)
   }
-  if (options.includeMetadata && options.format !== "svg" && options.format !== "metadata-json" && options.format !== "png" && options.format !== "jpeg") {
+  if (
+    options.includeMetadata &&
+    options.format !== "svg" &&
+    options.format !== "metadata-json" &&
+    options.format !== "png" &&
+    options.format !== "jpeg" &&
+    options.format !== "tiff" &&
+    options.format !== "webp" &&
+    options.format !== "avif" &&
+    options.format !== "tga" &&
+    options.format !== "ppm" &&
+    options.format !== "pgm" &&
+    options.format !== "pbm"
+  ) {
     warnings.push(`${options.format.toUpperCase()} export does not embed the app's metadata fields.`)
   }
-  if (doc.colorMode !== "RGB" || doc.bitDepth > 8) {
+  const highBitPreservingExport = doc.bitDepth > 8 && (
+    options.format === "tiff" ||
+    options.format === "ppm" ||
+    options.format === "pgm"
+  )
+  if (doc.bitDepth > 8 && !highBitPreservingExport) {
     warnings.push(`${doc.colorMode}/${doc.bitDepth}-bit document intent is converted through an 8-bit browser canvas export path.`)
+  } else if (doc.colorMode !== "RGB") {
+    warnings.push(`${doc.colorMode} document intent is composited into RGB export pixels.`)
   }
   if (doc.layers.length > 1) {
     warnings.push(`${doc.layers.length} layers are flattened into a single exported output surface.`)
@@ -2100,6 +2575,38 @@ export function createDocumentReport(
   const layerMetadata = layers.filter((layer) => layer.metadata).length
   const exportPresets = (doc.assetLibrary ?? []).filter((asset) => asset.kind === "export").length
   items.push({ label: "Canvas", status: "preserved", detail: `${doc.width} x ${doc.height}px, ${doc.colorMode}, ${doc.bitDepth}-bit metadata retained.` })
+  if (doc.metadata?.largeDocumentInspection) {
+    const inspection = doc.metadata.largeDocumentInspection
+    items.push({
+      label: "Large document inspection",
+      status: "info",
+      detail: `${inspection.sourceName} parsed as ${inspection.originalWidth} x ${inspection.originalHeight}px; pixels were not opened for editing. ${inspection.reason}`,
+    })
+  }
+  if (doc.metadata?.largeDocumentTileView) {
+    const tileView = doc.metadata.largeDocumentTileView
+    items.push({
+      label: "Large document tile view",
+      status: "approximated",
+      detail: `${tileView.sourceName} is represented by a ${doc.width} x ${doc.height}px overview plus ${tileView.tileColumns} x ${tileView.tileRows} full-resolution tiles.`,
+    })
+  }
+  if (doc.metadata?.largeDocumentTileEdit) {
+    const tileEdit = doc.metadata.largeDocumentTileEdit
+    items.push({
+      label: "Large document tile edit",
+      status: "info",
+      detail: `Editing tile ${tileEdit.tile.col},${tileEdit.tile.row} from ${tileEdit.sourceName}; update the source tile to write changes back to the tile cache.`,
+    })
+  }
+  if (doc.metadata?.psdRepairPlan) {
+    const repair = doc.metadata.psdRepairPlan
+    items.push({
+      label: "PSD repair plan",
+      status: "info",
+      detail: `${repair.summary} ${repair.actions.slice(0, 3).map((action) => `${action.label} -> ${action.localRepresentation}`).join("; ")}`,
+    })
+  }
   if (source.includes("PSD") && (doc.bitDepth === 16 || doc.bitDepth === 32)) {
     items.push({
       label: "Bit depth",
@@ -2140,8 +2647,8 @@ export function createDocumentReport(
   if (doc.printSettings) items.push({ label: "Print settings", status: "preserved", detail: `${doc.printSettings.paperSize} print setup, marks, bleed, and color-handling metadata retained.` })
   items.push({ label: "Project schema", status: "info", detail: "Project saves use schema version 2 with migration-aware loading and recovery from wrapped JSON text." })
   items.push({ label: "Layers", status: "preserved", detail: `${layers.length} layer records retained with visibility, opacity, blend mode, and lock state.` })
-  if (textLayers) items.push({ label: "Text layers", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${textLayers} editable text layer${textLayers === 1 ? "" : "s"} round-trip through the native PSD text engine; extended properties (variable axes, OpenType features, on-path geometry) ride along as a "__pstext:<base64-json>__" suffix on the layer name and are stripped from the display name on import.` })
-  if (shapeLayers) items.push({ label: "Shape layers", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${shapeLayers} shape layer${shapeLayers === 1 ? "" : "s"} round-trip as vector masks with native fill/stroke descriptors; custom-shape parameters and per-subpath metadata are appended as "__psshape:<base64-json>__" and "__pspath:<kind>:<base64-json>__" name markers, hidden on display.` })
+  if (textLayers) items.push({ label: "Text layers", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${textLayers} editable text layer${textLayers === 1 ? "" : "s"} round-trip through the native PSD text engine; extended properties (variable axes, OpenType features, on-path geometry) are mirrored into the PSD XMP app-preservation payload, with layer-name markers retained only as a legacy fallback.` })
+  if (shapeLayers) items.push({ label: "Shape layers", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${shapeLayers} shape layer${shapeLayers === 1 ? "" : "s"} round-trip as vector masks with native fill/stroke descriptors; custom-shape parameters and per-subpath metadata are mirrored into the PSD XMP app-preservation payload, with name markers retained only as a fallback.` })
   if (groupLayers) items.push({ label: "Groups", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${groupLayers} group layer${groupLayers === 1 ? "" : "s"} retain child relationship metadata; PSD export maps folders natively.` })
   if (blendModes.length) items.push({ label: "Blend modes", status: source.includes("PSD") ? "approximated" : "preserved", detail: `Non-normal blend modes modeled for round trip: ${blendModes.join(", ")}.` })
   const threeDLayers = layers.filter((layer) => layer.kind === "3d").length
@@ -2149,16 +2656,18 @@ export function createDocumentReport(
   if (threeDLayers) items.push({ label: "3D layers", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${threeDLayers} browser-native 3D scene layer${threeDLayers === 1 ? "" : "s"} retained with mesh, material, light, and camera metadata.` })
   if (videoLayers) items.push({ label: "Video layers", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${videoLayers} video layer${videoLayers === 1 ? "" : "s"} retained with poster frame, timing, keyframe, and audio metadata.` })
   if (maskedLayers) items.push({ label: "Masks", status: "preserved", detail: `${maskedLayers} raster/vector mask entry${maskedLayers === 1 ? "" : "ies"} serialized.` })
-  if (layerNotes || layerMetadata) items.push({ label: "Layer notes and metadata", status: source.includes("PSD") ? "unsupported" : "preserved", detail: `${layerNotes} layer note${layerNotes === 1 ? "" : "s"} and ${layerMetadata} metadata-bearing layer${layerMetadata === 1 ? "" : "s"} retained as app-only searchable annotations, tags, and custom key/value fields.` })
+  if (layerNotes || layerMetadata) items.push({ label: "Layer notes and metadata", status: "preserved", detail: source.includes("PSD")
+    ? `${layerNotes} layer note${layerNotes === 1 ? "" : "s"} and ${layerMetadata} metadata-bearing layer${layerMetadata === 1 ? "" : "s"} restore in this app from the PSD XMP app-preservation payload; they are not Photoshop-native layer records.`
+    : `${layerNotes} layer note${layerNotes === 1 ? "" : "s"} and ${layerMetadata} metadata-bearing layer${layerMetadata === 1 ? "" : "s"} retained as app-only searchable annotations, tags, and custom key/value fields.` })
   if (styledLayers) items.push({ label: "Layer styles", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${styledLayers} styled layer${styledLayers === 1 ? "" : "s"} round-trip native PSD effects (shadow/glow/bevel/satin/overlays/stroke) with global-light tracking.` })
   if (adjustmentLayers) items.push({
     label: "Adjustment layers",
     status: source.includes("PSD") ? "approximated" : "preserved",
     detail: source.includes("PSD")
-      ? `${adjustmentLayers} non-destructive adjustment layer${adjustmentLayers === 1 ? "" : "s"} round-trip the current visual result; 16 types use native ag-psd descriptors. The 6 remaining types (shadows-highlights, hdr-toning, desaturate, match-color, replace-color, equalize) encode their params as a "__adj:<type>:<base64-json>__" suffix on the layer name, which is decoded back on import.`
+      ? `${adjustmentLayers} non-destructive adjustment layer${adjustmentLayers === 1 ? "" : "s"} round-trip the current visual result; 16 types use native ag-psd descriptors. The 6 remaining types (shadows-highlights, hdr-toning, desaturate, match-color, replace-color, equalize) preserve editable params in the PSD XMP app-preservation payload, with layer-name tokens retained as fallback.`
       : `${adjustmentLayers} non-destructive adjustment layer${adjustmentLayers === 1 ? "" : "s"} retained in project format.`,
   })
-  if (smartFilters) items.push({ label: "Smart filters", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${smartFilters} smart filter${smartFilters === 1 ? "" : "s"} bake their visual result into the layer's exported pixels; editable filter id, parameters, order, masks${smartFilterMasks ? ` (${smartFilterMasks} mask state${smartFilterMasks === 1 ? "" : "s"})` : ""}, opacity, blend mode, density, and feather survive only in the companion .psd-web project file, not the PSD bytes themselves.` })
+  if (smartFilters) items.push({ label: "Smart filters", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${smartFilters} smart filter${smartFilters === 1 ? "" : "s"} bake their visual result into the layer's exported pixels; editable filter id, parameters, order, masks${smartFilterMasks ? ` (${smartFilterMasks} mask state${smartFilterMasks === 1 ? "" : "s"})` : ""}, opacity, blend mode, density, and feather restore in this app from the PSD XMP app-preservation payload.` })
   if (smartObjectSources) items.push({ label: "Smart object sources", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${smartObjectSources} embedded smart source${smartObjectSources === 1 ? "" : "s"} round-trip via the native PSD placedLayer + linkedFiles array (PNG bytes, 30 MB cap), with app project preservation for relink metadata, export timestamps, and ${smartObjectEditPackages} edit package${smartObjectEditPackages === 1 ? "" : "s"}.` })
   if (smartObjectFileHandles) items.push({ label: "File System Access smart links", status: source.includes("PSD") ? "unsupported" : "preserved", detail: `${smartObjectFileHandles} linked smart object handle reference${smartObjectFileHandles === 1 ? "" : "s"} retain handle name, permission state, content hash, and modified time; live browser FileSystemFileHandle objects are intentionally not serialized.` })
   if (linkedSmartObjects) items.push({ label: "Linked smart objects", status: source.includes("PSD") ? "unsupported" : "info", detail: `${linkedSmartObjects} linked smart object reference${linkedSmartObjects === 1 ? "" : "s"} round-trip via the linkedFiles "linked" type; the source file is referenced by path rather than embedded.` })
@@ -2242,7 +2751,7 @@ export function canvasFromDataUrl(dataUrl: string | null | undefined, w: number,
 }
 
 async function deserializeLayer(serialized: Record<string, unknown>, docW: number, docH: number): Promise<Layer> {
-  const { canvasDataUrl, maskDataUrl, frame, smartFilters, smartSource, ...rest } = serialized
+  const { canvasDataUrl, maskDataUrl, frame, smartFilters, smartSource, highBitImageData, ...rest } = serialized
   const canvas = await canvasFromDataUrl(canvasDataUrl as string | undefined, docW, docH)
   const mask = maskDataUrl ? await canvasFromDataUrl(maskDataUrl as string, docW, docH) : null
   const restoredFrame = frame
@@ -2274,7 +2783,7 @@ async function deserializeLayer(serialized: Record<string, unknown>, docW: numbe
         canvasDataUrl: undefined,
       }
     : undefined
-  return {
+  const layer = {
     ...rest,
     id: cleanText(rest.id, uid("layer"), 80),
     name: cleanText(rest.name, "Layer"),
@@ -2290,6 +2799,11 @@ async function deserializeLayer(serialized: Record<string, unknown>, docW: numbe
     smartFilters: restoredSmartFilters,
     smartSource: restoredSmartSource,
   } as Layer
+  const highBit = deserializeHighBitImagePayload(highBitImageData)
+  if (highBit && highBit.width === layer.canvas.width && highBit.height === layer.canvas.height) {
+    ;(layer as HighBitLayer).__highBitImageData = highBit
+  }
+  return layer
 }
 
 export async function deserializeProject(text: string): Promise<PsDocument> {
@@ -2392,6 +2906,10 @@ export async function deserializeProject(text: string): Promise<PsDocument> {
   let bitDepth: PsDocument["bitDepth"] = 8
   if (rawBitDepth === 16 || rawBitDepth === "16") bitDepth = 16
   else if (rawBitDepth === 32 || rawBitDepth === "32") bitDepth = 32
+  const documentHighBit = deserializeHighBitImagePayload(source.highBitImageData)
+  const validatedDocumentHighBit = documentHighBit && documentHighBit.width === width && documentHighBit.height === height
+    ? documentHighBit
+    : undefined
 
   // Construct the result via an explicit allow-list. Every field is either
   // typed-and-validated (the dangerous ones — colors, anything that can
@@ -2411,6 +2929,7 @@ export async function deserializeProject(text: string): Promise<PsDocument> {
       ? source.colorMode
       : "RGB",
     bitDepth,
+    ...(validatedDocumentHighBit ? { __highBitImageData: validatedDocumentHighBit } : {}),
     selection: {
       bounds: selectionBounds,
       shape: selectionShape,
@@ -2483,6 +3002,61 @@ export async function deserializeProject(text: string): Promise<PsDocument> {
   } satisfies PsDocument
 }
 
+function psdColorToHex(color: unknown, fallback = "#ffffff") {
+  if (!color || typeof color !== "object") return fallback
+  const c = color as Record<string, unknown>
+  const toHex = (value: unknown) => {
+    const n = typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(255, Math.round(value))) : 255
+    return n.toString(16).padStart(2, "0")
+  }
+  return `#${toHex(c.r)}${toHex(c.g)}${toHex(c.b)}`
+}
+
+function psdArtboardToApp(artboard: PsdLayer["artboard"] | undefined): NonNullable<Layer["artboard"]> | undefined {
+  if (!artboard?.rect) return undefined
+  const left = Math.round(Number(artboard.rect.left) || 0)
+  const top = Math.round(Number(artboard.rect.top) || 0)
+  const right = Math.round(Number(artboard.rect.right) || left)
+  const bottom = Math.round(Number(artboard.rect.bottom) || top)
+  return {
+    x: left,
+    y: top,
+    w: Math.max(1, right - left),
+    h: Math.max(1, bottom - top),
+    background: psdColorToHex(artboard.color, artboard.backgroundType === 0 ? "transparent" : "#ffffff"),
+  }
+}
+
+function psdPixelSourceToVideo(layer: PsdLayer): NonNullable<Layer["video"]> | undefined {
+  const pixelSource = layer.pixelSource
+  if (!pixelSource) return undefined
+  const link = pixelSource.frameReader?.link
+  const sourceName = link?.name || link?.relativePath || link?.fullPath || layer.name || "PSD video source"
+  return {
+    sourceName,
+    durationMs: 0,
+    currentTimeMs: 0,
+    playbackRate: 1,
+    inPointMs: 0,
+    outPointMs: 0,
+    keyframes: [],
+  }
+}
+
+function appArtboardToPsd(layer: Layer): PsdLayer["artboard"] | undefined {
+  if (!layer.artboard) return undefined
+  return {
+    rect: {
+      top: layer.artboard.y,
+      left: layer.artboard.x,
+      bottom: layer.artboard.y + layer.artboard.h,
+      right: layer.artboard.x + layer.artboard.w,
+    },
+    backgroundType: layer.artboard.background === "transparent" ? 0 : 1,
+    color: parseHexColor(layer.artboard.background === "transparent" ? "#ffffff" : layer.artboard.background),
+  }
+}
+
 function flattenPsdChildren(children: PsdLayer[] | undefined, docW: number, docH: number, parentId?: string) {
   const layers: Layer[] = []
   const directIds: string[] = []
@@ -2493,10 +3067,11 @@ function flattenPsdChildren(children: PsdLayer[] | undefined, docW: number, docH
       const groupId = uid("group")
       const nested = flattenPsdChildren(child.children, docW, docH, groupId)
       layers.push(...nested.layers)
+      const artboard = psdArtboardToApp(child.artboard)
       const group: Layer = {
         id: groupId,
         name: cleanText(stripMarkers(child.name ?? "") || child.name, "Group", MAX_LAYER_NAME_LENGTH),
-        kind: "group",
+        kind: artboard ? "artboard" : "group",
         visible: !child.hidden,
         locked: !!child.protected?.composite,
         lockTransparency: !!(child.transparencyProtected || child.protected?.transparency),
@@ -2510,6 +3085,7 @@ function flattenPsdChildren(children: PsdLayer[] | undefined, docW: number, docH
         parentId,
         expanded: child.opened !== false,
         colorLabel: child.layerColor,
+        artboard,
       }
       const groupAdvancedBlending = psdToAppAdvancedBlending(child)
       if (groupAdvancedBlending) group.advancedBlending = groupAdvancedBlending
@@ -2529,15 +3105,21 @@ function flattenPsdChildren(children: PsdLayer[] | undefined, docW: number, docH
 
     const maskInfo = child.mask ? psdLayerMaskToApp(child.mask, docW, docH) : null
     const vectorMaskPath = child.vectorMask ? psdVectorMaskOnLayerToApp(child.vectorMask) : null
-    const layerKind: Layer["kind"] = adjustment
-      ? "adjustment"
-      : shape
-        ? "shape"
-        : text
-          ? "text"
-          : vectorMaskPath
+    const artboard = psdArtboardToApp(child.artboard)
+    const video = psdPixelSourceToVideo(child)
+    const layerKind: Layer["kind"] = artboard
+      ? "artboard"
+      : video
+        ? "video"
+        : adjustment
+          ? "adjustment"
+          : shape
             ? "shape"
-            : "raster"
+            : text
+              ? "text"
+              : vectorMaskPath
+                ? "shape"
+                : "raster"
 
     const layer: Layer = {
       id: layerId,
@@ -2560,6 +3142,8 @@ function flattenPsdChildren(children: PsdLayer[] | undefined, docW: number, docH
       shape: shape ?? undefined,
       vectorMask: vectorMaskPath ?? undefined,
       adjustment: adjustment ?? undefined,
+      artboard,
+      video,
       style: psdEffectsToLayerStyle(child.effects),
       colorLabel: child.layerColor,
     }
@@ -2579,7 +3163,7 @@ export async function deserializePsdFile(file: File, options: PsdDeserializeOpti
   const buffer = await file.arrayBuffer()
   const header = readPsdHeaderDimensions(buffer)
   if (
-    header?.version === 2 &&
+    header &&
     canvasSizeError(header.width || 1, header.height || 1, "PSD canvas") &&
     options.psbLargeDocumentMode &&
     options.psbLargeDocumentMode !== "full"
@@ -2604,6 +3188,8 @@ export async function deserializePsdFile(file: File, options: PsdDeserializeOpti
     skipThumbnail: true,
     useImageData: false,
   })
+  const repairPlan = createPsdRepairPlanFromParsedPsd(psd)
+  const appPreservationPayload = extractPsdAppPreservationFromXmp(psd.imageResources?.xmpMetadata)
   const flattened = flattenPsdChildren(psd.children, width, height)
   const layers = flattened.layers.length
     ? flattened.layers
@@ -2662,6 +3248,19 @@ export async function deserializePsdFile(file: File, options: PsdDeserializeOpti
   const docDpi = psdResolutionToApp(psd.imageResources?.resolutionInfo)
   const alphaChannels = await psdAlphaChannelsToApp(psd, width, height)
   const storedPaths = psdResourceToAppPaths(psd)
+  const nativeSourceSnapshot = createPsdNativeSourceSnapshot(buffer, file.name, {
+    format: header?.version === 2 ? "psb" : "psd",
+    width,
+    height,
+    colorMode: colorModeResult.colorMode,
+    bitDepth,
+  })
+  const mergedMetadata = hasMeaningfulMetadata(docMetadata) || nativeSourceSnapshot
+    ? {
+        ...(hasMeaningfulMetadata(docMetadata) ? docMetadata : {}),
+        ...(nativeSourceSnapshot ? { psdNativeSource: nativeSourceSnapshot } : {}),
+      }
+    : undefined
 
   const activeLayerId = [...layers].reverse().find((layer) => layer.kind !== "group")?.id ?? layers[layers.length - 1].id
   const doc: PsDocument = {
@@ -2699,7 +3298,7 @@ export async function deserializePsdFile(file: File, options: PsdDeserializeOpti
     notes: docNotes.length ? docNotes : undefined,
     channels: alphaChannels.length ? alphaChannels : undefined,
     comps: docComps.length ? docComps : undefined,
-    metadata: hasMeaningfulMetadata(docMetadata) ? docMetadata : undefined,
+    metadata: mergedMetadata,
     printSettings: docPrint,
     dpi: docDpi,
   }
@@ -2723,6 +3322,23 @@ export async function deserializePsdFile(file: File, options: PsdDeserializeOpti
       proofColors: false,
       gamutWarning: false,
     } satisfies ColorMgmt
+  }
+  if (repairPlan.actions.length) {
+    doc.metadata = {
+      ...(doc.metadata ?? {}),
+      psdRepairPlan: {
+        summary: repairPlan.summary,
+        actions: repairPlan.actions.map((action) => ({
+          label: action.label,
+          status: action.status,
+          localRepresentation: action.localRepresentation,
+          detail: action.detail,
+        })),
+      },
+    }
+  }
+  if (appPreservationPayload) {
+    await applyPsdAppPreservationPayload(doc, appPreservationPayload)
   }
   if (storedPaths.length) {
     const pathLayers = storedPaths.map((entry) => ({
@@ -2838,12 +3454,30 @@ async function registerPsbCompositeTiles(docId: string, pixelData: PixelData | u
 
 async function deserializeOversizedPsb(buffer: ArrayBuffer, file: File, mode: Exclude<PsbLargeDocumentMode, "full">): Promise<PsDocument> {
   const header = readPsdHeaderDimensions(buffer)
-  if (!header) throw new Error("PSB header could not be read")
+  if (!header) throw new Error("Photoshop document header could not be read")
   const plan = planPsbLargeDocumentOpen({ width: header.width, height: header.height, fileName: file.name })
-  const scale = mode === "downscale-50" ? 0.5 : plan.tileView.overviewScale
-  const width = mode === "downscale-50" ? plan.downscale50.width : plan.tileView.overviewWidth
-  const height = mode === "downscale-50" ? plan.downscale50.height : plan.tileView.overviewHeight
-  const sizeError = canvasSizeError(width, height, mode === "downscale-50" ? "50% PSB canvas" : "PSB tile overview")
+  const reducedPlan = planLargeDocumentOpen({
+    fileName: file.name,
+    kind: header.version === 2 ? "psb" : "psd",
+    width: header.width,
+    height: header.height,
+  })
+  const scale = mode === "downscale-50"
+    ? 0.5
+    : mode === "reduced-scale"
+      ? reducedPlan.reducedScale.scale
+      : plan.tileView.overviewScale
+  const width = mode === "downscale-50"
+    ? plan.downscale50.width
+    : mode === "reduced-scale"
+      ? reducedPlan.reducedScale.width
+      : plan.tileView.overviewWidth
+  const height = mode === "downscale-50"
+    ? plan.downscale50.height
+    : mode === "reduced-scale"
+      ? reducedPlan.reducedScale.height
+      : plan.tileView.overviewHeight
+  const sizeError = canvasSizeError(width, height, mode === "tile-view" ? "PSB tile overview" : "Reduced PSB canvas")
   if (sizeError) throw new Error(sizeError)
   const { readPsd } = await loadPsdCodec()
   const psd = readPsd(buffer, {
@@ -2851,12 +3485,12 @@ async function deserializeOversizedPsb(buffer: ArrayBuffer, file: File, mode: Ex
     skipCompositeImageData: false,
     skipThumbnail: true,
     useImageData: true,
-    }) as Psd
+  }) as Psd
   const canvas = pixelDataToScaledCanvas(psd.imageData, header.width, header.height, width, height)
   const docId = uid("doc")
   const layer: Layer = {
     id: uid("layer"),
-    name: mode === "downscale-50" ? "50% PSB composite" : "PSB tile overview",
+    name: mode === "tile-view" ? "Tile overview" : mode === "downscale-50" ? "50% composite" : "Reduced composite",
     kind: "raster",
     visible: true,
     locked: false,
@@ -2865,7 +3499,7 @@ async function deserializeOversizedPsb(buffer: ArrayBuffer, file: File, mode: Ex
     canvas,
     metadata: {
       description: `Source: ${file.name}`,
-      tags: ["psb", mode],
+      tags: [header.version === 2 ? "psb" : "psd", mode],
       custom: {
         originalWidth: header.width,
         originalHeight: header.height,
@@ -2879,7 +3513,7 @@ async function deserializeOversizedPsb(buffer: ArrayBuffer, file: File, mode: Ex
   if (mode === "tile-view") await registerPsbCompositeTiles(docId, psd.imageData, header.width, header.height, plan)
   return {
     id: docId,
-    name: file.name.replace(/\.psb$/i, mode === "downscale-50" ? " (50%)" : " (Tile Overview)"),
+    name: file.name.replace(/\.(?:psd|psb)$/i, mode === "tile-view" ? " (Tile Overview)" : mode === "downscale-50" ? " (50%)" : " (Reduced)"),
     width,
     height,
     zoom: 1,
@@ -2892,9 +3526,9 @@ async function deserializeOversizedPsb(buffer: ArrayBuffer, file: File, mode: Ex
     selection: { bounds: null, shape: "rect" },
     metadata: {
       title: file.name,
-      description: mode === "downscale-50"
-        ? `Opened oversized PSB at 50% scale from ${header.width} x ${header.height} px.`
-        : `Opened oversized PSB tile overview from ${header.width} x ${header.height} px using ${plan.tileView.tileColumns} x ${plan.tileView.tileRows} tiles.`,
+      description: mode !== "tile-view"
+        ? `Opened oversized Photoshop document at ${(scale * 100).toFixed(1)}% scale from ${header.width} x ${header.height} px.`
+        : `Opened oversized Photoshop document tile overview from ${header.width} x ${header.height} px using ${plan.tileView.tileColumns} x ${plan.tileView.tileRows} tiles.`,
       source: file.name,
       createdAt: new Date().toISOString(),
       largeDocumentTileView: mode === "tile-view" ? {
@@ -2951,7 +3585,11 @@ function hasMeaningfulMetadata(m: ReturnType<typeof psdMetadataToApp>): boolean 
   return false
 }
 
-function psdChildrenFromLayers(doc: PsDocument, parentId?: string): PsdLayer[] {
+function psdChildrenFromLayers(
+  doc: PsDocument,
+  parentId?: string,
+  linkedFiles?: NonNullable<Psd["linkedFiles"]>,
+): PsdLayer[] {
   const direct = doc.layers.filter((layer) => layer.parentId === parentId)
   return [...direct].reverse().map((layer): PsdLayer => {
     const protectedState = {
@@ -2971,11 +3609,12 @@ function psdChildrenFromLayers(doc: PsDocument, parentId?: string): PsdLayer[] {
     )
 
     const layerName = (adjustmentExtras as { name?: string }).name ?? layer.name
+    const groupLike = layer.kind === "group" || layer.kind === "artboard"
     const base: PsdLayer = {
       name: layerName,
       hidden: !layer.visible,
       opacity: layer.opacity,
-      blendMode: appBlendToPsd(layer.kind === "group" ? "normal" : layer.blendMode),
+      blendMode: appBlendToPsd(groupLike ? "normal" : layer.blendMode),
       layerColor: (layer.colorLabel ?? "none") as LayerColor,
       transparencyProtected: !!layer.lockTransparency,
       protected: protectedState,
@@ -2983,12 +3622,13 @@ function psdChildrenFromLayers(doc: PsDocument, parentId?: string): PsdLayer[] {
       linkGroup: layer.linkGroupId ? Number.parseInt(layer.linkGroupId, 10) || undefined : undefined,
       effects: layerStyleToPsdEffects(layer.style, doc.globalLight),
     }
-    if (layer.kind === "group") {
+    if (groupLike) {
       return {
         ...base,
         ...advancedBlendExtras,
+        artboard: appArtboardToPsd(layer),
         opened: layer.expanded !== false,
-        children: psdChildrenFromLayers(doc, layer.id),
+        children: psdChildrenFromLayers(doc, layer.id, linkedFiles),
       }
     }
 
@@ -3028,6 +3668,14 @@ function psdChildrenFromLayers(doc: PsDocument, parentId?: string): PsdLayer[] {
     if (smartObjectExtras?.placedLayer) {
       ;(out as PsdLayer & { placedLayer?: unknown }).placedLayer = smartObjectExtras.placedLayer
     }
+    if (smartObjectExtras?.linkedFile) linkedFiles?.push(smartObjectExtras.linkedFile)
+    if (smartFilterExtras?.nativeFilter) {
+      const placed = (out as PsdLayer & { placedLayer?: { filter?: unknown } }).placedLayer
+      if (placed) placed.filter = smartFilterExtras.nativeFilter
+    }
+    if (smartFilterExtras?.filterEffectsMasks) {
+      ;(out as PsdLayer).filterEffectsMasks = smartFilterExtras.filterEffectsMasks
+    }
     if (Object.keys(additionalLayerInfo).length) {
       ;(out as PsdLayer & { additionalLayerInfo?: Record<string, unknown> }).additionalLayerInfo = additionalLayerInfo
     }
@@ -3035,10 +3683,21 @@ function psdChildrenFromLayers(doc: PsDocument, parentId?: string): PsdLayer[] {
   })
 }
 
-export async function serializePsd(doc: PsDocument, options: { psb?: boolean } = {}): Promise<Blob> {
+export interface PsdSerializeOptions {
+  psb?: boolean
+  preserveNativeSource?: boolean
+}
+
+export async function serializePsd(doc: PsDocument, options: PsdSerializeOptions = {}): Promise<Blob> {
+  if (options.preserveNativeSource) {
+    const sourceBytes = restorePsdNativeSourceSnapshot(doc.metadata?.psdNativeSource)
+    if (sourceBytes) return new Blob([sourceBytes], { type: "image/vnd.adobe.photoshop" })
+  }
+
   const colorModeExport = appColorModeToPsd(doc)
   const bitsPerChannel = appBitDepthToPsd(doc)
-  const children = psdChildrenFromLayers(doc)
+  const linkedFiles: NonNullable<Psd["linkedFiles"]> = []
+  const children = psdChildrenFromLayers(doc, undefined, linkedFiles)
 
   // Prepend the saved-alpha-channel marker group so per-channel pixel
   // data survives a vanilla ag-psd write/read cycle (ag-psd does not
@@ -3051,6 +3710,10 @@ export async function serializePsd(doc: PsDocument, options: { psb?: boolean } =
   const slices = appSlicesToPsd(doc.slices, doc.width, doc.height)
   const layerComps = appLayerCompsToPsd(doc.comps)
   const metadataResources = appMetadataToPsdResources(doc.metadata)
+  const appPreservation = createPsdAppPreservationPayload(doc)
+  const xmpMetadata = appPreservation.layers.length
+    ? embedPsdAppPreservationInXmp(metadataResources.xmpMetadata, appPreservation)
+    : metadataResources.xmpMetadata
   const printResources = appPrintSettingsToPsdResources(doc.printSettings)
   const resolutionInfo = appResolutionToPsd(doc)
   const globalLightResources = appGlobalLightToPsdResources(doc.globalLight)
@@ -3063,7 +3726,7 @@ export async function serializePsd(doc: PsDocument, options: { psb?: boolean } =
     ...(alphaChannelInfo.channelNames?.length
       ? { alphaChannelNames: alphaChannelInfo.channelNames }
       : {}),
-    ...(metadataResources.xmpMetadata ? { xmpMetadata: metadataResources.xmpMetadata } : {}),
+    ...(xmpMetadata ? { xmpMetadata } : {}),
     ...(globalLightResources ?? {}),
     ...(printResources ?? {}),
     ...(slices ? { slices } : {}),
@@ -3075,15 +3738,36 @@ export async function serializePsd(doc: PsDocument, options: { psb?: boolean } =
   // 0x07D0+ path image resources directly through `imageResources`.
   const pathMarkerName = documentPathResources?.markerName
 
+  if (bitsPerChannel !== 8 || doc.colorMode !== "RGB") {
+    const highBit = getHighBitExportImage(doc, { transparent: true })
+    const composite = highBit
+      ? highBit
+      : createHighBitImageFromImageData(
+          canvasImageData(renderDocumentComposite(doc, { transparent: true })),
+          {
+            bitDepth: bitsPerChannel === 1 ? 8 : bitsPerChannel,
+            colorMode: doc.colorMode,
+            profile: doc.colorManagement?.assignedProfile,
+          },
+        )
+    const buffer = writeNativeCompositePsd(doc, composite, {
+      psb: options.psb,
+      xmpMetadata,
+      colorModeData: colorModeExport.colorModeData,
+    })
+    return new Blob([buffer], { type: "image/vnd.adobe.photoshop" })
+  }
+
   const psd: Psd = {
     width: doc.width,
     height: doc.height,
-    channels: doc.colorMode === "CMYK" ? 4 : doc.colorMode === "Grayscale" ? 2 : 4,
+    channels: 4,
     bitsPerChannel,
     colorMode: colorModeExport.colorMode,
     canvas: renderDocumentComposite(doc, { transparent: true }),
     children,
     imageResources,
+    ...(linkedFiles.length ? { linkedFiles } : {}),
     ...(annotations.length ? { annotations } : {}),
     ...(pathMarkerName ? { name: pathMarkerName } : {}),
   }
@@ -3120,6 +3804,90 @@ export async function loadImageFromFile(file: File): Promise<HTMLImageElement> {
       try {
         assertCanvasSize(img.naturalWidth, img.naturalHeight, "Image canvas")
         resolve(img)
+      } catch (error) {
+        reject(error)
+      } finally {
+        URL.revokeObjectURL(url)
+      }
+    }
+    img.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error(`Could not load ${file.name}`))
+    }
+    img.src = url
+  })
+}
+
+export async function loadRasterCanvasFromFile(file: File, options: LoadRasterCanvasOptions = {}): Promise<LoadedRasterCanvas> {
+  assertFileSize(file, MAX_RASTER_FILE_BYTES, "Image file")
+  const mode = options.mode ?? "full"
+  const header = await inspectImportFileDimensions(file)
+  if (mode === "full" && header?.kind === "raster") {
+    assertCanvasSize(header.width, header.height, "Image canvas")
+  }
+
+  return new Promise<LoadedRasterCanvas>((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+    img.onload = () => {
+      try {
+        const originalWidth = Math.max(1, Math.round(img.naturalWidth || header?.width || 1))
+        const originalHeight = Math.max(1, Math.round(img.naturalHeight || header?.height || 1))
+        const fullError = canvasSizeError(originalWidth, originalHeight, "Image canvas")
+        const plan = planLargeDocumentOpen({
+          fileName: file.name,
+          kind: "raster",
+          width: originalWidth,
+          height: originalHeight,
+          memoryBudgetMB: options.memoryBudgetMB,
+          tileable: false,
+        })
+
+        if (mode === "full") {
+          if (fullError) throw new Error(fullError)
+          const canvas = makeIoCanvas(originalWidth, originalHeight)
+          canvas.getContext("2d")!.drawImage(img, 0, 0)
+          resolve({
+            canvas,
+            originalWidth,
+            originalHeight,
+            scale: 1,
+            mode: "full",
+            warnings: [],
+          })
+          return
+        }
+
+        if (!fullError) {
+          const canvas = makeIoCanvas(originalWidth, originalHeight)
+          canvas.getContext("2d")!.drawImage(img, 0, 0)
+          resolve({
+            canvas,
+            originalWidth,
+            originalHeight,
+            scale: 1,
+            mode: "full",
+            warnings: [],
+          })
+          return
+        }
+
+        if (!plan.reducedScale.editable) {
+          throw new Error(plan.inspection.reason)
+        }
+        const canvas = makeIoCanvas(plan.reducedScale.width, plan.reducedScale.height)
+        const ctx = canvas.getContext("2d")!
+        ctx.imageSmoothingEnabled = true
+        ctx.imageSmoothingQuality = "high"
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+        resolve({
+          canvas,
+          originalWidth,
+          originalHeight,
+          scale: plan.reducedScale.scale,
+          mode: "reduced-scale",
+          warnings: plan.warnings,
+        })
       } catch (error) {
         reject(error)
       } finally {

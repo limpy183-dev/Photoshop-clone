@@ -23,6 +23,164 @@ export function smartObjectStatus(layer: Pick<Layer, "smartObject" | "kind" | "s
   return layer.smartSource.linkType === "embedded" ? "embedded" : "current"
 }
 
+export interface LinkedSmartObjectFileSnapshot {
+  name?: string
+  size?: number
+  lastModified?: number
+  sourceHash?: string
+}
+
+export interface LinkedSmartObjectSyncPlan {
+  changed: boolean
+  status: NonNullable<SmartObjectSource["status"]>
+  reason: "not-linked" | "missing-handle" | "metadata-changed" | "hash-changed" | "unchanged"
+}
+
+export interface LinkedSmartObjectSyncOptions {
+  hashContents?: boolean
+  readCanvas?: (file: File) => Promise<HTMLCanvasElement>
+}
+
+export interface LinkedSmartObjectSyncResult {
+  layer: Layer
+  changed: boolean
+  status: NonNullable<SmartObjectSource["status"]>
+  file?: File
+  sourceHash?: string
+}
+
+export function planLinkedSmartObjectSync(
+  layer: Pick<Layer, "smartObject" | "kind" | "smartSource">,
+  snapshot: LinkedSmartObjectFileSnapshot | null | undefined,
+): LinkedSmartObjectSyncPlan {
+  const source = layer.smartSource
+  if ((!layer.smartObject && layer.kind !== "smart-object") || source?.linkType !== "linked") {
+    return { changed: false, status: smartObjectStatus(layer), reason: "not-linked" }
+  }
+  if (!snapshot) return { changed: true, status: "missing", reason: "missing-handle" }
+  const metadataChanged =
+    (typeof snapshot.lastModified === "number" && source.lastKnownModified !== snapshot.lastModified) ||
+    (typeof snapshot.size === "number" && source.lastKnownSize !== snapshot.size) ||
+    (typeof snapshot.name === "string" && source.fileHandleName && source.fileHandleName !== snapshot.name)
+  if (snapshot.sourceHash && source.sourceHash && snapshot.sourceHash !== source.sourceHash) {
+    return { changed: true, status: "modified", reason: "hash-changed" }
+  }
+  if (metadataChanged) return { changed: true, status: "modified", reason: "metadata-changed" }
+  return { changed: false, status: "current", reason: "unchanged" }
+}
+
+async function hashFileFnv1a32(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  let hash = 0x811c9dc5
+  for (const byte of bytes) hash = Math.imul(hash ^ byte, 0x01000193) >>> 0
+  return `fnv1a32:${hash.toString(16).padStart(8, "0")}`
+}
+
+export async function syncLinkedSmartObjectSource(
+  layer: Layer,
+  options: LinkedSmartObjectSyncOptions = {},
+): Promise<LinkedSmartObjectSyncResult> {
+  const source = layer.smartSource
+  const handle = source?.fileHandle
+  if ((!layer.smartObject && layer.kind !== "smart-object") || source?.linkType !== "linked" || !handle) {
+    const next = source ? markSmartObjectLinked(layer, { status: "missing" }) : layer
+    return { layer: next, changed: false, status: "missing" }
+  }
+
+  const permissionHandle = handle as FileSystemFileHandle & { queryPermission?: () => Promise<PermissionState> }
+  const permission = typeof permissionHandle.queryPermission === "function"
+    ? await permissionHandle.queryPermission()
+    : "granted"
+  if (permission === "denied") {
+    const next = markSmartObjectLinked(layer, { status: "missing", handlePermission: permission })
+    return { layer: next, changed: true, status: "missing" }
+  }
+
+  const file = await handle.getFile()
+  const sourceHash = options.hashContents ? await hashFileFnv1a32(file) : source.sourceHash
+  const plan = planLinkedSmartObjectSync(layer, {
+    name: file.name,
+    size: file.size,
+    lastModified: file.lastModified,
+    sourceHash,
+  })
+
+  if (plan.changed && options.readCanvas) {
+    const sourceCanvas = await options.readCanvas(file)
+    const next = replaceSmartObjectContents(layer, sourceCanvas, {
+      ...source,
+      fileName: file.name,
+      fileHandle: handle,
+      fileHandleName: handle.name ?? file.name,
+      handlePermission: permission,
+      lastKnownModified: file.lastModified,
+      lastKnownSize: file.size,
+      sourceHash,
+      status: "current",
+      linkType: "linked",
+      relinkedAt: Date.now(),
+    })
+    return { layer: next, changed: true, status: "current", file, sourceHash }
+  }
+
+  const status = plan.changed ? "modified" : "current"
+  const next = markSmartObjectLinked(layer, {
+    fileName: source.fileName ?? file.name,
+    fileHandle: handle,
+    fileHandleName: handle.name ?? file.name,
+    handlePermission: permission,
+    lastKnownModified: file.lastModified,
+    lastKnownSize: file.size,
+    sourceHash,
+    status,
+  })
+  return { layer: next, changed: plan.changed, status, file, sourceHash }
+}
+
+export interface LinkedSmartObjectSyncTarget {
+  docId: string
+  layer: Layer
+}
+
+export interface LinkedSmartObjectSyncEvent extends LinkedSmartObjectSyncResult {
+  docId: string
+}
+
+export interface LinkedSmartObjectSyncDaemonOptions {
+  intervalMs: number
+  getTargets: () => LinkedSmartObjectSyncTarget[]
+  onSync: (event: LinkedSmartObjectSyncEvent) => void
+  syncOptions?: LinkedSmartObjectSyncOptions
+  setIntervalFn?: (callback: () => void | Promise<void>, intervalMs: number) => ReturnType<typeof setInterval>
+  clearIntervalFn?: (handle: ReturnType<typeof setInterval>) => void
+}
+
+export function createLinkedSmartObjectSyncDaemon(options: LinkedSmartObjectSyncDaemonOptions) {
+  let timer: ReturnType<typeof setInterval> | null = null
+  const setIntervalFn = options.setIntervalFn ?? setInterval
+  const clearIntervalFn = options.clearIntervalFn ?? clearInterval
+
+  const syncNow = async () => {
+    for (const target of options.getTargets()) {
+      const result = await syncLinkedSmartObjectSource(target.layer, options.syncOptions)
+      options.onSync({ ...result, docId: target.docId })
+    }
+  }
+
+  return {
+    start() {
+      if (timer) return
+      timer = setIntervalFn(() => { void syncNow() }, options.intervalMs)
+    },
+    stop() {
+      if (!timer) return
+      clearIntervalFn(timer)
+      timer = null
+    },
+    syncNow,
+  }
+}
+
 export function createSmartObjectSource(
   canvas: HTMLCanvasElement,
   options: Partial<SmartObjectSource> = {},
@@ -40,6 +198,7 @@ export function createSmartObjectSource(
     fileHandleName: options.fileHandleName,
     handlePermission: options.handlePermission,
     lastKnownModified: options.lastKnownModified,
+    lastKnownSize: options.lastKnownSize,
     sourceHash: options.sourceHash,
     editPackage: options.editPackage,
     exportedAt: options.exportedAt,
@@ -100,6 +259,7 @@ export function markSmartObjectLinked(
       fileHandleName: options.fileHandleName ?? layer.smartSource?.fileHandleName,
       handlePermission: options.handlePermission ?? layer.smartSource?.handlePermission,
       lastKnownModified: options.lastKnownModified ?? layer.smartSource?.lastKnownModified,
+      lastKnownSize: options.lastKnownSize ?? layer.smartSource?.lastKnownSize,
       sourceHash: options.sourceHash ?? layer.smartSource?.sourceHash,
       editPackage: options.editPackage ?? layer.smartSource?.editPackage,
       exportedAt: options.exportedAt ?? layer.smartSource?.exportedAt,

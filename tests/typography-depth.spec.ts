@@ -6,16 +6,27 @@ import {
   buildFontSubstitutionComparison,
   buildOpenTypeFeatureSettings,
   buildTypographyRenderPlan,
+  buildFindReplaceHighlights,
+  buildTextPathHandleModel,
+  buildVariableFontAxisControlModel,
+  createEmbeddedFontFromBuffer,
   convertTextToEditablePath,
   createTextExtrusionScene,
+  deleteTextPathPoint,
   diagnoseDocumentFonts,
+  detectOpenTypeFeatureSupport,
+  insertTextPathPoint,
+  matchFontFromImageData,
+  parseOpenTypeFontMetadata,
   parseVariableFontMetadata,
   layoutTextOnPath,
   listOpenTypeFeatureToggles,
   findReplaceTextLayers,
   matchFontForLayer,
   normalizeVariableAxes,
+  reverseTextPath,
   resolveFontSubstitutions,
+  updateTextPathPoint,
 } from "../components/photoshop/typography-engine"
 import type { Layer, ShapeProps, TextProps } from "../components/photoshop/types"
 import { installFixtureDom } from "./photoshop-fixtures"
@@ -153,6 +164,150 @@ function buildVariationFixtureFont() {
   return sfnt.buffer
 }
 
+function align4(length: number) {
+  return (length + 3) & ~3
+}
+
+function tableRecord(tag: string, data: Uint8Array) {
+  return { tag, data }
+}
+
+function buildOutlineFixtureFont() {
+  const head = new Uint8Array(54)
+  const headView = new DataView(head.buffer)
+  writeUint32(headView, 0, 0x00010000)
+  writeUint32(headView, 4, 0x00010000)
+  writeUint16(headView, 18, 1000)
+  writeInt16(headView, 36, 0)
+  writeInt16(headView, 38, 0)
+  writeInt16(headView, 40, 700)
+  writeInt16(headView, 42, 700)
+  writeUint16(headView, 50, 0)
+
+  const hhea = new Uint8Array(36)
+  const hheaView = new DataView(hhea.buffer)
+  writeUint32(hheaView, 0, 0x00010000)
+  writeInt16(hheaView, 4, 800)
+  writeInt16(hheaView, 6, -200)
+  writeUint16(hheaView, 34, 2)
+
+  const maxp = new Uint8Array(6)
+  const maxpView = new DataView(maxp.buffer)
+  writeUint32(maxpView, 0, 0x00010000)
+  writeUint16(maxpView, 4, 2)
+
+  const hmtx = new Uint8Array(8)
+  const hmtxView = new DataView(hmtx.buffer)
+  writeUint16(hmtxView, 0, 500)
+  writeInt16(hmtxView, 2, 0)
+  writeUint16(hmtxView, 4, 700)
+  writeInt16(hmtxView, 6, 0)
+
+  const glyphA = new Uint8Array(30)
+  const glyphView = new DataView(glyphA.buffer)
+  writeInt16(glyphView, 0, 1)
+  writeInt16(glyphView, 2, 0)
+  writeInt16(glyphView, 4, 0)
+  writeInt16(glyphView, 6, 700)
+  writeInt16(glyphView, 8, 700)
+  writeUint16(glyphView, 10, 2)
+  writeUint16(glyphView, 12, 0)
+  glyphA.set([1, 1, 1], 14)
+  writeInt16(glyphView, 17, 0)
+  writeInt16(glyphView, 19, 700)
+  writeInt16(glyphView, 21, -350)
+  writeInt16(glyphView, 23, 0)
+  writeInt16(glyphView, 25, 0)
+  writeInt16(glyphView, 27, 700)
+
+  const glyf = glyphA
+  const loca = new Uint8Array(6)
+  const locaView = new DataView(loca.buffer)
+  writeUint16(locaView, 0, 0)
+  writeUint16(locaView, 2, 0)
+  writeUint16(locaView, 4, glyphA.length / 2)
+
+  const cmapSubtable = new Uint8Array(32)
+  const cmapSubView = new DataView(cmapSubtable.buffer)
+  writeUint16(cmapSubView, 0, 4)
+  writeUint16(cmapSubView, 2, 32)
+  writeUint16(cmapSubView, 6, 4)
+  writeUint16(cmapSubView, 8, 4)
+  writeUint16(cmapSubView, 10, 1)
+  writeUint16(cmapSubView, 14, 65)
+  writeUint16(cmapSubView, 16, 0xffff)
+  writeUint16(cmapSubView, 20, 65)
+  writeUint16(cmapSubView, 22, 0xffff)
+  writeUint16(cmapSubView, 24, 0xffc0)
+  writeUint16(cmapSubView, 26, 1)
+
+  const cmap = new Uint8Array(12 + cmapSubtable.length)
+  const cmapView = new DataView(cmap.buffer)
+  writeUint16(cmapView, 2, 1)
+  writeUint16(cmapView, 4, 3)
+  writeUint16(cmapView, 6, 1)
+  writeUint32(cmapView, 8, 12)
+  cmap.set(cmapSubtable, 12)
+
+  const scriptList = new Uint8Array([0, 0])
+  const featureList = new Uint8Array(22)
+  const featureView = new DataView(featureList.buffer)
+  writeUint16(featureView, 0, 2)
+  writeTag(featureList, 2, "liga")
+  writeUint16(featureView, 6, 14)
+  writeTag(featureList, 8, "smcp")
+  writeUint16(featureView, 12, 18)
+  const gsub = new Uint8Array(10 + scriptList.length + featureList.length + 2)
+  const gsubView = new DataView(gsub.buffer)
+  writeUint16(gsubView, 0, 1)
+  writeUint16(gsubView, 4, 10)
+  writeUint16(gsubView, 6, 12)
+  writeUint16(gsubView, 8, 34)
+  gsub.set(scriptList, 10)
+  gsub.set(featureList, 12)
+
+  const tables = [
+    tableRecord("head", head),
+    tableRecord("hhea", hhea),
+    tableRecord("maxp", maxp),
+    tableRecord("hmtx", hmtx),
+    tableRecord("loca", loca),
+    tableRecord("glyf", glyf),
+    tableRecord("cmap", cmap),
+    tableRecord("GSUB", gsub),
+  ]
+  const directoryLength = 12 + tables.length * 16
+  let offset = directoryLength
+  const total = directoryLength + tables.reduce((sum, table) => sum + align4(table.data.length), 0)
+  const sfnt = new Uint8Array(total)
+  const view = new DataView(sfnt.buffer)
+  writeUint32(view, 0, 0x00010000)
+  writeUint16(view, 4, tables.length)
+  tables.forEach((table, index) => {
+    const record = 12 + index * 16
+    writeTag(sfnt, record, table.tag)
+    writeUint32(view, record + 8, offset)
+    writeUint32(view, record + 12, table.data.length)
+    sfnt.set(table.data, offset)
+    offset += align4(table.data.length)
+  })
+  return sfnt.buffer
+}
+
+function blackRectImageData(width: number, height: number, rect: { x: number; y: number; w: number; h: number }) {
+  const image = new ImageData(width, height)
+  for (let y = rect.y; y < rect.y + rect.h; y++) {
+    for (let x = rect.x; x < rect.x + rect.w; x++) {
+      const index = (y * width + x) * 4
+      image.data[index] = 8
+      image.data[index + 1] = 8
+      image.data[index + 2] = 8
+      image.data[index + 3] = 255
+    }
+  }
+  return image
+}
+
 test("variable font axes are normalized and reflected in render plans", () => {
   const axes = normalizeVariableAxes({ wght: 980, wdth: 20, slnt: -8 }, [
     { tag: "wght", name: "Weight", min: 100, max: 900, defaultValue: 400 },
@@ -164,6 +319,38 @@ test("variable font axes are normalized and reflected in render plans", () => {
   expect(axes).toEqual({ wght: 900, wdth: 75, opsz: 14 })
   expect(plan.fontVariationSettings).toContain('"wght" 900')
   expect(plan.renderHints.contrast).toBeGreaterThan(1)
+})
+
+test("variable font axis controls merge discovered axes, active custom axes, and named instances", () => {
+  const model = buildVariableFontAxisControlModel(
+    baseText({
+      variableAxes: { wght: 980, XTRA: 25 },
+      variableAxisDefinitions: [
+        { tag: "wght", name: "Weight", min: 100, max: 900, defaultValue: 400 },
+      ],
+    }),
+    {
+      family: "Fixture VF",
+      source: "font-access",
+      axes: [
+        { tag: "wght", name: "Weight", min: 100, max: 900, defaultValue: 400 },
+        { tag: "GRAD", name: "Grade", min: -1, max: 1, defaultValue: 0 },
+      ],
+      namedInstances: [
+        { name: "Display Bold", coordinates: { wght: 720, GRAD: 0.5 } },
+      ],
+    },
+  )
+
+  expect(model.source).toBe("font-access")
+  expect(model.axes.map((axis) => `${axis.tag}:${axis.value}:${axis.source}`)).toEqual([
+    "wght:900:discovered",
+    "GRAD:0:discovered",
+    "XTRA:25:custom",
+  ])
+  expect(model.namedInstances[0].label).toBe("Display Bold")
+  expect(model.namedInstances[0].summary).toContain("wght 720")
+  expect(model.status).toContain("2 discovered")
 })
 
 test("font preview and diagnostics identify available, missing, and substituted fonts", () => {
@@ -209,6 +396,8 @@ test("match font ranks candidates deterministically from text geometry", () => {
 
   expect(result.best.family).toBe("Display Wide")
   expect(result.candidates[0].score).toBeGreaterThan(result.candidates[1].score)
+  expect(result.target.source).toBe("layer-box")
+  expect(result.candidates[0].geometry.averageGlyphWidth).toBeCloseTo(0.78)
 })
 
 test("find and replace edits text layers across the document and returns match metadata", () => {
@@ -246,6 +435,27 @@ test("find and replace previews regex matches with layer counts before editing",
   expect(preview.changedLayerIds).toEqual([])
   expect(preview.layers[0].text?.content).toBe("SKU A12, sku B34")
   expect(preview.matches.map((match) => match.text)).toEqual(["SKU A12", "sku B34", "sku C56"])
+  expect(preview.highlights.map((group) => `${group.layerName}:${group.matches.length}`)).toEqual(["Layer a:2", "Layer b:1"])
+  expect(preview.highlights[0].segments.filter((segment) => segment.highlight)).toHaveLength(2)
+})
+
+test("find and replace can build highlight-all groups for every matched text layer", () => {
+  const matches = [
+    { layerId: "a", layerName: "Headline", index: 0, length: 5, text: "Color" },
+    { layerId: "a", layerName: "Headline", index: 11, length: 5, text: "color" },
+    { layerId: "b", layerName: "Caption", index: 6, length: 5, text: "color" },
+  ]
+  const groups = buildFindReplaceHighlights(
+    [
+      layer("a", baseText({ content: "Color tone color" })),
+      layer("b", baseText({ content: "brand color deck" })),
+    ],
+    matches,
+  )
+
+  expect(groups).toHaveLength(2)
+  expect(groups[0].segments.map((segment) => segment.highlight ? `[${segment.text}]` : segment.text).join("")).toBe("[Color] tone [color]")
+  expect(groups[1].matchCountLabel).toBe("1 match")
 })
 
 test("find and replace reports invalid regex patterns without throwing", () => {
@@ -348,7 +558,27 @@ test("vertical type exposes flow alignment and explicit glyph orientation", () =
   expect(upright.verticalAlign).toBe("bottom")
   expect(upright.textOrientation).toBe("upright")
   expect(upright.letterSpacing).toBe("5.04px")
+  expect(upright.verticalMetrics.columnGap).toBeCloseTo(50.4)
+  expect(upright.verticalMetrics.glyphSpacing).toBe(0)
   expect(sideways.textOrientation).toBe("sideways")
+})
+
+test("vertical type render plans expose explicit metric controls", () => {
+  const plan = buildTypographyRenderPlan(baseText({
+    content: "AB12",
+    vertical: true,
+    verticalColumnGap: 64,
+    verticalGlyphSpacing: 6,
+    verticalGlyphScale: 1.25,
+    verticalUseProportionalMetrics: true,
+  }))
+
+  expect(plan.verticalMetrics).toEqual({
+    columnGap: 64,
+    glyphSpacing: 6,
+    glyphScale: 1.25,
+    proportional: true,
+  })
 })
 
 test("variable font metadata parser reads axis ranges and named instances", () => {
@@ -361,6 +591,59 @@ test("variable font metadata parser reads axis ranges and named instances", () =
   expect(metadata.namedInstances).toEqual([
     { name: "Condensed Bold", coordinates: { wght: 700, wdth: 75 } },
   ])
+})
+
+test("embedded OpenType font bytes provide feature detection, shaping, and exact glyph paths", () => {
+  const fontBuffer = buildOutlineFixtureFont()
+  const embeddedFont = createEmbeddedFontFromBuffer("Fixture Outline", "fixture-outline.ttf", fontBuffer, "font/ttf")
+  const metadata = parseOpenTypeFontMetadata(fontBuffer)
+  const support = detectOpenTypeFeatureSupport("Fixture Outline", { embeddedFont })
+  const text = baseText({
+    content: "A",
+    font: "Fixture Outline",
+    size: 100,
+    x: 10,
+    y: 20,
+    embeddedFont,
+  })
+  const plan = buildTypographyRenderPlan(text)
+  const path = convertTextToEditablePath(text)
+
+  expect(metadata.unitsPerEm).toBe(1000)
+  expect(metadata.glyphCount).toBe(2)
+  expect(metadata.featureTags).toEqual(expect.arrayContaining(["liga", "smcp"]))
+  expect(support.supportedTags.has("liga")).toBe(true)
+  expect(support.supportedTags.has("smcp")).toBe(true)
+  expect(plan.shaping.engine).toBe("embedded-opentype")
+  expect(plan.shaping.glyphRun.map((glyph) => glyph.glyphId)).toEqual([1])
+  expect(plan.shaping.advanceWidth).toBeCloseTo(70)
+  expect(path.subpaths?.[0].source).toBe("font-outline")
+  expect(path.subpaths?.[0].points.map((point) => [Math.round(point.x), Math.round(point.y)])).toEqual([
+    [10, 100],
+    [80, 100],
+    [45, 30],
+  ])
+})
+
+test("image-backed Match Font uses raster recognition features when no editable text is available", () => {
+  installFixtureDom()
+  const result = matchFontFromImageData(
+    blackRectImageData(120, 60, { x: 12, y: 8, w: 88, h: 38 }),
+    {
+      expectedText: "AB",
+      fontSize: 52,
+      candidates: [
+        { family: "Condensed Sans", averageGlyphWidth: 0.42, xHeight: 0.55, serif: false },
+        { family: "Display Wide", averageGlyphWidth: 0.85, xHeight: 0.73, serif: false },
+        { family: "Book Serif", averageGlyphWidth: 0.54, xHeight: 0.5, serif: true },
+      ],
+    },
+  )
+
+  expect(result.best.family).toBe("Display Wide")
+  expect(result.target.source).toBe("image-recognition")
+  expect(result.recognition.confidence).toBeGreaterThan(0.5)
+  expect(result.candidates[0].reasons).toContain("image model")
 })
 
 test("font substitution comparison builds side-by-side previews and specimens", () => {
@@ -377,6 +660,37 @@ test("font substitution comparison builds side-by-side previews and specimens", 
     "web:Inter",
   ])
   expect(comparison.specimens[2].fontVariationSettings).toContain('"wght" 400')
+  expect(comparison.original.geometry.averageGlyphWidth).toBeGreaterThan(0)
+  expect(comparison.fallback.geometry.averageGlyphWidth).toBeGreaterThan(0)
+  expect(comparison.geometryDelta.averageGlyphWidth).toBeDefined()
+})
+
+test("text-on-path handle model supports point insert, move, delete, and reverse edits", () => {
+  const text = baseText({
+    textPath: [
+      { x: 10, y: 20 },
+      { x: 90, y: 20 },
+      { x: 130, y: 60 },
+    ],
+    textPathAlign: "center",
+    textPathStartOffset: 12,
+    textPathBaselineOffset: -6,
+    textPathClosed: false,
+  })
+  const model = buildTextPathHandleModel(text)
+  const inserted = insertTextPathPoint(text, 1, { x: 50, y: 12 })
+  const moved = updateTextPathPoint(inserted, 2, { x: 100, y: 28 })
+  const deleted = deleteTextPathPoint(moved, 0)
+  const reversed = reverseTextPath(deleted)
+
+  expect(model.points.map((point) => point.label)).toEqual(["P1", "P2", "P3"])
+  expect(model.totalLength).toBeGreaterThan(130)
+  expect(model.startHandle.distance).toBe(12)
+  expect(model.baselineHandle.offset).toBe(-6)
+  expect(inserted.textPath?.map((point) => point.x)).toEqual([10, 50, 90, 130])
+  expect(moved.textPath?.[2]).toEqual({ x: 100, y: 28 })
+  expect(deleted.textPath).toHaveLength(3)
+  expect(reversed.textPath?.[0]).toEqual(deleted.textPath?.[2])
 })
 
 test("3D text extrusion creates a renderable scene with per-glyph depth geometry", () => {

@@ -457,7 +457,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
       {
         id: "algorithmic-content-aware",
         group: "Composite",
-        title: "Auto-Align, Auto-Blend, Content-Aware Scale",
+        title: "Auto-Align, Auto-Blend, Content-Aware Scale, Generative Fill",
         run: () => {
           window.dispatchEvent(new CustomEvent("ps-open-algorithmic-operations"))
           close()

@@ -1,5 +1,13 @@
 import type { AlphaChannel, BlendMode, ColorManagementSettings } from "./types"
-import { cmykToRgb, rgbToCmyk, type RgbColor } from "./color-pipeline"
+import {
+  checkRgbOutOfGamut,
+  rgbToCmyk,
+  rgbToLab,
+  softProofImageData,
+  type HighBitImage,
+  type PipelineBitDepth,
+  type RgbColor,
+} from "./color-pipeline"
 import { hexToRgb } from "./color-utils"
 
 export type PixelChannel = "rgb" | "red" | "green" | "blue" | "alpha" | "gray"
@@ -55,6 +63,56 @@ export interface SpotPreviewOptions {
   spotOpacity?: number
 }
 
+export type SeparationProcess = "RGB" | "CMYK" | "Lab" | "Grayscale" | "Multichannel"
+export type SeparationPlateKind = "process" | "spot" | "alpha"
+export type SeparationPlateData = Uint8ClampedArray | Uint16Array | Float32Array
+
+export interface SeparationPlate {
+  id: string
+  name: string
+  kind: SeparationPlateKind
+  color?: string
+  opacity: number
+  data: SeparationPlateData
+  range: [number, number]
+}
+
+export interface SpotSeparationChannel {
+  id: string
+  name: string
+  color: string
+  opacity?: number
+  mask: ImageData
+}
+
+export interface BuildColorSeparationOptions {
+  mode?: SeparationProcess
+  processProfile?: string
+  spotChannels?: SpotSeparationChannel[]
+  savedAlphaChannels?: SpotSeparationChannel[]
+  multichannel?: {
+    red?: boolean
+    green?: boolean
+    blue?: boolean
+  }
+}
+
+export interface SeparationCoverageStats {
+  pixels: number
+  totalInkMax: number
+  totalInkAverage: number
+}
+
+export interface ColorSeparationModel {
+  width: number
+  height: number
+  bitDepth: PipelineBitDepth
+  process: SeparationProcess
+  processProfile?: string
+  plates: SeparationPlate[]
+  coverage: SeparationCoverageStats
+}
+
 const SPOT_NAME_PATTERN = /^\[spot:(#[0-9a-fA-F]{3,8})(?::([0-9]{1,3}(?:\.[0-9]+)?))?\](.*)$/
 
 function clamp(value: number, min = 0, max = 255) {
@@ -75,26 +133,6 @@ function percent(value: number | undefined, fallback: number) {
 
 function luma(r: number, g: number, b: number) {
   return 0.299 * r + 0.587 * g + 0.114 * b
-}
-
-function rgbToHsl(r: number, g: number, b: number) {
-  r /= 255
-  g /= 255
-  b /= 255
-  const max = Math.max(r, g, b)
-  const min = Math.min(r, g, b)
-  let h = 0
-  let s = 0
-  const l = (max + min) / 2
-  if (max !== min) {
-    const d = max - min
-    s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
-    if (max === r) h = (g - b) / d + (g < b ? 6 : 0)
-    else if (max === g) h = (b - r) / d + 2
-    else h = (r - g) / d + 4
-    h /= 6
-  }
-  return { h, s, l }
 }
 
 function readChannel(data: Uint8ClampedArray, index: number, channel: PixelChannel) {
@@ -283,56 +321,234 @@ export function simulateSpotChannelPreview(base: ImageData, mask: ImageData, opt
   return new ImageData(out, base.width, base.height)
 }
 
-function simulateCmykProof(rgb: RgbColor, dotGain = 0.08) {
-  const cmyk = rgbToCmyk(rgb, {
-    blackGeneration: dotGain > 0.1 ? "heavy" : "medium",
-    totalInkLimit: dotGain > 0.1 ? 300 : 320,
-  })
-  const proof = cmykToRgb({ ...cmyk, k: clamp01(cmyk.k * (1 + dotGain)) })
-  const gray = luma(proof.r, proof.g, proof.b)
-  return {
-    r: clamp8(proof.r * (1 - dotGain) + gray * dotGain),
-    g: clamp8(proof.g * (1 - dotGain) + gray * dotGain),
-    b: clamp8(proof.b * (1 - dotGain) + gray * dotGain),
+function isHighBitImage(source: ImageData | HighBitImage): source is HighBitImage {
+  return "storage" in source && "bitDepth" in source && "channels" in source
+}
+
+function sourceBitDepth(source: ImageData | HighBitImage): PipelineBitDepth {
+  return isHighBitImage(source) ? source.bitDepth : 8
+}
+
+function sourceMax(source: HighBitImage) {
+  return source.storage === "uint16" ? 65535 : source.storage === "uint8" ? 255 : 1
+}
+
+function readSourceRgb(source: ImageData | HighBitImage, pixel: number): RgbColor {
+  const i = pixel * 4
+  if (!isHighBitImage(source)) {
+    return { r: source.data[i], g: source.data[i + 1], b: source.data[i + 2] }
   }
+  const max = sourceMax(source)
+  return {
+    r: clamp8((Number(source.data[i]) / max) * 255),
+    g: clamp8((Number(source.data[i + 1]) / max) * 255),
+    b: clamp8((Number(source.data[i + 2]) / max) * 255),
+  }
+}
+
+function allocPlate(bitDepth: PipelineBitDepth, length: number, float = false): SeparationPlateData {
+  if (float || bitDepth === 32) return new Float32Array(length)
+  if (bitDepth === 16) return new Uint16Array(length)
+  return new Uint8ClampedArray(length)
+}
+
+function writePlateUnit(data: SeparationPlateData, index: number, value: number, bitDepth: PipelineBitDepth) {
+  const v = clamp01(value)
+  if (data instanceof Float32Array) data[index] = v
+  else if (bitDepth === 16 && data instanceof Uint16Array) data[index] = Math.round(v * 65535)
+  else data[index] = clamp8(v * 255)
+}
+
+function readPlateUnit(plate: SeparationPlate, index: number, bitDepth: PipelineBitDepth) {
+  if (plate.data instanceof Float32Array) {
+    const [min, max] = plate.range
+    const value = plate.data[index]
+    if (min === 0 && max === 1) return clamp01(value)
+    return clamp01((value - min) / Math.max(0.000001, max - min))
+  }
+  if (bitDepth === 16 && plate.data instanceof Uint16Array) return plate.data[index] / 65535
+  return plate.data[index] / 255
+}
+
+function plateFromMask(channel: SpotSeparationChannel, width: number, height: number, bitDepth: PipelineBitDepth, kind: SeparationPlateKind): SeparationPlate {
+  const data = allocPlate(bitDepth, width * height)
+  const w = Math.min(width, channel.mask.width)
+  const h = Math.min(height, channel.mask.height)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const mi = (y * channel.mask.width + x) * 4
+      const coverage = (luma(channel.mask.data[mi], channel.mask.data[mi + 1], channel.mask.data[mi + 2]) / 255) *
+        (channel.mask.data[mi + 3] / 255)
+      writePlateUnit(data, y * width + x, coverage, bitDepth)
+    }
+  }
+  return {
+    id: channel.id,
+    name: channel.name,
+    kind,
+    color: channel.color,
+    opacity: clamp01((channel.opacity ?? 100) / 100),
+    data,
+    range: [0, 1],
+  }
+}
+
+function emptyCoverage(): SeparationCoverageStats {
+  return { pixels: 0, totalInkMax: 0, totalInkAverage: 0 }
+}
+
+export function buildColorSeparationModel(
+  source: ImageData | HighBitImage,
+  options: BuildColorSeparationOptions = {},
+): ColorSeparationModel {
+  const width = source.width
+  const height = source.height
+  const pixels = width * height
+  const bitDepth = sourceBitDepth(source)
+  const process = options.mode ?? (isHighBitImage(source) && source.colorMode !== "RGB" ? source.colorMode as SeparationProcess : "RGB")
+  const plates: SeparationPlate[] = []
+  let totalInkSum = 0
+  let totalInkMax = 0
+
+  const addUnitPlate = (id: string, name: string, color: string | undefined = undefined) => {
+    const plate: SeparationPlate = {
+      id,
+      name,
+      kind: "process",
+      color,
+      opacity: 1,
+      data: allocPlate(bitDepth, pixels),
+      range: [0, 1],
+    }
+    plates.push(plate)
+    return plate
+  }
+
+  if (process === "CMYK") {
+    const cyan = addUnitPlate("process_c", "Cyan", "#00aeef")
+    const magenta = addUnitPlate("process_m", "Magenta", "#ec008c")
+    const yellow = addUnitPlate("process_y", "Yellow", "#fff200")
+    const black = addUnitPlate("process_k", "Black", "#111111")
+    for (let p = 0; p < pixels; p++) {
+      const cmyk = rgbToCmyk(readSourceRgb(source, p), { blackGeneration: "medium", totalInkLimit: 320 })
+      writePlateUnit(cyan.data, p, cmyk.c, bitDepth)
+      writePlateUnit(magenta.data, p, cmyk.m, bitDepth)
+      writePlateUnit(yellow.data, p, cmyk.y, bitDepth)
+      writePlateUnit(black.data, p, cmyk.k, bitDepth)
+      const total = (cmyk.c + cmyk.m + cmyk.y + cmyk.k) * 100
+      totalInkSum += total
+      totalInkMax = Math.max(totalInkMax, total)
+    }
+  } else if (process === "Lab") {
+    const lightness: SeparationPlate = { id: "lab_l", name: "Lightness", kind: "process", opacity: 1, data: new Float32Array(pixels), range: [0, 100] }
+    const a: SeparationPlate = { id: "lab_a", name: "a", kind: "process", opacity: 1, data: new Float32Array(pixels), range: [-128, 127] }
+    const b: SeparationPlate = { id: "lab_b", name: "b", kind: "process", opacity: 1, data: new Float32Array(pixels), range: [-128, 127] }
+    plates.push(lightness, a, b)
+    for (let p = 0; p < pixels; p++) {
+      const lab = rgbToLab(readSourceRgb(source, p))
+      lightness.data[p] = lab.l
+      a.data[p] = lab.a
+      b.data[p] = lab.b
+    }
+  } else if (process === "Grayscale") {
+    const gray = addUnitPlate("process_gray", "Gray", "#808080")
+    for (let p = 0; p < pixels; p++) {
+      const rgb = readSourceRgb(source, p)
+      writePlateUnit(gray.data, p, luma(rgb.r, rgb.g, rgb.b) / 255, bitDepth)
+    }
+  } else if (process === "Multichannel") {
+    const channels = options.multichannel ?? { red: true, green: true, blue: true }
+    const channelDefs = [
+      ["red", "Red", "#ff0000", 0, channels.red !== false],
+      ["green", "Green", "#00ff00", 1, channels.green !== false],
+      ["blue", "Blue", "#0000ff", 2, channels.blue !== false],
+    ] as const
+    for (const [id, name, color, offset, enabled] of channelDefs) {
+      if (!enabled) continue
+      const plate = addUnitPlate(id, name, color)
+      for (let p = 0; p < pixels; p++) {
+        const rgb = readSourceRgb(source, p)
+        const value = offset === 0 ? rgb.r : offset === 1 ? rgb.g : rgb.b
+        writePlateUnit(plate.data, p, value / 255, bitDepth)
+      }
+    }
+  } else {
+    const red = addUnitPlate("process_r", "Red", "#ff0000")
+    const green = addUnitPlate("process_g", "Green", "#00ff00")
+    const blue = addUnitPlate("process_b", "Blue", "#0000ff")
+    for (let p = 0; p < pixels; p++) {
+      const rgb = readSourceRgb(source, p)
+      writePlateUnit(red.data, p, rgb.r / 255, bitDepth)
+      writePlateUnit(green.data, p, rgb.g / 255, bitDepth)
+      writePlateUnit(blue.data, p, rgb.b / 255, bitDepth)
+    }
+  }
+
+  for (const spot of options.spotChannels ?? []) plates.push(plateFromMask(spot, width, height, bitDepth, "spot"))
+  for (const alpha of options.savedAlphaChannels ?? []) plates.push(plateFromMask(alpha, width, height, bitDepth, "alpha"))
+
+  return {
+    width,
+    height,
+    bitDepth,
+    process,
+    processProfile: options.processProfile,
+    plates,
+    coverage: process === "CMYK"
+      ? { pixels, totalInkMax, totalInkAverage: totalInkSum / Math.max(1, pixels) }
+      : emptyCoverage(),
+  }
+}
+
+function paperColor(value: string | undefined) {
+  return hexToRgb(value ?? "#ffffff")
+}
+
+export function composeSeparationPreview(model: ColorSeparationModel, options: { paper?: string } = {}): ImageData {
+  const out = new Uint8ClampedArray(model.width * model.height * 4)
+  const paper = paperColor(options.paper)
+  const plate = (name: string) => model.plates.find((item) => item.name === name)
+  const cyan = plate("Cyan")
+  const magenta = plate("Magenta")
+  const yellow = plate("Yellow")
+  const black = plate("Black")
+  for (let p = 0; p < model.width * model.height; p++) {
+    const i = p * 4
+    if (model.process === "CMYK" && cyan && magenta && yellow && black) {
+      const c = readPlateUnit(cyan, p, model.bitDepth)
+      const m = readPlateUnit(magenta, p, model.bitDepth)
+      const y = readPlateUnit(yellow, p, model.bitDepth)
+      const k = readPlateUnit(black, p, model.bitDepth)
+      out[i] = clamp8(paper.r * (1 - c) * (1 - k))
+      out[i + 1] = clamp8(paper.g * (1 - m) * (1 - k))
+      out[i + 2] = clamp8(paper.b * (1 - y) * (1 - k))
+    } else {
+      out[i] = paper.r
+      out[i + 1] = paper.g
+      out[i + 2] = paper.b
+    }
+    out[i + 3] = 255
+  }
+
+  for (const spot of model.plates.filter((item) => item.kind === "spot")) {
+    const ink = hexToRgb(spot.color ?? "#ff00ff")
+    for (let p = 0; p < model.width * model.height; p++) {
+      const i = p * 4
+      const coverage = readPlateUnit(spot, p, model.bitDepth) * spot.opacity
+      if (coverage <= 0) continue
+      out[i] = clamp8(out[i] * (1 - coverage) + ink.r * coverage)
+      out[i + 1] = clamp8(out[i + 1] * (1 - coverage) + ink.g * coverage)
+      out[i + 2] = clamp8(out[i + 2] * (1 - coverage) + ink.b * coverage)
+    }
+  }
+
+  return new ImageData(out, model.width, model.height)
 }
 
 export function isApproximatelyOutOfGamut(rgb: RgbColor, settings?: ColorManagementSettings) {
-  if (!settings?.gamutWarning) return false
-  const proofProfile = settings.proofProfile ?? "None"
-  const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b)
-  if (proofProfile.includes("CMYK") || proofProfile.includes("SWOP") || proofProfile.includes("Japan")) {
-    return hsl.s > 0.68 && (Math.max(rgb.r, rgb.g, rgb.b) > 220 || Math.min(rgb.r, rgb.g, rgb.b) < 35)
-  }
-  if (proofProfile === "Dot Gain 20%") return hsl.s > 0.08
-  return false
+  return checkRgbOutOfGamut(rgb, settings).outOfGamut
 }
 
 export function softProofImageDataApprox(source: ImageData, settings?: ColorManagementSettings): ImageData {
-  const out = new Uint8ClampedArray(source.data)
-  const proofProfile = settings?.proofProfile ?? "None"
-  const proofColors = !!settings?.proofColors && proofProfile !== "None"
-  for (let i = 0; i < out.length; i += 4) {
-    const original = { r: out[i], g: out[i + 1], b: out[i + 2] }
-    let next = original
-    if (proofColors) {
-      if (proofProfile.includes("CMYK") || proofProfile.includes("SWOP") || proofProfile.includes("Japan")) {
-        next = simulateCmykProof(original, proofProfile.includes("SWOP") ? 0.13 : 0.08)
-      } else if (proofProfile === "Dot Gain 20%") {
-        const gray = clamp8((luma(original.r, original.g, original.b) / 255) ** 1.16 * 255)
-        next = { r: gray, g: gray, b: gray }
-      }
-    }
-    if (isApproximatelyOutOfGamut(original, settings)) {
-      next = {
-        r: clamp8(next.r * 0.35 + 128 * 0.65),
-        g: clamp8(next.g * 0.2 + 128 * 0.25),
-        b: clamp8(next.b * 0.35 + 255 * 0.65),
-      }
-    }
-    out[i] = next.r
-    out[i + 1] = next.g
-    out[i + 2] = next.b
-  }
-  return new ImageData(out, source.width, source.height)
+  return softProofImageData(source, settings)
 }

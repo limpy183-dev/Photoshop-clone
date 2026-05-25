@@ -77,7 +77,8 @@ test("export limitation reports are explicit for browser raster and SVG exports"
 
   expect(png.items).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Interlaced PNG", status: "preserved" })]))
   expect(jpeg.items).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Progressive JPEG", status: "preserved" })]))
-  expect(jpeg.items).toEqual(expect.arrayContaining([expect.objectContaining({ label: "ICC profile embedding", status: "unsupported" })]))
+  expect(jpeg.items).toEqual(expect.arrayContaining([expect.objectContaining({ label: "ICC profile conversion", status: "preserved" })]))
+  expect(jpeg.items).toEqual(expect.arrayContaining([expect.objectContaining({ label: "ICC profile embedding", status: "preserved" })]))
   expect(svg.items).toEqual(expect.arrayContaining([expect.objectContaining({ label: "Editable vector structure", status: "approximated" })]))
 })
 
@@ -85,13 +86,13 @@ test("document color honesty warns about metadata modes versus browser canvas re
   const doc = richFixtureDocument()
   const report = describeDocumentColorHonesty(doc)
 
-  expect(report.badge).toBe("CMYK/16-bit metadata, 8-bit RGBA canvas")
+  expect(report.badge).toBe("CMYK/16-bit typed edit path, 8-bit preview")
   expect(report.items).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ label: "Browser canvas path", severity: "warn" }),
       expect.objectContaining({ label: "CMYK separations", severity: "warn" }),
       expect.objectContaining({ label: "High-bit editing", severity: "warn" }),
-      expect.objectContaining({ label: "ICC transforms", severity: "warn" }),
+      expect.objectContaining({ label: "ICC transforms", severity: "info" }),
     ]),
   )
 })
@@ -104,7 +105,7 @@ test("status bar exposes color and bit-depth honesty warning for non-RGB or high
   await page.getByRole("button", { name: /Photo 6 x 4 in/ }).click()
   await page.getByRole("button", { name: "Create" }).click()
 
-  await expect(page.getByText("Editing at 8-bit | Document: 16-bit")).toBeVisible()
+  await expect(page.getByText("High-bit edit path | Preview: 8-bit | Document: 16-bit")).toBeVisible()
   await expect(page.getByText("Precision warning")).toBeVisible()
 })
 

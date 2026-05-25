@@ -12,11 +12,23 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { canvasToGifDataUrl, createDocumentReport, downloadBlob, downloadDataUrl, renderDocumentComposite, rasterMime } from "./document-io"
+import { Progress } from "@/components/ui/progress"
+import { Archive, Download, XCircle } from "lucide-react"
+import {
+  canvasToGifDataUrl,
+  createDocumentReport,
+  diagnoseBrowserRasterEncoders,
+  downloadBlob,
+  renderDocumentComposite,
+  rasterMime,
+  type BrowserRasterEncoderDiagnostic,
+} from "./document-io"
 import { useEditor, makeCanvas } from "./editor-context"
 import { canvasSizeError } from "./canvas-limits"
 import type { BrowserRasterExportFormat } from "./document-io"
 import type { Layer, PsDocument, Slice, TimelineFrame } from "./types"
+import { runBatchExportItems, type BatchExportFailure, type BatchExportProgressEvent } from "./batch-export-engine"
+import { createStoredZipBlob, type StoredZipEntry } from "./zip-packaging"
 
 type BatchScope = "document" | "visible-layers" | "selected-layers" | "timeline" | "slices" | "sprite-layers" | "sprite-slices" | "sprite-timeline"
 type RasterFormat = BrowserRasterExportFormat
@@ -65,7 +77,20 @@ function docWithFrame(doc: PsDocument, frame: TimelineFrame): PsDocument {
   }
 }
 
-async function downloadCanvas(canvas: HTMLCanvasElement, name: string, format: RasterFormat, quality: number, scale: number, matte: string) {
+function dataUrlToBlob(dataUrl: string) {
+  const [header, body = ""] = dataUrl.split(",", 2)
+  const mime = /^data:([^;]+)/i.exec(header)?.[1] ?? "application/octet-stream"
+  const binary = atob(body)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return new Blob([bytes], { type: mime })
+}
+
+function extensionForFormat(format: RasterFormat) {
+  return format === "jpeg" ? "jpg" : format
+}
+
+async function encodeCanvas(canvas: HTMLCanvasElement, format: RasterFormat, quality: number, scale: number, matte: string) {
   const sizeError = canvasSizeError(canvas.width * scale, canvas.height * scale, "Export")
   if (sizeError) throw new Error(sizeError)
   const out = scale === 1 ? canvas : makeCanvas(canvas.width * scale, canvas.height * scale, format === "jpeg" ? matte : undefined)
@@ -76,12 +101,18 @@ async function downloadCanvas(canvas: HTMLCanvasElement, name: string, format: R
     ctx.drawImage(canvas, 0, 0, out.width, out.height)
   }
   if (format === "gif") {
-    downloadDataUrl(canvasToGifDataUrl(out, true), `${name}.gif`)
-    return
+    return dataUrlToBlob(canvasToGifDataUrl(out, true))
   }
   const blob = await new Promise<Blob | null>((resolve) => out.toBlob(resolve, rasterMime(format), quality))
-  if (!blob) throw new Error(`Could not export ${name}`)
-  downloadBlob(blob, `${name}.${format === "jpeg" ? "jpg" : format}`)
+  if (!blob) throw new Error("Canvas encoder returned no blob")
+  if ((format === "webp" || format === "avif") && blob.type && blob.type.toLowerCase() !== rasterMime(format)) {
+    throw new Error(`${format.toUpperCase()} encoder returned ${blob.type}; this browser does not support ${rasterMime(format)} export.`)
+  }
+  return blob
+}
+
+async function downloadCanvas(canvas: HTMLCanvasElement, name: string, format: RasterFormat, quality: number, scale: number, matte: string) {
+  downloadBlob(await encodeCanvas(canvas, format, quality, scale, matte), `${name}.${extensionForFormat(format)}`)
 }
 
 function alphaBounds(canvas: HTMLCanvasElement) {
@@ -133,6 +164,31 @@ function spriteSheet(items: HTMLCanvasElement[], columns: number, padding: numbe
   return out
 }
 
+interface BatchCanvasItem {
+  name: string
+  canvas: HTMLCanvasElement
+}
+
+function failureReportEntry(input: {
+  scope: BatchScope
+  exportFormat: RasterFormat
+  completed: number
+  total: number
+  failed: BatchExportFailure[]
+  canceled: boolean
+}): StoredZipEntry {
+  return {
+    name: "_export-report.json",
+    data: new TextEncoder().encode(JSON.stringify({
+      app: "Photoshop Web",
+      format: "batch-export-report",
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      ...input,
+    }, null, 2)),
+  }
+}
+
 export function BatchExportDialog({
   open,
   onOpenChange,
@@ -151,7 +207,13 @@ export function BatchExportDialog({
   const [matte, setMatte] = React.useState("#ffffff")
   const [spriteColumns, setSpriteColumns] = React.useState(4)
   const [spritePadding, setSpritePadding] = React.useState(8)
+  const [packageZip, setPackageZip] = React.useState(true)
+  const [continueOnError, setContinueOnError] = React.useState(true)
   const [busy, setBusy] = React.useState(false)
+  const [progress, setProgress] = React.useState<BatchExportProgressEvent | null>(null)
+  const [failures, setFailures] = React.useState<BatchExportFailure[]>([])
+  const [encoderDiagnostics, setEncoderDiagnostics] = React.useState<BrowserRasterEncoderDiagnostic[]>([])
+  const abortRef = React.useRef<AbortController | null>(null)
 
   React.useEffect(() => {
     if (!open) return
@@ -159,7 +221,20 @@ export function BatchExportDialog({
     setFormat(initial?.format ?? "png")
     setScale(initial?.scale ?? 1)
     setTransparent(typeof initial?.transparent === "boolean" ? initial.transparent : true)
+    setProgress(null)
+    setFailures([])
   }, [open, initial])
+
+  React.useEffect(() => {
+    if (!open) return
+    let disposed = false
+    void diagnoseBrowserRasterEncoders(["webp", "avif"]).then((diagnostics) => {
+      if (!disposed) setEncoderDiagnostics(diagnostics)
+    })
+    return () => {
+      disposed = true
+    }
+  }, [open])
 
   if (!activeDoc) return null
 
@@ -177,54 +252,117 @@ export function BatchExportDialog({
           ? activeDoc.slices?.length ?? 0
           : candidates.length
 
+  const browserEncoderDiagnostic = encoderDiagnostics.find((item) => item.format === format)
+  const progressPercent = progress?.total ? Math.round(((progress.completed + progress.failed) / progress.total) * 100) : 0
+
+  const batchItems = (): BatchCanvasItem[] => {
+    const baseName = safeName(activeDoc.name)
+    const ext = extensionForFormat(format)
+    if (scope === "document") {
+      return [{
+        name: `${baseName}.${ext}`,
+        canvas: renderDocumentComposite(activeDoc, { transparent: transparent && format !== "jpeg", matte }),
+      }]
+    }
+    if (scope === "timeline") {
+      const frames = activeDoc.timelineFrames ?? []
+      if (!frames.length) throw new Error("This document has no timeline frames")
+      return frames.map((frame, index) => ({
+        name: `${baseName}-frame-${String(index + 1).padStart(2, "0")}.${ext}`,
+        canvas: renderDocumentComposite(docWithFrame(activeDoc, frame), { transparent: transparent && format !== "jpeg", matte }),
+      }))
+    }
+    if (scope === "slices") {
+      const slices = activeDoc.slices ?? []
+      if (!slices.length) throw new Error("This document has no slices")
+      const composite = renderDocumentComposite(activeDoc, { transparent: transparent && format !== "jpeg", matte })
+      return slices.map((slice) => ({
+        name: `${baseName}-${safeName(slice.name)}.${ext}`,
+        canvas: canvasForSlice(activeDoc, composite, slice),
+      }))
+    }
+    if (scope === "sprite-layers") {
+      if (!candidates.length) throw new Error("No layers match the selected export scope")
+      const items = candidates.map((layer) => trimCanvas(canvasForLayer(activeDoc, layer), transparent ? "transparent" : matte))
+      return [{ name: `${baseName}-layer-sprite-sheet.${ext}`, canvas: spriteSheet(items, spriteColumns, spritePadding, transparent ? "transparent" : matte) }]
+    }
+    if (scope === "sprite-slices") {
+      const slices = activeDoc.slices ?? []
+      if (!slices.length) throw new Error("This document has no slices")
+      const composite = renderDocumentComposite(activeDoc, { transparent: transparent && format !== "jpeg", matte })
+      const items = slices.map((slice) => canvasForSlice(activeDoc, composite, slice))
+      return [{ name: `${baseName}-slice-sprite-sheet.${ext}`, canvas: spriteSheet(items, spriteColumns, spritePadding, transparent ? "transparent" : matte) }]
+    }
+    if (scope === "sprite-timeline") {
+      const frames = activeDoc.timelineFrames ?? []
+      if (!frames.length) throw new Error("This document has no timeline frames")
+      const items = frames.map((frame) => renderDocumentComposite(docWithFrame(activeDoc, frame), { transparent: transparent && format !== "jpeg", matte }))
+      return [{ name: `${baseName}-timeline-sprite-sheet.${ext}`, canvas: spriteSheet(items, spriteColumns, spritePadding, transparent ? "transparent" : matte) }]
+    }
+    if (!candidates.length) throw new Error("No layers match the selected export scope")
+    return candidates.map((layer) => ({
+      name: `${baseName}-${safeName(layer.name)}.${ext}`,
+      canvas: canvasForLayer(activeDoc, layer),
+    }))
+  }
+
   const exportNow = async () => {
+    const controller = new AbortController()
+    abortRef.current = controller
     setBusy(true)
+    setProgress(null)
+    setFailures([])
     try {
       const baseName = safeName(activeDoc.name)
-      if (scope === "document") {
-        const canvas = renderDocumentComposite(activeDoc, { transparent: transparent && format !== "jpeg", matte })
-        await downloadCanvas(canvas, baseName, format, quality, scale, matte)
-      } else if (scope === "timeline") {
-        const frames = activeDoc.timelineFrames ?? []
-        if (!frames.length) throw new Error("This document has no timeline frames")
-        for (let i = 0; i < frames.length; i++) {
-          const canvas = renderDocumentComposite(docWithFrame(activeDoc, frames[i]), { transparent: transparent && format !== "jpeg", matte })
-          await downloadCanvas(canvas, `${baseName}-frame-${String(i + 1).padStart(2, "0")}`, format, quality, scale, matte)
-        }
-      } else if (scope === "slices") {
-        const slices = activeDoc.slices ?? []
-        if (!slices.length) throw new Error("This document has no slices")
-        const composite = renderDocumentComposite(activeDoc, { transparent: transparent && format !== "jpeg", matte })
-        for (const slice of slices) {
-          await downloadCanvas(canvasForSlice(activeDoc, composite, slice), `${baseName}-${safeName(slice.name)}`, format, quality, scale, matte)
-        }
-      } else if (scope === "sprite-layers") {
-        if (!candidates.length) throw new Error("No layers match the selected export scope")
-        const items = candidates.map((layer) => trimCanvas(canvasForLayer(activeDoc, layer), transparent ? "transparent" : matte))
-        await downloadCanvas(spriteSheet(items, spriteColumns, spritePadding, transparent ? "transparent" : matte), `${baseName}-layer-sprite-sheet`, format, quality, scale, matte)
-      } else if (scope === "sprite-slices") {
-        const slices = activeDoc.slices ?? []
-        if (!slices.length) throw new Error("This document has no slices")
-        const composite = renderDocumentComposite(activeDoc, { transparent: transparent && format !== "jpeg", matte })
-        const items = slices.map((slice) => canvasForSlice(activeDoc, composite, slice))
-        await downloadCanvas(spriteSheet(items, spriteColumns, spritePadding, transparent ? "transparent" : matte), `${baseName}-slice-sprite-sheet`, format, quality, scale, matte)
-      } else if (scope === "sprite-timeline") {
-        const frames = activeDoc.timelineFrames ?? []
-        if (!frames.length) throw new Error("This document has no timeline frames")
-        const items = frames.map((frame) => renderDocumentComposite(docWithFrame(activeDoc, frame), { transparent: transparent && format !== "jpeg", matte }))
-        await downloadCanvas(spriteSheet(items, spriteColumns, spritePadding, transparent ? "transparent" : matte), `${baseName}-timeline-sprite-sheet`, format, quality, scale, matte)
+      const items = batchItems()
+      const shouldZip = packageZip && items.length > 1
+      let finalFailureCount = 0
+      if (items.length === 1 && !shouldZip) {
+        const item = items[0]
+        await downloadCanvas(item.canvas, item.name.replace(/\.[^.]+$/, ""), format, quality, scale, matte)
+        setProgress({ total: 1, completed: 1, failed: 0, currentName: item.name, canceled: false })
       } else {
-        if (!candidates.length) throw new Error("No layers match the selected export scope")
-        for (const layer of candidates) {
-          await downloadCanvas(canvasForLayer(activeDoc, layer), `${baseName}-${safeName(layer.name)}`, format, quality, scale, matte)
+        const result = await runBatchExportItems(items, {
+          signal: controller.signal,
+          continueOnError,
+          encode: async (item) => encodeCanvas(item.canvas, format, quality, scale, matte),
+          onProgress: setProgress,
+        })
+        setFailures(result.failed)
+        finalFailureCount = result.failed.length
+        if (!result.entries.length && result.failed.length) {
+          throw new Error(`All ${result.total} export item${result.total === 1 ? "" : "s"} failed`)
+        }
+        if (shouldZip) {
+          const entries = result.failed.length || result.canceled
+            ? [...result.entries, failureReportEntry({
+                scope,
+                exportFormat: format,
+                completed: result.completed,
+                total: result.total,
+                failed: result.failed,
+                canceled: result.canceled,
+              })]
+            : result.entries
+          downloadBlob(createStoredZipBlob(entries), `${baseName}-${scope}.zip`)
+        } else {
+          for (const entry of result.entries) {
+            downloadBlob(new Blob([entry.data], { type: rasterMime(format) }), entry.name)
+          }
+        }
+        if (result.canceled) {
+          toast.info(`Export canceled after ${result.completed} item${result.completed === 1 ? "" : "s"}`)
+          return
         }
       }
       dispatch({ type: "add-document-report", report: createDocumentReport(activeDoc, "Batch Export") })
-      toast.success(`Exported ${estimatedCount} item${estimatedCount === 1 ? "" : "s"}`)
+      const failedCount = finalFailureCount
+      toast.success(failedCount ? `Exported with ${failedCount} failure${failedCount === 1 ? "" : "s"}` : `Exported ${estimatedCount} item${estimatedCount === 1 ? "" : "s"}`)
       onOpenChange(false)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Batch export failed")
     } finally {
+      abortRef.current = null
       setBusy(false)
     }
   }
@@ -284,6 +422,16 @@ export function BatchExportDialog({
               <input type="color" value={matte} onChange={(e) => setMatte(e.target.value)} className="h-7 w-10" />
             </label>
           </div>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="flex items-center gap-2">
+              <Checkbox checked={packageZip} disabled={estimatedCount <= 1} onCheckedChange={(v) => setPackageZip(v === true)} />
+              ZIP multi-file outputs
+            </label>
+            <label className="flex items-center gap-2">
+              <Checkbox checked={continueOnError} onCheckedChange={(v) => setContinueOnError(v === true)} />
+              Continue after errors
+            </label>
+          </div>
           {scope.startsWith("sprite-") ? (
             <div className="grid grid-cols-2 gap-2">
               <label className="grid gap-1">
@@ -299,10 +447,48 @@ export function BatchExportDialog({
           <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1.5 text-[10px] text-[var(--ps-text-dim)]">
             Ready to export {estimatedCount} item{estimatedCount === 1 ? "" : "s"}.
           </div>
+          {(format === "webp" || format === "avif") && browserEncoderDiagnostic ? (
+            <div className={`rounded-sm border px-2 py-1.5 text-[10px] ${browserEncoderDiagnostic.supported ? "border-emerald-500/35 bg-emerald-500/10 text-emerald-100" : "border-red-500/35 bg-red-500/10 text-red-100"}`}>
+              <div className="font-medium">{format.toUpperCase()} browser encoder</div>
+              <div>{browserEncoderDiagnostic.message}</div>
+            </div>
+          ) : null}
+          {progress ? (
+            <div className="space-y-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-2 text-[10px]">
+              <div className="flex items-center justify-between">
+                <span className="text-[var(--ps-text-dim)]">{progress.currentName ?? "Preparing export"}</span>
+                <span className="tabular-nums">{progress.completed + progress.failed}/{progress.total}</span>
+              </div>
+              <Progress value={progressPercent} className="h-1.5" />
+              {progress.failed ? (
+                <div className="text-amber-200">{progress.failed} item{progress.failed === 1 ? "" : "s"} failed and {continueOnError ? "will be reported" : "stopped the batch"}.</div>
+              ) : null}
+            </div>
+          ) : null}
+          {failures.length ? (
+            <div className="max-h-20 overflow-auto rounded-sm border border-amber-500/35 bg-amber-500/10 px-2 py-1.5 text-[10px] text-amber-100">
+              {failures.slice(0, 4).map((failure) => (
+                <div key={failure.name} className="truncate">{failure.name}: {failure.error}</div>
+              ))}
+            </div>
+          ) : null}
         </div>
         <DialogFooter>
-          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button size="sm" disabled={busy || estimatedCount === 0} onClick={exportNow}>{busy ? "Exporting..." : "Export"}</Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              if (busy) abortRef.current?.abort()
+              else onOpenChange(false)
+            }}
+          >
+            {busy ? <XCircle className="h-4 w-4" /> : null}
+            {busy ? "Cancel Batch" : "Cancel"}
+          </Button>
+          <Button size="sm" disabled={busy || estimatedCount === 0} onClick={exportNow}>
+            {packageZip && estimatedCount > 1 ? <Archive className="h-4 w-4" /> : <Download className="h-4 w-4" />}
+            {busy ? "Exporting..." : "Export"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

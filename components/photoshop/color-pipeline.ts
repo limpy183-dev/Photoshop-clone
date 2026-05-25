@@ -1,3 +1,23 @@
+export {
+  applyIccTransformToImageData,
+  buildGamutWarningMaskImageData,
+  checkRgbOutOfGamut,
+  convertImageDataForExport,
+  describeIccProfile,
+  iccProfileDeviceKind,
+  normalizeIccProfileName,
+  parseIccProfile,
+  softProofImageData,
+  softProofRgbColor,
+  supportedIccProfileNames,
+  transformRgbColor,
+  type GamutWarningResult,
+  type IccProfileName,
+  type ParsedIccProfile,
+  type IccTransformOptions,
+  type IccTransformResult,
+} from "./icc-transform"
+
 export type PipelineColorMode = "RGB" | "CMYK" | "Lab" | "Grayscale" | "Bitmap" | "Duotone" | "Indexed" | "Multichannel"
 export type PipelineBitDepth = 8 | 16 | 32
 
@@ -155,6 +175,28 @@ export interface HighBitPixelReadout {
   b: number
   a: number
   normalized: {
+    r: number
+    g: number
+    b: number
+    a: number
+  }
+}
+
+export interface HighBitPreviewComparison {
+  source: HighBitPixelReadout
+  preview: {
+    r: number
+    g: number
+    b: number
+    a: number
+  }
+  previewEquivalent: {
+    r: number
+    g: number
+    b: number
+    a: number
+  }
+  delta: {
     r: number
     g: number
     b: number
@@ -689,6 +731,43 @@ export function readHighBitPixel(source: HighBitImage, x: number, y: number): Hi
   }
 }
 
+export function compareHighBitPixelToPreview(
+  source: HighBitImage,
+  preview: ImageData,
+  x: number,
+  y: number,
+): HighBitPreviewComparison | null {
+  const high = readHighBitPixel(source, x, y)
+  const px = Math.floor(x)
+  const py = Math.floor(y)
+  if (!high || px < 0 || py < 0 || px >= preview.width || py >= preview.height) return null
+  const i = (py * preview.width + px) * 4
+  const max = highBitMax(source.storage)
+  const previewPixel = {
+    r: preview.data[i],
+    g: preview.data[i + 1],
+    b: preview.data[i + 2],
+    a: preview.data[i + 3],
+  }
+  const previewEquivalent = {
+    r: source.storage === "float32" ? previewPixel.r / 255 : Math.round((previewPixel.r / 255) * max),
+    g: source.storage === "float32" ? previewPixel.g / 255 : Math.round((previewPixel.g / 255) * max),
+    b: source.storage === "float32" ? previewPixel.b / 255 : Math.round((previewPixel.b / 255) * max),
+    a: source.storage === "float32" ? previewPixel.a / 255 : Math.round((previewPixel.a / 255) * max),
+  }
+  return {
+    source: high,
+    preview: previewPixel,
+    previewEquivalent,
+    delta: {
+      r: high.r - previewEquivalent.r,
+      g: high.g - previewEquivalent.g,
+      b: high.b - previewEquivalent.b,
+      a: high.a - previewEquivalent.a,
+    },
+  }
+}
+
 export function createFloatBufferFromImageData(source: ImageData, options: HighBitImageOptions = {}): FloatPixelBuffer {
   const data = new Float32Array(source.data.length)
   for (let i = 0; i < source.data.length; i++) data[i] = source.data[i] / 255
@@ -894,16 +973,16 @@ export function describeColorPipeline(options: HighBitImageOptions = {}): ColorP
   const colorMode = options.colorMode ?? "RGB"
   const storage: HighBitImage["storage"] = bitDepth === 32 ? "float32" : bitDepth === 16 ? "uint16" : "uint8"
   const warnings = [
-    "Local RGB, CMYK, and Lab math is available for previews and algorithms, but this is not a full ICC transform engine.",
-    "Canvas painting, browser display, and browser raster export still resolve through 8-bit RGBA surfaces.",
+    "A browser-local ICC transform engine is available for supported RGB, grayscale, and CMYK proof profiles.",
+    "High-bit typed arrays back compatible filters, adjustment compositing, paint synchronization, pixel readout, and precision TIFF/PNM export; browser display remains an 8-bit RGBA preview.",
   ]
   if (options.profile && options.profile !== "sRGB IEC61966-2.1") {
-    warnings.push(`${options.profile} is tracked as intent/profile metadata unless a dedicated ICC/WASM engine is added.`)
+    warnings.push(`${options.profile} is converted through the local ICC profile connection space for previews and exports where the profile is supported.`)
   }
   return {
     storage,
     supportsHighBitMath: bitDepth > 8,
-    supportsIccTransforms: false,
+    supportsIccTransforms: true,
     colorMode,
     bitDepth,
     warnings,
@@ -929,8 +1008,8 @@ function normalizeMode(value: unknown): string {
 }
 
 function colorHonestyBadge(mode: string, bitDepth: PipelineBitDepth, profile: string | undefined, hasWarnings: boolean) {
-  if (mode !== "RGB" && bitDepth > 8) return `${mode}/${bitDepth}-bit metadata, 8-bit RGBA canvas`
-  if (bitDepth > 8) return `${bitDepth}-bit metadata, 8-bit RGBA canvas`
+  if (mode !== "RGB" && bitDepth > 8) return `${mode}/${bitDepth}-bit typed edit path, 8-bit preview`
+  if (bitDepth > 8) return `${bitDepth}-bit typed edit path, 8-bit preview`
   if (mode !== "RGB") return `${mode} metadata, 8-bit RGBA canvas`
   if (profile && profile !== "sRGB IEC61966-2.1" && hasWarnings) return "ICC metadata, sRGB canvas preview"
   return "RGB/8-bit canvas"
@@ -955,7 +1034,7 @@ export function describeDocumentColorHonesty(doc: DocumentColorHonestyInput): Do
     "Browser canvas path",
     nonRgb || highBit ? "warn" : "info",
     nonRgb || highBit
-      ? `The editable document tracks ${mode}/${bitDepth}-bit intent, but browser painting, display, and many filters operate on 8-bit RGBA canvas pixels.`
+      ? `The editable document tracks ${mode}/${bitDepth}-bit intent; high-bit-aware edits use typed arrays, while browser display and fallback operations use 8-bit RGBA preview pixels.`
       : "Painting, display, and most filters operate on browser 8-bit RGBA canvas pixels.",
   )
 
@@ -963,7 +1042,7 @@ export function describeDocumentColorHonesty(doc: DocumentColorHonestyInput): Do
     add(
       "High-bit editing",
       "warn",
-      `${bitDepth}-bit document state is modeled for import/export intent and typed-array helpers; destructive canvas edits are tone-mapped to 8-bit RGBA surfaces.`,
+      `${bitDepth}-bit typed-array sources are used for compatible filters, adjustment layers, brush/paint synchronization, source-vs-preview readout, and TIFF/PNM precision export; unsupported operations can still fall back to the tone-mapped canvas preview.`,
     )
   }
 
@@ -971,19 +1050,19 @@ export function describeDocumentColorHonesty(doc: DocumentColorHonestyInput): Do
     add(
       "CMYK separations",
       "warn",
-      "CMYK values and print intent are tracked as document metadata and local conversion helpers, not as live native separated ink channels in the browser canvas.",
+      "Typed CMYK process plates and total-ink analysis are available for preflight and preview; the browser canvas remains a tone-mapped RGB display surface.",
     )
   } else if (mode === "Lab") {
     add(
       "Lab color",
       "warn",
-      "Lab conversions are available for algorithms, but the displayed and painted document surface remains RGB canvas data.",
+      "Typed Lab L/a/b plates are available for color analysis and conversion; browser display is still rendered through an RGB preview.",
     )
   } else if (mode === "Multichannel" || doc.modeSettings?.multichannel || hasExtraChannels) {
     add(
       "Spot/multichannel channels",
       "warn",
-      "Spot, alpha, and multichannel data can be tracked as saved channels, but browser raster export and canvas painting cannot preserve native spot plates.",
+      "Spot, alpha, and multichannel data can be modeled as typed separation plates with overprint preview; browser raster formats still flatten them for final display/export unless a plate-capable export is used.",
     )
   } else if (mode === "Duotone" || doc.modeSettings?.duotone) {
     add(
@@ -1013,16 +1092,16 @@ export function describeDocumentColorHonesty(doc: DocumentColorHonestyInput): Do
 
   add(
     "ICC transforms",
-    profileNeedsTransform || proofingEnabled ? "warn" : "info",
+    profileNeedsTransform || proofingEnabled ? "info" : "info",
     profileNeedsTransform || proofingEnabled
-      ? `${profile ?? "Document profile"} and proof/gamut settings are recorded, but this app does not run a native ICC engine in the browser canvas path.`
-      : "sRGB-like canvas display is used unless a document records a different profile or proofing setup.",
+      ? `${profile ?? "Document profile"} and proof/gamut settings run through the browser-local ICC transform engine for preview and raster export conversion.`
+      : "sRGB canvas display is used unless a document records a different profile or proofing setup.",
   )
 
   add(
     "Destructive 8-bit operations",
     nonRgb || highBit || profileNeedsTransform ? "warn" : "info",
-    "Brush strokes, raster filters, layer compositing previews, and browser exports can permanently bake the current 8-bit RGBA approximation into pixels.",
+    "Operations without a high-bit typed-array implementation can permanently bake the current 8-bit RGBA preview approximation into pixels.",
   )
 
   const hasWarnings = items.some((item) => item.severity !== "info")

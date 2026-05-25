@@ -5,17 +5,27 @@ import {
   buildSelectionHeuristicMaskData,
 } from "../components/photoshop/tool-helpers"
 import {
+  applyPromptInpaintImageData,
+  buildGenerativeFillPlan,
+  classifyGenerativeFillProvider,
+  createModelBackedGenerativeFillRequest,
+} from "../components/photoshop/generative-fill-engine"
+import {
   autoAlignImageStack,
   autoBlendImageStack,
   buildSelectAndMaskPreviewModel,
   detectImageFeatures,
   focusStackImageData,
+  applyWorkflowTransformToPoint,
   matchImageFeatures,
+  mergeHdrSceneLinearImageStack,
   mergeHdrImageStack,
   photomergeImageStack,
   perspectiveCropImageData,
   seamCarveImageData,
+  solveProjectiveTransformFromPointPairs,
 } from "../components/photoshop/photo-workflow-engine"
+import type { HighBitImage } from "../components/photoshop/color-pipeline"
 
 class TestImageData {
   data: Uint8ClampedArray
@@ -82,6 +92,69 @@ test("content-aware fill plan exposes sampling controls, adaptation, output targ
   expect(plan.previewData?.confidenceAlpha[1 * 6 + 2]).toBeGreaterThan(0)
 })
 
+test("content-aware fill plan exposes bounded patch synthesis controls", () => {
+  const src = flatImage(8, 5, (x, y) => [30 + x * 14, 70 + y * 18, 110 + x * 3, 255])
+
+  const plan = buildContentAwareFillPlan(src, {
+    fillBounds: { x: 3, y: 1, w: 3, h: 3 },
+    sampling: { mode: "auto" },
+    patch: {
+      patchRadius: 2,
+      searchRadius: 9,
+      candidateBudget: 12,
+      boundaryCandidateBudget: 5,
+      refinementPasses: 1,
+      seamRelaxPasses: 0,
+      coherence: 0.75,
+      fillOrder: "center-first",
+    },
+    preview: true,
+  })
+
+  expect(plan.patch).toEqual({
+    patchRadius: 2,
+    searchRadius: 9,
+    candidateBudget: 12,
+    boundaryCandidateBudget: 5,
+    refinementPasses: 1,
+    seamRelaxPasses: 0,
+    coherence: 0.75,
+    fillOrder: "center-first",
+  })
+  expect(plan.previewData?.patchPriorityAlpha).toHaveLength(8 * 5)
+  expect(plan.previewData?.patchPriorityAlpha[2 * 8 + 4]).toBeGreaterThan(plan.previewData?.patchPriorityAlpha[1 * 8 + 3] ?? 255)
+})
+
+test("prompt-guided generative fill plans local fallback and model-backed requests", () => {
+  const src = flatImage(5, 3, (x, y) => [40 + x * 15, 55 + y * 20, 80, 255])
+  const mask = new Uint8ClampedArray(5 * 3)
+  mask[1 * 5 + 2] = 255
+
+  const plan = buildGenerativeFillPlan(src, mask, {
+    prompt: "blue sky replacement",
+    mode: "fill",
+    provider: "auto",
+  })
+  const local = applyPromptInpaintImageData(src, mask, plan)
+  const request = createModelBackedGenerativeFillRequest({
+    sourcePng: "data:image/png;base64,source",
+    maskPng: "data:image/png;base64,mask",
+    prompt: "remove the wire",
+    mode: "remove",
+    endpoint: "/api/photoshop/generative-fill",
+  })
+
+  expect(plan.maskBounds).toEqual({ x: 2, y: 1, w: 1, h: 1 })
+  expect(plan.promptTokens).toContain("blue")
+  expect(plan.provider.strategy).toBe("local-prompt-inpaint")
+  expect(local.provenance.provider).toBe("local-prompt-inpaint")
+  expect(local.provenance.promptHash).toMatch(/^gf_/)
+  expect(local.image.data[(1 * 5 + 2) * 4 + 2]).toBeGreaterThan(src.data[(1 * 5 + 2) * 4 + 2])
+  expect(request.body.mode).toBe("remove")
+  expect(request.body.prompt).toBe("remove the wire")
+  expect(classifyGenerativeFillProvider({ endpoint: request.endpoint, apiKeyPresent: true }).modelBacked).toBe(true)
+})
+
 test("photo workflow helpers align, blend, photomerge, HDR merge, and focus stack deterministic fixtures", () => {
   const base = flatImage(5, 3, (x, y) => {
     const hit = x === 1 && y === 1
@@ -120,6 +193,96 @@ test("photo workflow helpers align, blend, photomerge, HDR merge, and focus stac
   const focused = focusStackImageData([leftSharp, rightSharp])
   expect(focused.sourceIndexByPixel[4]).toBe(0)
   expect(focused.image.data[4 * 4]).toBe(255)
+})
+
+test("photomerge can use similarity transforms instead of translation-only placement", () => {
+  const reference = flatImage(10, 8, (x, y) => {
+    const marker = `${x},${y}`
+    if (marker === "3,2") return [230, 30, 30, 255]
+    if (marker === "7,2") return [30, 210, 50, 255]
+    if (marker === "3,6") return [40, 70, 235, 255]
+    if (marker === "7,6") return [235, 210, 40, 255]
+    return [20 + x * 6, 32 + y * 5, 58 + ((x * 13 + y * 7) % 29), 255]
+  })
+  const moving = flatImage(5, 5, (x, y) => {
+    const marker = `${x},${y}`
+    if (marker === "1,1") return [230, 30, 30, 255]
+    if (marker === "3,1") return [30, 210, 50, 255]
+    if (marker === "1,3") return [40, 70, 235, 255]
+    if (marker === "3,3") return [235, 210, 40, 255]
+    const rx = x * 2 + 1
+    const ry = y * 2
+    return [20 + rx * 6, 32 + ry * 5, 58 + ((rx * 13 + ry * 7) % 29), 255]
+  })
+
+  const matched = matchImageFeatures(reference, moving, {
+    alignmentModel: "similarity",
+    maxFeatures: 40,
+    minFeatureDistance: 1,
+    descriptorRadius: 1,
+    ransacThreshold: 1.1,
+  })
+  expect(matched.placement.model).toBe("similarity")
+  expect(matched.placement.transform?.a).toBeGreaterThan(1.5)
+  expect(matched.placement.transform?.d).toBeGreaterThan(1.5)
+  expect(Math.abs(matched.placement.transform?.b ?? 1)).toBeLessThan(0.35)
+  expect(matched.inliers.length).toBeGreaterThanOrEqual(4)
+
+  const panorama = photomergeImageStack([reference, moving], {
+    alignmentModel: "similarity",
+    maxFeatures: 40,
+    minFeatureDistance: 1,
+    descriptorRadius: 1,
+    ransacThreshold: 1.1,
+    projection: "cylindrical",
+    projectionFocalLength: 12,
+  })
+
+  expect(panorama.projection).toBe("cylindrical")
+  expect(panorama.placements[1].model).toBe("similarity")
+  expect(panorama.image.width).toBeGreaterThanOrEqual(10)
+  expect(panorama.transformDiagnostics[0].inliers).toBeGreaterThanOrEqual(4)
+})
+
+test("photomerge solves projective camera geometry and exposes production blend diagnostics", () => {
+  const transform = solveProjectiveTransformFromPointPairs([
+    { source: { x: 0, y: 0 }, target: { x: 1, y: 1 } },
+    { source: { x: 4, y: 0 }, target: { x: 6, y: 0 } },
+    { source: { x: 4, y: 3 }, target: { x: 5, y: 5 } },
+    { source: { x: 0, y: 3 }, target: { x: 0, y: 4 } },
+  ])
+
+  expect(transform).toBeTruthy()
+  for (const pair of [
+    { source: { x: 0, y: 0 }, target: { x: 1, y: 1 } },
+    { source: { x: 4, y: 0 }, target: { x: 6, y: 0 } },
+    { source: { x: 4, y: 3 }, target: { x: 5, y: 5 } },
+    { source: { x: 0, y: 3 }, target: { x: 0, y: 4 } },
+  ]) {
+    const projected = applyWorkflowTransformToPoint(transform!, pair.source.x, pair.source.y)
+    expect(projected.x).toBeCloseTo(pair.target.x, 4)
+    expect(projected.y).toBeCloseTo(pair.target.y, 4)
+  }
+
+  const reference = flatImage(8, 4, (x, y) => [30 + x * 14, 42 + y * 21, 90 + ((x + y) % 3) * 30, 255])
+  const shifted = flatImage(8, 4, (x, y) => [30 + Math.max(0, x - 2) * 14, 42 + y * 21, 90 + (((Math.max(0, x - 2)) + y) % 3) * 30, 255])
+  const panorama = photomergeImageStack([reference, shifted], {
+    searchRadius: 3,
+    alignmentModel: "homography",
+    projection: "spherical",
+    blendMode: "multiband",
+    cameraModel: {
+      focalLengthPx: 12,
+      sensorWidthMm: 36,
+      lens: { k1: -0.02, k2: 0.004, p1: 0.001, p2: -0.001 },
+    },
+  })
+
+  expect(panorama.projection).toBe("spherical")
+  expect(panorama.cameraModel?.focalLengthPx).toBe(12)
+  expect(panorama.blendDiagnostics.mode).toBe("multiband")
+  expect(panorama.blendDiagnostics.exposureCompensated).toBe(true)
+  expect(panorama.image.width).toBeGreaterThanOrEqual(8)
 })
 
 test("photomerge uses classical feature matching diagnostics and expands the panorama canvas", () => {
@@ -172,6 +335,79 @@ test("HDR merge can align exposure brackets before tone mapping", () => {
   expect(hdr.image.width).toBe(6)
   expect(hdr.radiance.length).toBe(6 * 4 * 3)
   expect(hdr.exposureWeights[0][0]).toBeGreaterThan(0)
+})
+
+test("HDR merge exposes deghost masks and exposure weighting controls", () => {
+  const dark = flatImage(4, 2, (x, y) => {
+    if (x === 1 && y === 0) return [40, 42, 44, 255]
+    return [30 + x * 8, 34 + y * 9, 38 + x * 4, 255]
+  })
+  const normalWithGhost = flatImage(4, 2, (x, y) => {
+    if (x === 1 && y === 0) return [235, 36, 34, 255]
+    return [68 + x * 18, 72 + y * 16, 76 + x * 10, 255]
+  })
+  const bright = flatImage(4, 2, (x, y) => {
+    if (x === 1 && y === 0) return [92, 94, 96, 255]
+    return [120 + x * 24, 126 + y * 18, 132 + x * 13, 255]
+  })
+
+  const hdr = mergeHdrImageStack(
+    [dark, normalWithGhost, bright],
+    [{ ev: -1 }, { ev: 0 }, { ev: 1 }],
+    {
+      deghost: "high",
+      referenceIndex: 0,
+      exposureWeighting: "shadow-priority",
+      manualExposureWeights: [1, 0.7, 1.4],
+      toneMapping: { exposure: 0.1, compression: 0.85, gamma: 2.15 },
+    },
+  )
+  const ghostPixel = 1
+
+  expect(hdr.deghostMask[ghostPixel]).toBe(255)
+  expect(hdr.sourceIndexByPixel[ghostPixel]).toBe(0)
+  expect(hdr.image.data[ghostPixel * 4]).toBeLessThan(150)
+  expect(hdr.exposureWeights[2][4]).toBeGreaterThan(hdr.exposureWeights[0][4])
+  expect(hdr.toneMapping).toEqual({ exposure: 0.1, compression: 0.85, gamma: 2.15 })
+})
+
+test("HDR merge can emit scene-linear 32-bit high-bit output from RAW-style frames", () => {
+  const dark: HighBitImage = {
+    width: 2,
+    height: 1,
+    channels: 4,
+    bitDepth: 32,
+    colorMode: "RGB",
+    storage: "float32",
+    data: new Float32Array([0.02, 0.03, 0.04, 1, 0.12, 0.13, 0.14, 1]),
+    warnings: [],
+  }
+  const bright: HighBitImage = {
+    width: 2,
+    height: 1,
+    channels: 4,
+    bitDepth: 32,
+    colorMode: "RGB",
+    storage: "float32",
+    data: new Float32Array([0.28, 0.3, 0.32, 1, 0.82, 0.84, 0.86, 1]),
+    warnings: [],
+  }
+
+  const hdr = mergeHdrSceneLinearImageStack(
+    [
+      { image: dark, ev: -2, sourceKind: "raw" },
+      { image: bright, ev: 2, sourceKind: "raw" },
+    ],
+    { deghost: "low", toneMapping: { exposure: 0, compression: 0.9, gamma: 2.2 } },
+  )
+
+  expect(hdr.highBitImage.bitDepth).toBe(32)
+  expect(hdr.highBitImage.storage).toBe("float32")
+  expect(hdr.highBitImage.warnings.join(" ")).toContain("scene-linear")
+  expect(hdr.preview.width).toBe(2)
+  expect(hdr.rawStack).toBe(true)
+  expect((hdr.highBitImage.data as Float32Array)[0]).toBeGreaterThan(0.02)
+  expect(hdr.deghostMask).toHaveLength(2)
 })
 
 test("projective perspective crop maps a quadrilateral into a rectified image", () => {

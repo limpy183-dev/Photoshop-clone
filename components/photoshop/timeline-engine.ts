@@ -344,6 +344,179 @@ export function moveFrame(frames: TimelineFrame[], from: number, to: number): Ti
   return next
 }
 
+export function timelineDurationMs(frames: TimelineFrame[]): number {
+  return frames.reduce((sum, frame) => sum + Math.max(0, Math.round(frame.durationMs)), 0)
+}
+
+export function timelineFrameIndexAtTime(frames: TimelineFrame[], playheadMs: number): number {
+  if (!frames.length) return -1
+  const total = timelineDurationMs(frames)
+  const time = clamp(Math.round(playheadMs), 0, Math.max(0, total))
+  let cursor = 0
+  for (let i = 0; i < frames.length; i++) {
+    const duration = Math.max(0, Math.round(frames[i].durationMs))
+    if (time < cursor + duration) return i
+    cursor += duration
+  }
+  return frames.length - 1
+}
+
+export interface SplitTimelineFrameResult {
+  frames: TimelineFrame[]
+  didSplit: boolean
+  frameIndex: number
+  playheadMs: number
+  splitFrameIds: string[]
+}
+
+export function splitTimelineFrameAtPlayhead(
+  frames: TimelineFrame[],
+  playheadMs: number,
+  options: { minDurationMs?: number; idFactory?: (prefix: string) => string } = {},
+): SplitTimelineFrameResult {
+  const total = timelineDurationMs(frames)
+  const clampedPlayhead = clamp(Math.round(playheadMs), 0, Math.max(0, total))
+  const frameIndex = timelineFrameIndexAtTime(frames, clampedPlayhead)
+  if (frameIndex < 0) {
+    return { frames, didSplit: false, frameIndex, playheadMs: clampedPlayhead, splitFrameIds: [] }
+  }
+
+  const minDurationMs = Math.max(1, Math.round(options.minDurationMs ?? 20))
+  const frameStart = frames.slice(0, frameIndex).reduce((sum, frame) => sum + Math.max(0, Math.round(frame.durationMs)), 0)
+  const frame = frames[frameIndex]
+  const offset = clampedPlayhead - frameStart
+  const leftDuration = Math.round(offset)
+  const rightDuration = Math.round(frame.durationMs - offset)
+  if (leftDuration < minDurationMs || rightDuration < minDurationMs) {
+    return { frames, didSplit: false, frameIndex, playheadMs: clampedPlayhead, splitFrameIds: [] }
+  }
+
+  const makeId = options.idFactory ?? ((prefix: string) => uid(prefix))
+  const left: TimelineFrame = {
+    ...frame,
+    id: makeId("frame"),
+    name: `${frame.name} A`,
+    durationMs: leftDuration,
+  }
+  const right: TimelineFrame = {
+    ...frame,
+    id: makeId("frame"),
+    name: `${frame.name} B`,
+    durationMs: rightDuration,
+  }
+  return {
+    frames: [...frames.slice(0, frameIndex), left, right, ...frames.slice(frameIndex + 1)],
+    didSplit: true,
+    frameIndex,
+    playheadMs: clampedPlayhead,
+    splitFrameIds: [left.id, right.id],
+  }
+}
+
+export interface VideoFrameCanvasSample {
+  index: number
+  timeMs: number
+  label?: string
+  canvas: HTMLCanvasElement
+  dataUrl?: string
+}
+
+export interface VideoFrameCanvasExtraction {
+  layers: Layer[]
+  frames: TimelineFrame[]
+}
+
+export function makeFramesFromVideoCanvases(
+  doc: PsDocument,
+  sourceLayerId: string,
+  samples: VideoFrameCanvasSample[],
+  options: {
+    durationMs?: number
+    namePrefix?: string
+    idFactory?: (prefix: string, index: number) => string
+  } = {},
+): VideoFrameCanvasExtraction {
+  const durationMs = Math.max(20, Math.round(options.durationMs ?? (1000 / Math.max(1, doc.timelineSettings?.fps ?? DEFAULT_TIMELINE_SETTINGS.fps))))
+  const makeId = options.idFactory ?? ((prefix: string) => uid(prefix))
+  const sourceLayer = doc.layers.find((layer) => layer.id === sourceLayerId)
+  const namePrefix = options.namePrefix ?? sourceLayer?.name ?? "Video frame"
+
+  const layers: Layer[] = samples.map((sample, index) => {
+    const canvas = document.createElement("canvas")
+    canvas.width = Math.max(1, doc.width)
+    canvas.height = Math.max(1, doc.height)
+    const ctx = canvas.getContext("2d")
+    if (ctx) {
+      ctx.imageSmoothingEnabled = true
+      ctx.imageSmoothingQuality = "high"
+      ctx.drawImage(sample.canvas, 0, 0, canvas.width, canvas.height)
+    }
+    const label = sample.label ?? `${(sample.timeMs / 1000).toFixed(2)}s`
+    return {
+      id: makeId("video_frame", index),
+      name: `${namePrefix} ${String(index + 1).padStart(3, "0")} @ ${label}`,
+      kind: "raster",
+      visible: false,
+      locked: false,
+      opacity: 1,
+      fillOpacity: 1,
+      blendMode: "normal",
+      canvas,
+      metadata: {
+        title: `${namePrefix} ${String(index + 1).padStart(3, "0")}`,
+        custom: {
+          sourceLayerId,
+          sourceName: sourceLayer?.video?.sourceName ?? sourceLayer?.name ?? namePrefix,
+          sourceTimeMs: Math.round(sample.timeMs),
+        },
+      },
+    }
+  })
+
+  const existingVisibility = Object.fromEntries(
+    doc.layers.map((layer) => [layer.id, layer.id === sourceLayerId ? false : layer.visible]),
+  )
+  const existingOpacity = Object.fromEntries(doc.layers.map((layer) => [layer.id, layer.opacity]))
+  const existingFillOpacity = Object.fromEntries(doc.layers.map((layer) => [layer.id, layer.fillOpacity ?? 1]))
+  const existingBlend = Object.fromEntries(doc.layers.map((layer) => [layer.id, layer.blendMode]))
+  const extractedVisibilityOff = Object.fromEntries(layers.map((layer) => [layer.id, false]))
+  const extractedOpacity = Object.fromEntries(layers.map((layer) => [layer.id, 1]))
+  const extractedFillOpacity = Object.fromEntries(layers.map((layer) => [layer.id, 1]))
+  const extractedBlend = Object.fromEntries(layers.map((layer) => [layer.id, "normal" as BlendMode]))
+
+  const frames: TimelineFrame[] = samples.map((sample, index) => {
+    const layer = layers[index]
+    const label = sample.label ?? `${(sample.timeMs / 1000).toFixed(2)}s`
+    return {
+      id: makeId("frame", index),
+      name: `${namePrefix} ${String(index + 1).padStart(3, "0")} @ ${label}`,
+      durationMs,
+      layerVisibility: {
+        ...existingVisibility,
+        ...extractedVisibilityOff,
+        [layer.id]: true,
+      },
+      layerOpacity: { ...existingOpacity, ...extractedOpacity },
+      layerFillOpacity: { ...existingFillOpacity, ...extractedFillOpacity },
+      layerBlend: { ...existingBlend, ...extractedBlend },
+      layerTransform: {},
+      transition: "hold",
+      easing: "linear",
+      thumbnail: sample.dataUrl ?? sample.canvas.toDataURL("image/png"),
+      keyframes: [{
+        id: makeId("key", index),
+        timeMs: Math.round(sample.timeMs),
+        layerId: sourceLayerId,
+        property: "opacity",
+        value: 1,
+        easing: "hold",
+      }],
+    }
+  })
+
+  return { layers, frames }
+}
+
 export function makeFramesFromLayers(doc: PsDocument): TimelineFrame[] {
   const baseVisibility: Record<string, boolean> = Object.fromEntries(
     doc.layers.map((layer) => [layer.id, false]),

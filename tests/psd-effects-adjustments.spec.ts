@@ -12,6 +12,7 @@ import {
   psdToAppAdvancedBlending,
   psdToAppSmartFilters,
 } from "../components/photoshop/psd-effects-adjustments"
+import { createBlurGalleryMeshResource, formatFieldBlurPins } from "../components/photoshop/blur-gallery-controls"
 import type {
   AdjustmentProps,
   AdjustmentType,
@@ -534,68 +535,40 @@ test("selective-color round-trips CMY+K buckets", () => {
 })
 
 /* -------------------------------------------------------------------------- */
-/* Adjustments: marker-fallback round-trip                                     */
+/* Adjustments: native or preservation-channel round-trip                      */
 /* -------------------------------------------------------------------------- */
 
-function roundTripMarker(adjustment: AdjustmentProps): AdjustmentProps | null {
-  const psdFields = appAdjustmentToPsdLayer(adjustmentLayer(adjustment))
-  // Marker-fallback path produces a `name` field instead of `adjustment`.
-  expect(psdFields.adjustment).toBeUndefined()
-  expect(typeof psdFields.name).toBe("string")
-  const stub = { name: psdFields.name } as unknown as Parameters<typeof psdLayerToAppAdjustment>[0]
-  return psdLayerToAppAdjustment(stub)
-}
+test("unsupported adjustment exports keep real layer names and avoid marker encoding", () => {
+  const unsupported: AdjustmentProps[] = [
+    { type: "shadows-highlights", params: { shadowAmount: 35, highlightAmount: 20, midtoneContrast: 5 } },
+    { type: "hdr-toning", params: { method: "local", radius: 30, strength: 0.7 } },
+    { type: "desaturate", params: {} },
+    { type: "match-color", params: { source: "doc-a", luminance: 0.9, colorIntensity: 1.1, fadeAmount: 0 } },
+    { type: "replace-color", params: { target: "#aabbcc", replacement: "#112233", fuzziness: 40 } },
+    { type: "equalize", params: {} },
+  ]
 
-test("shadows-highlights round-trips through marker-name encoding", () => {
-  const result = roundTripMarker({
-    type: "shadows-highlights",
-    params: { shadowAmount: 35, highlightAmount: 20, midtoneContrast: 5 },
-  })
-  expect(result?.type).toBe("shadows-highlights")
-  expect(result?.params.shadowAmount).toBe(35)
-  expect(result?.params.highlightAmount).toBe(20)
-  expect(result?.params.midtoneContrast).toBe(5)
+  for (const adjustment of unsupported) {
+    const psdFields = appAdjustmentToPsdLayer(adjustmentLayer(adjustment))
+    expect((psdFields as { name?: string }).name).toBeUndefined()
+  }
 })
 
-test("hdr-toning round-trips via marker", () => {
-  const result = roundTripMarker({
-    type: "hdr-toning",
-    params: { method: "local", radius: 30, strength: 0.7 },
+test("desaturate exports as a native hue/saturation surrogate", () => {
+  const psdFields = appAdjustmentToPsdLayer(adjustmentLayer({ type: "desaturate", params: {} }))
+  expect(psdFields.adjustment).toMatchObject({
+    type: "hue/saturation",
+    master: { saturation: -100 },
   })
-  expect(result?.type).toBe("hdr-toning")
-  expect(result?.params.method).toBe("local")
-  expect(result?.params.radius).toBe(30)
 })
 
-test("desaturate round-trips via marker", () => {
-  const result = roundTripMarker({ type: "desaturate", params: {} })
-  expect(result?.type).toBe("desaturate")
-})
-
-test("match-color round-trips via marker", () => {
-  const result = roundTripMarker({
-    type: "match-color",
-    params: { source: "doc-a", luminance: 0.9, colorIntensity: 1.1, fadeAmount: 0 },
-  })
-  expect(result?.type).toBe("match-color")
-  expect(result?.params.source).toBe("doc-a")
-  expect(result?.params.luminance).toBeCloseTo(0.9, 3)
-})
-
-test("replace-color round-trips via marker", () => {
-  const result = roundTripMarker({
-    type: "replace-color",
-    params: { target: "#aabbcc", replacement: "#112233", fuzziness: 40 },
-  })
+test("legacy marker-name adjustment payloads still import safely", () => {
+  const marker = "__adj:replace-color:JTdCJTIydGFyZ2V0JTIyJTNBJTIyJTIzYWFiYmNjJTIyJTJDJTIycmVwbGFjZW1lbnQlMjIlM0ElMjIlMjMxMTIyMzMlMjIlMkMlMjJmdXp6aW5lc3MlMjIlM0E0MCU3RA==__"
+  const result = psdLayerToAppAdjustment({ name: marker } as unknown as Parameters<typeof psdLayerToAppAdjustment>[0])
   expect(result?.type).toBe("replace-color")
   expect(result?.params.target).toBe("#aabbcc")
   expect(result?.params.replacement).toBe("#112233")
   expect(result?.params.fuzziness).toBe(40)
-})
-
-test("equalize round-trips via marker", () => {
-  const result = roundTripMarker({ type: "equalize", params: {} })
-  expect(result?.type).toBe("equalize")
 })
 
 test("non-marker non-adjustment names yield null", () => {
@@ -672,6 +645,98 @@ test("smart filter stack serializes into additionalLayerInfo and round-trips", (
   expect(back?.[1].enabled).toBe(false)
   expect(back?.[1].params.amount).toBe(80)
   expect(back?.[1].maskEnabled).toBe(false)
+})
+
+test("blur gallery smart filters preserve mesh resource descriptors in PSD metadata", () => {
+  const blurGalleryMesh = createBlurGalleryMeshResource("field-blur", {
+    blur: 22,
+    falloff: 35,
+    pins: formatFieldBlurPins([
+      { x: 22, y: 44, blur: 12 },
+      { x: 72, y: 66, blur: 34 },
+    ]),
+  })
+  const layer: Layer = {
+    id: "layer_blur_gallery",
+    name: "Blur Gallery Smart",
+    kind: "raster",
+    visible: true,
+    locked: false,
+    opacity: 1,
+    blendMode: "normal",
+    canvas: fixtureCanvas(),
+    smartFilters: [{
+      id: "sf_field",
+      filterId: "field-blur",
+      name: "Field Blur",
+      enabled: true,
+      opacity: 1,
+      blendMode: "normal",
+      params: { blur: 22, falloff: 35, pins: String(blurGalleryMesh.descriptor.params.pins) },
+      blurGalleryMesh,
+    }],
+  }
+
+  const result = appSmartFiltersToPsd(layer)
+  const payload = result?.additionalInfo[SMART_FILTERS_INFO_KEY] as { filters?: SmartFilter[] } | undefined
+  expect(payload?.filters?.[0].blurGalleryMesh?.resourceKey).toBe("blurGalleryMesh")
+
+  const back = psdToAppSmartFilters({
+    additionalLayerInfo: result!.additionalInfo,
+  } as unknown as Parameters<typeof psdToAppSmartFilters>[0])
+  expect(back?.[0].blurGalleryMesh?.checksum).toBe(blurGalleryMesh.checksum)
+  expect(back?.[0].blurGalleryMesh?.descriptor.mesh.kind).toBe("field")
+})
+
+test("smart filter stack exports native placed-filter data and editable masks", () => {
+  const mask = {
+    width: 2,
+    height: 1,
+    getContext: () => ({
+      getImageData: () => ({ width: 2, height: 1, data: new Uint8ClampedArray([0, 0, 0, 255, 255, 255, 255, 255]) }),
+      putImageData: () => {},
+    }),
+  } as unknown as HTMLCanvasElement
+  const layer: Layer = {
+    id: "layer_smart",
+    name: "Smart",
+    kind: "smart-object",
+    visible: true,
+    locked: false,
+    opacity: 1,
+    blendMode: "normal",
+    canvas: fixtureCanvas(),
+    smartFilters: [{
+      id: "sf_native",
+      filterId: "gaussian-blur",
+      name: "Gaussian Blur",
+      enabled: true,
+      opacity: 0.8,
+      blendMode: "soft-light",
+      params: { radius: 5 },
+      mask,
+      maskEnabled: true,
+    }],
+  }
+
+  const result = appSmartFiltersToPsd(layer)
+
+  expect(result?.nativeFilter?.list[0]).toMatchObject({
+    type: "gaussian blur",
+    name: "Gaussian Blur",
+    enabled: true,
+  })
+  expect(result?.filterEffectsMasks?.[0]?.extra?.data.length).toBe(2)
+
+  const back = psdToAppSmartFilters({
+    placedLayer: { filter: result!.nativeFilter },
+    filterEffectsMasks: result!.filterEffectsMasks,
+  } as unknown as Parameters<typeof psdToAppSmartFilters>[0])
+
+  expect(back?.[0].filterId).toBe("gaussian-blur")
+  expect(back?.[0].params.radius).toBe(5)
+  expect(back?.[0].mask?.width).toBe(2)
+  expect(back?.[0].mask?.height).toBe(1)
 })
 
 test("smart filters helper returns null when no filters are attached", () => {

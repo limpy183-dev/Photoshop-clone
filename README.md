@@ -280,6 +280,8 @@ This project intentionally models and reports limits that cannot be fully solved
 
 These limitations are surfaced through status warnings, preflight reports, export limitation reports, and compatibility manifests rather than hidden behind silent lossy conversions.
 
+See [BOUNDARIES.md](BOUNDARIES.md) for the list of features that are intentionally out of scope (Adobe cloud/AI services, native plugin runtimes, certified CMM, codecs beyond `MediaRecorder`, etc.) and why.
+
 ## Development Notes
 
 - Keep editor behavior centralized through typed editor actions when possible.

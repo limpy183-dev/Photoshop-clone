@@ -24,7 +24,7 @@ import type { GapWorkflowKind } from "./gap-workflow-dialog"
 import type { SelectionOperation } from "./management-dialogs"
 import { lazyDialog } from "./lazy-dialog"
 import { dispatchPhotoshopEvent } from "./events"
-import { canPluginUsePermission } from "./plugin-system"
+import { canPluginUsePermission, permissionsForPluginActionDescriptors } from "./plugin-system"
 
 // All dialogs below are lazy-mounted: the JS chunk is fetched only the first
 // time the user opens the dialog, and the component returns null until then.
@@ -193,6 +193,17 @@ const WorkspaceManagerDialog = lazyDialog<{
 const ContactSheetDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
   () => import("./contact-sheet-dialog").then((m) => ({ default: m.ContactSheetDialog })),
 )
+const LargeDocumentRecoveryDialog = lazyDialog<{
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  plan: import("./large-document").LargeDocumentOpenPlan | null
+  busy?: boolean
+  onOpenReduced: () => void
+  onOpenTileOnly: () => void
+  onInspect: () => void
+}>(
+  () => import("./large-document-recovery-dialog").then((m) => ({ default: m.LargeDocumentRecoveryDialog })),
+)
 const GridSettingsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
   () => import("./workspace-dialogs").then((m) => ({ default: m.GridSettingsDialog })),
 )
@@ -215,11 +226,19 @@ import {
   downloadBlob,
   downloadText,
   generateDocumentThumbnail,
-  loadImageFromFile,
+  inspectImportFileDimensions,
+  inspectPsdRecoveryFile,
+  loadRasterCanvasFromFile,
   serializePsb,
   serializePsd,
   serializeProject,
 } from "./document-io"
+import {
+  createLargeDocumentInspectionDocument,
+  describeLargeDocumentRecovery,
+  planLargeDocumentOpen,
+  type LargeDocumentOpenPlan,
+} from "./large-document"
 import {
   readRecentDocuments,
   rememberRecentDocument,
@@ -255,6 +274,8 @@ function permissionsForPluginCommand(command: PluginCommandDescriptor): PluginPe
   if (command.requiredPermissions?.length) return command.requiredPermissions
   if (command.action.type === "apply-filter") return ["filters:write"]
   if (command.action.type === "post-message") return ["commands"]
+  if (command.action.type === "batch-play") return permissionsForPluginActionDescriptors(command.action.descriptors)
+  if (command.action.type === "eval-script") return ["commands"]
   return []
 }
 
@@ -374,6 +395,13 @@ export function MenuBar({
   const [selectionOperation, setSelectionOperation] = React.useState<SelectionOperation | null>(null)
   const [savedWorkspaces, setSavedWorkspaces] = React.useState<{ name: string; savedAt?: number }[]>([])
   const [recentDocuments, setRecentDocuments] = React.useState<RecentDocument[]>([])
+  const [largeDocumentRecovery, setLargeDocumentRecovery] = React.useState<{
+    file: File
+    plan: LargeDocumentOpenPlan
+    source: "open" | "place"
+    reason: string
+  } | null>(null)
+  const [largeDocumentRecoveryBusy, setLargeDocumentRecoveryBusy] = React.useState(false)
 
   const refreshWorkspaces = React.useCallback(() => {
     try {
@@ -745,11 +773,86 @@ export function MenuBar({
   }
 
   const canvasFromImageFile = async (file: File) => {
-    const image = await loadImageFromFile(file)
-    const canvas = makeCanvas(image.naturalWidth, image.naturalHeight)
-    canvas.getContext("2d")!.drawImage(image, 0, 0)
-    return canvas
+    return (await loadRasterCanvasFromFile(file, { mode: "reduced-scale" })).canvas
   }
+
+  const buildLargeDocumentRecovery = async (
+    file: File,
+    source: "open" | "place",
+    error: unknown,
+  ) => {
+    const dimensions = await inspectImportFileDimensions(file).catch(() => null)
+    if (!dimensions) return false
+    const parsedPsd = dimensions.kind === "psd" || dimensions.kind === "psb"
+      ? await inspectPsdRecoveryFile(file).catch(() => null)
+      : null
+    const reason = error instanceof Error ? error.message : "The document exceeds browser limits."
+    const plan = planLargeDocumentOpen({
+      fileName: file.name,
+      kind: parsedPsd?.kind ?? dimensions.kind,
+      width: parsedPsd?.width ?? dimensions.width,
+      height: parsedPsd?.height ?? dimensions.height,
+      layerCount: parsedPsd?.parsedStructure.layerCount ?? 1,
+      tileable: dimensions.kind === "psb",
+      parsedStructure: parsedPsd?.parsedStructure,
+    })
+    setLargeDocumentRecovery({ file, plan, source, reason })
+    toast.info(describeLargeDocumentRecovery(plan))
+    return true
+  }
+
+  const openRasterCanvasAsDocument = React.useCallback((file: File, raster: Awaited<ReturnType<typeof loadRasterCanvasFromFile>>) => {
+    const doc = makeDocument(file.name, raster.canvas.width, raster.canvas.height)
+    doc.layers[0].canvas.getContext("2d")!.drawImage(raster.canvas, 0, 0)
+    if (raster.mode === "reduced-scale") {
+      doc.name = file.name.replace(/\.[^.]+$/, " (Reduced)")
+      doc.metadata = {
+        ...(doc.metadata ?? {}),
+        title: file.name,
+        source: file.name,
+        description: `Opened at ${(raster.scale * 100).toFixed(1)}% scale from ${raster.originalWidth} x ${raster.originalHeight}px.`,
+        createdAt: new Date().toISOString(),
+      }
+    }
+    createDocument(doc, raster.mode === "reduced-scale" ? "Open Reduced Image" : "Open")
+    rememberDoc(doc, "image")
+  }, [createDocument, rememberDoc])
+
+  const placeRasterCanvas = React.useCallback(async (file: File, sourceCanvas: HTMLCanvasElement, label = "Place Embedded") => {
+    if (!activeDoc) return
+    const canvas = makeCanvas(activeDoc.width, activeDoc.height)
+    const ctx = canvas.getContext("2d")!
+    const maxW = activeDoc.width * 0.9
+    const maxH = activeDoc.height * 0.9
+    const scale = Math.min(1, maxW / sourceCanvas.width, maxH / sourceCanvas.height)
+    const w = Math.max(1, sourceCanvas.width * scale)
+    const h = Math.max(1, sourceCanvas.height * scale)
+    ctx.imageSmoothingEnabled = true
+    ctx.imageSmoothingQuality = "high"
+    ctx.drawImage(sourceCanvas, (activeDoc.width - w) / 2, (activeDoc.height - h) / 2, w, h)
+    const layer: Layer = {
+      id: `layer_${Math.random().toString(36).slice(2, 9)}`,
+      name: `Placed ${file.name}`,
+      kind: "smart-object",
+      smartObject: true,
+      visible: true,
+      locked: false,
+      opacity: 1,
+      blendMode: "normal",
+      canvas,
+      smartSource: createSmartObjectSource(sourceCanvas, {
+        name: file.name,
+        fileName: file.name,
+        linkType: "embedded",
+        status: "embedded",
+        embedded: true,
+        lastKnownModified: file.lastModified,
+        sourceHash: await fileHash(file),
+      }),
+    }
+    dispatch({ type: "add-layer", layer })
+    setTimeout(() => commit(label, [layer.id]), 0)
+  }, [activeDoc, commit, dispatch])
 
   const pickSmartObjectImage = async (): Promise<{ file: File; handle?: ReadableFileHandle; permission: PermissionState | "unsupported" }> => {
     const picker = (window as OpenPickerWindow).showOpenFilePicker
@@ -1402,12 +1505,10 @@ export function MenuBar({
           rememberDoc(doc, "psd")
           return
         }
-        const img = await loadImageFromFile(file)
-        const doc = makeDocument(file.name, img.naturalWidth, img.naturalHeight)
-        doc.layers[0].canvas.getContext("2d")!.drawImage(img, 0, 0)
-        createDocument(doc, "Open")
-        rememberDoc(doc, "image")
+        const raster = await loadRasterCanvasFromFile(file)
+        openRasterCanvasAsDocument(file, raster)
       } catch (err) {
+        if (await buildLargeDocumentRecovery(file, "open", err)) return
         toast.error(err instanceof Error ? err.message : "Could not open file")
       }
     }
@@ -1477,46 +1578,82 @@ export function MenuBar({
       const file = input.files?.[0]
       if (!file || !activeDoc) return
       try {
-        const img = await loadImageFromFile(file)
-        const sourceCanvas = makeCanvas(img.naturalWidth, img.naturalHeight)
-        sourceCanvas.getContext("2d")!.drawImage(img, 0, 0)
-        const canvas = makeCanvas(activeDoc.width, activeDoc.height)
-        const ctx = canvas.getContext("2d")!
-        const maxW = activeDoc.width * 0.9
-        const maxH = activeDoc.height * 0.9
-        const scale = Math.min(1, maxW / img.naturalWidth, maxH / img.naturalHeight)
-        const w = Math.max(1, img.naturalWidth * scale)
-        const h = Math.max(1, img.naturalHeight * scale)
-        ctx.imageSmoothingEnabled = true
-        ctx.imageSmoothingQuality = "high"
-        ctx.drawImage(img, (activeDoc.width - w) / 2, (activeDoc.height - h) / 2, w, h)
-        const layer: Layer = {
-          id: `layer_${Math.random().toString(36).slice(2, 9)}`,
-          name: `Placed ${file.name}`,
-          kind: "smart-object",
-          smartObject: true,
-          visible: true,
-          locked: false,
-          opacity: 1,
-          blendMode: "normal",
-          canvas,
-          smartSource: createSmartObjectSource(sourceCanvas, {
-            name: file.name,
-            fileName: file.name,
-            linkType: "embedded",
-            status: "embedded",
-            embedded: true,
-            lastKnownModified: file.lastModified,
-            sourceHash: await fileHash(file),
-          }),
-        }
-        dispatch({ type: "add-layer", layer })
-        setTimeout(() => commit("Place Embedded", [layer.id]), 0)
+        const raster = await loadRasterCanvasFromFile(file)
+        await placeRasterCanvas(file, raster.canvas)
       } catch (err) {
+        if (await buildLargeDocumentRecovery(file, "place", err)) return
         toast.error(err instanceof Error ? err.message : "Could not place image")
       }
     }
     input.click()
+  }
+
+  const closeLargeDocumentRecovery = () => {
+    if (largeDocumentRecoveryBusy) return
+    setLargeDocumentRecovery(null)
+  }
+
+  const openLargeDocumentReduced = async () => {
+    const recovery = largeDocumentRecovery
+    if (!recovery) return
+    setLargeDocumentRecoveryBusy(true)
+    try {
+      if (recovery.source === "place") {
+        const raster = await loadRasterCanvasFromFile(recovery.file, { mode: "reduced-scale" })
+        await placeRasterCanvas(recovery.file, raster.canvas, "Place Reduced Embedded")
+      } else if (recovery.plan.kind === "psd" || recovery.plan.kind === "psb") {
+        const doc = await deserializePsdFile(recovery.file, { psbLargeDocumentMode: "reduced-scale" })
+        createDocument(doc, "Open Reduced Photoshop Document")
+        dispatch({ type: "add-document-report", report: createDocumentReport(doc, "PSD Import") })
+        rememberDoc(doc, "psd")
+      } else {
+        const raster = await loadRasterCanvasFromFile(recovery.file, { mode: "reduced-scale" })
+        openRasterCanvasAsDocument(recovery.file, raster)
+      }
+      setLargeDocumentRecovery(null)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not open reduced document")
+    } finally {
+      setLargeDocumentRecoveryBusy(false)
+    }
+  }
+
+  const openLargeDocumentTileOnly = async () => {
+    const recovery = largeDocumentRecovery
+    if (!recovery) return
+    if (recovery.plan.kind !== "psb") {
+      toast.info("Tile-only import is available for oversized PSB files.")
+      return
+    }
+    setLargeDocumentRecoveryBusy(true)
+    try {
+      const doc = await deserializePsdFile(recovery.file, { psbLargeDocumentMode: "tile-view" })
+      createDocument(doc, "Open Tile-Only PSB")
+      dispatch({ type: "add-document-report", report: createDocumentReport(doc, "PSD Import") })
+      rememberDoc(doc, "psd")
+      setLargeDocumentRecovery(null)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not open tile-only PSB")
+    } finally {
+      setLargeDocumentRecoveryBusy(false)
+    }
+  }
+
+  const inspectLargeDocument = () => {
+    const recovery = largeDocumentRecovery
+    if (!recovery) return
+    const doc = createLargeDocumentInspectionDocument({
+      fileName: recovery.file.name,
+      kind: recovery.plan.kind,
+      width: recovery.plan.width,
+      height: recovery.plan.height,
+      reason: recovery.reason,
+      warnings: recovery.plan.warnings,
+      parsedStructure: recovery.plan.parsedStructure,
+    })
+    createDocument(doc, "Inspect Large Document")
+    dispatch({ type: "add-document-report", report: createDocumentReport(doc, recovery.plan.kind === "psd" || recovery.plan.kind === "psb" ? "PSD Import" : "Project Import") })
+    setLargeDocumentRecovery(null)
   }
 
   const applyWorkspacePreset = (preset: WorkspacePresetId) => {
@@ -3127,6 +3264,17 @@ export function MenuBar({
       <PreferencesDialog open={preferencesOpen} onOpenChange={setPreferencesOpen} />
       <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
+      <LargeDocumentRecoveryDialog
+        open={!!largeDocumentRecovery}
+        onOpenChange={(open) => {
+          if (!open) closeLargeDocumentRecovery()
+        }}
+        plan={largeDocumentRecovery?.plan ?? null}
+        busy={largeDocumentRecoveryBusy}
+        onOpenReduced={() => void openLargeDocumentReduced()}
+        onOpenTileOnly={() => void openLargeDocumentTileOnly()}
+        onInspect={inspectLargeDocument}
+      />
       <FilterGalleryDialog open={filterGalleryOpen} onOpenChange={setFilterGalleryOpen} />
       <CameraRawDialog open={cameraRawOpen} onOpenChange={setCameraRawOpen} />
       <SelectAndMaskDialog open={selectMaskOpen} onOpenChange={setSelectMaskOpen} />

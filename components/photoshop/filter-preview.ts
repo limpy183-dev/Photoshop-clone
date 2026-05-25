@@ -5,6 +5,12 @@ import {
   isFilterWorkerSupported,
   planExpensiveFilterTiling,
 } from "./filter-worker"
+import {
+  getBlurGalleryControlState,
+  isBlurGalleryFilterId,
+  parseFieldBlurPins,
+  parsePathBlurPoints,
+} from "./blur-gallery-controls"
 import type { FilterContext, FilterDef } from "./filters"
 
 type ParamValue = number | string | boolean
@@ -17,7 +23,16 @@ export interface FilterPreviewPlan {
   pixelCount: number
   previewScale: number
   tileSize?: number
-  reason: "small-preview" | "worker-supported-preview" | "expensive-filter-large-preview" | "unsupported-large-preview"
+  reason:
+    | "small-preview"
+    | "worker-supported-preview"
+    | "expensive-filter-large-preview"
+    | "unsupported-large-preview"
+    | "interactive-blur-gallery-preview"
+}
+
+export interface FilterPreviewOptions {
+  interactive?: boolean
 }
 
 export function planFilterPreviewExecution(
@@ -25,9 +40,20 @@ export function planFilterPreviewExecution(
   width: number,
   height: number,
   params: ParamMap = {},
+  options: FilterPreviewOptions = {},
 ): FilterPreviewPlan {
   const pixelCount = Math.max(0, Math.round(width)) * Math.max(0, Math.round(height))
   const previewScale = pixelCount >= 4_000_000 ? 0.5 : 1
+
+  if (isInteractiveBlurGalleryPreview(filterId, params, options) && isHeavyBlurGalleryPreview(filterId, width, height, params)) {
+    return {
+      mode: "downsample-sync",
+      pixelCount,
+      previewScale: pixelCount >= 4_000_000 ? 0.25 : 0.5,
+      reason: "interactive-blur-gallery-preview",
+    }
+  }
+
   const tiling = planExpensiveFilterTiling(filterId, width, height, params, { tileSize: 512 })
 
   if (tiling.strategy === "tiled-worker-preferred") {
@@ -67,8 +93,9 @@ export async function applyPlannedFilterPreview(
   params: ParamMap,
   context: FilterContext,
   signal?: AbortSignal,
+  options: FilterPreviewOptions = {},
 ) {
-  const plan = planFilterPreviewExecution(filter.id, src.width, src.height, params)
+  const plan = planFilterPreviewExecution(filter.id, src.width, src.height, params, options)
   if (signal?.aborted) throw new DOMException("Filter preview cancelled", "AbortError")
 
   if (Object.keys(context).length > 0) {
@@ -92,6 +119,36 @@ export async function applyPlannedFilterPreview(
   }
 
   return filter.apply(src, params, context)
+}
+
+function isInteractiveBlurGalleryPreview(filterId: string, params: ParamMap, options: FilterPreviewOptions) {
+  if (!isBlurGalleryFilterId(filterId)) return false
+  return options.interactive === true || getBlurGalleryControlState(params).previewQuality === "interactive"
+}
+
+function isHeavyBlurGalleryPreview(filterId: string, width: number, height: number, params: ParamMap) {
+  const pixelCount = Math.max(0, Math.round(width)) * Math.max(0, Math.round(height))
+  if (pixelCount >= 1_000_000) return true
+
+  if (filterId === "field-blur") {
+    const pins = parseFieldBlurPins(String(params.pins ?? ""))
+    const maxPinBlur = pins.reduce((max, pin) => Math.max(max, pin.blur), 0)
+    return pins.length > 1 || Math.max(Number(params.blur) || 0, maxPinBlur) >= 32
+  }
+
+  if (filterId === "iris-blur" || filterId === "tilt-shift") {
+    return (Number(params.blur) || 0) >= 32
+  }
+
+  if (filterId === "path-blur") {
+    return parsePathBlurPoints(String(params.path ?? "")).length > 2 || (Number(params.distance) || 0) >= 48
+  }
+
+  if (filterId === "spin-blur") {
+    return (Number(params.amount) || 0) >= 32 || (Number(params.radius) || 0) >= 65
+  }
+
+  return false
 }
 
 export async function applyPlannedFilterFinal(

@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { makeCanvas, makeDocument, useEditor } from "./editor-context"
-import { canvasToGifDataUrl, downloadBlob, downloadDataUrl, loadImageFromFile, rasterMime, renderDocumentComposite } from "./document-io"
+import { canvasToGifDataUrl, downloadBlob, downloadDataUrl, loadRasterCanvasFromFile, rasterMime, renderDocumentComposite } from "./document-io"
 import type { BrowserRasterExportFormat } from "./document-io"
 import {
   DEFAULT_AUTOMATION_OUTPUT,
@@ -80,9 +80,9 @@ function safeName(name: string) {
   return name.replace(/\.[^.]+$/, "").replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "-") || "image"
 }
 
-function imageToCanvas(img: HTMLImageElement, maxWidth: number, maxHeight: number, resize: boolean) {
-  let width = img.naturalWidth
-  let height = img.naturalHeight
+function sourceToCanvas(source: CanvasImageSource, sourceWidth: number, sourceHeight: number, maxWidth: number, maxHeight: number, resize: boolean) {
+  let width = sourceWidth
+  let height = sourceHeight
   if (resize && maxWidth > 0 && maxHeight > 0) {
     const ratio = Math.min(maxWidth / width, maxHeight / height, 1)
     width = Math.max(1, Math.round(width * ratio))
@@ -92,7 +92,7 @@ function imageToCanvas(img: HTMLImageElement, maxWidth: number, maxHeight: numbe
   const ctx = canvas.getContext("2d")!
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = "high"
-  ctx.drawImage(img, 0, 0, width, height)
+  ctx.drawImage(source, 0, 0, width, height)
   return canvas
 }
 
@@ -186,8 +186,8 @@ export function BatchProcessingDialog({ open, onOpenChange }: { open: boolean; o
       let processed = 0
       for (const file of files) {
         try {
-          const img = await loadImageFromFile(file)
-          const canvas = imageToCanvas(img, maxWidth, maxHeight, resize)
+          const raster = await loadRasterCanvasFromFile(file, { mode: "reduced-scale" })
+          const canvas = sourceToCanvas(raster.canvas, raster.canvas.width, raster.canvas.height, maxWidth, maxHeight, resize)
           const output = await executeCanvasWorkflow(canvas, workflow, { makeCanvas, log: appendLog })
           const filename = renderTemplateName(workflow.output.filenameTemplate, { name: safeName(file.name), workflow: workflow.name }, processed)
           await exportCanvas(output, filename, workflow.output)
@@ -303,8 +303,8 @@ export function ImageProcessorDialog({ open, onOpenChange }: { open: boolean; on
       let firstCanvas: HTMLCanvasElement | null = null
       for (const file of files) {
         try {
-          const img = await loadImageFromFile(file)
-          const canvas = imageToCanvas(img, maxWidth, maxHeight, resize)
+          const raster = await loadRasterCanvasFromFile(file, { mode: "reduced-scale" })
+          const canvas = sourceToCanvas(raster.canvas, raster.canvas.width, raster.canvas.height, maxWidth, maxHeight, resize)
           if (!firstCanvas) firstCanvas = canvas
           await exportCanvas(canvas, `${safeName(file.name)}-processed`, { format, quality, transparent, matte })
         } catch (error) {

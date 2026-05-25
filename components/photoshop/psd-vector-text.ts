@@ -448,6 +448,7 @@ export function appTextToPsd(text: TextProps, layerLeft: number, layerTop: numbe
   if (text.variableAxes) markerPayload.variableAxes = text.variableAxes
   if (text.variableAxisDefinitions) markerPayload.variableAxisDefinitions = text.variableAxisDefinitions
   if (text.variableNamedInstance) markerPayload.variableNamedInstance = text.variableNamedInstance
+  if (text.embeddedFont) markerPayload.embeddedFont = text.embeddedFont
   if (text.characterStyles && text.characterStyles.length > 0) markerPayload.characterStyles = text.characterStyles
   if (text.openType) markerPayload.openType = text.openType
   if (text.contextualAlternates != null) markerPayload.contextualAlternates = text.contextualAlternates
@@ -670,6 +671,9 @@ export function psdTextToApp(
         text.verticalAlign = extras.verticalAlign
       }
       if (typeof extras.variableNamedInstance === "string") text.variableNamedInstance = extras.variableNamedInstance
+      if (extras.embeddedFont && typeof extras.embeddedFont === "object") {
+        text.embeddedFont = extras.embeddedFont as TextProps["embeddedFont"]
+      }
       if (extras.mojikumi === "default" || extras.mojikumi === "loose" || extras.mojikumi === "compact" || extras.mojikumi === "none") {
         text.mojikumi = extras.mojikumi
       }

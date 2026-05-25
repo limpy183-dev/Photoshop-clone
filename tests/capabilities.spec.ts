@@ -13,13 +13,16 @@ import { createDocumentReport } from "../components/photoshop/document-io"
 test("capability registry classifies required report tracks", () => {
   expect(CAPABILITY_STATUS_ORDER).toEqual(["complete", "usable", "approximation", "stub", "unsupported"])
   expect(getCapability("tool.quick-selection").status).toBe("usable")
+  expect(getCapability("tool.object-aware-selection").status).toBe("usable")
+  expect(getCapability("tool.selection-matting").status).toBe("usable")
+  expect(getCapability("tool.magnetic-lasso").status).toBe("usable")
   expect(getCapability("format.psb").status).toBe("usable")
   expect(getCapability("format.openexr").status).toBe("approximation")
   expect(getCapability("format.baseline-tiff").status).toBe("usable")
   expect(getCapability("format.tga-pnm").status).toBe("usable")
-  expect(getCapability("color.high-bit-pipeline").status).toBe("approximation")
-  expect(getCapability("workflow.photomerge").status).toBe("approximation")
-  expect(getCapability("external.generative-fill").status).toBe("unsupported")
+  expect(getCapability("color.high-bit-pipeline").status).toBe("usable")
+  expect(getCapability("workflow.photomerge").status).toBe("usable")
+  expect(getCapability("external.generative-fill").status).toBe("usable")
 })
 
 test("capability registry exposes summaries by kind", () => {

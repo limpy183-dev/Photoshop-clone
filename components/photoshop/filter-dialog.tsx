@@ -8,7 +8,14 @@ import { compositeLayer } from "./blend-modes"
 import { useEditor } from "./editor-context"
 import { applyPlannedFilterFinal, applyPlannedFilterPreview } from "./filter-preview"
 import { getFilter, type FilterContext, type FilterDef } from "./filters"
-import { isBlurGalleryFilterId, normalizeBlurGalleryParams, type BlurGalleryParams } from "./blur-gallery-controls"
+import { applyHighBitFilterToLayer, previewHighBitFilterForLayer } from "./high-bit-document"
+import {
+  createBlurGalleryMeshResource,
+  getBlurGalleryControlState,
+  isBlurGalleryFilterId,
+  normalizeBlurGalleryParams,
+  type BlurGalleryParams,
+} from "./blur-gallery-controls"
 import type { Layer, PsDocument } from "./types"
 
 interface FilterDialogProps {
@@ -118,6 +125,7 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
     if (smartTarget) return
     const controller = new AbortController()
     const sequence = ++previewSequenceRef.current
+    const interactiveBlurGallery = isBlurGallery && getBlurGalleryControlState(params).previewQuality === "interactive"
     const run = async () => {
       for (const o of originalsRef.current) {
         if (controller.signal.aborted || sequence !== previewSequenceRef.current) return
@@ -125,7 +133,12 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
         if (!layer || typeof layer.canvas.getContext !== "function") continue
         let result: ImageData
         try {
-          result = await applyPlannedFilterPreview(filter, o.data, params, context, controller.signal)
+          const highBitPreview = activeDoc.bitDepth > 8 && Object.keys(context).length === 0
+            ? previewHighBitFilterForLayer(layer, activeDoc, filter.id, params, context)
+            : null
+          result = highBitPreview ?? await applyPlannedFilterPreview(filter, o.data, params, context, controller.signal, {
+            interactive: interactiveBlurGallery,
+          })
         } catch (error) {
           if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return
           result = filter.apply(o.data, params, context)
@@ -139,12 +152,12 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
         setFilterPreview(layer.id, tmp)
       }
     }
-    const id = window.setTimeout(() => void run(), 80)
+    const id = window.setTimeout(() => void run(), interactiveBlurGallery ? 24 : 80)
     return () => {
       controller.abort()
       window.clearTimeout(id)
     }
-  }, [filter, params, context, activeDoc, setFilterPreview, smartTarget])
+  }, [filter, params, context, activeDoc, setFilterPreview, smartTarget, isBlurGallery])
 
   React.useEffect(() => {
     if (!filter || !activeDoc) return
@@ -189,19 +202,21 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
 
     if (smartTarget) {
       const layer = selectedLayers[0]
+      const smartFilter = {
+        id: `sf_${Math.random().toString(36).slice(2, 9)}`,
+        filterId: filter.id,
+        name: filter.name,
+        enabled: true,
+        opacity: 1,
+        blendMode: "normal" as const,
+        maskDensity: 1,
+        maskFeather: 0,
+        params,
+        ...(isBlurGalleryFilterId(filter.id) ? { blurGalleryMesh: createBlurGalleryMeshResource(filter.id, params) } : {}),
+      }
       const smartFilters = [
         ...(layer.smartFilters ?? []),
-        {
-          id: `sf_${Math.random().toString(36).slice(2, 9)}`,
-          filterId: filter.id,
-          name: filter.name,
-          enabled: true,
-          opacity: 1,
-          blendMode: "normal" as const,
-          maskDensity: 1,
-          maskFeather: 0,
-          params,
-        },
+        smartFilter,
       ]
       dispatch({ type: "set-layer-smart-filters", id: layer.id, smartFilters })
       requestRender({ layerIds: [layer.id], reason: "smart-filter" })
@@ -216,6 +231,9 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
       for (const o of originalsRef.current) {
         const layer = activeDoc!.layers.find((l) => l.id === o.id)
         if (!layer || typeof layer.canvas.getContext !== "function") continue
+        if (activeDoc!.bitDepth > 8 && Object.keys(context).length === 0 && applyHighBitFilterToLayer(layer, activeDoc!, filter.id, params, context)) {
+          continue
+        }
         const result = await applyPlannedFilterFinal(filter, o.data, params, context)
         layer.canvas.getContext("2d")!.putImageData(result, 0, 0)
       }

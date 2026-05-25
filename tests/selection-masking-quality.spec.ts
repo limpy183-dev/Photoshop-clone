@@ -4,6 +4,7 @@ import {
   buildEdgeAwareQuickSelectionMaskData,
   decontaminateImageDataWithMask,
   refineSelectionMaskData,
+  selectionDiagnosticsOverlayData,
 } from "../components/photoshop/algorithmic-operations"
 
 class TestImageData {
@@ -54,6 +55,40 @@ test("adaptive quick selection accepts a coherent object region while stopping a
   expect(result.maskData[2 * 5 + 2]).toBe(255)
 })
 
+test("quick selection reports edge and color rejections when difficult boundaries stop expansion", () => {
+  const pixels: number[] = []
+  for (let y = 0; y < 7; y++) {
+    for (let x = 0; x < 7; x++) {
+      const inside = x >= 1 && x <= 3 && y >= 1 && y <= 5
+      const weakBridge = x === 4 && y >= 2 && y <= 4
+      const r = inside ? 206 : weakBridge ? 170 : 28
+      const g = inside ? 56 : weakBridge ? 72 : 120
+      const b = inside ? 38 : weakBridge ? 54 : 218
+      pixels.push(r, g, b, 255)
+    }
+  }
+
+  const result = buildEdgeAwareQuickSelectionMaskData(imageData(7, 7, pixels), {
+    seed: { x: 2, y: 3 },
+    tolerance: 42,
+    adaptive: true,
+    includeDiagonals: true,
+    edgeSensitivity: 0.9,
+    diagnostics: true,
+  })
+
+  expect(result.bounds).toEqual({ x: 1, y: 1, w: 3, h: 5 })
+  expect(result.maskData[3 * 7 + 4]).toBe(0)
+  expect(result.diagnostics.reasonCounts.edge).toBeGreaterThan(0)
+  expect(result.diagnostics.reasonCounts.color).toBeGreaterThan(0)
+  expect(result.diagnostics.summary).toContain("stopped at edge contrast")
+
+  const overlay = selectionDiagnosticsOverlayData(result.diagnostics, 7, 7)
+  const edgeRejectedPixel = result.diagnostics.reasonMap.findIndex((reason) => reason === 3)
+  expect(edgeRejectedPixel).toBeGreaterThanOrEqual(0)
+  expect(overlay.data[edgeRejectedPixel * 4 + 3]).toBeGreaterThan(0)
+})
+
 test("selection refinement smooths pinholes, feathers edges, and can shift the selection outward", () => {
   const mask = new Uint8ClampedArray(7 * 7)
   for (let y = 2; y <= 4; y++) {
@@ -74,6 +109,77 @@ test("selection refinement smooths pinholes, feathers edges, and can shift the s
   expect(refined.maskData[1 * 7 + 3]).toBeGreaterThan(0)
   expect(refined.maskData[1 * 7 + 3]).toBeLessThan(255)
   expect(refined.maskData[0]).toBe(0)
+})
+
+test("local matting preserves semi-transparent hair-like edge pixels without selecting background", () => {
+  const pixels: number[] = []
+  for (let y = 0; y < 3; y++) {
+    for (let x = 0; x < 7; x++) {
+      const core = x >= 2 && x <= 4
+      const hair = x === 1 || x === 5
+      pixels.push(
+        core ? 120 : hair ? 132 : 24,
+        core ? 82 : hair ? 78 : 114,
+        core ? 42 : hair ? 50 : 218,
+        hair ? 132 : 255,
+      )
+    }
+  }
+  const initial = new Uint8ClampedArray(7 * 3)
+  for (let y = 0; y < 3; y++) {
+    for (let x = 2; x <= 4; x++) initial[y * 7 + x] = 255
+  }
+
+  const refined = refineSelectionMaskData(initial, 7, 3, {
+    sourceImage: imageData(7, 3, pixels),
+    smartRadius: true,
+    edgeRadius: 2,
+    matteRadius: 2,
+    transparencyMatting: true,
+  })
+
+  expect(refined.maskData[1 * 7 + 1]).toBeGreaterThan(70)
+  expect(refined.maskData[1 * 7 + 1]).toBeLessThan(230)
+  expect(refined.maskData[1 * 7 + 5]).toBeGreaterThan(70)
+  expect(refined.maskData[1 * 7 + 0]).toBeLessThan(32)
+  expect(refined.bounds).toEqual({ x: 1, y: 0, w: 5, h: 3 })
+})
+
+test("filament-aware matting keeps thin opaque strands near the edge as partial alpha", () => {
+  const pixels: number[] = []
+  for (let y = 0; y < 5; y++) {
+    for (let x = 0; x < 9; x++) {
+      const core = x >= 4 && x <= 5 && y >= 1 && y <= 3
+      const strand = (x === 3 || x === 6) && y >= 1 && y <= 3
+      const remoteDark = x === 0 && y === 4
+      pixels.push(
+        core ? 96 : strand || remoteDark ? 104 : 42,
+        core ? 66 : strand || remoteDark ? 62 : 130,
+        core ? 34 : strand || remoteDark ? 38 : 220,
+        255,
+      )
+    }
+  }
+
+  const initial = new Uint8ClampedArray(9 * 5)
+  for (let y = 1; y <= 3; y++) {
+    for (let x = 4; x <= 5; x++) initial[y * 9 + x] = 255
+  }
+
+  const refined = refineSelectionMaskData(initial, 9, 5, {
+    sourceImage: imageData(9, 5, pixels),
+    smartRadius: true,
+    edgeRadius: 2,
+    matteRadius: 3,
+    transparencyMatting: true,
+    preserveEdgeFilaments: true,
+    filamentRadius: 3,
+  })
+
+  expect(refined.maskData[2 * 9 + 3]).toBeGreaterThan(64)
+  expect(refined.maskData[2 * 9 + 3]).toBeLessThan(255)
+  expect(refined.maskData[2 * 9 + 6]).toBeGreaterThan(64)
+  expect(refined.maskData[4 * 9 + 0]).toBeLessThan(32)
 })
 
 test("decontaminate colors pulls semi-transparent edge pixels toward protected interior colors", () => {

@@ -87,6 +87,8 @@ export interface SelectionOptions {
   sampleSize?: "point" | "3x3" | "5x5"
   magneticWidth?: number
   magneticContrast?: number
+  magneticHysteresis?: number
+  magneticSmoothing?: number
 }
 
 export interface TextOptions {
@@ -202,6 +204,18 @@ export interface TypographyNamedInstance {
   coordinates: Record<string, number>
 }
 
+export type EmbeddedFontFormat = "ttf" | "otf" | "woff" | "woff2" | "unknown"
+
+export interface TypographyEmbeddedFont {
+  family: string
+  fileName: string
+  mimeType: string
+  dataBase64: string
+  byteLength: number
+  format: EmbeddedFontFormat
+  hash: string
+}
+
 export interface OpenTypeControls {
   ligatures?: boolean
   discretionaryLigatures?: boolean
@@ -261,6 +275,14 @@ export interface TextProps {
   textOrientation?: "mixed" | "upright" | "sideways"
   /** Vertical flow alignment within an area text box. */
   verticalAlign?: "top" | "middle" | "bottom"
+  /** Explicit distance between vertical text columns in px. Defaults to leading/line height. */
+  verticalColumnGap?: number
+  /** Additional vertical advance between glyph units in px. */
+  verticalGlyphSpacing?: number
+  /** Per-glyph scale used by browser-local vertical type metrics. */
+  verticalGlyphScale?: number
+  /** Use measured glyph advance instead of square em-box advance for vertical units. */
+  verticalUseProportionalMetrics?: boolean
   /** Mojikumi (Japanese punctuation spacing) setting name. */
   mojikumi?: "default" | "loose" | "compact" | "none"
   /** Per-character overrides stored as editable metadata. */
@@ -275,6 +297,8 @@ export interface TextProps {
   variableAxisDefinitions?: TypographyAxisDefinition[]
   /** Name of the last applied variable-font preset/instance. */
   variableNamedInstance?: string
+  /** Project-embedded font bytes used for exact local OpenType inspection and export packaging. */
+  embeddedFont?: TypographyEmbeddedFont
 
   /* --- Character properties --- */
   /** Character spacing in 1/1000 em units (-200 to 500). */
@@ -385,6 +409,8 @@ export interface ShapeProps {
   starPoints?: number
   /** Editable compound shape components rendered with per-component boolean operations. */
   components?: ShapeComponent[]
+  /** Cached computed path for compound boolean geometry. */
+  computedPath?: PathProps
   /** Multiple fill/stroke entries rendered in stack order. */
   appearance?: ShapeAppearance
   booleanOperation?: "new" | "unite" | "subtract" | "intersect" | "exclude"
@@ -424,16 +450,22 @@ export interface ShapeAppearance {
   strokes: ShapeStrokeAppearance[]
 }
 
+export type PathHandleMode = "symmetric" | "broken"
+
 export interface PathPoint {
   x: number
   y: number
   cp1?: { x: number; y: number }
   cp2?: { x: number; y: number }
+  /** Bezier handle coupling for direct on-canvas editing. */
+  handleMode?: PathHandleMode
 }
 
 export interface PathProps {
   points: PathPoint[]
   closed: boolean
+  /** Optional provenance for generated paths such as exact font outlines. */
+  source?: "font-outline" | "approximated-glyph" | "shape" | "compound" | string
   /** Optional additional subpaths for compound paths or approximated glyph outlines. */
   subpaths?: PathProps[]
 }
@@ -576,6 +608,30 @@ export interface AdvancedBlending {
   blendIfUnderlying: BlendIfRange
 }
 
+export interface BlurGalleryMeshResource {
+  signature: "8BIM"
+  resourceKey: "blurGalleryMesh"
+  version: 1
+  descriptor: {
+    filterId: string
+    params: Record<string, number | string | boolean>
+    controlState: {
+      selectedFieldPinIndexes: number[]
+      selectedPathPointIndexes: number[]
+      activeControl: string | null
+      previewQuality: "full" | "interactive"
+    }
+    mesh:
+      | { kind: "field"; pins: { x: number; y: number; blur: number }[]; falloff: number; blur: number }
+      | { kind: "iris"; center: { x: number; y: number }; radius: number; feather: number; blur: number }
+      | { kind: "tilt"; center: { x: number; y: number }; angle: number; radius: number; feather: number; blur: number }
+      | { kind: "path"; points: { x: number; y: number }[]; distance: number; taper: number; angle: number }
+      | { kind: "spin"; center: { x: number; y: number }; radius: number; amount: number }
+  }
+  payloadBase64: string
+  checksum: string
+}
+
 export interface SmartFilter {
   id: string
   filterId: string
@@ -590,6 +646,8 @@ export interface SmartFilter {
   maskDensity?: number
   /** Feather radius in document pixels for the smart filter mask. */
   maskFeather?: number
+  /** Deterministic browser-side descriptor for Blur Gallery pins/path/mesh state. */
+  blurGalleryMesh?: BlurGalleryMeshResource
 }
 
 export interface SmartObjectEditPackage {
@@ -619,6 +677,7 @@ export interface SmartObjectSource {
   fileHandleName?: string
   handlePermission?: PermissionState | "unsupported"
   lastKnownModified?: number
+  lastKnownSize?: number
   sourceHash?: string
   editPackage?: SmartObjectEditPackage
   exportedAt?: number
@@ -754,6 +813,73 @@ export interface ThreeDPrintReport {
   issues: ThreeDPrintIssue[]
 }
 
+export type ThreeDAnimationTarget = "object" | "camera" | "material"
+export type ThreeDAnimationProperty =
+  | "position"
+  | "rotation"
+  | "scale"
+  | "target"
+  | "fov"
+  | "focalLength"
+  | "color"
+  | "opacity"
+  | "metallic"
+  | "roughness"
+
+export interface ThreeDAnimationKeyframe {
+  timeMs: number
+  value: Vec3 | number | string
+  easing?: "hold" | "linear" | "ease-in" | "ease-out" | "ease-in-out"
+}
+
+export interface ThreeDAnimationTrack {
+  id: string
+  target: ThreeDAnimationTarget
+  targetId?: string
+  property: ThreeDAnimationProperty
+  keyframes: ThreeDAnimationKeyframe[]
+}
+
+export interface ThreeDAnimationStack {
+  id: string
+  name: string
+  durationMs: number
+  loop?: boolean
+  tracks: ThreeDAnimationTrack[]
+}
+
+export interface ThreeDPrintSlice {
+  index: number
+  z: number
+  contours: Array<{
+    points: Array<{ x: number; y: number }>
+    closed: boolean
+  }>
+  segmentCount: number
+  areaEstimate: number
+}
+
+export interface ThreeDPrintBrowserHandoff {
+  kind: "download-gcode"
+  driverIntegration: false
+  fileName: string
+  mime: string
+  detail: string
+}
+
+export interface ThreeDPrintPlan {
+  readiness: ThreeDPrintReport
+  layerHeight: number
+  nozzleDiameter: number
+  filamentDiameter: number
+  slices: ThreeDPrintSlice[]
+  estimatedMaterialVolume: number
+  estimatedPrintTimeMinutes: number
+  browserHandoff: ThreeDPrintBrowserHandoff
+  gcodePreview: string
+  warnings: string[]
+}
+
 export interface ThreeDLight {
   id: string
   name: string
@@ -780,6 +906,9 @@ export interface ThreeDScene {
   background?: string
   selectedObjectId?: string
   selectedVertexIndex?: number
+  animations?: ThreeDAnimationStack[]
+  activeAnimationId?: string
+  currentTimeMs?: number
 }
 
 export interface VideoKeyframe {
@@ -863,6 +992,14 @@ export type PluginCommandAction =
   | { type: "open-panel" }
   | { type: "apply-filter" }
   | { type: "post-message"; message?: unknown }
+  | { type: "batch-play"; descriptors: PluginActionDescriptor[] }
+  | { type: "eval-script"; source: string }
+
+export interface PluginActionDescriptor {
+  _obj: string
+  _target?: unknown[]
+  [key: string]: unknown
+}
 
 export interface PluginCommandDescriptor {
   id: string
@@ -873,20 +1010,61 @@ export interface PluginCommandDescriptor {
   action: PluginCommandAction
 }
 
+export interface PluginUxpEntrypoint {
+  id: string
+  type: "panel" | "command"
+  label: string
+}
+
+export interface PluginUxpManifestSummary {
+  manifestVersion: number
+  id: string
+  main?: string
+  hostApp?: string
+  minVersion?: string
+  entrypoints: PluginUxpEntrypoint[]
+}
+
+export interface PluginCepManifestSummary {
+  extensionId: string
+  bundleName: string
+  bundleVersion?: string
+  host?: string
+  mainPath?: string
+}
+
+export interface PluginEightBfBinarySummary {
+  fileName: string
+  byteLength: number
+  signature: string
+  executable: boolean
+  reason: string
+}
+
 export interface PluginDescriptor {
   id: string
   name: string
   kind: "cep-panel" | "ux-plugin" | "8bf-filter"
   enabled: boolean
+  manifestVersion?: number
   version?: string
   author?: string
+  description?: string
   permissions?: PluginPermission[]
+  capabilities?: string[]
+  runtimeAdapters?: Array<"browser" | "uxp" | "cep" | "8bf-native">
+  uxpManifest?: PluginUxpManifestSummary
+  cepManifest?: PluginCepManifestSummary
+  binary8bf?: PluginEightBfBinarySummary
   panelHtml?: string
   commands?: PluginCommandDescriptor[]
   storageDefaults?: Record<string, unknown>
   filterKernel?: number[]
   filterBias?: number
   filterDivisor?: number
+  installedAt?: number
+  source?: "sample" | "registry" | "import" | "package"
+  trusted?: boolean
   createdAt: number
 }
 
@@ -974,6 +1152,26 @@ export interface Selection {
   shape: "rect" | "ellipse" | "polygon" | "freehand" | "wand" | "color"
   mask?: HTMLCanvasElement | null
   feather?: number
+  diagnostics?: SelectionDiagnostics
+}
+
+export type SelectionDiagnosticReason = "accepted" | "color" | "edge" | "alpha" | "limit" | "bounds"
+
+export interface SelectionDiagnostics {
+  acceptedPixels: number
+  rejectedPixels: number
+  coverageRatio: number
+  boundsTouchesCanvas: boolean
+  maxPixelsReached: boolean
+  queueExhausted: boolean
+  summary: string
+  reasonCounts: Record<SelectionDiagnosticReason, number>
+  /**
+   * Per-document-pixel reason map used to render visual diagnostics.
+   * 0 = unvisited, 1 = accepted, 2 = color rejected, 3 = edge rejected,
+   * 4 = alpha rejected, 5 = max-pixel limit, 6 = canvas bounds.
+   */
+  reasonMap: Uint8ClampedArray
 }
 
 export type QuickMaskPaintMode = "add" | "subtract" | "auto"
@@ -1010,6 +1208,23 @@ export interface LayerNote {
   updatedAt?: number
 }
 
+export type ReviewStatus = "open" | "resolved"
+
+export interface CommentReply {
+  id: string
+  author: string
+  text: string
+  createdAt: number
+  updatedAt?: number
+}
+
+export type AnnotationGeometry =
+  | { kind: "pin"; x: number; y: number }
+  | { kind: "rect"; x: number; y: number; w: number; h: number }
+  | { kind: "ellipse"; x: number; y: number; w: number; h: number }
+  | { kind: "arrow"; x1: number; y1: number; x2: number; y2: number }
+  | { kind: "freehand"; points: { x: number; y: number }[]; closed?: boolean }
+
 export interface Note {
   id: string
   x: number
@@ -1017,6 +1232,15 @@ export interface Note {
   author: string
   text: string
   color: string
+  kind?: "note" | "comment" | "annotation"
+  status?: ReviewStatus
+  replies?: CommentReply[]
+  tags?: string[]
+  geometry?: AnnotationGeometry
+  createdAt?: number
+  updatedAt?: number
+  resolvedAt?: number
+  resolvedBy?: string
 }
 
 export interface Slice {
@@ -1115,8 +1339,11 @@ export interface AssetLibraryItem {
     | "variable-data"
     | "prepress"
   group?: string
+  tags?: string[]
+  description?: string
   payload: unknown
   createdAt: number
+  updatedAt?: number
 }
 
 export interface FrameLayerTransform {
@@ -1199,6 +1426,47 @@ export interface DocumentMetadata {
   contentCredentials?: ContentCredential[]
   /** Browser-safe overview plus full-resolution tile access for oversized PSB files. */
   largeDocumentTileView?: LargeDocumentTileViewMetadata
+  /** Read-only parsed-file fallback when pixels cannot be opened safely. */
+  largeDocumentInspection?: LargeDocumentInspectionMetadata
+  /** Full-resolution tile document opened from a tile-only parent. */
+  largeDocumentTileEdit?: LargeDocumentTileEditMetadata
+  /** Focused import repair actions for PSD layer/resource structures represented locally. */
+  psdRepairPlan?: PsdRepairPlanMetadata
+  /** Exact original PSD/PSB bytes retained for native-source replay when the file is small enough. */
+  psdNativeSource?: PsdNativeSourceSnapshotMetadata
+}
+
+export interface PsdNativeSourceSnapshotMetadata {
+  kind: "psd-native-source"
+  version: 1
+  sourceName: string
+  format: "psd" | "psb"
+  byteLength: number
+  width?: number
+  height?: number
+  colorMode?: string
+  bitDepth?: number
+  checksum: string
+  encoding: "base64"
+  data: string
+}
+
+export interface PsdParsedStructureMetadata {
+  layerCount?: number
+  colorMode?: string
+  bitDepth?: number
+  resources?: string[]
+  repairableItems?: string[]
+}
+
+export interface PsdRepairPlanMetadata {
+  summary: string
+  actions: {
+    label: string
+    status: "represented" | "repairable" | "inspect-only"
+    localRepresentation: string
+    detail: string
+  }[]
 }
 
 export interface LargeDocumentTileViewMetadata {
@@ -1212,6 +1480,38 @@ export interface LargeDocumentTileViewMetadata {
   tileRows: number
   tileCount: number
   selectedTile?: { col: number; row: number }
+}
+
+export interface LargeDocumentInspectionMetadata {
+  mode: "inspection"
+  sourceName: string
+  kind: "raster" | "psd" | "psb" | "project" | "advanced"
+  originalWidth: number
+  originalHeight: number
+  previewWidth: number
+  previewHeight: number
+  editable: false
+  reason: string
+  warnings: string[]
+  parsedStructure?: PsdParsedStructureMetadata
+}
+
+export interface LargeDocumentTileEditMetadata {
+  mode: "tile-edit"
+  parentDocId: string
+  sourceName: string
+  originalWidth: number
+  originalHeight: number
+  tileSize: number
+  tile: {
+    col: number
+    row: number
+    x: number
+    y: number
+    width: number
+    height: number
+  }
+  editable: true
 }
 
 export interface ContentCredential {
@@ -1228,12 +1528,23 @@ export interface ContentCredential {
   assertion: string
 }
 
+export type ColorProfileName =
+  | "sRGB IEC61966-2.1"
+  | "Display P3"
+  | "Adobe RGB (1998)"
+  | "ProPhoto RGB"
+  | "Working CMYK"
+  | "U.S. Web Coated SWOP v2"
+  | "Japan Color 2001 Coated"
+  | "Dot Gain 20%"
+  | "Gray Gamma 2.2"
+
 export interface ColorManagementSettings {
-  assignedProfile: "sRGB IEC61966-2.1" | "Display P3" | "Adobe RGB (1998)" | "ProPhoto RGB" | "Working CMYK" | "Dot Gain 20%" | "Gray Gamma 2.2"
-  workingSpace: "sRGB IEC61966-2.1" | "Display P3" | "Adobe RGB (1998)" | "ProPhoto RGB" | "Working CMYK"
+  assignedProfile: ColorProfileName
+  workingSpace: ColorProfileName
   renderingIntent: "perceptual" | "relative-colorimetric" | "saturation" | "absolute-colorimetric"
   blackPointCompensation: boolean
-  proofProfile: "None" | "Working CMYK" | "U.S. Web Coated SWOP v2" | "Japan Color 2001 Coated" | "Display P3" | "Dot Gain 20%"
+  proofProfile: "None" | ColorProfileName
   proofColors: boolean
   gamutWarning: boolean
   simulateBlackInk?: boolean
@@ -1624,6 +1935,10 @@ declare global {
       cornerRadiusTR: number
       cornerRadiusBR: number
       cornerRadiusBL: number
+    }>
+    /** Internal: current direct-selection path editing options */
+    __psPathOptions?: Partial<{
+      handleMode: PathHandleMode
     }>
   }
   interface CanvasRenderingContext2D {

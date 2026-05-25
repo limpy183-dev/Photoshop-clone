@@ -6,6 +6,13 @@ import { useEditor } from "../editor-context"
 import { downloadText } from "../document-io"
 import { Archive, Brush, CircleDot, Download, Palette, Plus, Sparkles, Trash2, Upload } from "lucide-react"
 import type { AssetLibraryItem, BrushSettings, GradientSettings, LayerStyle } from "../types"
+import {
+  collectAssetTags,
+  createAssetLibraryBundle,
+  extractAssetLibraryArray,
+  filterAssetLibrary,
+  normalizeAssetTags,
+} from "../asset-library-bundles"
 
 type AssetKind = AssetLibraryItem["kind"] | "all"
 
@@ -49,7 +56,7 @@ export function normalizeImportedAssetLibrary(parsed: unknown, options: AssetImp
   if (typeof options.fileSizeBytes === "number" && options.fileSizeBytes > MAX_ASSET_IMPORT_BYTES) {
     throw new Error(`Asset imports are limited to ${formatImportBytes(MAX_ASSET_IMPORT_BYTES)}.`)
   }
-  const imported = Array.isArray(parsed) ? parsed : isRecord(parsed) ? parsed.assets : undefined
+  const imported = extractAssetLibraryArray(parsed)
   if (!Array.isArray(imported)) throw new Error("Asset file does not contain an asset array")
   if (imported.length > MAX_ASSET_IMPORT_COUNT) {
     throw new Error(`Asset imports are limited to ${MAX_ASSET_IMPORT_COUNT} items.`)
@@ -64,7 +71,10 @@ export function normalizeImportedAssetLibrary(parsed: unknown, options: AssetImp
     }
     const assetKind = kind as AssetLibraryItem["kind"]
     const payload = normalizeAssetPayload(assetKind, raw.payload)
-    return {
+    const tags = normalizeAssetTags(raw.tags)
+    const description = cleanOptionalText(raw.description, 180)
+    const updatedAt = cleanOptionalTimestamp(raw.updatedAt)
+    const asset: AssetLibraryItem = {
       id: cleanId(raw.id, "asset", index, options.makeId),
       name: cleanText(raw.name, KIND_LABEL[assetKind], 80),
       kind: assetKind,
@@ -72,6 +82,10 @@ export function normalizeImportedAssetLibrary(parsed: unknown, options: AssetImp
       payload,
       createdAt: cleanTimestamp(raw.createdAt, now),
     }
+    if (tags.length) asset.tags = tags
+    if (description) asset.description = description
+    if (updatedAt) asset.updatedAt = updatedAt
+    return asset
   })
 }
 
@@ -79,11 +93,15 @@ export function AssetsPanel() {
   const { activeDoc, activeLayer, brush, gradient, foreground, dispatch, commit } = useEditor()
   const [kind, setKind] = React.useState<AssetKind>("all")
   const [group, setGroup] = React.useState("Project")
+  const [query, setQuery] = React.useState("")
+  const [tag, setTag] = React.useState("all")
+  const [tagInput, setTagInput] = React.useState("")
 
   if (!activeDoc) return <PanelEmpty text="No document open" />
 
   const assets = activeDoc.assetLibrary ?? []
-  const visible = kind === "all" ? assets : assets.filter((asset) => asset.kind === kind)
+  const tags = collectAssetTags(assets)
+  const visible = filterAssetLibrary(assets, { kind, query, tag: tag === "all" ? undefined : tag })
 
   const setAssets = (next: AssetLibraryItem[]) => dispatch({ type: "set-asset-library", assets: next })
 
@@ -92,6 +110,7 @@ export function AssetsPanel() {
       ...asset,
       id: `asset_${Math.random().toString(36).slice(2, 9)}`,
       createdAt: Date.now(),
+      tags: parseTagInput(tagInput),
     }
     setAssets([next, ...assets])
   }
@@ -134,7 +153,7 @@ export function AssetsPanel() {
   const importAssets = () => {
     const input = document.createElement("input")
     input.type = "file"
-    input.accept = ".json,application/json"
+    input.accept = ".json,.pslibrary,application/json"
     input.onchange = async () => {
       const file = input.files?.[0]
       if (!file) return
@@ -165,6 +184,12 @@ export function AssetsPanel() {
             placeholder="Asset group"
           />
         </div>
+        <input
+          value={tagInput}
+          onChange={(e) => setTagInput(e.target.value)}
+          className="h-6 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px] outline-none"
+          placeholder="Tags for new captures, comma-separated"
+        />
         <div className="grid grid-cols-3 gap-1">
           <AssetButton icon={Palette} label="Swatch" onClick={captureSwatch} />
           <AssetButton icon={Brush} label="Brush" onClick={captureBrush} />
@@ -173,6 +198,12 @@ export function AssetsPanel() {
           <AssetButton icon={Plus} label="Export" onClick={addExportPreset} />
           <AssetButton icon={Upload} label="Import" onClick={importAssets} />
         </div>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          className="h-6 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px] outline-none"
+          placeholder="Search assets, tags, groups, payload"
+        />
         <div className="flex items-center gap-1">
           <select
             value={kind}
@@ -184,13 +215,26 @@ export function AssetsPanel() {
               <option key={value} value={value}>{label}</option>
             ))}
           </select>
+          <select
+            value={tag}
+            onChange={(e) => setTag(e.target.value)}
+            className="h-6 flex-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[11px]"
+          >
+            <option value="all">All tags</option>
+            {tags.map((entry) => (
+              <option key={entry.tag} value={entry.tag}>{entry.tag} ({entry.count})</option>
+            ))}
+          </select>
           <button
             type="button"
             className="flex h-6 items-center gap-1 rounded-sm border border-[var(--ps-divider)] px-2 text-[10px] hover:bg-[var(--ps-tool-hover)]"
-            onClick={() => downloadText(JSON.stringify({ app: "Photoshop Web", assets }, null, 2), `${activeDoc.name}-assets.json`)}
+            onClick={() => downloadText(
+              JSON.stringify(createAssetLibraryBundle(assets, { name: `${activeDoc.name} Library`, documentName: activeDoc.name }), null, 2),
+              `${activeDoc.name}-library.pslibrary.json`,
+            )}
           >
             <Download className="h-3 w-3" />
-            JSON
+            Bundle
           </button>
         </div>
       </div>
@@ -210,6 +254,7 @@ export function AssetsPanel() {
               <span className="min-w-0">
                 <span className="block truncate text-[11px]">{asset.name}</span>
                 <span className="block truncate text-[10px] text-[var(--ps-text-dim)]">{KIND_LABEL[asset.kind]} · {asset.group ?? "Ungrouped"}</span>
+                {asset.tags?.length ? <span className="block truncate text-[10px] text-[var(--ps-text-dim)]">#{asset.tags.join(" #")}</span> : null}
               </span>
               <span
                 role="button"
@@ -514,6 +559,10 @@ function cleanTimestamp(value: unknown, fallback: number) {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback
 }
 
+function cleanOptionalTimestamp(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined
+}
+
 function cleanText(value: unknown, fallback: string, maxLength: number) {
   const trimmed = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : ""
   return trimmed ? trimmed.slice(0, maxLength) : fallback
@@ -579,4 +628,8 @@ function isSafeRecordKey(key: string) {
 
 function formatImportBytes(bytes: number) {
   return `${Math.round(bytes / 1000)} KB`
+}
+
+function parseTagInput(value: string) {
+  return normalizeAssetTags(value.split(/[,\s]+/))
 }

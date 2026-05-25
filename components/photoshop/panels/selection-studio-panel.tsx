@@ -8,6 +8,7 @@ import {
   selectionFromMask,
   selectionToPath,
   selectionToMaskCanvas,
+  selectBackgroundMask,
   selectSkyMask,
   selectSubjectMask,
 } from "../tool-helpers"
@@ -29,6 +30,7 @@ export function SelectionStudioPanel() {
   const bounds = selection.bounds
   const channels = activeDoc.channels ?? []
   const hasSelection = !!bounds
+  const diagnostics = selection.diagnostics
 
   const runSelection = (label: string, fn: () => void) => {
     fn()
@@ -36,15 +38,17 @@ export function SelectionStudioPanel() {
     window.setTimeout(() => commit(label, []), 0)
   }
 
-  const autoMask = (kind: "subject" | "sky" | "focus") => {
+  const autoMask = (kind: "subject" | "sky" | "background" | "focus") => {
     if (!activeLayer || typeof activeLayer.canvas.getContext !== "function") return
     const mask =
       kind === "subject"
         ? selectSubjectMask(activeLayer.canvas, 48)
         : kind === "sky"
           ? selectSkyMask(activeLayer.canvas)
+          : kind === "background"
+            ? selectBackgroundMask(activeLayer.canvas, tolerance)
           : focusAreaMask(activeLayer.canvas)
-    runSelection(kind === "subject" ? "Select Subject" : kind === "sky" ? "Select Sky" : "Focus Area", () => {
+    runSelection(kind === "subject" ? "Select Subject" : kind === "sky" ? "Select Sky" : kind === "background" ? "Select Background" : "Focus Area", () => {
       dispatch({ type: "set-selection", selection: selectionFromMask(mask, "freehand") })
     })
   }
@@ -115,9 +119,10 @@ export function SelectionStudioPanel() {
                 runSelection("Deselect", () => dispatch({ type: "set-selection", selection: { bounds: null, shape: "rect" } }))
               }
             />
-            <PanelButton label="Subject" disabled={!activeLayer} onClick={() => autoMask("subject")} />
-            <PanelButton label="Sky" disabled={!activeLayer} onClick={() => autoMask("sky")} />
-            <PanelButton label="Focus Area" disabled={!activeLayer} onClick={() => autoMask("focus")} />
+            <PanelButton label="Subject" disabled={!activeLayer} title="Offline object-aware heuristic (Local). No ML model bundled; diagnostics report nativeAiParity=false." onClick={() => autoMask("subject")} />
+            <PanelButton label="Sky" disabled={!activeLayer} title="Offline sky-extraction heuristic (Local). No ML model bundled; diagnostics report nativeAiParity=false." onClick={() => autoMask("sky")} />
+            <PanelButton label="Background" disabled={!activeLayer} title="Offline background-extraction heuristic (Local). No ML model bundled; diagnostics report nativeAiParity=false." onClick={() => autoMask("background")} />
+            <PanelButton label="Focus Area" disabled={!activeLayer} title="Offline focus/depth heuristic (Local). No ML model bundled; diagnostics report nativeAiParity=false." onClick={() => autoMask("focus")} />
             <PanelButton label="Mask..." disabled={!activeDoc} onClick={() => window.dispatchEvent(new CustomEvent("ps-open-select-and-mask"))} />
             <PanelButton label="To Path" disabled={!activeLayer || !hasSelection} onClick={makePathFromSelection} />
           </div>
@@ -184,6 +189,24 @@ export function SelectionStudioPanel() {
           />
         </Section>
 
+        {diagnostics ? (
+          <Section title="Diagnostics">
+            <div className="space-y-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
+              <div className="text-[var(--ps-text)]">{diagnostics.summary}</div>
+              <div className="grid grid-cols-2 gap-1 text-[10px] tabular-nums text-[var(--ps-text-dim)]">
+                <Metric label="Accepted" value={diagnostics.acceptedPixels} />
+                <Metric label="Rejected" value={diagnostics.rejectedPixels} />
+              </div>
+              <DiagnosticRow color="#34d399" label="Accepted" value={diagnostics.reasonCounts.accepted} />
+              <DiagnosticRow color="#3b82f6" label="Color rejected" value={diagnostics.reasonCounts.color} />
+              <DiagnosticRow color="#f87171" label="Edge rejected" value={diagnostics.reasonCounts.edge} />
+              <DiagnosticRow color="#a855f7" label="Alpha rejected" value={diagnostics.reasonCounts.alpha} />
+              {diagnostics.maxPixelsReached ? <DiagnosticRow color="#facc15" label="Pixel limit" value={diagnostics.reasonCounts.limit} /> : null}
+              {diagnostics.boundsTouchesCanvas ? <DiagnosticRow color="#fb923c" label="Canvas bounds touched" value={1} /> : null}
+            </div>
+          </Section>
+        ) : null}
+
         <Section title="Alpha Channels">
           <div className="flex gap-1">
             <input
@@ -239,12 +262,13 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
-function PanelButton({ label, disabled, onClick }: { label: string; disabled?: boolean; onClick: () => void }) {
+function PanelButton({ label, disabled, onClick, title }: { label: string; disabled?: boolean; onClick: () => void; title?: string }) {
   return (
     <button
       type="button"
       disabled={disabled}
       onClick={onClick}
+      title={title}
       className="h-7 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-left hover:bg-[var(--ps-tool-hover)] disabled:cursor-default disabled:opacity-40"
     >
       {label}
@@ -261,6 +285,18 @@ function SmallButton({ label, onClick }: { label: string; onClick: () => void })
     >
       {label}
     </button>
+  )
+}
+
+function DiagnosticRow({ color, label, value }: { color: string; label: string; value: number }) {
+  return (
+    <div className="flex items-center justify-between gap-2 text-[10px] text-[var(--ps-text-dim)]">
+      <span className="flex min-w-0 items-center gap-1.5">
+        <span className="h-2.5 w-2.5 shrink-0 rounded-[2px]" style={{ background: color }} />
+        <span className="truncate">{label}</span>
+      </span>
+      <span className="tabular-nums">{value}</span>
+    </div>
   )
 }
 

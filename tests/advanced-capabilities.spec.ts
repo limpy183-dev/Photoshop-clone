@@ -21,7 +21,8 @@ test("advanced capabilities label local browser-native limits instead of native 
 
   await openCommand(page, "Plugin Manager")
   await expect(page.getByRole("dialog", { name: "Advanced Photoshop Subsystems" })).toBeVisible()
-  await expect(page.getByText(/No native 8BF, UXP, or CEP execution/)).toBeVisible()
+  await expect(page.getByText(/Browser-safe UXP and CEP adapters are available/)).toBeVisible()
+  await expect(page.getByText(/Native 8BF binaries import as metadata/)).toBeVisible()
   await page.keyboard.press("Escape")
 
   await openCommand(page, "Creative Cloud Libraries, Stock, and Fonts")
@@ -31,7 +32,31 @@ test("advanced capabilities label local browser-native limits instead of native 
 
   await openCommand(page, "Content Credentials")
   await expect(page.getByRole("dialog", { name: "Advanced Photoshop Subsystems" })).toBeVisible()
-  await expect(page.getByText(/Not C2PA signed or embedded in exported images/)).toBeVisible()
+  await expect(page.getByText(/Embed Metadata exports include them in app XMP\/metadata payloads/)).toBeVisible()
+})
+
+test("plugin manager installs marketplace plugins through a permission review flow", async ({ page }) => {
+  await page.goto("/")
+  await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
+
+  await openCommand(page, "Plugin Manager")
+  await expect(page.getByRole("dialog", { name: "Advanced Photoshop Subsystems" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Local Plugin Registry" })).toBeVisible()
+
+  await page.getByRole("button", { name: "Review install for UXP-style Document Helper" }).click()
+  await expect(page.getByText("Permission review")).toBeVisible()
+  await expect(page.getByText("Document read")).toBeVisible()
+  await expect(page.getByText("Host UI")).toBeVisible()
+
+  await page.getByRole("button", { name: "Install reviewed plugin" }).click()
+  const installedPlugin = page.getByRole("button", { name: /UXP-style Document Helper/ })
+  await expect(installedPlugin).toBeVisible()
+  await expect(installedPlugin).toContainText("enabled")
+
+  await page.getByRole("button", { name: "Disable" }).click()
+  await expect(installedPlugin).toContainText("disabled")
+  await page.getByRole("button", { name: "Enable" }).click()
+  await expect(installedPlugin).toContainText("enabled")
 })
 
 test("camera raw and preflight expose visible non-native limitations", async ({ page }) => {

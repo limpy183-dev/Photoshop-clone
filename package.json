@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@abasb75/jpeg2000-decoder": "^2.5.4-f",
+    "@cornerstonejs/codec-openjpeg": "^1.3.0",
     "@discourse/heic": "^1.0.0",
     "@gsap/react": "^2.1.2",
     "@hookform/resolvers": "^3.9.1",

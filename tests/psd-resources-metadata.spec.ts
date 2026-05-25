@@ -21,6 +21,10 @@ import {
   psdSmartObjectToAppLayer,
   RESOURCES_METADATA_CAPABILITY,
 } from "../components/photoshop/psd-resources-metadata"
+import {
+  appSmartFiltersToNativePsd,
+  psdNativeSmartFiltersToApp,
+} from "../components/photoshop/psd-effects-adjustments"
 import type {
   DocumentMetadata,
   Guide,
@@ -30,6 +34,7 @@ import type {
   PrintSettings,
   PsDocument,
   Slice,
+  SmartFilter,
 } from "../components/photoshop/types"
 import { fixtureCanvas } from "./photoshop-fixtures"
 
@@ -207,6 +212,58 @@ test("smart object placement encodes id, type, transform and links embedded data
   expect(recovered?.width).toBe(32)
   expect(recovered?.height).toBe(24)
   expect(recovered?.id).toBe(placedGuid)
+})
+
+test("smart filters emit native PSD placed-layer filter descriptors", () => {
+  const filters: SmartFilter[] = [
+    {
+      id: "sf_gaussian",
+      filterId: "gaussian-blur",
+      name: "Gaussian Blur",
+      enabled: true,
+      opacity: 0.75,
+      blendMode: "overlay",
+      params: { radius: 6 },
+      mask: fixtureCanvas(32, 24, "#ffffff"),
+      maskEnabled: true,
+      maskDensity: 0.6,
+    },
+    {
+      id: "sf_invert",
+      filterId: "invert",
+      name: "Invert",
+      enabled: false,
+      params: {},
+    },
+  ]
+
+  const native = appSmartFiltersToNativePsd(filters, 32, 24)
+  expect(native.filter).toMatchObject({
+    enabled: true,
+    validAtPosition: true,
+    maskEnabled: true,
+  })
+  expect(native.filter?.list.map((filter) => filter.type)).toEqual(["gaussian blur", "invert"])
+  expect(native.filter?.list[0]).toMatchObject({
+    name: "Gaussian Blur",
+    opacity: 0.75,
+    blendMode: "overlay",
+    filter: { radius: { value: 6, units: "Pixels" } },
+  })
+  expect(native.filterEffectsMasks?.[0]).toMatchObject({
+    id: "sf_gaussian",
+    top: 0,
+    left: 0,
+    bottom: 24,
+    right: 32,
+    depth: 8,
+  })
+
+  const restored = psdNativeSmartFiltersToApp({
+    placedLayer: { id: "smart", type: "raster", transform: [0, 0, 32, 0, 32, 24, 0, 24], filter: native.filter },
+  } as Parameters<typeof psdNativeSmartFiltersToApp>[0])
+  expect(restored?.map((filter) => filter.filterId)).toEqual(["gaussian-blur", "invert"])
+  expect(restored?.[0]).toMatchObject({ name: "Gaussian Blur", opacity: 0.75, blendMode: "overlay", params: { radius: 6 } })
 })
 
 test("smart object returns null for layers without smartSource", () => {

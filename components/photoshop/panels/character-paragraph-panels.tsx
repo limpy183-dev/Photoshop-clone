@@ -6,8 +6,10 @@ import { rasterizeText } from "../tool-helpers"
 import type { TextAntiAliasMode } from "../types"
 import {
   applyVariableFontNamedInstance,
+  buildVariableFontAxisControlModel,
   DEFAULT_VARIABLE_AXIS_DEFINITIONS,
   detectOpenTypeFeatureSupport,
+  findEmbeddedFontForFamily,
   inspectVariableFont,
   listOpenTypeFeatureToggles,
   type OpenTypeFeatureSupport,
@@ -27,11 +29,13 @@ import {
 } from "lucide-react"
 
 export function CharacterPanel() {
-  const { activeLayer, dispatch, requestRender, commit } = useEditor()
+  const { activeDoc, activeLayer, dispatch, requestRender, commit } = useEditor()
   const text = activeLayer?.kind === "text" ? activeLayer.text : null
   const textFont = text?.font
+  const embeddedFont = text ? text.embeddedFont ?? findEmbeddedFontForFamily(activeDoc?.assetLibrary, text.font) : undefined
   const [fontInspection, setFontInspection] = React.useState<VariableFontInspection | null>(null)
   const [featureSupport, setFeatureSupport] = React.useState<OpenTypeFeatureSupport | null>(null)
+  const [customAxisTag, setCustomAxisTag] = React.useState("")
 
   const update = (patch: Partial<NonNullable<typeof text>>) => {
     if (!activeLayer || !text) return
@@ -47,6 +51,24 @@ export function CharacterPanel() {
   const updateAxis = (tag: string, value: number) => {
     update({ variableAxes: { ...(text?.variableAxes ?? {}), [tag]: value } })
   }
+  const resetAxis = (tag: string, value: number) => {
+    updateAxis(tag, value)
+    commitChange(`Reset Variable ${tag}`)
+  }
+  const addCustomAxis = () => {
+    if (!text) return
+    const tag = customAxisTag.trim().slice(0, 4)
+    if (!/^[A-Za-z0-9]{4}$/.test(tag)) return
+    update({
+      variableAxes: { ...(text.variableAxes ?? {}), [tag]: text.variableAxes?.[tag] ?? 0 },
+      variableAxisDefinitions: [
+        ...(text.variableAxisDefinitions ?? []),
+        { tag, name: tag.toUpperCase(), min: -1000, max: 1000, defaultValue: 0 },
+      ].filter((axis, index, all) => all.findIndex((candidate) => candidate.tag === axis.tag) === index),
+    })
+    setCustomAxisTag("")
+    commitChange(`Add Variable Axis ${tag}`)
+  }
   const applyNamedInstance = (name: string) => {
     if (!text || !name) {
       update({ variableNamedInstance: undefined })
@@ -59,7 +81,7 @@ export function CharacterPanel() {
   }
   const inspectActiveFont = async (allowLocalFontAccess = false) => {
     if (!text) return
-    const inspection = await inspectVariableFont(text.font, { allowLocalFontAccess })
+    const inspection = await inspectVariableFont(text.font, { allowLocalFontAccess, embeddedFont })
     setFontInspection(inspection)
     if (inspection.axes.length && allowLocalFontAccess) {
       update({ variableAxisDefinitions: inspection.axes })
@@ -73,15 +95,20 @@ export function CharacterPanel() {
       setFeatureSupport(null)
       return
     }
-    setFeatureSupport(detectOpenTypeFeatureSupport(textFont))
+    setFeatureSupport(detectOpenTypeFeatureSupport(textFont, { embeddedFont }))
     let cancelled = false
-    inspectVariableFont(textFont).then((inspection) => {
+    inspectVariableFont(textFont, { embeddedFont }).then((inspection) => {
       if (!cancelled) setFontInspection(inspection)
     })
     return () => {
       cancelled = true
     }
-  }, [textFont])
+  }, [textFont, embeddedFont])
+
+  const axisModel = React.useMemo(
+    () => text ? buildVariableFontAxisControlModel(text, fontInspection) : null,
+    [text, fontInspection],
+  )
 
   if (!text) {
     return (
@@ -91,8 +118,7 @@ export function CharacterPanel() {
     )
   }
 
-  const detectedAxes = fontInspection?.axes.length ? fontInspection.axes : undefined
-  const axisDefinitions = detectedAxes ?? (text.variableAxisDefinitions?.length ? text.variableAxisDefinitions : DEFAULT_VARIABLE_AXIS_DEFINITIONS)
+  const axisDefinitions = axisModel?.axes.length ? axisModel.axes : DEFAULT_VARIABLE_AXIS_DEFINITIONS.map((axis) => ({ ...axis, value: text.variableAxes?.[axis.tag] ?? axis.defaultValue, source: "default" as const }))
   const supportedTags = featureSupport?.supportedTags
   const openTypeToggles = listOpenTypeFeatureToggles(supportedTags?.size ? { supportedTags } : {})
 
@@ -237,16 +263,35 @@ export function CharacterPanel() {
       <div className="px-3 py-2 border-b border-[var(--ps-divider)] space-y-2">
         <div className="flex items-center justify-between gap-2">
           <label className="text-[10px] text-[var(--ps-text-dim)]">Variable Font Axes</label>
-          <button
-            type="button"
-            onClick={() => void inspectActiveFont(true)}
-            className="h-5 rounded-sm border border-[var(--ps-divider)] px-1.5 text-[9px] hover:bg-[var(--ps-tool-hover)]"
-            title="Inspect the local font file for real variation axes and named instances"
-          >
-            Inspect
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => {
+                if (!text) return
+                update({
+                  variableAxes: Object.fromEntries(axisDefinitions.map((axis) => [axis.tag, axis.defaultValue])),
+                  variableNamedInstance: undefined,
+                })
+                commitChange("Reset Variable Axes")
+              }}
+              className="h-5 rounded-sm border border-[var(--ps-divider)] px-1.5 text-[9px] hover:bg-[var(--ps-tool-hover)]"
+            >
+              Reset
+            </button>
+            <button
+              type="button"
+              onClick={() => void inspectActiveFont(true)}
+              className="h-5 rounded-sm border border-[var(--ps-divider)] px-1.5 text-[9px] hover:bg-[var(--ps-tool-hover)]"
+              title="Inspect the local font file for real variation axes and named instances"
+            >
+              Inspect
+            </button>
+          </div>
         </div>
-        {fontInspection?.namedInstances.length ? (
+        {axisModel ? (
+          <p className="text-[9px] leading-snug text-[var(--ps-text-dim)]">{axisModel.status}</p>
+        ) : null}
+        {axisModel?.namedInstances.length ? (
           <label className="grid gap-1 text-[10px] text-[var(--ps-text-dim)]">
             Instance
             <select
@@ -255,31 +300,58 @@ export function CharacterPanel() {
               className="h-6 bg-[var(--ps-panel-2)] border border-[var(--ps-divider)] rounded-sm px-1 text-[10px]"
             >
               <option value="">Custom</option>
-              {fontInspection.namedInstances.map((instance) => (
+              {axisModel.namedInstances.map((instance) => (
                 <option key={instance.name} value={instance.name}>{instance.name}</option>
               ))}
             </select>
           </label>
         ) : null}
         {axisDefinitions.map((axis) => (
-          <CharSlider
-            key={axis.tag}
-            label={axis.name}
-            value={text.variableAxes?.[axis.tag] ?? axis.defaultValue}
-            min={axis.min}
-            max={axis.max}
-            step={1}
-            onChange={(v) => updateAxis(axis.tag, v)}
-            onCommit={() => commitChange(`Variable ${axis.name}`)}
-          />
+          <div key={axis.tag} className="space-y-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-1.5">
+            <CharSlider
+              label={`${axis.name} (${axis.tag})`}
+              value={axis.value}
+              min={axis.min}
+              max={axis.max}
+              step={Math.abs(axis.max - axis.min) <= 4 ? 0.01 : 1}
+              onChange={(v) => updateAxis(axis.tag, v)}
+              onCommit={() => commitChange(`Variable ${axis.name}`)}
+            />
+            <div className="flex items-center justify-between gap-2 text-[9px] text-[var(--ps-text-dim)]">
+              <span>{axis.source} · {axis.min} / {axis.defaultValue} / {axis.max}</span>
+              <button
+                type="button"
+                onClick={() => resetAxis(axis.tag, axis.defaultValue)}
+                className="rounded-sm border border-[var(--ps-divider)] px-1 hover:bg-[var(--ps-tool-hover)]"
+              >
+                Default
+              </button>
+            </div>
+          </div>
         ))}
+        <div className="grid grid-cols-[1fr_52px] gap-1">
+          <input
+            value={customAxisTag}
+            maxLength={4}
+            onChange={(e) => setCustomAxisTag(e.target.value)}
+            placeholder="Axis tag"
+            className="h-6 bg-[var(--ps-panel-2)] border border-[var(--ps-divider)] rounded-sm px-1 text-[10px]"
+          />
+          <button
+            type="button"
+            onClick={addCustomAxis}
+            className="h-6 rounded-sm border border-[var(--ps-divider)] text-[10px] hover:bg-[var(--ps-tool-hover)]"
+          >
+            Add
+          </button>
+        </div>
         {fontInspection?.error ? (
           <p className="text-[9px] leading-snug text-amber-300">{fontInspection.error}</p>
-        ) : (
+        ) : !axisModel?.axes.length ? (
           <p className="text-[9px] leading-snug text-[var(--ps-text-dim)]">
-            {fontInspection?.source === "font-access" ? "Axes read from local font data." : "Using browser/default axis metadata until local inspection is available."}
+            No variable axes are known for this font yet.
           </p>
-        )}
+        ) : null}
       </div>
 
       <div className="px-3 py-2 border-b border-[var(--ps-divider)] space-y-2">
@@ -365,6 +437,34 @@ export function CharacterPanel() {
           </select>
         </div>
         <CheckRow label="Tate Chu Yoko" checked={text.tateChuYoko === true} onChange={(v) => { update({ tateChuYoko: v }); commitChange("Tate Chu Yoko") }} />
+        <CharSlider
+          label="Column Gap"
+          value={text.verticalColumnGap ?? Math.round(text.leading ?? text.size * 1.2)}
+          min={0}
+          max={300}
+          suffix="px"
+          onChange={(v) => update({ verticalColumnGap: v })}
+          onCommit={() => commitChange("Vertical Column Gap")}
+        />
+        <CharSlider
+          label="Glyph Spacing"
+          value={text.verticalGlyphSpacing ?? 0}
+          min={-40}
+          max={120}
+          suffix="px"
+          onChange={(v) => update({ verticalGlyphSpacing: v })}
+          onCommit={() => commitChange("Vertical Glyph Spacing")}
+        />
+        <CharSlider
+          label="Glyph Scale"
+          value={Math.round((text.verticalGlyphScale ?? 1) * 100)}
+          min={25}
+          max={200}
+          suffix="%"
+          onChange={(v) => update({ verticalGlyphScale: v / 100 })}
+          onCommit={() => commitChange("Vertical Glyph Scale")}
+        />
+        <CheckRow label="Proportional vertical metrics" checked={text.verticalUseProportionalMetrics === true} onChange={(v) => { update({ verticalUseProportionalMetrics: v }); commitChange("Vertical Metrics") }} />
       </div>
 
       <div className="px-3 py-2">

@@ -1,4 +1,4 @@
-import type { Layer, PathPoint, PathProps, ShapeProps } from "./types"
+import type { Layer, PathPoint, PathProps, SelectionDiagnostics, SelectionDiagnosticReason, ShapeProps } from "./types"
 import { hexToRgb } from "./color-utils"
 import { autoAlignImageStack, seamCarveImageData } from "./photo-workflow-engine"
 import {
@@ -7,6 +7,7 @@ import {
   expandMaskData as expandMaskDataPure,
   featherMaskData as featherMaskDataPure,
   smoothMaskData as smoothMaskDataPure,
+  transformSelectionMaskData as transformSelectionMaskDataPure,
 } from "./selection-algorithms"
 
 export interface Point {
@@ -84,6 +85,113 @@ export interface EdgeAwareQuickSelectionOptions {
   edgeSensitivity?: number
   sampleSize?: "point" | "3x3" | "5x5"
   contiguous?: boolean
+  diagnostics?: boolean
+}
+
+const DIAGNOSTIC_REASON_CODE: Record<SelectionDiagnosticReason, number> = {
+  accepted: 1,
+  color: 2,
+  edge: 3,
+  alpha: 4,
+  limit: 5,
+  bounds: 6,
+}
+
+function createSelectionDiagnostics(width: number, height: number): SelectionDiagnostics {
+  return {
+    acceptedPixels: 0,
+    rejectedPixels: 0,
+    coverageRatio: 0,
+    boundsTouchesCanvas: false,
+    maxPixelsReached: false,
+    queueExhausted: false,
+    summary: "Selection diagnostics are available.",
+    reasonCounts: {
+      accepted: 0,
+      color: 0,
+      edge: 0,
+      alpha: 0,
+      limit: 0,
+      bounds: 0,
+    },
+    reasonMap: new Uint8ClampedArray(width * height),
+  }
+}
+
+function markSelectionDiagnostic(
+  diagnostics: SelectionDiagnostics,
+  pixel: number,
+  reason: SelectionDiagnosticReason,
+  primary = true,
+) {
+  diagnostics.reasonCounts[reason]++
+  if (reason === "accepted") {
+    diagnostics.reasonMap[pixel] = DIAGNOSTIC_REASON_CODE.accepted
+  } else if (primary && diagnostics.reasonMap[pixel] === 0) {
+    diagnostics.reasonMap[pixel] = DIAGNOSTIC_REASON_CODE[reason]
+  }
+}
+
+function finalizeSelectionDiagnostics(
+  diagnostics: SelectionDiagnostics,
+  width: number,
+  height: number,
+  bounds: Bounds | null,
+  maxPixelsReached: boolean,
+  queueExhausted: boolean,
+) {
+  diagnostics.acceptedPixels = diagnostics.reasonCounts.accepted
+  diagnostics.rejectedPixels = diagnostics.reasonMap.reduce((sum, reason) => sum + (reason >= 2 ? 1 : 0), 0)
+  diagnostics.coverageRatio = diagnostics.acceptedPixels / Math.max(1, width * height)
+  diagnostics.maxPixelsReached = maxPixelsReached
+  diagnostics.queueExhausted = queueExhausted
+  diagnostics.boundsTouchesCanvas = !!bounds && (
+    bounds.x <= 0 ||
+    bounds.y <= 0 ||
+    bounds.x + bounds.w >= width ||
+    bounds.y + bounds.h >= height
+  )
+  if (maxPixelsReached) {
+    diagnostics.summary = "Selection stopped at the maximum pixel budget."
+  } else if (diagnostics.boundsTouchesCanvas) {
+    diagnostics.summary = "Selection reached the canvas bounds; inspect for possible leakage."
+  } else if (diagnostics.reasonCounts.edge > 0) {
+    diagnostics.summary = "Selection stopped at edge contrast and rejected nearby pixels."
+  } else if (diagnostics.reasonCounts.color > 0) {
+    diagnostics.summary = "Selection stopped at color-distance differences."
+  } else if (diagnostics.acceptedPixels === 0) {
+    diagnostics.summary = "Selection found no eligible pixels at the seed."
+  } else {
+    diagnostics.summary = "Selection completed without obvious edge leakage."
+  }
+  return diagnostics
+}
+
+export function selectionDiagnosticsOverlayData(
+  diagnostics: SelectionDiagnostics,
+  width: number,
+  height: number,
+) {
+  const out = new ImageData(width, height)
+  const colors: Record<number, [number, number, number, number]> = {
+    1: [52, 211, 153, 96],
+    2: [59, 130, 246, 140],
+    3: [248, 113, 113, 170],
+    4: [168, 85, 247, 130],
+    5: [250, 204, 21, 170],
+    6: [251, 146, 60, 160],
+  }
+  const count = Math.min(width * height, diagnostics.reasonMap.length)
+  for (let p = 0; p < count; p++) {
+    const color = colors[diagnostics.reasonMap[p]]
+    if (!color) continue
+    const i = p * 4
+    out.data[i] = color[0]
+    out.data[i + 1] = color[1]
+    out.data[i + 2] = color[2]
+    out.data[i + 3] = color[3]
+  }
+  return out
 }
 
 function sampledSeedColor(src: ImageData, x: number, y: number, radius: number, minAlpha: number) {
@@ -140,7 +248,18 @@ export function buildEdgeAwareQuickSelectionMaskData(
   const width = src.width
   const height = src.height
   const maskData = new Uint8ClampedArray(width * height)
-  if (width <= 0 || height <= 0) return { maskData, width, height, bounds: null as Bounds | null }
+  const diagnostics = createSelectionDiagnostics(Math.max(0, width), Math.max(0, height))
+  const finish = (maxPixelsReached: boolean, queueExhausted: boolean) => {
+    const bounds = maskDataBounds(maskData, width, height)
+    return {
+      maskData,
+      width,
+      height,
+      bounds,
+      diagnostics: finalizeSelectionDiagnostics(diagnostics, width, height, bounds, maxPixelsReached, queueExhausted),
+    }
+  }
+  if (width <= 0 || height <= 0) return finish(false, true)
 
   const tolerance = Math.max(1, options.tolerance ?? 48)
   const minAlpha = Math.max(0, Math.min(255, options.minAlpha ?? alphaThreshold))
@@ -158,7 +277,7 @@ export function buildEdgeAwareQuickSelectionMaskData(
         start = i
       }
     }
-    if (start < 0) return { maskData, width, height, bounds: null as Bounds | null }
+    if (start < 0) return finish(false, true)
   }
 
   const seedX = start % width
@@ -177,13 +296,25 @@ export function buildEdgeAwareQuickSelectionMaskData(
   if (options.contiguous === false) {
     for (let p = 0; p < width * height && accepted < maxPixels; p++) {
       const pi = p * 4
-      if (src.data[pi + 3] <= minAlpha) continue
-      if (rgbDistanceToSeed(src.data, pi, seed) > adaptiveTolerance) continue
-      if (localColorGradient(src.data, width, height, p) > edgeLimit * 1.25 && rgbDistanceToSeed(src.data, pi, seed) > adaptiveTolerance * 0.72) continue
+      const colorDistance = rgbDistanceToSeed(src.data, pi, seed)
+      if (src.data[pi + 3] <= minAlpha) {
+        markSelectionDiagnostic(diagnostics, p, "alpha")
+        continue
+      }
+      if (colorDistance > adaptiveTolerance) {
+        markSelectionDiagnostic(diagnostics, p, "color")
+        continue
+      }
+      if (localColorGradient(src.data, width, height, p) > edgeLimit * 1.25 && colorDistance > adaptiveTolerance * 0.72) {
+        markSelectionDiagnostic(diagnostics, p, "edge")
+        continue
+      }
       maskData[p] = 255
+      markSelectionDiagnostic(diagnostics, p, "accepted")
       accepted++
     }
-    return { maskData, width, height, bounds: maskDataBounds(maskData, width, height) }
+    if (accepted >= maxPixels) diagnostics.reasonCounts.limit++
+    return finish(accepted >= maxPixels, true)
   }
 
   const queue = [start]
@@ -191,9 +322,18 @@ export function buildEdgeAwareQuickSelectionMaskData(
   for (let head = 0; head < queue.length && accepted < maxPixels; head++) {
     const p = queue[head]
     const pi = p * 4
-    if (src.data[pi + 3] <= minAlpha || rgbDistanceToSeed(src.data, pi, seed) > adaptiveTolerance) continue
+    const currentColorDistance = rgbDistanceToSeed(src.data, pi, seed)
+    if (src.data[pi + 3] <= minAlpha) {
+      markSelectionDiagnostic(diagnostics, p, "alpha")
+      continue
+    }
+    if (currentColorDistance > adaptiveTolerance) {
+      markSelectionDiagnostic(diagnostics, p, "color")
+      continue
+    }
 
     maskData[p] = 255
+    markSelectionDiagnostic(diagnostics, p, "accepted")
     accepted++
 
     const x = p % width
@@ -216,15 +356,31 @@ export function buildEdgeAwareQuickSelectionMaskData(
       if (next < 0 || visited[next]) continue
       const ni = next * 4
       visited[next] = 1
-      if (src.data[ni + 3] <= minAlpha) continue
-      if (rgbaDistance(src.data, pi, ni) > edgeLimit) continue
-      if (localColorGradient(src.data, width, height, next) > edgeLimit * 1.25 && rgbDistanceToSeed(src.data, ni, seed) > adaptiveTolerance * 0.72) continue
-      if (rgbDistanceToSeed(src.data, ni, seed) > adaptiveTolerance) continue
+      const colorDistance = rgbDistanceToSeed(src.data, ni, seed)
+      if (src.data[ni + 3] <= minAlpha) {
+        markSelectionDiagnostic(diagnostics, next, "alpha")
+        continue
+      }
+      if (rgbaDistance(src.data, pi, ni) > edgeLimit) {
+        markSelectionDiagnostic(diagnostics, next, "edge")
+        if (colorDistance > adaptiveTolerance) markSelectionDiagnostic(diagnostics, next, "color", false)
+        continue
+      }
+      if (localColorGradient(src.data, width, height, next) > edgeLimit * 1.25 && colorDistance > adaptiveTolerance * 0.72) {
+        markSelectionDiagnostic(diagnostics, next, "edge")
+        if (colorDistance > adaptiveTolerance) markSelectionDiagnostic(diagnostics, next, "color", false)
+        continue
+      }
+      if (colorDistance > adaptiveTolerance) {
+        markSelectionDiagnostic(diagnostics, next, "color")
+        continue
+      }
       queue.push(next)
     }
   }
 
-  return { maskData, width, height, bounds: maskDataBounds(maskData, width, height) }
+  if (accepted >= maxPixels) diagnostics.reasonCounts.limit++
+  return finish(accepted >= maxPixels, accepted < maxPixels)
 }
 
 export interface SelectionMaskRefinementOptions {
@@ -235,6 +391,10 @@ export interface SelectionMaskRefinementOptions {
   smartRadius?: boolean
   edgeRadius?: number
   sourceImage?: ImageData
+  matteRadius?: number
+  transparencyMatting?: boolean
+  preserveEdgeFilaments?: boolean
+  filamentRadius?: number
 }
 
 function majoritySmoothMask(maskData: Uint8ClampedArray, width: number, height: number, radius: number) {
@@ -437,6 +597,152 @@ function edgeAwareRefineMaskData(
   return out
 }
 
+function localTransparencyMatteMaskData(
+  maskData: Uint8ClampedArray,
+  width: number,
+  height: number,
+  source: ImageData,
+  radius: number,
+) {
+  if (source.width !== width || source.height !== height || radius <= 0) return new Uint8ClampedArray(maskData)
+  const selected = new Uint8Array(width * height)
+  const outside = new Uint8Array(width * height)
+  for (let i = 0; i < selected.length; i++) {
+    selected[i] = maskData[i] > 127 ? 1 : 0
+    outside[i] = selected[i] ? 0 : 1
+  }
+  const distToSelected = distanceToFeature(selected, width, height)
+  const distToOutside = distanceToFeature(outside, width, height)
+  const matteRadius = Math.max(1, Math.min(32, Math.round(radius)))
+  const matteRadiusSq = matteRadius * matteRadius
+  const sampleRadius = Math.max(2, Math.min(10, matteRadius + 1))
+  const out = new Uint8ClampedArray(maskData)
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const p = y * width + x
+      const edgeDistanceSq = Math.min(distToSelected[p], distToOutside[p])
+      if (edgeDistanceSq > matteRadiusSq) continue
+      const i = p * 4
+      const sourceAlpha = source.data[i + 3] / 255
+      if (sourceAlpha <= alphaThreshold / 255) {
+        out[p] = 0
+        continue
+      }
+      const models = localMaskColorModels(source, maskData, x, y, sampleRadius)
+      if (!models) continue
+      const dInside = colorDistanceToAverage(source.data, i, models.inside)
+      const dOutside = colorDistanceToAverage(source.data, i, models.outside)
+      const colorAlpha = clamp(dOutside / Math.max(1, dInside + dOutside), 0, 1)
+      const edgeWeight = clamp(1 - Math.sqrt(edgeDistanceSq) / Math.max(1, matteRadius + 1), 0.15, 1)
+      const transparentEdge = sourceAlpha < 0.96
+      const estimated = transparentEdge
+        ? colorAlpha * 0.62 + sourceAlpha * 0.38
+        : colorAlpha
+      const matteAlpha = clamp8(estimated * 255 * (0.55 + edgeWeight * 0.45))
+
+      if (maskData[p] > 180 && transparentEdge) {
+        out[p] = Math.min(out[p], Math.max(160, matteAlpha))
+      } else if (matteAlpha > out[p] && (transparentEdge || colorAlpha > 0.58)) {
+        out[p] = matteAlpha
+      } else if (colorAlpha < 0.22 && maskData[p] < 180) {
+        out[p] = Math.min(out[p], clamp8(maskData[p] * 0.45))
+      }
+    }
+  }
+  return out
+}
+
+function preserveEdgeFilamentMaskData(
+  maskData: Uint8ClampedArray,
+  width: number,
+  height: number,
+  source: ImageData,
+  radius: number,
+) {
+  if (source.width !== width || source.height !== height || radius <= 0) return new Uint8ClampedArray(maskData)
+  const selected = new Uint8Array(width * height)
+  const outside = new Uint8Array(width * height)
+  for (let i = 0; i < selected.length; i++) {
+    selected[i] = maskData[i] > 127 ? 1 : 0
+    outside[i] = selected[i] ? 0 : 1
+  }
+  const distToSelected = distanceToFeature(selected, width, height)
+  const distToOutside = distanceToFeature(outside, width, height)
+  const filamentRadius = Math.max(1, Math.min(24, Math.round(radius)))
+  const filamentRadiusSq = filamentRadius * filamentRadius
+  const sampleRadius = Math.max(2, Math.min(9, filamentRadius + 1))
+  const out = new Uint8ClampedArray(maskData)
+
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const p = y * width + x
+      const nearSelected = distToSelected[p] <= filamentRadiusSq
+      const nearOutside = distToOutside[p] <= (filamentRadius + 1) ** 2
+      if (!nearSelected || !nearOutside) continue
+      const i = p * 4
+      const sourceAlpha = source.data[i + 3]
+      if (sourceAlpha <= alphaThreshold) {
+        out[p] = 0
+        continue
+      }
+      const models = localMaskColorModels(source, maskData, x, y, sampleRadius)
+      if (!models) continue
+      const insideDistance = colorDistanceToAverage(source.data, i, models.inside)
+      const outsideDistance = colorDistanceToAverage(source.data, i, models.outside)
+      const gradient = localColorGradient(source.data, width, height, p)
+      const colorConfidence = clamp((outsideDistance - insideDistance + 18) / Math.max(1, outsideDistance + insideDistance), 0, 1)
+      const edgeWeight = clamp(1 - Math.sqrt(distToSelected[p]) / Math.max(1, filamentRadius + 1), 0.18, 1)
+      const thinStructure =
+        sourceAlpha < 245 ||
+        gradient > 20 ||
+        (insideDistance + 12 < outsideDistance && edgeWeight > 0.2)
+      if (!thinStructure || insideDistance > outsideDistance + 28) continue
+      const partial = clamp8((0.28 + colorConfidence * 0.56 + Math.min(1, gradient / 96) * 0.16) * edgeWeight * 255)
+      if (maskData[p] > 180 && sourceAlpha < 245) {
+        out[p] = Math.min(out[p], Math.max(96, partial))
+      } else {
+        out[p] = Math.max(out[p], clamp(partial, 72, 232))
+      }
+    }
+  }
+  return out
+}
+
+function keepAlphaConnectedToSeed(
+  alpha: Uint8ClampedArray,
+  seedAlpha: Uint8ClampedArray,
+  width: number,
+  height: number,
+  threshold = alphaThreshold,
+) {
+  const visited = new Uint8Array(width * height)
+  const stack: number[] = []
+  for (let i = 0; i < seedAlpha.length; i++) {
+    if (seedAlpha[i] > 127 && alpha[i] > threshold) stack.push(i)
+  }
+  while (stack.length) {
+    const p = stack.pop()!
+    if (visited[p] || alpha[p] <= threshold) continue
+    visited[p] = 1
+    const x = p % width
+    const y = (p - x) / width
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue
+        const nx = x + dx
+        const ny = y + dy
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue
+        const next = ny * width + nx
+        if (!visited[next] && alpha[next] > threshold) stack.push(next)
+      }
+    }
+  }
+  const out = new Uint8ClampedArray(alpha.length)
+  for (let i = 0; i < alpha.length; i++) out[i] = visited[i] ? alpha[i] : 0
+  return out
+}
+
 export function refineSelectionMaskData(
   maskData: Uint8ClampedArray,
   width: number,
@@ -457,6 +763,13 @@ export function refineSelectionMaskData(
 
   if (options.sourceImage && (options.smartRadius || (options.edgeRadius ?? 0) > 0)) {
     next = edgeAwareRefineMaskData(next, width, height, options.sourceImage, options.edgeRadius ?? 1, !!options.smartRadius)
+  }
+  if (options.sourceImage && (options.transparencyMatting || (options.matteRadius ?? 0) > 0)) {
+    next = localTransparencyMatteMaskData(next, width, height, options.sourceImage, options.matteRadius ?? options.edgeRadius ?? 2)
+  }
+  if (options.sourceImage && options.preserveEdgeFilaments) {
+    next = preserveEdgeFilamentMaskData(next, width, height, options.sourceImage, options.filamentRadius ?? options.matteRadius ?? options.edgeRadius ?? 2)
+    next = keepAlphaConnectedToSeed(next, maskData, width, height)
   }
   const hardBounds = maskDataBounds(next, width, height, 0)
 
@@ -1097,14 +1410,23 @@ export function transformSelectionMask(mask: HTMLCanvasElement, bounds: Bounds, 
   const out = document.createElement("canvas")
   out.width = mask.width
   out.height = mask.height
-  const ctx = out.getContext("2d")!
-  const cx = bounds.x + bounds.w / 2
-  const cy = bounds.y + bounds.h / 2
-  ctx.translate(cx, cy)
-  ctx.rotate((rotationDeg * Math.PI) / 180)
-  ctx.scale(scale, scale)
-  ctx.translate(-cx, -cy)
-  ctx.drawImage(mask, 0, 0)
+  const src = mask.getContext("2d")!.getImageData(0, 0, mask.width, mask.height)
+  const alpha = new Uint8ClampedArray(mask.width * mask.height)
+  for (let i = 0; i < alpha.length; i++) alpha[i] = src.data[i * 4 + 3]
+  const transformed = transformSelectionMaskDataPure(alpha, mask.width, mask.height, bounds, {
+    scale,
+    rotationDeg,
+    smoothing: true,
+  })
+  const img = out.getContext("2d")!.createImageData(mask.width, mask.height)
+  for (let i = 0; i < transformed.length; i++) {
+    const p = i * 4
+    img.data[p] = 255
+    img.data[p + 1] = 255
+    img.data[p + 2] = 255
+    img.data[p + 3] = transformed[i]
+  }
+  out.getContext("2d")!.putImageData(img, 0, 0)
   return out
 }
 

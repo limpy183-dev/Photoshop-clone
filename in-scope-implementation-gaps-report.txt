@@ -1,0 +1,480 @@
+IN-SCOPE IMPLEMENTATION GAPS REPORT
+Generated: 2026-05-25
+
+Scope
+-----
+This report lists features that are not fully implemented, or are not implemented
+at all, in the current codebase. It excludes the non-goals in BOUNDARIES.md and
+only covers work that is plausible inside this browser-based project.
+
+Primary evidence reviewed:
+- BOUNDARIES.md
+- README.md
+- CLAUDE.md
+- components/photoshop/capabilities.ts
+- components/photoshop/panel-registry.tsx
+- components/photoshop/tool-palette.tsx
+- components/photoshop/canvas-view.tsx
+- components/photoshop/document-io.ts
+- components/photoshop/advanced-subsystems.ts
+- components/photoshop/webgl-compositor.ts
+- components/photoshop/panels/**
+- tests/**
+- Existing status/gap reports, checked against the current source for staleness.
+
+
+Summary
+-------
+The app is broad and many items that older reports called missing now have real
+code paths: the tool palette exposes the full Photoshop-style tool set, many
+formerly "gap" panels are registered and implemented in gap-panels.tsx, and
+canvas-view.tsx contains handlers for marquee row/column, object selection,
+perspective crop, notes, count markers, material tools, red-eye, remove,
+background/magic eraser, blur/sharpen/smudge, dodge/burn/sponge, type masks,
+artboards, rotate view, and more.
+
+The remaining gaps are mostly depth/completeness issues:
+- Format fidelity is broad but still flattened, metadata-preserved, or partial
+  in several advanced cases.
+- Some high-bit/color paths are real but not universal across all tools,
+  filters, previews, and export surfaces.
+- Advanced layer, smart object, WebGL, automation, timeline, panel, and filter
+  workflows exist but still miss expected professional controls.
+- Some UI exists as functional local approximations rather than full dedicated
+  workflow surfaces.
+
+
+Not Implemented At All
+----------------------
+
+1. Dedicated Browser Diagnostics panel
+Status: not implemented as a standalone panel.
+Evidence: capabilities and preflight reports expose many diagnostics, but
+panel-registry.tsx has no dedicated diagnostics/capabilities panel.
+Missing:
+- Canvas max-size diagnostics.
+- WebGL max texture/extensions/renderer report.
+- OffscreenCanvas and worker-transfer checks.
+- MediaRecorder/image encoder capability matrix.
+- OPFS quota/usage report.
+- Browser heap estimate where available.
+- Active degraded-mode/fallback summary.
+- Copy/export diagnostic report action.
+
+2. Unified Preset Manager
+Status: not implemented as one central manager.
+Evidence: separate panels exist for brushes, swatches, gradients, patterns,
+styles, shapes, tool setups, and assets, but there is no single manager for all
+preset families.
+Missing:
+- Cross-family preset browser.
+- Rename/delete/reorder/import/export for all preset types in one place.
+- Drag-and-drop organization between sets.
+- Conflict handling for duplicate preset IDs/names.
+
+3. Photoshop-style Home/Start workspace
+Status: not implemented.
+Evidence: app/page.tsx routes to the editor/marketing shell; recent documents
+and new-document dialogs exist, but no Photoshop-style home screen is present.
+Missing:
+- Recent-file thumbnail grid.
+- New-document preset gallery as first-run workspace.
+- Pinned files and learning links tied to the start surface.
+
+4. Technology Previews preferences section
+Status: not implemented as a preferences section.
+Evidence: preferences include performance, file handling, tools, units, grid,
+and related settings, but no explicit technology-preview feature flag panel.
+Missing:
+- Experimental feature toggles.
+- Per-toggle risk/help text.
+- Reset and export behavior for preview flags.
+
+5. Image Assets Generator
+Status: not implemented.
+Evidence: slices and batch/export workflows exist, but no Generator-style layer
+name watcher/export convention was found.
+Missing:
+- Layer-name parsing such as "icon.png, 200% icon@2x.png".
+- Auto-export on save/change.
+- Per-layer scale/format extraction.
+- Conflict and invalid-name reporting.
+
+6. Dedicated Photomerge dialog/workspace
+Status: not implemented as a full UI surface.
+Evidence: workflow.photomerge is usable in capabilities and the engine supports
+alignment/projection/blending, but the UI appears to be exposed through broad
+advanced/workflow dialogs rather than a dedicated source browser and preview.
+Missing:
+- Source file browser.
+- Layout preview.
+- Projection selection UI.
+- Blend/vignette/geometric correction options.
+- Content-aware fill transparent areas option.
+
+7. Centralized Color Picker HUD / full color picker dialog
+Status: not implemented as a professional color picker surface.
+Evidence: foreground/background swatches use native input[type=color], and color
+panels exist, but no HUD picker or full HSB/RGB/Lab/CMYK harmony dialog exists.
+Missing:
+- On-canvas HUD color picker.
+- HSB/RGB/Lab/CMYK/Web fields in one dialog.
+- Color harmony rules and swatch capture flow.
+
+8. Rich animated tooltips
+Status: not implemented.
+Evidence: tooltips are simple text labels in tool-palette.tsx.
+Missing:
+- Larger tool descriptions.
+- Animated/visual usage previews.
+- Contextual "learn more" links into the learning index.
+
+9. Flatten Transparency command
+Status: not implemented as a menu/reducer command.
+Missing:
+- Composite semi-transparent pixels against the selected/background color.
+- Preserve/clear layer alpha according to command settings.
+- History entry and preflight warning.
+
+10. Purge commands
+Status: not implemented as user-facing commands.
+Missing:
+- Purge Undo, Clipboard, Histories, All, Video Cache.
+- Memory freed estimate or status notification.
+- Integration with history compression, tile store, and preview caches.
+
+11. Browse/Reveal in local file manager command
+Status: not implemented.
+Note: A browser cannot open arbitrary OS file manager locations universally, but
+an in-scope File System Access based "reveal/source info" workflow could exist.
+Missing:
+- Source file location display for handles.
+- Best-effort reveal/open containing folder where the browser allows it.
+
+
+Partially Implemented
+---------------------
+
+12. PSD/PSB round-trip fidelity
+Status: partially implemented.
+Implemented:
+- PSD/PSB import/export, layers, effects, adjustment metadata, channels, masks,
+  vector/text/path metadata, smart object/filter records, reports, and native
+  source snapshot replay for small untouched sources.
+Remaining in-scope gaps:
+- Layered high-bit/non-RGB PSD exports still fall back to flattened/native-writer
+  or app-preserved metadata rather than fully editable layered native output.
+- Some adjustment descriptors remain app-metadata/XMP preserved instead of
+  complete native descriptor emission.
+- Some app-only constructs such as 3D, video, variable data, plugin descriptors,
+  smart filters, notes, and advanced metadata are still project-first and only
+  approximated/rasterized/reported in PSD.
+- Huge PSB workflows need more complete tile-only editing coverage, not just
+  overview/inspection/reduced-scale handling.
+
+13. Advanced raster/professional formats
+Status: partially implemented.
+Implemented:
+- TIFF, TGA, PNM, Radiance HDR, EXR, PDF, EPS, HEIF/AVIF-related paths, JPEG
+  2000, DICOM, RAW/DNG preview/import paths.
+Remaining in-scope gaps:
+- RAW/DNG export and full sidecar round-trip are absent.
+- HEVC/HEIC export is absent; AVIF-backed HEIF-style paths do not replace HEIC.
+- JPEG 2000 lacks JPX/JPM authoring, alpha, advanced color boxes, and profile
+  controls.
+- PDF lacks multipage authoring/import UI, editable vector/text extraction,
+  transparency group preservation, and annotations.
+- EPS lacks broader operator coverage and editable vector reconstruction.
+- EXR lacks multipart/deep/tiled/arbitrary-channel workflows.
+- TIFF lacks BigTIFF and richer metadata/directory authoring.
+- DICOM lacks compressed transfer syntaxes, overlays, richer metadata workflow,
+  and non-clinical validation labeling.
+
+14. Raster export metadata
+Status: partially implemented.
+Implemented:
+- PNG/JPEG metadata, sidecars, progressive JPEG, interlaced PNG, TIFF/TGA/PNM
+  metadata paths, ICC chunks for some raster outputs.
+Remaining in-scope gaps:
+- Content credential manifests are modeled/reported but not embedded as a true
+  provenance payload.
+- TIFF IPTC/XMP/EXIF directory authoring is incomplete.
+- WebP/AVIF metadata and advanced encoder controls are incomplete.
+- TGA extension/developer metadata and Netpbm comment/source max-value
+  round-trip remain limited.
+
+15. High-bit and color pipeline coverage
+Status: partially implemented.
+Implemented:
+- High-bit typed buffers, selected high-bit filters, separation analysis, local
+  profile assignment/conversion/proofing for supported profiles, tone-mapped
+  previews, high-bit TIFF/PNM exports, source-vs-preview readouts.
+Remaining in-scope gaps:
+- More filters need typed high-bit implementations instead of preview fallback.
+- High-bit behavior is not universal across every destructive tool, smart filter,
+  adjustment, preview, and export path.
+- Assign Profile / Convert To Profile UI should be expanded and connected
+  consistently across menus/export/preflight.
+- CLUT/device-link ICC tag parsing for diagnostics is not complete.
+- Per-channel proof toggles and richer gamut/plate views need UI completion.
+
+16. Smart objects and linked smart objects
+Status: partially implemented.
+Implemented:
+- Embedded/linked source metadata, edit/replace/export contents, stack modes,
+  relinkedAt/source hashes, File System Access handle metadata fields, lifecycle
+  reporting.
+Remaining in-scope gaps:
+- No complete "Relink to File" workflow with persisted handle permission checks.
+- No periodic linked-file polling/update notification flow.
+- Smart object and 3D layer integration with tile backing/render materialization
+  remains limited in places.
+- Some smart object/filter private visual states remain metadata-preserved or
+  rasterized when exported outside the project format.
+
+17. Smart filter editing UI
+Status: partially implemented.
+Implemented:
+- Filter stack metadata, enable state, blend/opacity, masks, density/feather,
+  on-canvas mask painting, native descriptor metadata where supported.
+Remaining in-scope gaps:
+- Layers panel needs richer smart-filter mask thumbnails.
+- Per-filter eye toggles and mask link/unlink controls should be consistently
+  visible across Layers, Properties, and Filter Gallery.
+- Filter Gallery preset save/load and combined multi-filter stack authoring are
+  incomplete.
+
+18. WebGL compositor
+Status: partially implemented.
+Implemented:
+- WebGL planning, many blend modes, tiled GPU path planning, fallback reasons,
+  Canvas 2D fallback, unsupported-layer accounting.
+Remaining in-scope gaps:
+- GPU-accelerated filter chains are not complete.
+- Adjustment layer rendering is not fully moved to GPU.
+- Layer effects such as shadows, bevels, glows, overlays, and smart filters
+  still need deeper WebGL rendering coverage.
+- Advanced knockout and several CPU fallback paths still prevent full-stack GPU
+  compositing.
+
+19. Large-document/tile-only editing
+Status: partially implemented.
+Implemented:
+- OPFS scratch, tile store, tiled backing store, memory budget, progressive
+  preview, inspection/reduced-scale flows, export planning.
+Remaining in-scope gaps:
+- The main compositor still relies heavily on full-frame canvas paths.
+- Tile-only editing should cover more tools, smart objects, 3D/video layers,
+  filters, selections, and export flows.
+- More operations need explicit tile-local processing instead of requiring
+  materializing the whole document.
+
+20. Selection workflows
+Status: partially implemented.
+Implemented:
+- Marquee, lasso, magnetic lasso, magic wand, quick selection, object-aware
+  selection, select subject/sky/background, refine/select-and-mask style
+  refinements, color range, saved alpha channels, quick mask.
+Remaining in-scope gaps:
+- Quick Selection options need richer tolerance/sample-size/contiguous/grow and
+  shrink controls in the options bar.
+- Magnetic Lasso needs a live edge preview, visible width indicator, and
+  auto-anchor frequency controls.
+- Save/Load Selection dialogs need richer named-channel workflows.
+- Grow, Similar, Transform Selection, and stronger Color Range UI remain
+  incomplete.
+
+21. Path/vector/shape editing
+Status: partially implemented.
+Implemented:
+- Shape layers, compound metadata, custom shapes, path tools, direct anchor and
+  handle editing, SVG/path export, star/polygon metadata, text-to-path.
+Remaining in-scope gaps:
+- Multi-anchor selection/move and richer subpath selection affordances.
+- Full modifier-key parity for native path editing shortcuts.
+- True curved Bezier boolean operations beyond rectangle/exact or flattened
+  approximations.
+- Custom shape library import/export/organization beyond the bundled set.
+- Stroke Path with full brush dynamics/pressure simulation.
+- Copy CSS / Copy SVG context commands for shape/vector layers.
+
+22. Typography workflows
+Status: partially implemented.
+Implemented:
+- Text layers, character/paragraph panels, OpenType metadata, variable-axis data,
+  vertical type metadata, text warp, path/shape text, embedded font inspection,
+  font diagnostics, find/replace, match font ranking.
+Remaining in-scope gaps:
+- Variable font sliders, named-instance picker, and live axis preview.
+- OpenType feature grid based on active-font support.
+- Vertical type UI for orientation, spacing, mojikumi, and Tate Chu Yoko needs
+  fuller exposure.
+- Find/replace needs regex/GREP mode, highlight-all, and match count UI.
+- Missing-font diagnostics need side-by-side substitution/specimen previews.
+- Match Font needs top-candidate comparison and confidence display.
+- Character/paragraph style management needs richer create/update/apply flows.
+
+23. Brush and painting depth
+Status: partially implemented.
+Implemented:
+- Brush, pencil, eraser variants, mixer-like smudge/wet behavior, clone/history,
+  blur/sharpen/smudge, dodge/burn/sponge, background/magic eraser, red-eye,
+  remove, healing, patch, brush dynamics, texture/dual brush metadata.
+Remaining in-scope gaps:
+- Erodible tip and bristle physics are not implemented as full simulations.
+- Mixer Brush lacks full wet/load/mix reservoir behavior and UI depth.
+- Color Replacement can be improved with richer sampling/limits/mode controls.
+- Art History Brush is an approximation and lacks style/area/fidelity controls.
+- Painting tools need broader high-bit/tile-only path coverage.
+
+24. Layer compositing and layer workflows
+Status: partially implemented.
+Implemented:
+- Layers, groups, masks, vector masks, clipping, blend modes, layer effects,
+  layer comps, color labels, metadata, smart filters, advanced blending fields.
+Remaining in-scope gaps:
+- Knockout blending rendering is incomplete.
+- Blend If sliders/UI and split-handle behavior are incomplete.
+- Layer Mask Hides Effects, Vector Mask Hides Effects, and Transparency Shapes
+  Layer behavior need fuller rendering/UI support.
+- Bulk commands such as Flatten All Layer Effects, Flatten All Masks, Delete All
+  Empty Layers, and richer Rasterize submenu options are incomplete.
+- Layers panel filtering/search exists but can be expanded to Photoshop-style
+  kind/effect/mode/attribute filters.
+
+25. Channels and calculations
+Status: partially implemented.
+Implemented:
+- Channels panel, alpha/saved channels, spot/multichannel metadata, color mode
+  records, selection save/load foundations.
+Remaining in-scope gaps:
+- Apply Image and Calculations need fuller source/channel/blend/mask UI and
+  integration.
+- Split/Merge Channels workflows are incomplete.
+- Duotone, Bitmap, Indexed Color, and Color Table workflows need fuller dialogs
+  and conversion controls.
+
+26. Filters
+Status: partially implemented.
+Implemented:
+- Large registry, many deterministic filters, worker/tiled support, blur gallery
+  controls/metadata, smart-filter integration, previews, golden tests.
+Remaining in-scope gaps:
+- Blur Gallery needs full on-canvas interactive pins/ellipses/tilt lines/path
+  points/spin controls.
+- Lighting Effects needs draggable lights, material controls, bump source, and
+  preview.
+- Lens Correction and Adaptive Wide Angle need richer correction UIs.
+- Lens Blur and Smart Sharpen need full control sets.
+- Displace, Shear, Polar Coordinates, ZigZag, Diffuse, Tiles, Extrude, Wind,
+  Pointillize, Color Halftone, Mezzotint, Fragment, Facet, Fibers, Flame,
+  Picture Frame, Tree, Lens Flare, Reduce Noise, Dust & Scratches, Despeckle,
+  De-Interlace, NTSC Colors, and Custom Filter need implementation or fuller
+  controls where only registry/partial behavior exists.
+- Worker progress callbacks and batch worker execution are incomplete.
+
+27. Adjustment workflows
+Status: partially implemented.
+Implemented:
+- Many adjustment layers and adjustment filters exist, with UI and PSD/project
+  metadata for the common set.
+Remaining in-scope gaps:
+- Shadows/Highlights needs full tonal-width/radius/color-correction/midtone
+  controls.
+- HDR Toning needs method selection, local adaptation, edge glow, tone/detail
+  controls, and preset UI.
+- Match Color needs source/layer selection, luminance/color intensity/fade,
+  neutralize, and target statistics.
+- Replace Color needs selection preview, fuzziness controls, and replacement
+  HSL controls.
+- Equalize needs explicit entire-image vs selection-only behavior.
+- Auto Tone/Auto Contrast/Auto Color need configurable clipping algorithms.
+
+28. Timeline, animation, and browser video workflows
+Status: partially implemented.
+Implemented:
+- Timeline panel, frames, trims/splits, transitions metadata, video groups,
+  poster/contact-sheet frames, MediaRecorder/WebM/MP4 planning where available,
+  GIF/APNG/WebP/PNG sequence/frame package paths, audio metadata and WAV mix.
+Remaining in-scope gaps:
+- Frame-accurate trim handles with thumbnails along the timeline.
+- Split-at-playhead button and keyboard shortcuts.
+- Transition preview rendering on canvas and per-transition duration UI.
+- Audio mixer UI with per-track sliders, mute/solo, VU meters, and waveforms.
+- Timeline-driven frame extraction at configurable FPS and progress UI for
+  animation encoding need more complete integration.
+
+29. 3D browser-local workflows
+Status: partially implemented.
+Implemented:
+- 3D scene metadata, primitives, OBJ/DAE/3DS/KMZ/U3D subsets, materials, UVs,
+  texture-paint metadata, CPU raytrace preview, cross-section and print checks,
+  slicer-style handoff metadata.
+Remaining in-scope gaps:
+- GPU path tracing is not implemented.
+- More U3D/3DS/KMZ chunk/material/animation coverage could be added.
+- Texture painting should bake to editable texture atlases rather than metadata
+  in more workflows.
+- 3D tile rendering and smart-object integration need broader coverage.
+
+30. Plugin/automation compatibility subset
+Status: partially implemented.
+Implemented:
+- Local plugin descriptors, sandboxed panels, package import/export, scripting,
+  command DSL, browser-safe compatibility adapters, action descriptor subset,
+  permission review, and safe kernel descriptor execution.
+Remaining in-scope gaps:
+- Broader Action Manager descriptor coverage for app-supported document/layer/
+  filter operations.
+- Deeper browser-safe host API coverage for compatible plugin packages.
+- Better plugin UI lifecycle/testing harness.
+- Actions need conditional steps and richer playback/error recovery.
+- Keyboard shortcut and menu customization can be expanded.
+- Variables/Data Sets need fuller import/export and binding UI.
+- Droplets/Image Processor/PDF Presentation/Contact Sheet style workflows need
+  more complete automation surfaces where only partial dialogs exist.
+
+31. Panels that exist but remain lightweight
+Status: partially implemented.
+Evidence: Glyphs, Libraries, Learn, Discover, Notes, Measurement Log, Shapes,
+Styles, Comments, and Animation are implemented through gap-panels.tsx rather
+than dedicated full-depth panel modules.
+Remaining in-scope gaps:
+- Glyphs: Unicode blocks, font-specific glyph browsing, recent glyphs, search.
+- Libraries: richer local grid/gallery browsing, drag-to-canvas, asset previews.
+- Learn/Discover: contextual help tied to active tool/document state.
+- Notes: navigation, author/timestamps, filtering, and threaded note editing.
+- Measurement Log: export formats, calibration metadata, count summaries.
+- Styles/Shapes: richer preset preview, import/export, rename/delete/grouping.
+
+32. Status/preflight/limitation surfaces
+Status: partially implemented.
+Implemented:
+- Preflight, document reports, capability warnings, export compatibility
+  manifests, status bar summaries.
+Remaining in-scope gaps:
+- Status bar should surface more real-time bit-depth/source-vs-preview warnings.
+- Export dialogs should make all per-format limitations actionable with
+  one-click alternatives.
+- Capability text in advanced-subsystems.ts should be periodically reconciled
+  with lower-level encoders and capabilities.ts to avoid stale warnings.
+
+
+Recommended Priority Order
+--------------------------
+1. Browser Diagnostics panel.
+2. WebGL compositor depth: GPU filters, adjustments, layer effects, smart
+   filters.
+3. High-bit/color path consistency across filters, tools, status, and export.
+4. Smart object relink/update workflow and smart filter UI polish.
+5. Filter completion: Blur Gallery pins, Lighting Effects, Lens Correction,
+   Lens Blur, Smart Sharpen, and missing smaller filters.
+6. Timeline/audio UI: thumbnails, split controls, transitions, mixer, progress.
+7. Layer workflow depth: Blend If, Knockout, mask/effects switches, bulk layer
+   commands.
+8. Typography and panel depth: variable axes, OpenType grid, Glyphs/Libraries/
+   Learn/Discover/Notes upgrades.
+9. Advanced format depth: PDF multipage/vector work, RAW sidecars, JP2/HEIF/EXR/
+   TIFF metadata and export improvements.
+10. Automation depth: conditional actions, variables/data sets, image assets
+    generator, preset manager, shortcut/menu customization.

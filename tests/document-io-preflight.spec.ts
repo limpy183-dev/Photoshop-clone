@@ -1,6 +1,13 @@
 import { expect, test } from "@playwright/test"
 
-import { deserializePsdFile, loadImageFromFile } from "../components/photoshop/document-io"
+import {
+  deserializePsdFile,
+  inspectImportFileDimensions,
+  loadImageFromFile,
+  loadRasterCanvasFromFile,
+} from "../components/photoshop/document-io"
+import { MAX_CANVAS_DIMENSION, MAX_CANVAS_PIXELS } from "../components/photoshop/canvas-limits"
+import { installFixtureDom } from "./photoshop-fixtures"
 
 function ascii(value: string) {
   return Array.from(value, (ch) => ch.charCodeAt(0))
@@ -176,4 +183,67 @@ test("raster import preserves browser decode for acceptable images", async () =>
     })
     globalThis.Image = originalImage
   }
+})
+
+test("raster import can open oversized images at reduced scale without a full-size canvas", async () => {
+  installFixtureDom()
+  const file = new File([pngHeader(9000, 9000)], "oversized.png", { type: "image/png" })
+  let objectUrlCreated = false
+  const originalCreateObjectURL = URL.createObjectURL
+  const originalRevokeObjectURL = URL.revokeObjectURL
+  const originalImage = globalThis.Image
+
+  Object.defineProperty(URL, "createObjectURL", {
+    configurable: true,
+    value: () => {
+      objectUrlCreated = true
+      return "blob:oversized"
+    },
+  })
+  Object.defineProperty(URL, "revokeObjectURL", {
+    configurable: true,
+    value: () => undefined,
+  })
+  globalThis.Image = class {
+    naturalWidth = 9000
+    naturalHeight = 9000
+    onload: (() => void) | null = null
+    onerror: (() => void) | null = null
+
+    set src(_value: string) {
+      queueMicrotask(() => this.onload?.())
+    }
+  } as unknown as typeof Image
+
+  try {
+    const result = await loadRasterCanvasFromFile(file, { mode: "reduced-scale" })
+    expect(result.mode).toBe("reduced-scale")
+    expect(result.originalWidth).toBe(9000)
+    expect(result.originalHeight).toBe(9000)
+    expect(result.canvas.width).toBeLessThanOrEqual(MAX_CANVAS_DIMENSION)
+    expect(result.canvas.height).toBeLessThanOrEqual(MAX_CANVAS_DIMENSION)
+    expect(result.canvas.width * result.canvas.height).toBeLessThanOrEqual(MAX_CANVAS_PIXELS)
+    expect(result.scale).toBeLessThan(1)
+    expect(objectUrlCreated).toBe(true)
+  } finally {
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: originalCreateObjectURL,
+    })
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: originalRevokeObjectURL,
+    })
+    globalThis.Image = originalImage
+  }
+})
+
+test("import dimension inspection reads PSD, PSB, and raster headers without full decode", async () => {
+  const psd = new File([psdHeader(6400, 4200)], "poster.psd", { type: "image/vnd.adobe.photoshop" })
+  const psb = new File([new Uint8Array([...ascii("8BPS"), ...be16(2), 0, 0, 0, 0, 0, 0, ...be16(4), ...be32(12000), ...be32(16000), ...be16(8), ...be16(3)])], "wrap.psb", { type: "image/vnd.adobe.photoshop" })
+  const png = new File([pngHeader(3200, 1800)], "flat.png", { type: "image/png" })
+
+  await expect(inspectImportFileDimensions(psd)).resolves.toMatchObject({ width: 6400, height: 4200, format: "PSD", kind: "psd" })
+  await expect(inspectImportFileDimensions(psb)).resolves.toMatchObject({ width: 16000, height: 12000, format: "PSB", kind: "psb" })
+  await expect(inspectImportFileDimensions(png)).resolves.toMatchObject({ width: 3200, height: 1800, format: "PNG", kind: "raster" })
 })

@@ -10,9 +10,13 @@ import type {
   ThreeDTexturePixel,
   TimelineFrame,
   Vec3,
+  ThreeDAnimationKeyframe,
+  ThreeDAnimationStack,
   VideoExportPreset,
   VideoGroupProps,
   VideoLayerProps,
+  ThreeDPrintPlan,
+  ThreeDPrintSlice,
   VideoTransition,
 } from "./types"
 import { hexToRgb } from "./color-utils"
@@ -38,6 +42,9 @@ export interface RayTraceOptions {
   samples?: number
   background?: string
   shadows?: boolean
+  viewport?: { x: number; y: number; w: number; h: number }
+  documentWidth?: number
+  documentHeight?: number
 }
 
 export interface AudioMixPlan {
@@ -53,6 +60,20 @@ export interface VideoThumbnailPlanItem {
   index: number
   timeMs: number
   label: string
+}
+
+export interface VideoClipTrackState {
+  durationMs: number
+  inPointMs: number
+  outPointMs: number
+  playheadMs: number
+  inPercent: number
+  outPercent: number
+  clipWidthPercent: number
+  playheadPercent: number
+  frameStepMs: number
+  canSplit: boolean
+  labels: { in: string; out: string; playhead: string }
 }
 
 export interface VideoTransitionWeights {
@@ -94,6 +115,65 @@ export interface OfflineAudioMixSchedule {
   }>
 }
 
+export interface BrowserMuxCapability {
+  supported: boolean
+  mimeType: string | null
+  reason: string
+}
+
+export interface BrowserMuxCapabilityOptions {
+  container?: VideoExportPreset["container"]
+  codec?: VideoExportPreset["codec"]
+  audio?: boolean
+  candidates?: string[]
+}
+
+export interface FinalVideoExportPlan {
+  preset: VideoExportPreset
+  mode: "muxed-media" | "timeline-package" | "animated-image" | "png-sequence"
+  container: VideoExportPreset["container"]
+  extension: string
+  mimeType: string
+  codec: VideoExportPreset["codec"]
+  fps: number
+  width: number
+  height: number
+  durationMs: number
+  frameCount: number
+  audioTrackCount: number
+  warnings: string[]
+  muxCapability: BrowserMuxCapability
+}
+
+export interface VideoTrimHandleModel {
+  state: VideoClipTrackState
+  keyboardNudgeMs: number
+  handles: {
+    in: { timeMs: number; percent: number; frameIndex: number; label: string }
+    out: { timeMs: number; percent: number; frameIndex: number; label: string }
+    playhead: { timeMs: number; percent: number; frameIndex: number; label: string }
+  }
+  thumbnails: Array<VideoThumbnailPlanItem & { leftPercent: number; active: boolean }>
+  ticks: Array<{ timeMs: number; leftPercent: number; label: string; frameIndex: number }>
+}
+
+export interface MuxedAudioStreamSchedule {
+  sampleRate: number
+  durationMs: number
+  masterVolume: number
+  tracks: Array<AudioTrack & {
+    startSeconds: number
+    durationSeconds: number
+    fadeInSeconds: number
+    fadeOutSeconds: number
+    gain: number
+    leftGain: number
+    rightGain: number
+    pan: number
+    gainAutomation: Array<{ timeSeconds: number; value: number }>
+  }>
+}
+
 export const VIDEO_EXPORT_PRESETS: VideoExportPreset[] = [
   { id: "draft-webm", label: "Draft WebM 720p", width: 1280, height: 720, fps: 24, codec: "webm", bitrateKbps: 2800, audioKbps: 128, container: "webm" },
   { id: "social-1080p", label: "Social H.264 1080p", width: 1920, height: 1080, fps: 30, codec: "h264", bitrateKbps: 8000, audioKbps: 192, container: "mp4" },
@@ -101,6 +181,133 @@ export const VIDEO_EXPORT_PRESETS: VideoExportPreset[] = [
   { id: "frame-gif", label: "Frame Animation GIF", width: 1080, height: 1080, fps: 12, codec: "gif", bitrateKbps: 0, audioKbps: 0, container: "gif" },
   { id: "png-sequence", label: "PNG Sequence", width: 1920, height: 1080, fps: 24, codec: "png-sequence", bitrateKbps: 0, audioKbps: 0, container: "zip" },
 ]
+
+function browserMuxCandidates(input: string[] | BrowserMuxCapabilityOptions): string[] {
+  if (Array.isArray(input)) return input
+  if (input.candidates?.length) return input.candidates
+  const audio = input.audio !== false
+  const audioSuffix = audio ? ",opus" : ""
+  const mp4AudioSuffix = audio ? ",mp4a.40.2" : ""
+  const requestedMp4 = input.container === "mp4" || input.codec === "h264"
+  const requestedWebm = input.container === "webm" || input.codec === "vp9" || input.codec === "webm"
+  const mp4 = [
+    `video/mp4;codecs=avc1.42E01E${mp4AudioSuffix}`,
+    `video/mp4;codecs=avc1.4d401f${mp4AudioSuffix}`,
+    audio ? "video/mp4;codecs=h264,aac" : "video/mp4;codecs=h264",
+    "video/mp4",
+  ]
+  const webm = [
+    `video/webm;codecs=vp9${audioSuffix}`,
+    `video/webm;codecs=vp8${audioSuffix}`,
+    audio ? "video/webm;codecs=h264,opus" : "video/webm;codecs=h264",
+    "video/webm",
+  ]
+  if (requestedMp4 && !requestedWebm) return [...mp4, ...webm]
+  if (requestedWebm && !requestedMp4) return [...webm, ...mp4]
+  return webm
+}
+
+export function getBrowserMuxCapability(input: string[] | BrowserMuxCapabilityOptions = [
+  "video/webm;codecs=vp9,opus",
+  "video/webm;codecs=vp8,opus",
+  "video/webm;codecs=h264,opus",
+  "video/webm",
+]): BrowserMuxCapability {
+  const candidates = browserMuxCandidates(input)
+  const Recorder = globalThis.MediaRecorder
+  if (!Recorder) {
+    return {
+      supported: false,
+      mimeType: null,
+      reason: "MediaRecorder is not available in this browser, so browser-side audio/video muxing is unavailable.",
+    }
+  }
+  if (typeof Recorder.isTypeSupported !== "function") {
+    return {
+      supported: true,
+      mimeType: "",
+      reason: "MediaRecorder is available; this browser does not expose MIME probing.",
+    }
+  }
+  const mimeType = candidates.find((candidate) => Recorder.isTypeSupported(candidate)) ?? null
+  if (!mimeType) {
+    return {
+      supported: false,
+      mimeType: null,
+      reason: `MediaRecorder is available, but none of the requested audio/video MIME candidates are supported: ${candidates.join(", ")}.`,
+    }
+  }
+  return {
+    supported: true,
+    mimeType,
+    reason: `MediaRecorder can mux timeline video and audio as ${mimeType}.`,
+  }
+}
+
+export type VideoPresetDeliveryMode = "muxed-media" | "animated-image" | "png-sequence"
+
+export interface VideoPresetDiagnostic {
+  preset: VideoExportPreset
+  deliveryMode: VideoPresetDeliveryMode
+  willMuxNatively: boolean
+  fallbackToPackage: boolean
+  candidateMimeTypes: string[]
+  resolvedMimeType: string | null
+  reason: string
+}
+
+function deliveryModeForPreset(preset: VideoExportPreset): VideoPresetDeliveryMode {
+  if (preset.codec === "gif" || preset.container === "gif") return "animated-image"
+  if (preset.codec === "png-sequence" || preset.container === "zip") return "png-sequence"
+  return "muxed-media"
+}
+
+export function getVideoPresetDiagnostic(preset: VideoExportPreset): VideoPresetDiagnostic {
+  const deliveryMode = deliveryModeForPreset(preset)
+  if (deliveryMode === "animated-image") {
+    return {
+      preset,
+      deliveryMode,
+      willMuxNatively: false,
+      fallbackToPackage: false,
+      candidateMimeTypes: ["image/gif"],
+      resolvedMimeType: "image/gif",
+      reason: "Frame animation is encoded directly via the in-browser GIF encoder; no MediaRecorder required.",
+    }
+  }
+  if (deliveryMode === "png-sequence") {
+    return {
+      preset,
+      deliveryMode,
+      willMuxNatively: false,
+      fallbackToPackage: true,
+      candidateMimeTypes: ["application/zip"],
+      resolvedMimeType: "application/zip",
+      reason: "PNG sequence is packaged as ZIP (frames + timeline manifest + optional WAV mix); no muxing required.",
+    }
+  }
+  const candidates = browserMuxCandidates({
+    container: preset.container,
+    codec: preset.codec,
+    audio: preset.audioKbps > 0,
+  })
+  const mux = getBrowserMuxCapability(candidates)
+  return {
+    preset,
+    deliveryMode,
+    willMuxNatively: mux.supported && Boolean(mux.mimeType),
+    fallbackToPackage: !mux.supported || !mux.mimeType,
+    candidateMimeTypes: candidates,
+    resolvedMimeType: mux.mimeType,
+    reason: mux.supported && mux.mimeType
+      ? `Browser muxes this preset natively as ${mux.mimeType}.`
+      : `Browser cannot mux this preset; export falls back to PNG sequence ZIP. ${mux.reason}`,
+  }
+}
+
+export function getVideoPresetDiagnostics(): VideoPresetDiagnostic[] {
+  return VIDEO_EXPORT_PRESETS.map((preset) => getVideoPresetDiagnostic(preset))
+}
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value))
@@ -186,6 +393,142 @@ function normalizeMesh(vertices: Vec3[]) {
   return vertices.map((point) => mul(sub(point, center), scale))
 }
 
+function hexFromRgb(r: number, g: number, b: number) {
+  return `#${[r, g, b].map((value) => clamp(Math.round(value), 0, 255).toString(16).padStart(2, "0")).join("")}`
+}
+
+function bytesFromText(text: string) {
+  return new TextEncoder().encode(text)
+}
+
+function concatBytes(parts: Uint8Array[]) {
+  const size = parts.reduce((sum, part) => sum + part.length, 0)
+  const out = new Uint8Array(size)
+  let offset = 0
+  for (const part of parts) {
+    out.set(part, offset)
+    offset += part.length
+  }
+  return out
+}
+
+function le16(value: number) {
+  return new Uint8Array([value & 0xff, (value >> 8) & 0xff])
+}
+
+function le32(value: number) {
+  return new Uint8Array([value & 0xff, (value >> 8) & 0xff, (value >> 16) & 0xff, (value >> 24) & 0xff])
+}
+
+function f32le(value: number) {
+  const out = new Uint8Array(4)
+  new DataView(out.buffer).setFloat32(0, Number.isFinite(value) ? value : 0, true)
+  return out
+}
+
+function cString(text: string) {
+  const safe = text.replace(/\0/g, "").slice(0, 63)
+  return concatBytes([bytesFromText(safe), new Uint8Array([0])])
+}
+
+function chunk3ds(id: number, ...bodies: Uint8Array[]) {
+  const body = concatBytes(bodies)
+  return concatBytes([le16(id), le32(body.length + 6), body])
+}
+
+function crc32(bytes: Uint8Array) {
+  let crc = 0xffffffff
+  for (const byte of bytes) {
+    crc ^= byte
+    for (let bit = 0; bit < 8; bit++) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1))
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0
+}
+
+function zipStoreEntry(fileName: string, data: Uint8Array) {
+  const name = bytesFromText(fileName)
+  const crc = crc32(data)
+  const localHeader = concatBytes([
+    le32(0x04034b50),
+    le16(20),
+    le16(0),
+    le16(0),
+    le16(0),
+    le16(0),
+    le32(crc),
+    le32(data.length),
+    le32(data.length),
+    le16(name.length),
+    le16(0),
+    name,
+  ])
+  const localOffset = 0
+  const centralHeader = concatBytes([
+    le32(0x02014b50),
+    le16(20),
+    le16(20),
+    le16(0),
+    le16(0),
+    le16(0),
+    le16(0),
+    le32(crc),
+    le32(data.length),
+    le32(data.length),
+    le16(name.length),
+    le16(0),
+    le16(0),
+    le16(0),
+    le16(0),
+    le32(0),
+    le32(localOffset),
+    name,
+  ])
+  const centralOffset = localHeader.length + data.length
+  const end = concatBytes([
+    le32(0x06054b50),
+    le16(0),
+    le16(0),
+    le16(1),
+    le16(1),
+    le32(centralHeader.length),
+    le32(centralOffset),
+    le16(0),
+  ])
+  return concatBytes([localHeader, data, centralHeader, end])
+}
+
+function extractZipStoreEntries(buffer: ArrayBuffer): Array<{ name: string; data: Uint8Array; method: number }> {
+  const bytes = new Uint8Array(buffer)
+  const view = new DataView(buffer)
+  const entries: Array<{ name: string; data: Uint8Array; method: number }> = []
+  let offset = 0
+  while (offset + 30 <= bytes.length) {
+    const signature = view.getUint32(offset, true)
+    if (signature !== 0x04034b50) break
+    const method = view.getUint16(offset + 8, true)
+    const compressedSize = view.getUint32(offset + 18, true)
+    const fileNameLength = view.getUint16(offset + 26, true)
+    const extraLength = view.getUint16(offset + 28, true)
+    const nameStart = offset + 30
+    const dataStart = nameStart + fileNameLength + extraLength
+    const dataEnd = dataStart + compressedSize
+    if (dataEnd > bytes.length) break
+    const name = new TextDecoder().decode(bytes.slice(nameStart, nameStart + fileNameLength))
+    entries.push({ name, method, data: bytes.slice(dataStart, dataEnd) })
+    offset = dataEnd
+  }
+  return entries
+}
+
+function sceneLights() {
+  return [
+    { id: uid("light"), name: "Ambient", kind: "ambient" as const, color: "#ffffff", intensity: 0.35 },
+    { id: uid("light"), name: "Key", kind: "directional" as const, color: "#ffffff", intensity: 0.9, direction: vec(-0.4, -0.65, -0.55) },
+  ]
+}
+
 function sceneFromMesh(name: string, vertices: Vec3[], faces: number[][], format: AdvancedThreeDFormat, warnings: string[] = []): AdvancedThreeDImportResult {
   const material = createMaterial(format === "3ds" ? "#f4b15f" : format === "kmz" ? "#5ec8ff" : "#9bd87d", `${format.toUpperCase()} Material`)
   const object = createObject(name, normalizeMesh(vertices), faces, material.id)
@@ -194,10 +537,7 @@ function sceneFromMesh(name: string, vertices: Vec3[], faces: number[][], format
     scene: {
       objects: [object],
       materials: [material],
-      lights: [
-        { id: uid("light"), name: "Ambient", kind: "ambient", color: "#ffffff", intensity: 0.35 },
-        { id: uid("light"), name: "Key", kind: "directional", color: "#ffffff", intensity: 0.9, direction: vec(-0.4, -0.65, -0.55) },
-      ],
+      lights: sceneLights(),
       camera: { position: vec(0, 0.2, 5), target: vec(0, 0, 0), fov: 42, focalLength: 50 },
       renderMode: "solid-wire",
       background: "transparent",
@@ -210,11 +550,16 @@ function sceneFromMesh(name: string, vertices: Vec3[], faces: number[][], format
 function parse3ds(buffer: ArrayBuffer): AdvancedThreeDImportResult {
   const view = new DataView(buffer)
   const warnings: string[] = []
-  let objectName = "3DS Mesh"
-  let vertices: Vec3[] = []
-  let faces: number[][] = []
+  const materialByName = new Map<string, ThreeDMaterial>()
+  const objectRecords: Array<{
+    name: string
+    vertices: Vec3[]
+    faces: number[][]
+    uvs: Array<{ u: number; v: number }>
+    faceMaterials: string[]
+  }> = []
 
-  const readCString = (offset: number, end: number) => {
+  const readCString = (offset: number, end: number, fallback: string) => {
     const bytes: number[] = []
     let cursor = offset
     while (cursor < end) {
@@ -222,60 +567,200 @@ function parse3ds(buffer: ArrayBuffer): AdvancedThreeDImportResult {
       if (value === 0) break
       bytes.push(value)
     }
-    return { text: new TextDecoder().decode(new Uint8Array(bytes)) || objectName, next: cursor }
+    return { text: new TextDecoder().decode(new Uint8Array(bytes)) || fallback, next: cursor }
   }
 
-  const walk = (start: number, end: number) => {
+  const readColor = (start: number, end: number) => {
     let offset = start
-    while (offset + 6 <= end && offset + 6 <= view.byteLength) {
+    while (offset + 6 <= end) {
       const id = view.getUint16(offset, true)
       const size = view.getUint32(offset + 2, true)
       const body = offset + 6
-      if (size < 6 || offset + size > view.byteLength) {
-        offset += 1
-        continue
+      const next = offset + size
+      if (size < 6 || next > view.byteLength || next > end) break
+      if (id === 0x0011 && body + 3 <= next) {
+        return hexFromRgb(view.getUint8(body), view.getUint8(body + 1), view.getUint8(body + 2))
       }
-      const next = size > 0 ? Math.min(offset + size, view.byteLength) : end
-      if (next <= offset) break
-      if (id === 0x4000) {
-        const named = readCString(body, next)
-        objectName = named.text
-        walk(named.next, next)
-      } else if (id === 0x4110) {
-        const count = view.getUint16(body, true)
-        const parsed: Vec3[] = []
-        let cursor = body + 2
-        for (let i = 0; i < count && cursor + 12 <= next; i++) {
-          parsed.push(vec(view.getFloat32(cursor, true), view.getFloat32(cursor + 4, true), view.getFloat32(cursor + 8, true)))
-          cursor += 12
+      if (id === 0x0010 && body + 12 <= next) {
+        return hexFromRgb(view.getFloat32(body, true) * 255, view.getFloat32(body + 4, true) * 255, view.getFloat32(body + 8, true) * 255)
+      }
+      offset = next
+    }
+    return "#f4b15f"
+  }
+
+  const parseMaterial = (start: number, end: number) => {
+    let name = `3DS Material ${materialByName.size + 1}`
+    let color = "#f4b15f"
+    let offset = start
+    while (offset + 6 <= end) {
+      const id = view.getUint16(offset, true)
+      const size = view.getUint32(offset + 2, true)
+      const body = offset + 6
+      const next = offset + size
+      if (size < 6 || next > view.byteLength || next > end) break
+      if (id === 0xa000) {
+        name = readCString(body, next, name).text
+      } else if (id === 0xa020) {
+        color = readColor(body, next)
+      }
+      offset = next
+    }
+    materialByName.set(name, { id: uid("mat"), name, color, metallic: 0, roughness: 0.45, opacity: 1 })
+  }
+
+  const parseFaceMaterialGroups = (record: { faces: number[][]; faceMaterials: string[] }, start: number, end: number) => {
+    let offset = start
+    while (offset + 6 <= end) {
+      const id = view.getUint16(offset, true)
+      const size = view.getUint32(offset + 2, true)
+      const body = offset + 6
+      const next = offset + size
+      if (size < 6 || next > view.byteLength || next > end) break
+      if (id === 0x4130) {
+        const named = readCString(body, next, "3DS Material")
+        const count = named.next + 2 <= next ? view.getUint16(named.next, true) : 0
+        let cursor = named.next + 2
+        for (let i = 0; i < count && cursor + 2 <= next; i++) {
+          const faceIndex = view.getUint16(cursor, true)
+          if (faceIndex >= 0 && faceIndex < record.faces.length) record.faceMaterials[faceIndex] = named.text
+          cursor += 2
         }
-        vertices = parsed
-      } else if (id === 0x4120) {
-        const count = view.getUint16(body, true)
-        const parsed: number[][] = []
-        let cursor = body + 2
-        for (let i = 0; i < count && cursor + 8 <= next; i++) {
-          parsed.push([view.getUint16(cursor, true), view.getUint16(cursor + 2, true), view.getUint16(cursor + 4, true)])
-          cursor += 8
-        }
-        faces = parsed
-      } else {
-        walk(body, next)
       }
       offset = next
     }
   }
 
-  walk(0, view.byteLength)
-  if (!vertices.length || !faces.length) {
-    warnings.push("3DS geometry chunks were not found; imported a cube placeholder.")
-    const fallback = createPrimitiveThreeDScene("cube")
-    return { format: "3ds", scene: fallback, warnings }
+  const parseObject = (start: number, end: number) => {
+    const named = readCString(start, end, `3DS Mesh ${objectRecords.length + 1}`)
+    const record = { name: named.text, vertices: [] as Vec3[], faces: [] as number[][], uvs: [] as Array<{ u: number; v: number }>, faceMaterials: [] as string[] }
+    const walkRecord = (chunkStart: number, chunkEnd: number) => {
+      let offset = chunkStart
+      while (offset + 6 <= chunkEnd) {
+        const id = view.getUint16(offset, true)
+        const size = view.getUint32(offset + 2, true)
+        const body = offset + 6
+        const next = offset + size
+        if (size < 6 || next > view.byteLength || next > chunkEnd) break
+        if (id === 0x4110) {
+          const count = view.getUint16(body, true)
+          const parsed: Vec3[] = []
+          let cursor = body + 2
+          for (let i = 0; i < count && cursor + 12 <= next; i++) {
+            parsed.push(vec(view.getFloat32(cursor, true), view.getFloat32(cursor + 4, true), view.getFloat32(cursor + 8, true)))
+            cursor += 12
+          }
+          record.vertices = parsed
+        } else if (id === 0x4120) {
+          const count = view.getUint16(body, true)
+          const parsed: number[][] = []
+          let cursor = body + 2
+          for (let i = 0; i < count && cursor + 8 <= next; i++) {
+            parsed.push([view.getUint16(cursor, true), view.getUint16(cursor + 2, true), view.getUint16(cursor + 4, true)])
+            cursor += 8
+          }
+          record.faces = parsed
+          record.faceMaterials = Array.from({ length: parsed.length }, () => "")
+          parseFaceMaterialGroups(record, cursor, next)
+        } else if (id === 0x4140) {
+          const count = view.getUint16(body, true)
+          const parsed: Array<{ u: number; v: number }> = []
+          let cursor = body + 2
+          for (let i = 0; i < count && cursor + 8 <= next; i++) {
+            parsed.push({ u: view.getFloat32(cursor, true), v: view.getFloat32(cursor + 4, true) })
+            cursor += 8
+          }
+          record.uvs = parsed
+        } else {
+          walkRecord(body, next)
+        }
+        offset = next
+      }
+    }
+    walkRecord(named.next, end)
+    if (record.vertices.length && record.faces.length) objectRecords.push(record)
   }
-  return sceneFromMesh(objectName, vertices, faces, "3ds", warnings)
+
+  const parseObjectChunks = (start: number, end: number): typeof objectRecords[number] | null => {
+    const before = objectRecords.length
+    let offset = start
+    while (offset + 6 <= end) {
+      const id = view.getUint16(offset, true)
+      const size = view.getUint32(offset + 2, true)
+      const body = offset + 6
+      const next = offset + size
+      if (size < 6 || next > view.byteLength || next > end) {
+        offset += 1
+        continue
+      }
+      if (id === 0x4000) parseObject(body, next)
+      else if (id === 0xafff) parseMaterial(body, next)
+      else parseObjectChunks(body, next)
+      offset = next
+    }
+    return objectRecords.length > before ? objectRecords[objectRecords.length - 1] : null
+  }
+
+  parseObjectChunks(0, view.byteLength)
+  if (!objectRecords.length) {
+    warnings.push("3DS geometry chunks were not found; imported a cube placeholder.")
+    return { format: "3ds", scene: createPrimitiveThreeDScene("cube"), warnings }
+  }
+
+  const materials = materialByName.size ? [...materialByName.values()] : [createMaterial("#f4b15f", "3DS Material")]
+  const materialIdByName = new Map(materials.map((material) => [material.name, material.id]))
+  const objects = objectRecords.map((record, recordIndex) => {
+    for (const name of record.faceMaterials.filter(Boolean)) {
+      if (!materialIdByName.has(name)) {
+        const material = createMaterial("#f4b15f", name)
+        materials.push(material)
+        materialIdByName.set(name, material.id)
+      }
+    }
+    const fallbackMaterialId = materialIdByName.get(record.faceMaterials.find(Boolean) ?? "") ?? materials[recordIndex % materials.length]?.id ?? materials[0].id
+    const object = createObject(record.name, normalizeMesh(record.vertices), record.faces, fallbackMaterialId)
+    return {
+      ...object,
+      uvs: record.uvs.length === record.vertices.length ? record.uvs : object.uvs,
+      faces: object.faces.map((face, faceIndex) => ({
+        ...face,
+        materialId: materialIdByName.get(record.faceMaterials[faceIndex] ?? "") ?? fallbackMaterialId,
+        uvIndices: record.uvs.length === record.vertices.length ? [...face.indices] : face.uvIndices,
+      })),
+    }
+  })
+
+  return {
+    format: "3ds",
+    scene: {
+      objects,
+      materials,
+      lights: sceneLights(),
+      camera: { position: vec(0, 0.2, 5), target: vec(0, 0, 0), fov: 42, focalLength: 50 },
+      renderMode: "solid-wire",
+      background: "transparent",
+      selectedObjectId: objects[0]?.id,
+    },
+    warnings,
+  }
 }
 
 function parseKmz(buffer: ArrayBuffer): AdvancedThreeDImportResult {
+  const header = new Uint8Array(buffer.slice(0, 4))
+  if (header[0] === 0x50 && header[1] === 0x4b) {
+    const entries = extractZipStoreEntries(buffer)
+    if (entries.length) {
+      const dae = entries.find((entry) => /\.dae$/i.test(entry.name))
+      if (dae && dae.method === 0) {
+        const scene = parseDaeToScene(new TextDecoder().decode(dae.data))
+        return { format: "kmz", scene, warnings: [`KMZ ZIP package parsed from ${dae.name}; compression method store is preserved for browser-local round-trip.`] }
+      }
+      if (dae) {
+        return { format: "kmz", scene: createPrimitiveThreeDScene("cube"), warnings: [`KMZ entry ${dae.name} uses unsupported compression method ${dae.method}; imported a cube placeholder.`] }
+      }
+      return { format: "kmz", scene: createPrimitiveThreeDScene("cube"), warnings: ["KMZ ZIP package did not contain a COLLADA .dae payload; imported a cube placeholder."] }
+    }
+  }
   const text = new TextDecoder().decode(buffer)
   const daeStart = text.search(/<COLLADA/i)
   if (daeStart >= 0) {
@@ -287,6 +772,28 @@ function parseKmz(buffer: ArrayBuffer): AdvancedThreeDImportResult {
 
 function parseU3d(buffer: ArrayBuffer): AdvancedThreeDImportResult {
   const text = new TextDecoder().decode(buffer)
+  if (/^U3D-BROWSER-SUBSET\b/.test(text.trimStart())) {
+    const jsonStart = text.indexOf("{")
+    if (jsonStart >= 0) {
+      try {
+        const payload = JSON.parse(text.slice(jsonStart)) as { scene?: ThreeDScene }
+        if (payload.scene?.objects?.length && payload.scene.materials?.length) {
+          return {
+            format: "u3d",
+            scene: {
+              ...payload.scene,
+              lights: payload.scene.lights?.length ? payload.scene.lights : sceneLights(),
+              camera: payload.scene.camera ?? { position: vec(0, 0.2, 5), target: vec(0, 0, 0), fov: 42, focalLength: 50 },
+              renderMode: payload.scene.renderMode ?? "solid-wire",
+            },
+            warnings: ["U3D browser-local metadata subset parsed with mesh, material, UV, and animation records."],
+          }
+        }
+      } catch {
+        return { format: "u3d", scene: createPrimitiveThreeDScene("cube"), warnings: ["U3D browser-local metadata JSON could not be parsed; imported a cube placeholder."] }
+      }
+    }
+  }
   const vertices: Vec3[] = []
   const faces: number[][] = []
   let name = "U3D Mesh"
@@ -316,15 +823,90 @@ export function importAdvancedThreeDScene(buffer: ArrayBuffer, fileName: string)
   return { format: "u3d", scene: createPrimitiveThreeDScene("cube"), warnings: [`Unsupported advanced 3D extension "${ext ?? "unknown"}"; imported a cube placeholder.`] }
 }
 
+function encode3dsScene(scene: ThreeDScene) {
+  const materialById = new Map(scene.materials.map((material) => [material.id, material]))
+  const materialChunks = scene.materials.map((material) => {
+    const rgb = hexToRgb(material.color)
+    return chunk3ds(
+      0xafff,
+      chunk3ds(0xa000, cString(material.name)),
+      chunk3ds(0xa020, chunk3ds(0x0011, new Uint8Array([rgb.r, rgb.g, rgb.b]))),
+    )
+  })
+
+  const objectChunks = scene.objects
+    .filter((object) => object.vertices.length && object.faces.length)
+    .map((object) => {
+      const vertices = object.vertices.slice(0, 65_535).map((vertex) => transformVertex(vertex, object))
+      const triangleRecords: Array<{ indices: number[]; materialId: string }> = []
+      for (const face of object.faces) {
+        const indices = face.indices.filter((index) => index >= 0 && index < vertices.length)
+        for (let i = 1; i + 1 < indices.length && triangleRecords.length < 65_535; i++) {
+          triangleRecords.push({ indices: [indices[0], indices[i], indices[i + 1]], materialId: face.materialId ?? object.materialId })
+        }
+      }
+      const vertexBytes = concatBytes([
+        le16(vertices.length),
+        ...vertices.flatMap((vertex) => [f32le(vertex.x), f32le(vertex.y), f32le(vertex.z)]),
+      ])
+      const materialGroups = new Map<string, number[]>()
+      triangleRecords.forEach((record, index) => {
+        const materialName = materialById.get(record.materialId)?.name ?? materialById.get(object.materialId)?.name ?? scene.materials[0]?.name ?? "Material"
+        materialGroups.set(materialName, [...(materialGroups.get(materialName) ?? []), index])
+      })
+      const faceMaterialChunks = [...materialGroups.entries()].map(([name, indices]) => chunk3ds(
+        0x4130,
+        cString(name),
+        le16(indices.length),
+        ...indices.map(le16),
+      ))
+      const faceBytes = concatBytes([
+        le16(triangleRecords.length),
+        ...triangleRecords.flatMap((record) => [le16(record.indices[0]), le16(record.indices[1]), le16(record.indices[2]), le16(0)]),
+        ...faceMaterialChunks,
+      ])
+      const uvs = object.uvs?.length === object.vertices.length ? object.uvs : vertices.map(() => ({ u: 0, v: 0 }))
+      const uvBytes = concatBytes([
+        le16(Math.min(uvs.length, vertices.length)),
+        ...uvs.slice(0, vertices.length).flatMap((uv) => [f32le(uv.u), f32le(uv.v)]),
+      ])
+      return chunk3ds(
+        0x4000,
+        cString(object.name),
+        chunk3ds(0x4100, chunk3ds(0x4110, vertexBytes), chunk3ds(0x4120, faceBytes), chunk3ds(0x4140, uvBytes)),
+      )
+    })
+
+  return chunk3ds(0x4d4d, chunk3ds(0x0002, le32(3)), chunk3ds(0x3d3d, ...materialChunks, ...objectChunks))
+}
+
+function serializableThreeDScene(scene: ThreeDScene): ThreeDScene {
+  return {
+    ...scene,
+    objects: scene.objects.map((object) => ({
+      ...object,
+      vertices: object.vertices.map((vertex) => ({ ...vertex })),
+      faces: object.faces.map((face) => ({ ...face, indices: [...face.indices], uvIndices: face.uvIndices ? [...face.uvIndices] : undefined })),
+      uvs: object.uvs?.map((uv) => ({ ...uv })),
+    })),
+    materials: scene.materials.map((material) => ({
+      ...material,
+      texture: material.texture ? { ...material.texture, pixels: material.texture.pixels.map((pixel) => ({ ...pixel })) } : undefined,
+    })),
+    lights: scene.lights.map((light) => ({ ...light, position: light.position ? { ...light.position } : undefined, direction: light.direction ? { ...light.direction } : undefined })),
+    camera: { ...scene.camera, position: { ...scene.camera.position }, target: { ...scene.camera.target } },
+    animations: scene.animations?.map((animation) => ({ ...animation, tracks: animation.tracks.map((track) => ({ ...track, keyframes: track.keyframes.map((keyframe) => ({ ...keyframe, value: typeof keyframe.value === "object" ? { ...keyframe.value } : keyframe.value })) })) })),
+  }
+}
+
 export function exportAdvancedThreeDScene(scene: ThreeDScene, format: AdvancedThreeDFormat, baseName = "scene"): AdvancedThreeDExportResult {
   if (format === "3ds") {
-    const obj = exportSceneToObj(scene)
     return {
       format,
-      fileName: `${baseName}.3ds.txt`,
-      mime: "text/plain+3ds",
-      data: `3DS-BROWSER-SUBSET\n${obj}`,
-      warnings: ["Browser export writes a documented 3DS interchange subset, not a binary Autodesk 3DS file."],
+      fileName: `${baseName}.3ds`,
+      mime: "model/3ds",
+      data: encode3dsScene(scene),
+      warnings: ["Browser export writes a binary 3DS mesh/material/UV subset; vendor animation, plug-in, and controller chunks remain out of scope."],
     }
   }
   if (format === "kmz") {
@@ -333,23 +915,16 @@ export function exportAdvancedThreeDScene(scene: ThreeDScene, format: AdvancedTh
       format,
       fileName: `${baseName}.kmz`,
       mime: "application/vnd.google-earth.kmz",
-      data: `PK local-file model.dae\n${dae}`,
-      warnings: ["KMZ export stores an embedded COLLADA payload in the app's lightweight browser package representation."],
+      data: zipStoreEntry("model.dae", bytesFromText(dae)),
+      warnings: ["KMZ export writes a standards-shaped ZIP package with model.dae using store compression for deterministic browser-local round-trip."],
     }
   }
   return {
     format,
     fileName: `${baseName}.u3d`,
     mime: "model/u3d",
-    data: [
-      "U3D",
-      ...scene.objects.map((object) => [
-        `mesh ${object.name}`,
-        `vertices ${object.vertices.map((vertex) => `${vertex.x} ${vertex.y} ${vertex.z}`).join(" ")}`,
-        `faces ${object.faces.map((face) => face.indices.join(" ")).join(" ")}`,
-      ].join("\n")),
-    ].join("\n"),
-    warnings: ["U3D export writes the app's inspectable mesh subset for local project interchange."],
+    data: `U3D-BROWSER-SUBSET 1\n${JSON.stringify({ app: "Photoshop Web", version: 1, scene: serializableThreeDScene(scene) }, null, 2)}`,
+    warnings: ["U3D export writes the app's inspectable browser-local metadata subset, not proprietary U3D binary blocks."],
   }
 }
 
@@ -385,6 +960,101 @@ export function updateThreeDMaterial(scene: ThreeDScene, materialId: string, pat
     ...scene,
     materials: scene.materials.map((material) => (material.id === materialId ? { ...material, ...patch } : material)),
   }
+}
+
+export function upsertThreeDAnimationStack(scene: ThreeDScene, stack: ThreeDAnimationStack): ThreeDScene {
+  const animations = scene.animations ?? []
+  const existing = animations.findIndex((item) => item.id === stack.id)
+  const next = existing >= 0
+    ? animations.map((item, index) => (index === existing ? stack : item))
+    : [...animations, stack]
+  return { ...scene, animations: next, activeAnimationId: scene.activeAnimationId ?? stack.id }
+}
+
+function cloneThreeDScene(scene: ThreeDScene): ThreeDScene {
+  return serializableThreeDScene(scene)
+}
+
+function easeProgress(progress: number, easing: ThreeDAnimationKeyframe["easing"] = "linear") {
+  const t = clamp(progress, 0, 1)
+  if (easing === "hold") return 0
+  if (easing === "ease-in") return t * t
+  if (easing === "ease-out") return 1 - (1 - t) * (1 - t)
+  if (easing === "ease-in-out") return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2
+  return t
+}
+
+function lerp(a: number, b: number, t: number) {
+  return a + (b - a) * t
+}
+
+function isVec3Value(value: ThreeDAnimationKeyframe["value"]): value is Vec3 {
+  return typeof value === "object" && value !== null && "x" in value && "y" in value && "z" in value
+}
+
+function lerpColor(a: string, b: string, t: number) {
+  const left = hexToRgb(a)
+  const right = hexToRgb(b)
+  return hexFromRgb(lerp(left.r, right.r, t), lerp(left.g, right.g, t), lerp(left.b, right.b, t))
+}
+
+function interpolateKeyframes(keyframes: ThreeDAnimationKeyframe[], timeMs: number): ThreeDAnimationKeyframe["value"] | undefined {
+  const sorted = [...keyframes].sort((a, b) => a.timeMs - b.timeMs)
+  if (!sorted.length) return undefined
+  if (timeMs <= sorted[0].timeMs) return sorted[0].value
+  if (timeMs >= sorted[sorted.length - 1].timeMs) return sorted[sorted.length - 1].value
+  const nextIndex = sorted.findIndex((keyframe) => keyframe.timeMs >= timeMs)
+  const prev = sorted[Math.max(0, nextIndex - 1)]
+  const next = sorted[nextIndex]
+  if (!prev || !next) return sorted[0].value
+  const progress = easeProgress((timeMs - prev.timeMs) / Math.max(1, next.timeMs - prev.timeMs), prev.easing ?? next.easing)
+  if (typeof prev.value === "number" && typeof next.value === "number") return lerp(prev.value, next.value, progress)
+  if (typeof prev.value === "string" && typeof next.value === "string") return lerpColor(prev.value, next.value, progress)
+  if (isVec3Value(prev.value) && isVec3Value(next.value)) {
+    return {
+      x: lerp(prev.value.x, next.value.x, progress),
+      y: lerp(prev.value.y, next.value.y, progress),
+      z: lerp(prev.value.z, next.value.z, progress),
+    }
+  }
+  return progress < 1 ? prev.value : next.value
+}
+
+export function evaluateThreeDAnimation(scene: ThreeDScene, animationId: string | undefined = scene.activeAnimationId, timeMs = scene.currentTimeMs ?? 0): ThreeDScene {
+  const stack = scene.animations?.find((animation) => animation.id === animationId) ?? scene.animations?.[0]
+  if (!stack) return { ...scene, currentTimeMs: Math.max(0, Math.round(timeMs)) }
+  const duration = Math.max(1, Math.round(stack.durationMs))
+  const localTime = stack.loop ? ((Math.round(timeMs) % duration) + duration) % duration : clamp(Math.round(timeMs), 0, duration)
+  const out = cloneThreeDScene(scene)
+  for (const track of stack.tracks) {
+    const value = interpolateKeyframes(track.keyframes, localTime)
+    if (value === undefined) continue
+    if (track.target === "object") {
+      out.objects = out.objects.map((object) => {
+        if (object.id !== track.targetId) return object
+        if ((track.property === "position" || track.property === "rotation" || track.property === "scale") && isVec3Value(value)) {
+          return { ...object, [track.property]: value }
+        }
+        return object
+      })
+    } else if (track.target === "camera") {
+      if ((track.property === "position" || track.property === "target") && isVec3Value(value)) {
+        out.camera = { ...out.camera, [track.property]: value }
+      } else if ((track.property === "fov" || track.property === "focalLength") && typeof value === "number") {
+        out.camera = { ...out.camera, [track.property]: value }
+      }
+    } else if (track.target === "material") {
+      out.materials = out.materials.map((material) => {
+        if (material.id !== track.targetId) return material
+        if (track.property === "color" && typeof value === "string") return { ...material, color: value }
+        if ((track.property === "opacity" || track.property === "metallic" || track.property === "roughness") && typeof value === "number") {
+          return { ...material, [track.property]: clamp(value, 0, track.property === "opacity" ? 1 : 1) }
+        }
+        return material
+      })
+    }
+  }
+  return { ...out, activeAnimationId: stack.id, currentTimeMs: localTime }
 }
 
 export function paintThreeDSurface(
@@ -460,38 +1130,110 @@ export function rayTraceScene(scene: ThreeDScene, width: number, height: number,
   const forward = normalize(sub(camera.target, camera.position))
   const right = normalize(cross(forward, vec(0, 1, 0)))
   const up = normalize(cross(right, forward))
-  const aspect = w / h
+  const documentWidth = Math.max(1, Math.round(options.documentWidth ?? w))
+  const documentHeight = Math.max(1, Math.round(options.documentHeight ?? h))
+  const viewport = options.viewport ?? { x: 0, y: 0, w, h }
+  const aspect = documentWidth / documentHeight
   const fov = Math.tan(((camera.fov || 42) * Math.PI) / 360)
-  const light = normalize(vec(-0.35, -0.7, -0.5))
+  const sampleCount = clamp(Math.round(options.samples ?? 1), 1, 16)
+  const sampleGrid = Math.ceil(Math.sqrt(sampleCount))
+  const sampleOffsets = Array.from({ length: sampleCount }, (_, index) => ({
+    x: ((index % sampleGrid) + 0.5) / sampleGrid,
+    y: (Math.floor(index / sampleGrid) + 0.5) / sampleGrid,
+  }))
+  const lights = scene.lights ?? []
+
+  const isOccluded = (point: Vec3, normal: Vec3, lightDirection: Vec3, maxDistance: number) => {
+    const origin = add(point, mul(normal, 0.002))
+    for (const triangle of triangles) {
+      const distance = intersectTriangle(origin, lightDirection, triangle.a, triangle.b, triangle.c)
+      if (distance !== null && distance < maxDistance - 0.004) return true
+    }
+    return false
+  }
+
+  const shadeHit = (point: Vec3, direction: Vec3, normal: Vec3, material: ThreeDMaterial) => {
+    const base = hexToRgb(material.color)
+    const roughness = clamp(material.roughness ?? 0.45, 0, 1)
+    const metallic = clamp(material.metallic ?? 0, 0, 1)
+    const opacity = clamp(material.opacity ?? 1, 0, 1)
+    const surfaceNormal = dot(normal, direction) > 0 ? mul(normal, -1) : normal
+    const viewDirection = normalize(mul(direction, -1))
+    let r = 0
+    let g = 0
+    let b = 0
+    if (!lights.length) {
+      r += base.r * 0.04
+      g += base.g * 0.04
+      b += base.b * 0.04
+    }
+    for (const light of lights) {
+      const lightColor = hexToRgb(light.color)
+      if (light.kind === "ambient") {
+        const amount = Math.max(0, light.intensity)
+        r += base.r * (lightColor.r / 255) * amount
+        g += base.g * (lightColor.g / 255) * amount
+        b += base.b * (lightColor.b / 255) * amount
+        continue
+      }
+      const toLight = light.kind === "point"
+        ? sub(light.position ?? vec(0, 3, 4), point)
+        : normalize(mul(light.direction ?? vec(-0.35, -0.7, -0.5), -1))
+      const lightDistance = light.kind === "point" ? length(toLight) : Infinity
+      const lightDirection = normalize(toLight)
+      const attenuation = light.kind === "point" ? 1 / (1 + 0.06 * lightDistance * lightDistance) : 1
+      const shadow = options.shadows && isOccluded(point, surfaceNormal, lightDirection, lightDistance) ? 0.22 : 1
+      const diffuse = Math.max(0, dot(surfaceNormal, lightDirection))
+      const halfVector = normalize(add(lightDirection, viewDirection))
+      const specularPower = 4 + (1 - roughness) * 80
+      const specular = Math.pow(Math.max(0, dot(surfaceNormal, halfVector)), specularPower) * (0.12 + metallic * 0.65)
+      const intensity = Math.max(0, light.intensity) * attenuation * shadow
+      r += (base.r * diffuse * (1 - metallic * 0.2) + lightColor.r * specular) * intensity * (lightColor.r / 255)
+      g += (base.g * diffuse * (1 - metallic * 0.2) + lightColor.g * specular) * intensity * (lightColor.g / 255)
+      b += (base.b * diffuse * (1 - metallic * 0.2) + lightColor.b * specular) * intensity * (lightColor.b / 255)
+    }
+    return {
+      r: r * opacity + background.r * (1 - opacity),
+      g: g * opacity + background.g * (1 - opacity),
+      b: b * opacity + background.b * (1 - opacity),
+      a: 255,
+    }
+  }
+
+  const traceSample = (sampleX: number, sampleY: number) => {
+    const px = (sampleX / documentWidth - 0.5) * 2 * aspect * fov
+    const py = (0.5 - sampleY / documentHeight) * 2 * fov
+    const direction = normalize(add(add(forward, mul(right, px)), mul(up, py)))
+    let best = Infinity
+    let hit: { point: Vec3; normal: Vec3; material: ThreeDMaterial } | null = null
+    for (const triangle of triangles) {
+      const distance = intersectTriangle(camera.position, direction, triangle.a, triangle.b, triangle.c)
+      if (distance !== null && distance < best) {
+        best = distance
+        hit = { point: add(camera.position, mul(direction, distance)), normal: triangle.normal, material: triangle.material }
+      }
+    }
+    return hit ? shadeHit(hit.point, direction, hit.normal, hit.material) : { r: background.r, g: background.g, b: background.b, a: 255 }
+  }
 
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = (y * w + x) * 4
-      const px = ((x + 0.5) / w - 0.5) * 2 * aspect * fov
-      const py = (0.5 - (y + 0.5) / h) * 2 * fov
-      const direction = normalize(add(add(forward, mul(right, px)), mul(up, py)))
-      let best = Infinity
-      let hit: { normal: Vec3; material: ThreeDMaterial } | null = null
-      for (const triangle of triangles) {
-        const distance = intersectTriangle(camera.position, direction, triangle.a, triangle.b, triangle.c)
-        if (distance !== null && distance < best) {
-          best = distance
-          hit = { normal: triangle.normal, material: triangle.material }
-        }
+      let r = 0
+      let g = 0
+      let b = 0
+      let a = 0
+      for (const offset of sampleOffsets) {
+        const sample = traceSample(viewport.x + x + offset.x, viewport.y + y + offset.y)
+        r += sample.r
+        g += sample.g
+        b += sample.b
+        a += sample.a
       }
-      if (hit) {
-        const base = hexToRgb(hit.material.color)
-        const shade = clamp(0.2 + Math.max(0, dot(hit.normal, mul(light, -1))) * 0.95 + hit.material.metallic * 0.12, 0, 1.35)
-        data[i] = clamp(base.r * shade, 0, 255)
-        data[i + 1] = clamp(base.g * shade, 0, 255)
-        data[i + 2] = clamp(base.b * shade, 0, 255)
-        data[i + 3] = 255
-      } else {
-        data[i] = background.r
-        data[i + 1] = background.g
-        data[i + 2] = background.b
-        data[i + 3] = 255
-      }
+      data[i] = clamp(r / sampleOffsets.length, 0, 255)
+      data[i + 1] = clamp(g / sampleOffsets.length, 0, 255)
+      data[i + 2] = clamp(b / sampleOffsets.length, 0, 255)
+      data[i + 3] = clamp(a / sampleOffsets.length, 0, 255)
     }
   }
   return new ImageData(data, w, h)
@@ -564,6 +1306,128 @@ export function analyzeThreeDPrintReadiness(
   }
 }
 
+function sceneWorldBounds(scene: ThreeDScene) {
+  const vertices = scene.objects.flatMap((object) => object.vertices.map((vertex) => transformVertex(vertex, object)))
+  if (!vertices.length) return { min: vec(), max: vec(), size: vec() }
+  const min = vertices.reduce((acc, p) => vec(Math.min(acc.x, p.x), Math.min(acc.y, p.y), Math.min(acc.z, p.z)), vec(Infinity, Infinity, Infinity))
+  const max = vertices.reduce((acc, p) => vec(Math.max(acc.x, p.x), Math.max(acc.y, p.y), Math.max(acc.z, p.z)), vec(-Infinity, -Infinity, -Infinity))
+  return { min, max, size: vec(max.x - min.x, max.y - min.y, max.z - min.z) }
+}
+
+function edgeSlicePoint(a: Vec3, b: Vec3, z: number): { x: number; y: number } | null {
+  const da = a.z - z
+  const db = b.z - z
+  if ((da < 0 && db < 0) || (da > 0 && db > 0)) return null
+  if (Math.abs(a.z - b.z) < 1e-8) return null
+  const t = clamp((z - a.z) / (b.z - a.z), 0, 1)
+  return { x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t) }
+}
+
+function dedupeSlicePoints(points: Array<{ x: number; y: number }>) {
+  const out: Array<{ x: number; y: number }> = []
+  for (const point of points) {
+    if (!out.some((existing) => Math.abs(existing.x - point.x) < 1e-5 && Math.abs(existing.y - point.y) < 1e-5)) out.push(point)
+  }
+  return out
+}
+
+function segmentLength(points: Array<{ x: number; y: number }>) {
+  if (points.length < 2) return 0
+  return Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y)
+}
+
+export function buildThreeDPrintPlan(
+  scene: ThreeDScene,
+  options: {
+    layerHeight?: number
+    nozzleDiameter?: number
+    filamentDiameter?: number
+    maxBuildSize?: Vec3
+    minWallThickness?: number
+    baseName?: string
+  } = {},
+): ThreeDPrintPlan {
+  const layerHeight = clamp(options.layerHeight ?? 0.2, 0.02, 5)
+  const nozzleDiameter = clamp(options.nozzleDiameter ?? 0.4, 0.05, 5)
+  const filamentDiameter = clamp(options.filamentDiameter ?? 1.75, 0.1, 10)
+  const readiness = analyzeThreeDPrintReadiness(scene, {
+    minWallThickness: options.minWallThickness ?? nozzleDiameter * 0.5,
+    maxBuildSize: options.maxBuildSize,
+  })
+  const bounds = sceneWorldBounds(scene)
+  const triangles = trianglesForScene(scene)
+  const sliceCount = bounds.size.z > 0 ? Math.max(1, Math.ceil(bounds.size.z / layerHeight)) : 1
+  const slices: ThreeDPrintSlice[] = []
+  let totalPathLength = 0
+
+  for (let index = 0; index <= sliceCount; index++) {
+    const z = bounds.min.z + Math.min(bounds.size.z, index * layerHeight)
+    const contours: ThreeDPrintSlice["contours"] = []
+    for (const triangle of triangles) {
+      const points = dedupeSlicePoints([
+        edgeSlicePoint(triangle.a, triangle.b, z),
+        edgeSlicePoint(triangle.b, triangle.c, z),
+        edgeSlicePoint(triangle.c, triangle.a, z),
+      ].filter((point): point is { x: number; y: number } => !!point))
+      if (points.length === 2) contours.push({ points, closed: false })
+    }
+    const pathLength = contours.reduce((sum, contour) => sum + segmentLength(contour.points), 0)
+    totalPathLength += pathLength
+    slices.push({
+      index,
+      z,
+      contours,
+      segmentCount: contours.length,
+      areaEstimate: pathLength * nozzleDiameter,
+    })
+  }
+
+  const estimatedMaterialVolume = totalPathLength * nozzleDiameter * layerHeight
+  const filamentArea = Math.PI * Math.pow(filamentDiameter / 2, 2)
+  const estimatedFilamentLength = estimatedMaterialVolume / Math.max(0.0001, filamentArea)
+  const estimatedPrintTimeMinutes = Math.max(1, Math.round((totalPathLength / 40 / 60) * 10) / 10)
+  const baseName = (options.baseName ?? "3d-print").replace(/[^\w.-]+/g, "-")
+  const gcodeLines = [
+    "; Browser-local 3D print handoff",
+    `; slices=${slices.length}`,
+    `; layerHeight=${layerHeight.toFixed(3)}`,
+    `; nozzle=${nozzleDiameter.toFixed(3)}`,
+    `; estimatedMaterialVolume=${estimatedMaterialVolume.toFixed(4)}`,
+    `; estimatedFilamentLength=${estimatedFilamentLength.toFixed(4)}`,
+    "G21 ; millimeters",
+    "G90 ; absolute positioning",
+    ...slices.slice(0, 24).flatMap((slice) => [
+      `; layer ${slice.index} z=${slice.z.toFixed(4)} segments=${slice.segmentCount}`,
+      `G1 Z${slice.z.toFixed(4)} F600`,
+      ...slice.contours.slice(0, 12).flatMap((contour) => contour.points.length >= 2 ? [
+        `G0 X${contour.points[0].x.toFixed(4)} Y${contour.points[0].y.toFixed(4)}`,
+        `G1 X${contour.points[1].x.toFixed(4)} Y${contour.points[1].y.toFixed(4)} E${(segmentLength(contour.points) * nozzleDiameter * layerHeight / Math.max(0.0001, filamentArea)).toFixed(5)}`,
+      ] : []),
+    ]),
+  ]
+  return {
+    readiness,
+    layerHeight,
+    nozzleDiameter,
+    filamentDiameter,
+    slices,
+    estimatedMaterialVolume,
+    estimatedPrintTimeMinutes,
+    browserHandoff: {
+      kind: "download-gcode",
+      driverIntegration: false,
+      fileName: `${baseName}.gcode`,
+      mime: "text/x-gcode",
+      detail: "Browser-local handoff creates downloadable G-code-style preview metadata; the OS slicer/printer driver remains external.",
+    },
+    gcodePreview: `${gcodeLines.join("\n")}\n`,
+    warnings: [
+      "This is a browser-local slicer approximation for review and handoff metadata, not a printer-driver integration.",
+      ...readiness.issues.map((issue) => issue.detail),
+    ],
+  }
+}
+
 export function trimVideoClip(video: VideoLayerProps, inPointMs: number, outPointMs: number): VideoLayerProps {
   const start = clamp(Math.round(inPointMs), 0, Math.max(0, video.durationMs))
   const end = clamp(Math.round(outPointMs), start, Math.max(start, video.durationMs))
@@ -590,6 +1454,96 @@ export function trimVideoClipToFrame(video: VideoLayerProps, inPointMs: number, 
   return {
     ...trimmed,
     currentTimeMs: clamp(Math.round(snapTimeToFrame(trimmed.currentTimeMs, fps)), trimmed.inPointMs, trimmed.outPointMs),
+  }
+}
+
+export function buildVideoClipTrackState(
+  video: VideoLayerProps,
+  playheadMs: number = video.currentTimeMs,
+  options: { fps?: number } = {},
+): VideoClipTrackState {
+  const fps = Math.max(1, Math.round(options.fps ?? 24))
+  const frameStepMs = Math.max(1, Math.round(1000 / fps))
+  const durationMs = Math.max(1, Math.round(video.durationMs))
+  const inPointMs = clamp(Math.round(snapTimeToFrame(video.trimHandles?.inMs ?? video.inPointMs, fps)), 0, durationMs)
+  const outPointMs = clamp(
+    Math.round(snapTimeToFrame(video.trimHandles?.outMs ?? video.outPointMs, fps)),
+    inPointMs,
+    durationMs,
+  )
+  const playhead = clamp(Math.round(snapTimeToFrame(playheadMs, fps)), inPointMs, outPointMs)
+  const percent = (value: number) => clamp((value / durationMs) * 100, 0, 100)
+  const inPercent = percent(inPointMs)
+  const outPercent = percent(outPointMs)
+  const playheadPercent = percent(playhead)
+  return {
+    durationMs,
+    inPointMs,
+    outPointMs,
+    playheadMs: playhead,
+    inPercent,
+    outPercent,
+    clipWidthPercent: Math.max(0, outPercent - inPercent),
+    playheadPercent,
+    frameStepMs,
+    canSplit: playhead - inPointMs >= frameStepMs && outPointMs - playhead >= frameStepMs,
+    labels: {
+      in: `${(inPointMs / 1000).toFixed(2)}s`,
+      out: `${(outPointMs / 1000).toFixed(2)}s`,
+      playhead: `${(playhead / 1000).toFixed(2)}s`,
+    },
+  }
+}
+
+function labelTime(timeMs: number) {
+  return `${(timeMs / 1000).toFixed(2)}s`
+}
+
+function frameIndexForTime(timeMs: number, frameStepMs: number) {
+  return Math.round(timeMs / Math.max(1, frameStepMs))
+}
+
+export function buildVideoTrimHandleModel(
+  video: VideoLayerProps,
+  playheadMs: number = video.currentTimeMs,
+  options: { fps?: number; thumbnails?: VideoThumbnailPlanItem[]; maxTickCount?: number } = {},
+): VideoTrimHandleModel {
+  const state = buildVideoClipTrackState(video, playheadMs, { fps: options.fps })
+  const durationMs = Math.max(1, state.durationMs)
+  const percent = (timeMs: number) => clamp((timeMs / durationMs) * 100, 0, 100)
+  const handle = (timeMs: number, leftPercent: number, label: string) => ({
+    timeMs,
+    percent: leftPercent,
+    frameIndex: frameIndexForTime(timeMs, state.frameStepMs),
+    label,
+  })
+  const maxTickCount = clamp(Math.round(options.maxTickCount ?? 8), 2, 24)
+  const tickStep = durationMs / (maxTickCount - 1)
+  const ticks = Array.from({ length: maxTickCount }, (_, index) => {
+    const raw = index === maxTickCount - 1 ? durationMs : index * tickStep
+    const timeMs = Math.round(snapTimeToFrame(raw, options.fps ?? 24))
+    return {
+      timeMs,
+      leftPercent: percent(timeMs),
+      label: labelTime(timeMs),
+      frameIndex: frameIndexForTime(timeMs, state.frameStepMs),
+    }
+  })
+  const thumbnails = (options.thumbnails ?? buildVideoThumbnailPlan(video, { count: 8, fps: options.fps })).map((item) => ({
+    ...item,
+    leftPercent: percent(item.timeMs),
+    active: Math.abs(item.timeMs - state.playheadMs) <= state.frameStepMs,
+  }))
+  return {
+    state,
+    keyboardNudgeMs: state.frameStepMs,
+    handles: {
+      in: handle(state.inPointMs, state.inPercent, state.labels.in),
+      out: handle(state.outPointMs, state.outPercent, state.labels.out),
+      playhead: handle(state.playheadMs, state.playheadPercent, state.labels.playhead),
+    },
+    thumbnails,
+    ticks,
   }
 }
 
@@ -672,10 +1626,13 @@ export function createVideoElementForSource(source: string): HTMLVideoElement {
   return video
 }
 
-export function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {
+export function waitForVideoMetadata(video: HTMLVideoElement, options: { timeoutMs?: number } = {}): Promise<void> {
   if (Number.isFinite(video.duration) && video.readyState >= 1) return Promise.resolve()
   return new Promise((resolve, reject) => {
+    const timeoutMs = Math.max(1, Math.round(options.timeoutMs ?? 15_000))
+    let timer: ReturnType<typeof setTimeout> | null = null
     const cleanup = () => {
+      if (timer) clearTimeout(timer)
       video.removeEventListener("loadedmetadata", onLoaded)
       video.removeEventListener("error", onError)
     }
@@ -687,17 +1644,25 @@ export function waitForVideoMetadata(video: HTMLVideoElement): Promise<void> {
       cleanup()
       reject(new Error("Could not read video metadata"))
     }
+    const onTimeout = () => {
+      cleanup()
+      reject(new Error(`Timed out after ${timeoutMs}ms while reading video metadata`))
+    }
     video.addEventListener("loadedmetadata", onLoaded, { once: true })
     video.addEventListener("error", onError, { once: true })
+    timer = setTimeout(onTimeout, timeoutMs)
   })
 }
 
-export async function seekVideoElement(video: HTMLVideoElement, timeMs: number): Promise<void> {
-  await waitForVideoMetadata(video)
+export async function seekVideoElement(video: HTMLVideoElement, timeMs: number, options: { timeoutMs?: number } = {}): Promise<void> {
+  await waitForVideoMetadata(video, options)
   const target = clamp(timeMs / 1000, 0, Math.max(0, video.duration || 0))
   if (Math.abs(video.currentTime - target) < 0.001 && video.readyState >= 2) return
   await new Promise<void>((resolve, reject) => {
+    const timeoutMs = Math.max(1, Math.round(options.timeoutMs ?? 15_000))
+    let timer: ReturnType<typeof setTimeout> | null = null
     const cleanup = () => {
+      if (timer) clearTimeout(timer)
       video.removeEventListener("seeked", onSeeked)
       video.removeEventListener("error", onError)
     }
@@ -709,18 +1674,23 @@ export async function seekVideoElement(video: HTMLVideoElement, timeMs: number):
       cleanup()
       reject(new Error("Could not seek video frame"))
     }
+    const onTimeout = () => {
+      cleanup()
+      reject(new Error(`Timed out after ${timeoutMs}ms while seeking video frame`))
+    }
     video.addEventListener("seeked", onSeeked, { once: true })
     video.addEventListener("error", onError, { once: true })
     video.currentTime = target
+    timer = setTimeout(onTimeout, timeoutMs)
   })
 }
 
 export async function extractVideoFrameToCanvas(
   video: HTMLVideoElement,
   timeMs: number,
-  options: { width: number; height: number },
+  options: { width: number; height: number; timeoutMs?: number },
 ): Promise<HTMLCanvasElement> {
-  await seekVideoElement(video, timeMs)
+  await seekVideoElement(video, timeMs, { timeoutMs: options.timeoutMs })
   const canvas = document.createElement("canvas")
   canvas.width = Math.max(1, Math.round(options.width))
   canvas.height = Math.max(1, Math.round(options.height))
@@ -733,7 +1703,7 @@ export async function extractVideoFrameToCanvas(
 export async function extractVideoThumbnailStrip(
   source: string | HTMLVideoElement,
   video: VideoLayerProps,
-  options: { count?: number; fps?: number; width: number; height: number },
+  options: { count?: number; fps?: number; width: number; height: number; timeoutMs?: number },
 ): Promise<Array<VideoThumbnailPlanItem & { canvas: HTMLCanvasElement; dataUrl: string }>> {
   const element = typeof source === "string" ? createVideoElementForSource(source) : source
   const plan = buildVideoThumbnailPlan(video, options)
@@ -915,6 +1885,157 @@ export function buildOfflineAudioMixSchedule(
     durationMs: Math.max(1, Math.round(options.durationMs ?? inferredDuration)),
     masterVolume,
     tracks: scheduled,
+  }
+}
+
+function roundSeconds(value: number) {
+  return Math.round(value * 1_000_000) / 1_000_000
+}
+
+export function buildMuxedAudioStreamSchedule(
+  tracks: AudioTrack[],
+  options: { masterVolume?: number; sampleRate?: number; durationMs?: number } = {},
+): MuxedAudioStreamSchedule {
+  const schedule = buildOfflineAudioMixSchedule(tracks, options)
+  return {
+    ...schedule,
+    tracks: schedule.tracks.map((track) => {
+      const start = roundSeconds(track.startSeconds)
+      const end = roundSeconds(track.startSeconds + track.durationSeconds)
+      const fadeInEnd = roundSeconds(Math.min(end, track.startSeconds + track.fadeInSeconds))
+      const fadeOutStart = roundSeconds(Math.max(start, end - track.fadeOutSeconds))
+      const automation: Array<{ timeSeconds: number; value: number }> = []
+      if (track.fadeInSeconds > 0) {
+        automation.push({ timeSeconds: start, value: 0 })
+        automation.push({ timeSeconds: fadeInEnd, value: track.gain })
+      } else {
+        automation.push({ timeSeconds: start, value: track.gain })
+      }
+      if (track.fadeOutSeconds > 0) {
+        if (fadeOutStart > automation[automation.length - 1].timeSeconds) {
+          automation.push({ timeSeconds: fadeOutStart, value: track.gain })
+        }
+        automation.push({ timeSeconds: end, value: 0 })
+      } else if (end > automation[automation.length - 1].timeSeconds) {
+        automation.push({ timeSeconds: end, value: track.gain })
+      }
+      return {
+        ...track,
+        pan: clamp(track.pan ?? 0, -1, 1),
+        gainAutomation: automation,
+      }
+    }),
+  }
+}
+
+function extensionForMime(mimeType: string, fallback: VideoExportPreset["container"]) {
+  if (/video\/mp4/i.test(mimeType)) return "mp4"
+  if (/video\/webm/i.test(mimeType)) return "webm"
+  if (/image\/gif/i.test(mimeType)) return "gif"
+  if (fallback === "mp4") return "mp4"
+  if (fallback === "webm") return "webm"
+  if (fallback === "gif") return "gif"
+  return "zip"
+}
+
+function containerForMime(mimeType: string, fallback: VideoExportPreset["container"]): VideoExportPreset["container"] {
+  const extension = extensionForMime(mimeType, fallback)
+  if (extension === "mp4" || extension === "webm" || extension === "gif" || extension === "zip") return extension
+  return fallback
+}
+
+export function buildFinalVideoExportPlan(
+  preset: VideoExportPreset,
+  frames: TimelineFrame[],
+  audioTracks: AudioTrack[] = [],
+  options: { muxCapability?: BrowserMuxCapability } = {},
+): FinalVideoExportPlan {
+  const timelineDuration = frames.reduce((sum, frame) => sum + Math.max(0, Math.round(frame.durationMs)), 0)
+  const playableAudio = audioTracks.filter((track) => !track.muted && !!track.dataUrl && track.durationMs > 0)
+  const audioDuration = playableAudio.reduce((max, track) => Math.max(max, Math.max(0, track.startMs) + Math.max(0, track.durationMs)), 0)
+  const durationMs = Math.max(1, timelineDuration, audioDuration)
+
+  if (preset.codec === "gif" || preset.container === "gif") {
+    return {
+      preset,
+      mode: "animated-image",
+      container: "gif",
+      extension: "gif",
+      mimeType: "image/gif",
+      codec: preset.codec,
+      fps: preset.fps,
+      width: preset.width,
+      height: preset.height,
+      durationMs,
+      frameCount: frames.length,
+      audioTrackCount: 0,
+      warnings: playableAudio.length ? ["GIF export does not carry audio; export the WAV mix or package instead."] : [],
+      muxCapability: { supported: true, mimeType: "image/gif", reason: "Animated GIF export uses the in-app frame encoder." },
+    }
+  }
+
+  if (preset.codec === "png-sequence" || preset.container === "zip") {
+    return {
+      preset,
+      mode: "png-sequence",
+      container: "zip",
+      extension: "zip",
+      mimeType: "application/zip",
+      codec: preset.codec,
+      fps: preset.fps,
+      width: preset.width,
+      height: preset.height,
+      durationMs,
+      frameCount: frames.length,
+      audioTrackCount: playableAudio.length,
+      warnings: [],
+      muxCapability: { supported: true, mimeType: "application/zip", reason: "PNG sequence export is browser-local and deterministic." },
+    }
+  }
+
+  const muxCapability = options.muxCapability ?? getBrowserMuxCapability({
+    container: preset.container,
+    codec: preset.codec,
+    audio: playableAudio.length > 0,
+  })
+  if (muxCapability.supported) {
+    const mimeType = muxCapability.mimeType || (preset.container === "mp4" ? "video/mp4" : "video/webm")
+    return {
+      preset,
+      mode: "muxed-media",
+      container: containerForMime(mimeType, preset.container),
+      extension: extensionForMime(mimeType, preset.container),
+      mimeType,
+      codec: preset.codec,
+      fps: preset.fps,
+      width: preset.width,
+      height: preset.height,
+      durationMs,
+      frameCount: frames.length,
+      audioTrackCount: playableAudio.length,
+      warnings: [],
+      muxCapability,
+    }
+  }
+
+  return {
+    preset,
+    mode: "timeline-package",
+    container: "zip",
+    extension: "zip",
+    mimeType: "application/zip",
+    codec: preset.codec,
+    fps: preset.fps,
+    width: preset.width,
+    height: preset.height,
+    durationMs,
+    frameCount: frames.length,
+    audioTrackCount: playableAudio.length,
+    warnings: [
+      muxCapability.reason,
+      "Falling back to a deterministic frame/audio package with PNG frames, timeline manifest, and optional WAV audio mix.",
+    ],
+    muxCapability,
   }
 }
 

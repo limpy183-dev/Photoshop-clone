@@ -4,6 +4,7 @@ import { appendPathToCanvas, createDefaultShapeAppearance, drawSmoothPolygon, dr
 import { makeCanvas } from "./canvas-utils"
 import { hexToRgb } from "./color-utils"
 import {
+  buildOfflineObjectAwareSelectionMaskData,
   borderMaskData as borderMaskDataPure,
   contractMaskData as contractMaskDataPure,
   expandMaskData as expandMaskDataPure,
@@ -11,8 +12,13 @@ import {
   featherMaskData as featherMaskDataPure,
   selectionMaskToPathCandidates,
   smoothMaskData as smoothMaskDataPure,
+  traceMagneticLassoEdgePathData,
+  type OfflineObjectAwareSelectionResult,
   type MaskContourOptions,
   type MaskContourPath,
+  type SelectionImageSource,
+  type MagneticLassoTraceOptions,
+  type MagneticLassoTraceResult,
 } from "./selection-algorithms"
 
 export { makeCanvas, hexToRgb }
@@ -259,7 +265,9 @@ function textShapeVerticalOffset(t: TextProps, lineHeight: number, lineCount: nu
 
 function appendShapePath(ctx: CanvasRenderingContext2D, s: ShapeProps) {
   ctx.beginPath()
-  if (s.type === "custom") {
+  if (s.components?.length || s.computedPath) {
+    appendPathToCanvas(ctx, shapeToEditablePath(s))
+  } else if (s.type === "custom") {
     customShapePath(ctx, (s.customId ?? "star5") as CustomShapeId, s.x, s.y, s.w, s.h)
   } else if (s.type === "polygon") {
     drawSmoothPolygon(ctx, s)
@@ -335,10 +343,13 @@ function renderVerticalText(
   baselineOffset: number,
 ) {
   const columns = content.split("\n")
-  const columnGap = lineHeight
+  const columnGap = Math.max(0, t.verticalColumnGap ?? lineHeight)
   const direction = t.verticalWritingMode === "lr" ? 1 : -1
   const punctuationTighten = t.mojikumi === "compact" ? -size * 0.08 : t.mojikumi === "loose" ? size * 0.08 : 0
   const orientation = t.textOrientation ?? (t.tateChuYoko ? "mixed" : "upright")
+  const glyphScale = Math.max(0.1, Math.min(4, t.verticalGlyphScale ?? 1))
+  const glyphSpacing = t.verticalGlyphSpacing ?? 0
+  const proportional = t.verticalUseProportionalMetrics === true
   ctx.save()
   ctx.textAlign = "center"
   ctx.textBaseline = "middle"
@@ -347,18 +358,23 @@ function renderVerticalText(
     const column = columns[col]
     const x = t.x + col * columnGap * direction
     const units = verticalTextUnits(column, orientation, t.tateChuYoko === true)
-    const columnHeight = units.reduce((sum, unit) => sum + verticalUnitAdvance(ctx, unit, size, spacing, punctuationTighten), 0)
+    const columnHeight = units.reduce((sum, unit) => sum + verticalUnitAdvance(ctx, unit, size, spacing + glyphSpacing, punctuationTighten, glyphScale, proportional), 0)
     let y = t.y + verticalFlowOffset(t, columnHeight)
     for (const unit of units) {
-      const advance = verticalUnitAdvance(ctx, unit, size, spacing, punctuationTighten)
+      const advance = verticalUnitAdvance(ctx, unit, size, spacing + glyphSpacing, punctuationTighten, glyphScale, proportional)
       if (verticalUnitIsSideways(unit, orientation)) {
         ctx.save()
         ctx.translate(x, y + size / 2 + baselineOffset)
         ctx.rotate(Math.PI / 2)
+        ctx.scale(glyphScale, glyphScale)
         ctx.fillText(unit, 0, 0)
         ctx.restore()
       } else {
-        ctx.fillText(unit, x, y + size / 2 + baselineOffset)
+        ctx.save()
+        ctx.translate(x, y + size / 2 + baselineOffset)
+        ctx.scale(glyphScale, glyphScale)
+        ctx.fillText(unit, 0, 0)
+        ctx.restore()
       }
       y += advance
       if (t.boxHeight && y > t.y + t.boxHeight) break
@@ -384,10 +400,13 @@ function verticalUnitAdvance(
   size: number,
   spacing: number,
   punctuationTighten: number,
+  glyphScale = 1,
+  proportional = false,
 ) {
   const measured = typeof ctx.measureText === "function" ? ctx.measureText(unit).width : size
   const tighten = /^[A-Za-z0-9]$/.test(unit) ? 0 : punctuationTighten
-  return Math.max(size, measured) + spacing + 2 + tighten
+  const base = proportional ? measured : Math.max(size, measured)
+  return Math.max(size * 0.2, base * glyphScale) + spacing + 2 + tighten
 }
 
 function verticalFlowOffset(t: TextProps, contentHeight: number) {
@@ -678,6 +697,11 @@ export function rasterizeShape(canvas: HTMLCanvasElement, s: ShapeProps) {
     ctx.clearRect(0, 0, canvas.width, canvas.height)
   }
 
+  if (s.components?.length) {
+    drawShapeAppearance(ctx, s, s)
+    return
+  }
+
   const components = s.components?.length
     ? s.components
     : [{
@@ -726,7 +750,7 @@ function drawShapeAppearance(ctx: CanvasRenderingContext2D, geometry: ShapeProps
     appendShapePath(ctx, geometry)
     ctx.globalAlpha *= clamp(fill.opacity, 0, 1)
     ctx.fillStyle = fill.color
-    ctx.fill()
+    ctx.fill("evenodd")
     ctx.restore()
   }
   for (const stroke of appearance.strokes) {
@@ -740,7 +764,7 @@ function drawShapeAppearance(ctx: CanvasRenderingContext2D, geometry: ShapeProps
     ctx.lineJoin = stroke.lineJoin ?? "miter"
     if (stroke.dash?.length) ctx.setLineDash(stroke.dash)
     if (stroke.alignment === "inside") {
-      ctx.clip()
+      ctx.clip("evenodd")
       appendShapePath(ctx, geometry)
     }
     ctx.stroke()
@@ -1302,6 +1326,17 @@ type ContentAwareAdaptation = {
   scale: "none" | "low" | "medium" | "high"
   mirror: boolean
 }
+type ContentAwareFillOrder = "edge-first" | "center-first" | "randomized"
+type ContentAwarePatchControls = {
+  patchRadius: number
+  searchRadius: number
+  candidateBudget: number
+  boundaryCandidateBudget: number
+  refinementPasses: number
+  seamRelaxPasses: number
+  coherence: number
+  fillOrder: ContentAwareFillOrder
+}
 type Rect = { x: number; y: number; w: number; h: number }
 
 export interface ContentAwareFillPlanOptions {
@@ -1313,6 +1348,7 @@ export interface ContentAwareFillPlanOptions {
     excludeRegions?: Rect[]
   }
   adaptation?: Partial<ContentAwareAdaptation>
+  patch?: Partial<ContentAwarePatchControls>
   outputTarget?: ContentAwareFillOutputTarget
   preview?: boolean
 }
@@ -1329,6 +1365,7 @@ export interface ContentAwareFillPlan {
     excludeRegions: Rect[]
   }
   adaptation: ContentAwareAdaptation
+  patch: ContentAwarePatchControls
   outputTarget: ContentAwareFillOutputTarget
   previewData?: {
     width: number
@@ -1336,6 +1373,7 @@ export interface ContentAwareFillPlan {
     fillAlpha: Uint8Array
     sampleAlpha: Uint8Array
     confidenceAlpha: Uint8Array
+    patchPriorityAlpha: Uint8Array
   }
 }
 
@@ -1360,6 +1398,57 @@ function countAlpha(alpha: Uint8Array, threshold = MASK_THRESHOLD) {
   let count = 0
   for (let i = 0; i < alpha.length; i++) if (alpha[i] > threshold) count++
   return count
+}
+
+function normalizedFillOrder(value: unknown): ContentAwareFillOrder {
+  return value === "center-first" || value === "randomized" ? value : "edge-first"
+}
+
+function normalizeContentAwarePatchControls(
+  width: number,
+  height: number,
+  fillBounds: Rect,
+  fillPixelCount: number,
+  options?: Partial<ContentAwarePatchControls>,
+): ContentAwarePatchControls {
+  const defaultPatchRadius = fillPixelCount > 100000 ? 2 : fillPixelCount > 35000 ? 3 : 4
+  const defaultSearchRadius = Math.max(36, Math.round(Math.max(fillBounds.w, fillBounds.h) * 1.35))
+  const maxSearchRadius = Math.max(4, Math.ceil(Math.hypot(width, height)))
+  return {
+    patchRadius: clamp(Math.round(options?.patchRadius ?? defaultPatchRadius), 1, 10),
+    searchRadius: clamp(Math.round(options?.searchRadius ?? defaultSearchRadius), 1, maxSearchRadius),
+    candidateBudget: clamp(Math.round(options?.candidateBudget ?? (fillPixelCount > 80000 ? 32 : 56)), 1, 256),
+    boundaryCandidateBudget: clamp(Math.round(options?.boundaryCandidateBudget ?? 18), 0, 128),
+    refinementPasses: clamp(Math.round(options?.refinementPasses ?? (fillPixelCount > 60000 ? 1 : fillPixelCount > 12000 ? 2 : 3)), 0, 8),
+    seamRelaxPasses: clamp(Math.round(options?.seamRelaxPasses ?? 2), 0, 8),
+    coherence: clamp(options?.coherence ?? 1, 0, 4),
+    fillOrder: normalizedFillOrder(options?.fillOrder),
+  }
+}
+
+function buildPatchPriorityAlpha(
+  fillAlpha: Uint8Array,
+  width: number,
+  height: number,
+  fillPixels: number[],
+  distToOutside: Float64Array,
+  fillOrder: ContentAwareFillOrder,
+) {
+  const out = new Uint8Array(width * height)
+  let maxDist = 0
+  for (const p of fillPixels) maxDist = Math.max(maxDist, distToOutside[p] || 0)
+  for (const p of fillPixels) {
+    if (fillAlpha[p] <= MASK_THRESHOLD) continue
+    const normalized = maxDist <= 0 ? 1 : clamp(distToOutside[p] / maxDist, 0, 1)
+    const priority =
+      fillOrder === "center-first"
+        ? normalized
+        : fillOrder === "randomized"
+          ? pseudoRandomIndex(p + width * 131 + height * 17, 256) / 255
+          : 1 - normalized
+    out[p] = clampByte(32 + priority * 223)
+  }
+  return out
 }
 
 function buildSamplingAlpha(width: number, height: number, fillAlpha: Uint8Array, fillBounds: Rect, options: ContentAwareFillPlanOptions["sampling"]) {
@@ -1391,6 +1480,14 @@ export function buildContentAwareFillPlan(src: ImageData, options: ContentAwareF
   const fillAlpha = buildFillAlpha(width, height, options.fillBounds, options.mask)
   const fillBounds = alphaBounds(fillAlpha, width, height) ?? clippedRect(options.fillBounds, width, height) ?? { x: 0, y: 0, w: 0, h: 0 }
   const sampling = buildSamplingAlpha(width, height, fillAlpha, fillBounds, options.sampling)
+  const fillPixels: number[] = []
+  const outside = new Uint8Array(width * height)
+  for (let p = 0; p < width * height; p++) {
+    if (fillAlpha[p] > MASK_THRESHOLD) fillPixels.push(p)
+    else outside[p] = 1
+  }
+  const distToOutside = distanceToFeature(outside, width, height)
+  const patch = normalizeContentAwarePatchControls(width, height, fillBounds, fillPixels.length, options.patch)
   const confidenceAlpha = new Uint8Array(width * height)
   const samplePixels = countAlpha(sampling.sampleAlpha)
   if (samplePixels > 0) {
@@ -1407,6 +1504,7 @@ export function buildContentAwareFillPlan(src: ImageData, options: ContentAwareF
       confidenceAlpha[p] = clampByte(210 - distToEdge * 24)
     }
   }
+  const patchPriorityAlpha = buildPatchPriorityAlpha(fillAlpha, width, height, fillPixels, distToOutside, patch.fillOrder)
 
   return {
     width,
@@ -1425,9 +1523,10 @@ export function buildContentAwareFillPlan(src: ImageData, options: ContentAwareF
       scale: options.adaptation?.scale ?? "none",
       mirror: options.adaptation?.mirror ?? false,
     },
+    patch,
     outputTarget: options.outputTarget ?? "current-layer",
     previewData: options.preview
-      ? { width, height, fillAlpha, sampleAlpha: sampling.sampleAlpha, confidenceAlpha }
+      ? { width, height, fillAlpha, sampleAlpha: sampling.sampleAlpha, confidenceAlpha, patchPriorityAlpha }
       : undefined,
   }
 }
@@ -1444,6 +1543,7 @@ function patchMatchScore(
   sx: number,
   sy: number,
   radius: number,
+  coherence: number,
 ) {
   if (sx < radius || sy < radius || sx >= width - radius || sy >= height - radius) return Number.POSITIVE_INFINITY
   if (fillAlpha[sy * width + sx] > MASK_THRESHOLD) return Number.POSITIVE_INFINITY
@@ -1480,7 +1580,7 @@ function patchMatchScore(
     }
   }
   if (samples < Math.max(4, radius * 2)) return Number.POSITIVE_INFINITY
-  return score / samples + Math.hypot(tx - sx, ty - sy) * 0.02
+  return score / samples + Math.hypot(tx - sx, ty - sy) * 0.02 * coherence
 }
 
 function seamRelax(
@@ -1568,9 +1668,16 @@ export function contentAwareFill(
   }
 
   const distToOutside = distanceToFeature(outside, width, height)
-  fillPixels.sort((a, b) => distToOutside[a] - distToOutside[b])
+  const patch = normalizeContentAwarePatchControls(width, height, fillBounds, fillPixels.length, options?.patch)
+  fillPixels.sort((a, b) => {
+    if (patch.fillOrder === "center-first") return distToOutside[b] - distToOutside[a]
+    if (patch.fillOrder === "randomized") {
+      return pseudoRandomIndex(a + 7919, 1 << 20) - pseudoRandomIndex(b + 7919, 1 << 20)
+    }
+    return distToOutside[a] - distToOutside[b]
+  })
 
-  const searchPad = Math.max(36, Math.round(Math.max(fillBounds.w, fillBounds.h) * 1.35))
+  const searchPad = patch.searchRadius
   const sx0 = Math.max(0, fillBounds.x - searchPad)
   const sy0 = Math.max(0, fillBounds.y - searchPad)
   const sx1 = Math.min(width, fillBounds.x + fillBounds.w + searchPad)
@@ -1591,9 +1698,9 @@ export function contentAwareFill(
 
   if (!sourceCenters.length) return
 
-  const patchRadius = fillPixels.length > 100000 ? 2 : fillPixels.length > 35000 ? 3 : 4
-  const candidateBudget = fillPixels.length > 80000 ? 32 : 56
-  const boundaryBudget = Math.min(18, boundaryCenters.length)
+  const patchRadius = patch.patchRadius
+  const candidateBudget = patch.candidateBudget
+  const boundaryBudget = Math.min(patch.boundaryCandidateBudget, boundaryCenters.length)
 
   // PatchMatch-style neighbour offset cache: for each filled pixel we
   // remember the source it picked, so neighbours can propagate that
@@ -1615,7 +1722,7 @@ export function contentAwareFill(
       const candidate = boundaryCenters[pseudoRandomIndex(p + c * 7919 + n, boundaryCenters.length)]
       const cx = candidate % width
       const cy = (candidate - cx) / width
-      const score = patchMatchScore(source, work, filled, fillAlpha, width, height, x, y, cx, cy, patchRadius)
+      const score = patchMatchScore(source, work, filled, fillAlpha, width, height, x, y, cx, cy, patchRadius, patch.coherence)
       if (score < bestScore) {
         bestScore = score
         best = candidate
@@ -1626,7 +1733,7 @@ export function contentAwareFill(
       const candidate = sourceCenters[pseudoRandomIndex(p + c * 104729 + n * 17, sourceCenters.length)]
       const cx = candidate % width
       const cy = (candidate - cx) / width
-      const score = patchMatchScore(source, work, filled, fillAlpha, width, height, x, y, cx, cy, patchRadius)
+      const score = patchMatchScore(source, work, filled, fillAlpha, width, height, x, y, cx, cy, patchRadius, patch.coherence)
       if (score < bestScore) {
         bestScore = score
         best = candidate
@@ -1644,7 +1751,7 @@ export function contentAwareFill(
       if (nSx < 0) continue
       const cx = nSx - ndx
       const cy = nSy - ndy
-      const score = patchMatchScore(source, work, filled, fillAlpha, width, height, x, y, cx, cy, patchRadius)
+      const score = patchMatchScore(source, work, filled, fillAlpha, width, height, x, y, cx, cy, patchRadius, patch.coherence)
       if (score < bestScore) {
         bestScore = score
         best = cy * width + cx
@@ -1662,7 +1769,7 @@ export function contentAwareFill(
         const ry = pseudoRandomIndex(p + s * 17329 + n * 41, 1 << 16) / (1 << 15) - 1
         const cx = Math.round(bx + rx * radius)
         const cy = Math.round(by + ry * radius)
-        const score = patchMatchScore(source, work, filled, fillAlpha, width, height, x, y, cx, cy, patchRadius)
+        const score = patchMatchScore(source, work, filled, fillAlpha, width, height, x, y, cx, cy, patchRadius, patch.coherence)
         if (score < bestScore) {
           bestScore = score
           best = cy * width + cx
@@ -1701,7 +1808,7 @@ export function contentAwareFill(
   // Iterative coarse-to-fine refinement: re-run the patch search with
   // the now-filled work buffer as the reference, which lets later
   // passes pull in coherent textures from neighbouring patches.
-  const refinementPasses = fillPixels.length > 60000 ? 1 : fillPixels.length > 12000 ? 2 : 3
+  const refinementPasses = patch.refinementPasses
   for (let pass = 0; pass < refinementPasses; pass++) {
     const reverseStride = 1 + (pass % 2)
     for (let n = 0; n < fillPixels.length; n += reverseStride) {
@@ -1712,7 +1819,7 @@ export function contentAwareFill(
       const y = (p - x) / width
       let best = matchSourceY[p] >= 0 ? matchSourceY[p] * width + matchSourceX[p] : -1
       let bestScore = best >= 0
-        ? patchMatchScore(source, work, filled, fillAlpha, width, height, x, y, matchSourceX[p], matchSourceY[p], patchRadius)
+        ? patchMatchScore(source, work, filled, fillAlpha, width, height, x, y, matchSourceX[p], matchSourceY[p], patchRadius, patch.coherence)
         : Number.POSITIVE_INFINITY
 
       for (const [ndx, ndy] of [[-1, 0], [0, -1], [1, 0], [0, 1]] as const) {
@@ -1723,7 +1830,7 @@ export function contentAwareFill(
         if (nSx < 0) continue
         const cx = nSx - ndx
         const cy = nSy - ndy
-        const score = patchMatchScore(source, work, filled, fillAlpha, width, height, x, y, cx, cy, patchRadius)
+        const score = patchMatchScore(source, work, filled, fillAlpha, width, height, x, y, cx, cy, patchRadius, patch.coherence)
         if (score < bestScore) {
           bestScore = score
           best = cy * width + cx
@@ -1739,7 +1846,7 @@ export function contentAwareFill(
           const ry = pseudoRandomIndex(p + s * 17329 + pass * 41, 1 << 16) / (1 << 15) - 1
           const cx = Math.round(bx0 + rx * radius)
           const cy = Math.round(by0 + ry * radius)
-          const score = patchMatchScore(source, work, filled, fillAlpha, width, height, x, y, cx, cy, patchRadius)
+          const score = patchMatchScore(source, work, filled, fillAlpha, width, height, x, y, cx, cy, patchRadius, patch.coherence)
           if (score < bestScore) {
             bestScore = score
             best = cy * width + cx
@@ -1771,7 +1878,7 @@ export function contentAwareFill(
     }
   }
 
-  seamRelax(work, fillAlpha, width, height, fillBounds, 2)
+  seamRelax(work, fillAlpha, width, height, fillBounds, patch.seamRelaxPasses)
   ctx.putImageData(new ImageData(work, width, height), 0, 0)
 }
 
@@ -2193,23 +2300,6 @@ function luma(r: number, g: number, b: number) {
   return 0.299 * r + 0.587 * g + 0.114 * b
 }
 
-function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
-  r /= 255
-  g /= 255
-  b /= 255
-  const max = Math.max(r, g, b)
-  const min = Math.min(r, g, b)
-  const lum = (max + min) / 2
-  if (max === min) return [0, 0, lum * 100]
-  const d = max - min
-  const sat = lum > 0.5 ? d / (2 - max - min) : d / (max + min)
-  let hue = 0
-  if (max === r) hue = ((g - b) / d + (g < b ? 6 : 0)) / 6
-  else if (max === g) hue = ((b - r) / d + 2) / 6
-  else hue = ((r - g) / d + 4) / 6
-  return [hue * 360, sat * 100, lum * 100]
-}
-
 function imagePixel(img: ImageData, x: number, y: number) {
   const cx = clamp(Math.floor(x), 0, img.width - 1)
   const cy = clamp(Math.floor(y), 0, img.height - 1)
@@ -2567,29 +2657,6 @@ function keepScoredComponents(
   return out
 }
 
-function edgeAverage(img: ImageData, x0 = 0, y0 = 0, x1 = img.width, y1 = img.height) {
-  const samples: { r: number; g: number; b: number }[] = []
-  const step = Math.max(1, Math.floor(Math.min(x1 - x0, y1 - y0) / 80))
-  for (let x = x0; x < x1; x += step) {
-    samples.push(imagePixel(img, x, y0))
-    samples.push(imagePixel(img, x, y1 - 1))
-  }
-  for (let y = y0; y < y1; y += step) {
-    samples.push(imagePixel(img, x0, y))
-    samples.push(imagePixel(img, x1 - 1, y))
-  }
-  if (!samples.length) return { r: 0, g: 0, b: 0, spread: 0 }
-  const avg = {
-    r: samples.reduce((a, c) => a + c.r, 0) / samples.length,
-    g: samples.reduce((a, c) => a + c.g, 0) / samples.length,
-    b: samples.reduce((a, c) => a + c.b, 0) / samples.length,
-  }
-  const distances = samples.map((s) => rgbDistance(s, avg))
-  const mean = distances.reduce((a, d) => a + d, 0) / distances.length
-  const variance = distances.reduce((a, d) => a + (d - mean) * (d - mean), 0) / distances.length
-  return { ...avg, spread: mean + Math.sqrt(variance) }
-}
-
 /* ---------------------------------------------------------------- */
 /*  SNAP HELPERS                                                      */
 /* ---------------------------------------------------------------- */
@@ -2626,29 +2693,12 @@ export interface SelectionHeuristicMaskResult {
   bounds: Rect | null
   score: number
   diagnostics: {
-    method: "local-heuristic"
+    method: "local-heuristic" | "offline-object-aware"
     nativeAiParity: false
     candidatePixels: number
     keptPixels: number
-  }
-}
-
-function maskResultFromBinary(binary: Uint8Array, width: number, height: number, candidatePixels: number): SelectionHeuristicMaskResult {
-  const maskData = Uint8ClampedArray.from(binary, (value) => (value ? 255 : 0))
-  const bounds = alphaBounds(binary, width, height, 0)
-  const keptPixels = countAlpha(binary, 0)
-  return {
-    maskData,
-    width,
-    height,
-    bounds,
-    score: keptPixels / Math.max(1, candidatePixels),
-    diagnostics: {
-      method: "local-heuristic",
-      nativeAiParity: false,
-      candidatePixels,
-      keptPixels,
-    },
+    rejectedPixels?: number
+    sourcePrecision?: OfflineObjectAwareSelectionResult["diagnostics"]["sourcePrecision"]
   }
 }
 
@@ -2656,219 +2706,34 @@ export function buildSelectionHeuristicMaskData(
   src: ImageData,
   options: SelectionHeuristicMaskOptions,
 ): SelectionHeuristicMaskResult {
-  const w = src.width
-  const h = src.height
-  const candidate = new Uint8Array(w * h)
-  const tolerance = Math.max(8, options.tolerance ?? 44)
+  return buildOfflineObjectAwareSelectionMaskData(src, options) as SelectionHeuristicMaskResult
+}
 
-  if (options.kind === "sky") {
-    for (let y = 0; y < h; y++) {
-      const yNorm = y / Math.max(1, h - 1)
-      if (yNorm > 0.62) continue
-      for (let x = 0; x < w; x++) {
-        const i = (y * w + x) * 4
-        if (src.data[i + 3] <= MASK_THRESHOLD) continue
-        const r = src.data[i]
-        const g = src.data[i + 1]
-        const b = src.data[i + 2]
-        const [hue, sat, lum] = rgbToHsl(r, g, b)
-        const blueSky = hue >= 178 && hue <= 252 && sat > 18 && lum > 30 && b > r + 18 && b > g + 12
-        const paleSky = yNorm < 0.45 && lum > 62 && sat < 34 && localGradient(src, x, y) < 28
-        if (blueSky || paleSky) candidate[y * w + x] = 1
-      }
-    }
-    return maskResultFromBinary(candidate, w, h, countAlpha(candidate, 0))
-  }
-
-  const rect = options.kind === "object" && options.objectBounds
-    ? clippedRect(options.objectBounds, w, h) ?? { x: 0, y: 0, w, h }
-    : { x: 0, y: 0, w, h }
-  const bg = options.kind === "object"
-    ? edgeAverage(src, rect.x, rect.y, rect.x + rect.w, rect.y + rect.h)
-    : edgeAverage(src)
-  const cx = rect.x + rect.w / 2
-  const cy = rect.y + rect.h / 2
-  const threshold = Math.max(tolerance, bg.spread * 0.85 + 22)
-
-  for (let y = rect.y; y < rect.y + rect.h; y++) {
-    for (let x = rect.x; x < rect.x + rect.w; x++) {
-      const p = y * w + x
-      const i = p * 4
-      if (src.data[i + 3] <= MASK_THRESHOLD) continue
-      const r = src.data[i]
-      const g = src.data[i + 1]
-      const b = src.data[i + 2]
-      const [hue, sat, lum] = rgbToHsl(r, g, b)
-      const likelySky = y < h * 0.45 && hue >= 178 && hue <= 252 && sat > 18 && lum > 30 && b > r + 14
-      const likelyGreenBackground = hue >= 82 && hue <= 156 && sat > 18 && g > r + 24 && g > b + 8
-      if (likelySky || likelyGreenBackground) continue
-      const d = rgbDistance({ r, g, b }, bg)
-      const centerDistance = Math.hypot((x - cx) / Math.max(1, rect.w * 0.55), (y - cy) / Math.max(1, rect.h * 0.55))
-      const centerPrior = clamp(1 - centerDistance, 0, 1)
-      const edge = localGradient(src, x, y)
-      if (d > threshold * (0.98 - centerPrior * 0.28) || (edge > 34 && centerPrior > 0.08 && d > threshold * 0.4)) {
-        candidate[p] = 1
-      }
-    }
-  }
-
-  const kept = keepScoredComponents(
-    candidate,
-    w,
-    h,
-    (pixels, touchesEdge) => {
-      let sx = 0
-      let sy = 0
-      for (const p of pixels) {
-        sx += p % w
-        sy += Math.floor(p / w)
-      }
-      const px = sx / pixels.length
-      const py = sy / pixels.length
-      const centerDistance = Math.hypot((px - cx) / Math.max(1, rect.w * 0.55), (py - cy) / Math.max(1, rect.h * 0.55))
-      return pixels.length * (1.35 - clamp(centerDistance, 0, 1)) * (touchesEdge ? 0.35 : 1)
-    },
-    0.3,
-    Math.max(1, Math.floor(rect.w * rect.h * 0.005)),
-  )
-  return maskResultFromBinary(kept, w, h, countAlpha(candidate, 0))
+function offlineSelectionMaskFromCanvas(
+  src: HTMLCanvasElement,
+  options: Parameters<typeof buildOfflineObjectAwareSelectionMaskData>[1],
+  featherRadius: number,
+) {
+  const ctx = src.getContext("2d")!
+  const img = ctx.getImageData(0, 0, src.width, src.height)
+  const result = buildOfflineObjectAwareSelectionMaskData(img, options)
+  const mask = alphaDataToMask(result.maskData, result.width, result.height)
+  return featherRadius > 0 ? featherMask(mask, featherRadius) : mask
 }
 
 export function selectSubjectMask(
   src: HTMLCanvasElement,
   tolerance = 48,
 ): HTMLCanvasElement {
-  const w = src.width
-  const h = src.height
-  const ctx = src.getContext("2d")!
-  const img = ctx.getImageData(0, 0, w, h)
-
-  const bg = edgeAverage(img)
-  const threshold = Math.max(tolerance, bg.spread * 0.9 + 26)
-  const candidate = new Uint8Array(w * h)
-  const cx = w / 2
-  const cy = h / 2
-  let candidateCount = 0
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const p = y * w + x
-      const i = p * 4
-      const a = img.data[i + 3]
-      if (a <= MASK_THRESHOLD) continue
-      const rgb = { r: img.data[i], g: img.data[i + 1], b: img.data[i + 2] }
-      const dist = rgbDistance(rgb, bg)
-      const centerDistance = Math.hypot((x - cx) / Math.max(1, w * 0.55), (y - cy) / Math.max(1, h * 0.55))
-      const centerPrior = clamp(1 - centerDistance, 0, 1)
-      const edge = localGradient(img, x, y)
-      const keep =
-        dist > threshold * (0.92 - centerPrior * 0.24) ||
-        (edge > 34 && centerPrior > 0.12 && dist > threshold * 0.42)
-      if (keep) {
-        candidate[p] = 1
-        candidateCount++
-      }
-    }
-  }
-
-  if (candidateCount < Math.max(12, w * h * 0.001)) {
-    for (let i = 0; i < w * h; i++) {
-      if (img.data[i * 4 + 3] > MASK_THRESHOLD) candidate[i] = 1
-    }
-  }
-
-  const cleaned = cleanBinaryMask(candidate, w, h, Math.max(2, Math.round(Math.min(w, h) / 180)), 1)
-  const kept = keepScoredComponents(
-    cleaned,
-    w,
-    h,
-    (pixels, touchesEdge) => {
-      let sx = 0
-      let sy = 0
-      for (const p of pixels) {
-        sx += p % w
-        sy += (p - (p % w)) / w
-      }
-      const px = sx / pixels.length
-      const py = sy / pixels.length
-      const centerDistance = Math.hypot((px - cx) / Math.max(1, w * 0.55), (py - cy) / Math.max(1, h * 0.55))
-      const centerScore = 1.35 - clamp(centerDistance, 0, 1)
-      return pixels.length * centerScore * (touchesEdge ? 0.45 : 1)
-    },
-    0.32,
-    Math.max(8, Math.floor(w * h * 0.0004)),
-  )
-  return featherMask(binaryToMask(kept, w, h), 0.85)
+  return offlineSelectionMaskFromCanvas(src, { kind: "subject", tolerance }, 0.85)
 }
 
 export function selectSkyMask(src: HTMLCanvasElement): HTMLCanvasElement {
-  const w = src.width
-  const h = src.height
-  const ctx = src.getContext("2d")!
-  const img = ctx.getImageData(0, 0, w, h)
-  const candidate = new Uint8Array(w * h)
+  return offlineSelectionMaskFromCanvas(src, { kind: "sky" }, 1.1)
+}
 
-  for (let y = 0; y < h; y++) {
-    const yNorm = y / Math.max(1, h - 1)
-    if (yNorm > 0.82) continue
-    for (let x = 0; x < w; x++) {
-      const p = y * w + x
-      const i = p * 4
-      if (img.data[i + 3] <= MASK_THRESHOLD) continue
-      const r = img.data[i]
-      const g = img.data[i + 1]
-      const b = img.data[i + 2]
-      const [hue, sat, lum] = rgbToHsl(r, g, b)
-      const grad = localGradient(img, x, y)
-      const blueSky = hue >= 175 && hue <= 258 && sat > 10 && lum > 24 && b > r + 8 && b >= g * 0.78
-      const paleCloud = yNorm < 0.68 && lum > 58 && sat < 36 && grad < 34
-      const sunsetSky = yNorm < 0.54 && lum > 42 && sat > 16 && grad < 26
-      if (blueSky || paleCloud || sunsetSky) candidate[p] = 1
-    }
-  }
-
-  const connected = new Uint8Array(w * h)
-  const visited = new Uint8Array(w * h)
-  const stack: number[] = []
-  for (let x = 0; x < w; x++) {
-    if (candidate[x]) stack.push(x)
-    const lowerTop = Math.min(h - 1, Math.floor(h * 0.08))
-    const p = lowerTop * w + x
-    if (candidate[p]) stack.push(p)
-  }
-  for (let y = 0; y < Math.floor(h * 0.55); y++) {
-    if (candidate[y * w]) stack.push(y * w)
-    if (candidate[y * w + w - 1]) stack.push(y * w + w - 1)
-  }
-  while (stack.length) {
-    const p = stack.pop()!
-    if (visited[p] || !candidate[p]) continue
-    visited[p] = 1
-    connected[p] = 1
-    const x = p % w
-    const y = (p - x) / w
-    if (x > 0) stack.push(p - 1)
-    if (x < w - 1) stack.push(p + 1)
-    if (y > 0) stack.push(p - w)
-    if (y < h - 1) stack.push(p + w)
-  }
-
-  let count = 0
-  for (let i = 0; i < connected.length; i++) if (connected[i]) count++
-  if (count < w * h * 0.01) {
-    const topBg = edgeAverage(img, 0, 0, w, Math.max(2, Math.floor(h * 0.12)))
-    for (let y = 0; y < h * 0.6; y++) {
-      for (let x = 0; x < w; x++) {
-        const p = y * w + x
-        const i = p * 4
-        if (img.data[i + 3] <= MASK_THRESHOLD) continue
-        const d = rgbDistance({ r: img.data[i], g: img.data[i + 1], b: img.data[i + 2] }, topBg)
-        if (d < Math.max(34, topBg.spread * 1.35)) connected[p] = 1
-      }
-    }
-  }
-
-  const cleaned = cleanBinaryMask(connected, w, h, Math.max(2, Math.round(Math.min(w, h) / 140)), 0)
-  return featherMask(binaryToMask(cleaned, w, h), 1.1)
+export function selectBackgroundMask(src: HTMLCanvasElement, tolerance = 48): HTMLCanvasElement {
+  return offlineSelectionMaskFromCanvas(src, { kind: "background", tolerance }, 1)
 }
 
 export function focusAreaMask(src: HTMLCanvasElement, sensitivity = 0.42): HTMLCanvasElement {
@@ -2932,61 +2797,7 @@ export function objectSelectionMask(
   rect: { x: number; y: number; w: number; h: number },
   tolerance = 44,
 ): HTMLCanvasElement {
-  const w = src.width
-  const h = src.height
-  const x0 = clamp(Math.floor(Math.min(rect.x, rect.x + rect.w)), 0, w - 1)
-  const y0 = clamp(Math.floor(Math.min(rect.y, rect.y + rect.h)), 0, h - 1)
-  const x1 = clamp(Math.ceil(Math.max(rect.x, rect.x + rect.w)), x0 + 1, w)
-  const y1 = clamp(Math.ceil(Math.max(rect.y, rect.y + rect.h)), y0 + 1, h)
-  const ctx = src.getContext("2d")!
-  const img = ctx.getImageData(0, 0, w, h)
-  const bg = edgeAverage(img, x0, y0, x1, y1)
-  const threshold = Math.max(tolerance, bg.spread * 0.9 + 24)
-  const candidate = new Uint8Array(w * h)
-  const cx = x0 + (x1 - x0) / 2
-  const cy = y0 + (y1 - y0) / 2
-  for (let y = y0; y < y1; y++) {
-    for (let x = x0; x < x1; x++) {
-      const p = y * w + x
-      const i = p * 4
-      if (img.data[i + 3] <= MASK_THRESHOLD) continue
-      const d = rgbDistance({ r: img.data[i], g: img.data[i + 1], b: img.data[i + 2] }, bg)
-      const centerDistance = Math.hypot((x - cx) / Math.max(1, (x1 - x0) * 0.55), (y - cy) / Math.max(1, (y1 - y0) * 0.55))
-      const centerPrior = clamp(1 - centerDistance, 0, 1)
-      const edge = localGradient(img, x, y)
-      if (d > threshold * (0.95 - centerPrior * 0.25) || (edge > 34 && d > threshold * 0.35)) {
-        candidate[p] = 1
-      }
-    }
-  }
-  const cleaned = cleanBinaryMask(candidate, w, h, Math.max(2, Math.round(Math.min(x1 - x0, y1 - y0) / 80)), 1)
-  const kept = keepScoredComponents(
-    cleaned,
-    w,
-    h,
-    (pixels, touchesEdge) => {
-      let sx = 0
-      let sy = 0
-      for (const p of pixels) {
-        sx += p % w
-        sy += (p - (p % w)) / w
-      }
-      const px = sx / pixels.length
-      const py = sy / pixels.length
-      const centerDistance = Math.hypot((px - cx) / Math.max(1, (x1 - x0) * 0.55), (py - cy) / Math.max(1, (y1 - y0) * 0.55))
-      return pixels.length * (1.4 - clamp(centerDistance, 0, 1)) * (touchesEdge ? 0.72 : 1)
-    },
-    0.28,
-    Math.max(8, Math.floor((x1 - x0) * (y1 - y0) * 0.001)),
-  )
-  let selected = 0
-  for (let i = 0; i < kept.length; i++) selected += kept[i]
-  if (selected < Math.max(10, (x1 - x0) * (y1 - y0) * 0.002)) {
-    for (let y = y0; y < y1; y++) {
-      for (let x = x0; x < x1; x++) kept[y * w + x] = 1
-    }
-  }
-  return featherMask(binaryToMask(kept, w, h), 0.85)
+  return offlineSelectionMaskFromCanvas(src, { kind: "object", objectBounds: rect, tolerance }, 0.85)
 }
 
 export function refineEdgeBrushMask(
@@ -3293,6 +3104,8 @@ export function magneticLassoSnap(
   // Scharr kernels provide better rotational precision than the basic Sobel
   // weights while keeping this pure 3x3 pixel math.
   const gradients = new Float32Array(rw * rh)
+  const directions = new Float32Array(rw * rh)
+  const thinned = new Float32Array(rw * rh)
   const strong = new Uint8Array(rw * rh)
   const linked = new Uint8Array(rw * rh)
   const queue: number[] = []
@@ -3313,6 +3126,30 @@ export function magneticLassoSnap(
       const grad = Math.sqrt(gx * gx + gy * gy) / 16
       const idx = ry * rw + rx
       gradients[idx] = grad
+      directions[idx] = Math.atan2(gy, gx)
+    }
+  }
+
+  for (let ry = 1; ry < rh - 1; ry++) {
+    for (let rx = 1; rx < rw - 1; rx++) {
+      const idx = ry * rw + rx
+      const grad = gradients[idx]
+      if (grad <= 0) continue
+      const angle = ((directions[idx] * 180) / Math.PI + 180) % 180
+      let before = idx - 1
+      let after = idx + 1
+      if (angle >= 22.5 && angle < 67.5) {
+        before = idx - rw + 1
+        after = idx + rw - 1
+      } else if (angle >= 67.5 && angle < 112.5) {
+        before = idx - rw
+        after = idx + rw
+      } else if (angle >= 112.5 && angle < 157.5) {
+        before = idx - rw - 1
+        after = idx + rw + 1
+      }
+      if (grad < gradients[before] || grad < gradients[after]) continue
+      thinned[idx] = grad
       if (grad >= highThreshold) {
         strong[idx] = 1
         linked[idx] = 1
@@ -3332,7 +3169,7 @@ export function magneticLassoSnap(
         const ny = py + dy
         if (nx <= 0 || ny <= 0 || nx >= rw - 1 || ny >= rh - 1) continue
         const ni = ny * rw + nx
-        if (linked[ni] || gradients[ni] < lowThreshold) continue
+        if (linked[ni] || thinned[ni] < lowThreshold) continue
         linked[ni] = 1
         queue.push(ni)
       }
@@ -3349,7 +3186,7 @@ export function magneticLassoSnap(
       const docX = x0 + rx - 1
       const docY = y0 + ry - 1
       const distancePenalty = Math.hypot(docX - cx, docY - cy) * highThreshold * 0.08
-      const score = gradients[idx] - distancePenalty
+      const score = thinned[idx] - distancePenalty
       if (score > bestScore) {
         bestScore = score
         bestX = docX
@@ -3360,4 +3197,40 @@ export function magneticLassoSnap(
 
   if (bestScore === -Infinity) return { x: Math.round(cx), y: Math.round(cy) }
   return { x: bestX, y: bestY }
+}
+
+export function magneticLassoTrace(
+  canvas: HTMLCanvasElement | SelectionImageSource,
+  anchors: { x: number; y: number }[],
+  options: MagneticLassoTraceOptions = {},
+): MagneticLassoTraceResult {
+  if (!("getContext" in canvas)) {
+    if (anchors.length <= 1) {
+      return {
+        points: anchors.map((point) => ({ ...point })),
+        diagnostics: {
+          strongEdgePixels: 0,
+          weakLinkedPixels: 0,
+          thinnedEdgePixels: 0,
+          fallbackSegments: 0,
+          totalPoints: anchors.length,
+        },
+      }
+    }
+    return traceMagneticLassoEdgePathData(canvas, anchors, options)
+  }
+  const ctx = canvas.getContext("2d")
+  if (!ctx || anchors.length <= 1) {
+    return {
+      points: anchors.map((point) => ({ ...point })),
+      diagnostics: {
+        strongEdgePixels: 0,
+        weakLinkedPixels: 0,
+        thinnedEdgePixels: 0,
+        fallbackSegments: 0,
+        totalPoints: anchors.length,
+      },
+    }
+  }
+  return traceMagneticLassoEdgePathData(ctx.getImageData(0, 0, canvas.width, canvas.height), anchors, options)
 }

@@ -65,6 +65,7 @@ export function SelectAndMaskDialog({
   // Edge Detection
   const [smartRadius, setSmartRadius] = React.useState(true)
   const [edgeRadius, setEdgeRadius] = React.useState(3)
+  const [transparencyMatting, setTransparencyMatting] = React.useState(true)
 
   // Brush
   const [brushSize, setBrushSize] = React.useState(20)
@@ -295,6 +296,8 @@ export function SelectAndMaskDialog({
       shiftEdge,
       smartRadius,
       edgeRadius,
+      matteRadius: edgeRadius,
+      transparencyMatting,
       sourceImage: activeLayer ? activeLayer.canvas.getContext("2d")!.getImageData(0, 0, w, h) : undefined,
     })
     const out = new ImageData(w, h)
@@ -528,6 +531,14 @@ export function SelectAndMaskDialog({
                   className="border-[var(--ps-divider)]"
                 />
                 Smart Radius
+              </label>
+              <label className="flex items-center gap-2 text-[11px] mb-2">
+                <Checkbox
+                  checked={transparencyMatting}
+                  onCheckedChange={(v) => setTransparencyMatting(v === true)}
+                  className="border-[var(--ps-divider)]"
+                />
+                Transparency Matting
               </label>
               <PropSlider label="Radius" value={edgeRadius} min={0} max={250} suffix="px" onChange={setEdgeRadius} />
             </PropSection>

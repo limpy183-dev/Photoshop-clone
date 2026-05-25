@@ -267,6 +267,39 @@ export function analyzePreflightDocument(doc: PsDocument): PreflightReport {
     "Canvas",
     `${doc.width} x ${doc.height}px, ${doc.colorMode}, ${doc.bitDepth}-bit.`,
   ))
+  if (doc.metadata?.largeDocumentInspection) {
+    const inspection = doc.metadata.largeDocumentInspection
+    findings.push(finding(
+      "large-document-inspection",
+      "document",
+      "warn",
+      "Large document inspection",
+      `${inspection.sourceName} parsed as ${inspection.originalWidth} x ${inspection.originalHeight}px, but pixels are not editable in inspection mode. ${inspection.reason}`,
+      warnOnly("Choose reduced scale or tile-only", "Use reduced-scale import when enough fidelity fits browser limits, or tile-only mode for full-resolution tile edits."),
+    ))
+  }
+  if (doc.metadata?.largeDocumentTileView) {
+    const tileView = doc.metadata.largeDocumentTileView
+    findings.push(finding(
+      "large-document-tile-view",
+      "document",
+      "info",
+      "Large document tile view",
+      `${tileView.sourceName} is open as an overview plus ${tileView.tileColumns} x ${tileView.tileRows} full-resolution tiles.`,
+      warnOnly("Open individual tiles", "Use the PSB tile view controls to inspect or edit a full-resolution tile without allocating the whole document."),
+    ))
+  }
+  if (doc.metadata?.largeDocumentTileEdit) {
+    const tileEdit = doc.metadata.largeDocumentTileEdit
+    findings.push(finding(
+      "large-document-tile-edit",
+      "document",
+      "info",
+      "Large document tile edit",
+      `Editing tile ${tileEdit.tile.col},${tileEdit.tile.row} from ${tileEdit.sourceName}.`,
+      warnOnly("Update source tile", "Use Update Source Tile after editing to write the changed tile back to the tile cache."),
+    ))
+  }
   findings.push(finding(
     "icc-profile",
     "color",
@@ -375,7 +408,7 @@ export function analyzePreflightDocument(doc: PsDocument): PreflightReport {
     "export",
     doc.bitDepth > 8 || doc.colorMode !== "RGB" || spotChannels.length || !!profile ? "warn" : "info",
     "Raster/export risk",
-    "Browser raster export is an 8-bit composited canvas path; native spot plates, embedded ICC payloads, PDF/X metadata, live type, and production traps are not emitted.",
+    "Browser-native raster export uses the 8-bit composited preview; TIFF and 16-bit PNM can preserve high-bit typed-array samples where available, but native spot plates, PDF/X metadata, live type, and production traps are not emitted.",
     warnOnly("Use production export workflow", "Use this app's reports as handoff notes and verify final output in a certified prepress pipeline."),
   ))
 

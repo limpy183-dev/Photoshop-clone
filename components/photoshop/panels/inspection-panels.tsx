@@ -7,6 +7,7 @@ import { getFilter } from "../filters"
 import { applyLayerStyle } from "../layer-styles"
 import { Slider } from "@/components/ui/slider"
 import {
+  compareHighBitPixelToPreview,
   computeCanvasHistogram,
   computeHighBitHistogram,
   createHighBitImageFromImageData,
@@ -14,6 +15,7 @@ import {
   toneMapHighBitImageToImageData,
   type HighBitImage,
   type HighBitPixelReadout,
+  type HighBitPreviewComparison,
 } from "../color-pipeline"
 import type { BlendMode, Layer, PsDocument } from "../types"
 import { requestCanvasZoom } from "../zoom-events"
@@ -327,6 +329,15 @@ function formatHighBitReadout(readout: HighBitPixelReadout | null, bitDepth: PsD
   return `R ${Math.round(readout.r)}  G ${Math.round(readout.g)}  B ${Math.round(readout.b)}  A ${Math.round(readout.a)}`
 }
 
+function formatHighBitPreviewComparison(comparison: HighBitPreviewComparison | null, bitDepth: PsDocument["bitDepth"] | undefined) {
+  if (!comparison || !bitDepth || bitDepth <= 8) return "-"
+  const { preview, delta } = comparison
+  if (bitDepth === 32) {
+    return `P ${preview.r}/${preview.g}/${preview.b}/${preview.a}  d ${delta.r.toFixed(4)}/${delta.g.toFixed(4)}/${delta.b.toFixed(4)}/${delta.a.toFixed(4)}`
+  }
+  return `P ${preview.r}/${preview.g}/${preview.b}/${preview.a}  d ${Math.round(delta.r)}/${Math.round(delta.g)}/${Math.round(delta.b)}/${Math.round(delta.a)}`
+}
+
 function maxFiniteFloatValue(data: Float32Array) {
   let max = 1
   for (let i = 0; i < data.length; i++) {
@@ -495,22 +506,34 @@ export function HistogramPanel() {
 export function InfoPanel() {
   const { activeDoc } = useEditor()
   const compositeRef = React.useRef<HTMLCanvasElement | null>(null)
+  const previewImageDataRef = React.useRef<ImageData | null>(null)
   const highBitSourceRef = React.useRef<{ image: HighBitImage; label: string } | null>(null)
   const lastRebuildRef = React.useRef(0)
   const rebuildTimerRef = React.useRef<number | null>(null)
   const [mouse, setMouse] = React.useState<{ x: number; y: number; inside: boolean }>({ x: 0, y: 0, inside: false })
   const [rgba, setRgba] = React.useState([0, 0, 0, 0])
   const [highBitReadout, setHighBitReadout] = React.useState<HighBitPixelReadout | null>(null)
+  const [highBitComparison, setHighBitComparison] = React.useState<HighBitPreviewComparison | null>(null)
   const [highBitSourceLabel, setHighBitSourceLabel] = React.useState("-")
 
   const rebuildNow = React.useCallback(() => {
-    if (!activeDoc) return
+    if (!activeDoc) {
+      compositeRef.current = null
+      previewImageDataRef.current = null
+      highBitSourceRef.current = null
+      setHighBitReadout(null)
+      setHighBitComparison(null)
+      setHighBitSourceLabel("-")
+      return
+    }
     const composite = renderComposite(activeDoc, 1)
+    const previewImageData = composite.getContext("2d")!.getImageData(0, 0, composite.width, composite.height)
     compositeRef.current = composite
+    previewImageDataRef.current = previewImageData
     if (activeDoc.bitDepth > 8) {
       const source = findDocumentHighBitSource(activeDoc) ?? createProjectedHighBitSource(
         activeDoc,
-        composite.getContext("2d")!.getImageData(0, 0, composite.width, composite.height),
+        previewImageData,
       )
       highBitSourceRef.current = source
       setHighBitSourceLabel(source.label)
@@ -518,6 +541,7 @@ export function InfoPanel() {
       highBitSourceRef.current = null
       setHighBitSourceLabel("-")
       setHighBitReadout(null)
+      setHighBitComparison(null)
     }
     lastRebuildRef.current = performance.now()
   }, [activeDoc])
@@ -551,14 +575,23 @@ export function InfoPanel() {
       const c = compositeRef.current
       if (!c || !detail.inside) {
         setHighBitReadout(null)
+        setHighBitComparison(null)
         return
       }
       const x = Math.floor(detail.x)
       const y = Math.floor(detail.y)
-      const px = c.getContext("2d")!.getImageData(x, y, 1, 1).data
+      const previewImageData = previewImageDataRef.current
+      if (!previewImageData || x < 0 || y < 0 || x >= previewImageData.width || y >= previewImageData.height) {
+        setHighBitReadout(null)
+        setHighBitComparison(null)
+        return
+      }
+      const offset = (y * previewImageData.width + x) * 4
+      const px = previewImageData.data.subarray(offset, offset + 4)
       setRgba([px[0], px[1], px[2], px[3]])
       const highBitImage = highBitSourceRef.current?.image
       setHighBitReadout(highBitImage ? readHighBitPixel(highBitImage, x, y) : null)
+      setHighBitComparison(highBitImage ? compareHighBitPixelToPreview(highBitImage, previewImageData, x, y) : null)
     }
     window.addEventListener("ps-mousemove", handler)
     return () => window.removeEventListener("ps-mousemove", handler)
@@ -577,6 +610,9 @@ export function InfoPanel() {
         <InfoRow label="RGBA" value={`${rgba[0]}, ${rgba[1]}, ${rgba[2]}, ${Math.round((rgba[3] / 255) * 100)}%`} />
         {activeDoc && activeDoc.bitDepth > 8 ? (
           <InfoRow label={`${activeDoc.bitDepth}-bit`} value={formatHighBitReadout(highBitReadout, activeDoc.bitDepth)} />
+        ) : null}
+        {activeDoc && activeDoc.bitDepth > 8 ? (
+          <InfoRow label="Preview delta" value={formatHighBitPreviewComparison(highBitComparison, activeDoc.bitDepth)} />
         ) : null}
         <InfoRow label="HSB" value={`${hsb.h.toFixed(0)} / ${hsb.s.toFixed(0)} / ${hsb.b.toFixed(0)}`} />
         <InfoRow label="Lab" value={`${lab.l.toFixed(0)} / ${lab.a.toFixed(0)} / ${lab.b.toFixed(0)}`} />

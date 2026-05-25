@@ -5,6 +5,15 @@ import {
   createLayerTileAddress,
 } from "../components/photoshop/tiled-backing-store"
 import {
+  layerTileAddressForLayer,
+  planDocumentTileRecomposition,
+  planLayerTileRender,
+  renderLayerContentTile,
+  renderLayerTileForBackingStore,
+  renderThreeDLayerTilePreview,
+  renderTileCanvas,
+} from "../components/photoshop/layer-tile-renderer"
+import {
   createProgressiveTileRefiner,
 } from "../components/photoshop/progressive-renderer"
 import {
@@ -18,6 +27,7 @@ import {
   MemoryBudgetTracker,
   createHeapMemoryMonitor,
   formatMemoryUsage,
+  planRuntimeMemoryPressure,
 } from "../components/photoshop/memory-budget"
 import {
   compactIncrementalAutosaveChain,
@@ -38,14 +48,17 @@ import {
   resetCanvasPoolForTests,
 } from "../components/photoshop/canvas-utils"
 import {
+  getWebGLLayerCapability,
   isWebGLBlendModeCompatible,
   planGpuFilterChain,
+  planWebGLLayerStack,
   planWebGLCompositor,
 } from "../components/photoshop/webgl-compositor"
 import {
   createRafScheduler,
 } from "../components/photoshop/raf-coalescer"
-import { installFixtureDom } from "./photoshop-fixtures"
+import type { BlendMode, Layer, PsDocument } from "../components/photoshop/types"
+import { fixtureCanvas, fixtureMask, installFixtureDom } from "./photoshop-fixtures"
 
 class TestImageData {
   data: Uint8ClampedArray
@@ -136,6 +149,419 @@ test("tile store caches smart object and 3D layer tiles by source version and ca
     return new Blob(["side"])
   })
   expect(threeDRenders).toBe(2)
+})
+
+test("layer tile renderer keys smart objects by source changes and editable layer metadata", () => {
+  installFixtureDom()
+  const smartSourceCanvas = document.createElement("canvas")
+  smartSourceCanvas.width = 96
+  smartSourceCanvas.height = 48
+  const smartCanvas = document.createElement("canvas")
+  smartCanvas.width = 192
+  smartCanvas.height = 96
+  const smartLayer = {
+    id: "smart-layer",
+    name: "Linked Product",
+    kind: "smart-object",
+    smartObject: true,
+    visible: true,
+    locked: false,
+    opacity: 1,
+    blendMode: "normal",
+    canvas: smartCanvas,
+    smartSource: {
+      id: "source-a",
+      name: "source-a.png",
+      linkType: "linked",
+      embedded: true,
+      status: "current",
+      width: 96,
+      height: 48,
+      updatedAt: 10,
+      sourceHash: "hash-a",
+      canvas: smartSourceCanvas,
+    },
+  } satisfies Layer
+
+  const first = layerTileAddressForLayer(smartLayer, { col: 0, row: 0, tileSize: 64, documentWidth: 192, documentHeight: 96 })
+  const second = layerTileAddressForLayer(
+    {
+      ...smartLayer,
+      smartSource: {
+        ...smartLayer.smartSource!,
+        updatedAt: 20,
+        sourceHash: "hash-b",
+      },
+    },
+    { col: 0, row: 0, tileSize: 64, documentWidth: 192, documentHeight: 96 },
+  )
+
+  expect(first.layerKind).toBe("smart-object")
+  expect(first.sourceVersion).toContain("hash-a")
+  expect(second.sourceVersion).toContain("hash-b")
+  expect(second.key).not.toBe(first.key)
+
+  const textCanvas = document.createElement("canvas")
+  textCanvas.width = 192
+  textCanvas.height = 96
+  const textLayer = {
+    ...smartLayer,
+    id: "text-layer",
+    name: "Headline",
+    kind: "text",
+    smartObject: false,
+    smartSource: undefined,
+    canvas: textCanvas,
+    text: {
+      content: "Sale",
+      font: "Arial",
+      size: 32,
+      weight: "bold",
+      italic: false,
+      color: "#111111",
+      align: "center",
+      x: 20,
+      y: 42,
+    },
+  } satisfies Layer
+  const textPlan = planLayerTileRender(textLayer, { col: 1, row: 0, tileSize: 64, documentWidth: 192, documentHeight: 96 })
+  expect(textPlan.cacheable).toBe(true)
+  expect(textPlan.address.layerKind).toBe("text")
+  expect(textPlan.dependencies.join("|")).toContain("Sale")
+
+  const pathLayer = {
+    ...textLayer,
+    id: "vector-layer",
+    kind: "shape",
+    text: undefined,
+    shape: { type: "rect", x: 8, y: 8, w: 48, h: 32, fill: "#00aaee", stroke: { color: "#111111", width: 2 } },
+    path: { closed: true, points: [{ x: 8, y: 8 }, { x: 56, y: 8 }, { x: 56, y: 40 }, { x: 8, y: 40 }] },
+  } satisfies Layer
+  const vectorPlan = planLayerTileRender(pathLayer, { col: 0, row: 0, tileSize: 64, documentWidth: 192, documentHeight: 96 })
+  expect(vectorPlan.address.layerKind).toBe("vector")
+  expect(vectorPlan.dependencies.join("|")).toContain("rect")
+})
+
+test("smart object tile keys include filter stack changes and content tiles render filtered sources", () => {
+  installFixtureDom()
+  const smartSourceCanvas = fixtureCanvas(96, 48, "#3355aa")
+  const smartCanvas = fixtureCanvas(192, 96, "#3355aa")
+  const smartLayer = {
+    id: "smart-filtered",
+    name: "Filtered Smart",
+    kind: "smart-object",
+    smartObject: true,
+    visible: true,
+    locked: false,
+    opacity: 1,
+    blendMode: "normal",
+    canvas: smartCanvas,
+    smartSource: {
+      id: "source-filtered",
+      name: "source.png",
+      linkType: "linked",
+      embedded: true,
+      status: "current",
+      width: 96,
+      height: 48,
+      updatedAt: 10,
+      sourceHash: "hash-a",
+      canvas: smartSourceCanvas,
+    },
+    smartFilters: [
+      { id: "sf", filterId: "gaussian-blur", name: "Gaussian Blur", enabled: true, params: { radius: 2 } },
+    ],
+  } satisfies Layer
+
+  const ref = { col: 0, row: 0, tileSize: 64, documentWidth: 192, documentHeight: 96 }
+  const first = planLayerTileRender(smartLayer, ref)
+  const second = planLayerTileRender({
+    ...smartLayer,
+    smartFilters: [
+      { id: "sf", filterId: "gaussian-blur", name: "Gaussian Blur", enabled: true, params: { radius: 6 } },
+    ],
+  }, ref)
+  const tile = renderLayerContentTile(smartLayer, first.rect)
+
+  expect(first.contentSource).toBe("smart-source")
+  expect(first.dependencies.join("|")).toContain("smartFilters")
+  expect(second.address.key).not.toBe(first.address.key)
+  expect(tile.width).toBe(64)
+  expect(tile.height).toBe(64)
+})
+
+test("3D layer tile previews render only the requested tile and cache by camera", () => {
+  const scene = {
+    objects: [
+      {
+        id: "obj",
+        name: "Triangle",
+        vertices: [{ x: -1, y: -1, z: 0 }, { x: 1, y: -1, z: 0 }, { x: 0, y: 1, z: 0 }],
+        faces: [{ indices: [0, 1, 2], materialId: "mat" }],
+        materialId: "mat",
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+    ],
+    materials: [{ id: "mat", name: "Red", color: "#ff0000", roughness: 0.5, metallic: 0, opacity: 1 }],
+    lights: [],
+    camera: { position: { x: 0, y: 0, z: 4 }, target: { x: 0, y: 0, z: 0 }, fov: 42, focalLength: 50 },
+    renderMode: "solid" as const,
+  } satisfies NonNullable<Layer["threeD"]>
+  const layer = {
+    id: "three-d-layer",
+    name: "Scene",
+    kind: "3d",
+    visible: true,
+    locked: false,
+    opacity: 1,
+    blendMode: "normal",
+    canvas: {} as HTMLCanvasElement,
+    threeD: scene,
+  } satisfies Layer
+
+  const address = layerTileAddressForLayer(layer, { col: 1, row: 0, tileSize: 16, documentWidth: 32, documentHeight: 16 })
+  const preview = renderThreeDLayerTilePreview(layer, { x: 16, y: 0, w: 16, h: 16 }, { width: 32, height: 16 })
+  expect(address.layerKind).toBe("3d")
+  expect(address.cameraKey).toContain("fov:42")
+  expect(preview.width).toBe(16)
+  expect(preview.height).toBe(16)
+  expect(preview.data.some((value, index) => index % 4 === 3 && value > 0)).toBe(true)
+})
+
+test("3D layer content tiles render from scene metadata instead of full-frame raster previews", () => {
+  const scene = {
+    objects: [
+      {
+        id: "obj",
+        name: "Triangle",
+        vertices: [{ x: -1, y: -1, z: 0 }, { x: 1, y: -1, z: 0 }, { x: 0, y: 1, z: 0 }],
+        faces: [{ indices: [0, 1, 2], materialId: "mat" }],
+        materialId: "mat",
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+    ],
+    materials: [{ id: "mat", name: "Red", color: "#ff0000", roughness: 0.5, metallic: 0, opacity: 1 }],
+    lights: [],
+    camera: { position: { x: 0, y: 0, z: 4 }, target: { x: 0, y: 0, z: 0 }, fov: 42, focalLength: 50 },
+    renderMode: "solid" as const,
+  } satisfies NonNullable<Layer["threeD"]>
+  const layer = {
+    id: "three-d-layer",
+    name: "Scene",
+    kind: "3d",
+    visible: true,
+    locked: false,
+    opacity: 1,
+    blendMode: "normal",
+    canvas: fixtureCanvas(32, 16, "#000000"),
+    threeD: scene,
+  } satisfies Layer
+  const tile = renderLayerContentTile(layer, { x: 16, y: 0, w: 16, h: 16 }, { width: 32, height: 16 })
+  const image = tile.getContext("2d")!.getImageData(0, 0, 16, 16)
+
+  expect(tile.width).toBe(16)
+  expect(tile.height).toBe(16)
+  expect(image.data.some((value, index) => index % 4 === 3 && value > 0)).toBe(true)
+})
+
+test("smart object and 3D layer tiles materialize through the backing store cache", async () => {
+  installFixtureDom()
+  const store = new TiledBackingStore({ width: 128, height: 96, tileSize: 64, memoryBudgetMB: 4 })
+  const source = fixtureCanvas(256, 192, "#aa6633")
+  const smartCanvas = fixtureCanvas(128, 96, "#3355aa")
+  const smartLayer = {
+    id: "smart-materialized",
+    name: "Placed Source",
+    kind: "smart-object",
+    smartObject: true,
+    visible: true,
+    locked: false,
+    opacity: 1,
+    blendMode: "normal",
+    canvas: smartCanvas,
+    smartSource: {
+      id: "source",
+      name: "source.png",
+      linkType: "embedded",
+      embedded: true,
+      status: "current",
+      width: 256,
+      height: 192,
+      sourceHash: "v1",
+      canvas: source,
+    },
+  } satisfies Layer
+
+  const encoded: string[] = []
+  const codec = {
+    encodeCanvas: async (canvas: HTMLCanvasElement, plan: ReturnType<typeof planLayerTileRender>) => {
+      encoded.push(plan.address.key)
+      return new Blob([`${canvas.width}x${canvas.height}`])
+    },
+    decodeCanvas: async (blob: Blob) => {
+      const [width, height] = (await blob.text()).split("x").map(Number)
+      return fixtureCanvas(width, height, "#ffcc00")
+    },
+  }
+  const first = await renderLayerTileForBackingStore(store, smartLayer, {
+    col: 1,
+    row: 0,
+    tileSize: 64,
+    documentWidth: 128,
+    documentHeight: 96,
+  }, codec)
+  const second = await renderLayerTileForBackingStore(store, smartLayer, {
+    col: 1,
+    row: 0,
+    tileSize: 64,
+    documentWidth: 128,
+    documentHeight: 96,
+  }, codec)
+
+  expect(first.width).toBe(64)
+  expect(first.height).toBe(64)
+  expect(second.width).toBe(64)
+  expect(encoded).toHaveLength(1)
+
+  const sceneLayer = {
+    id: "scene-materialized",
+    name: "Scene",
+    kind: "3d",
+    visible: true,
+    locked: false,
+    opacity: 1,
+    blendMode: "normal",
+    canvas: fixtureCanvas(128, 96),
+    threeD: {
+      objects: [
+        {
+          id: "obj",
+          name: "Triangle",
+          vertices: [{ x: -1, y: -1, z: 0 }, { x: 1, y: -1, z: 0 }, { x: 0, y: 1, z: 0 }],
+          faces: [{ indices: [0, 1, 2], materialId: "mat" }],
+          materialId: "mat",
+          position: { x: 0, y: 0, z: 0 },
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+        },
+      ],
+      materials: [{ id: "mat", name: "Red", color: "#ff0000", roughness: 0.5, metallic: 0, opacity: 1 }],
+      lights: [],
+      camera: { position: { x: 0, y: 0, z: 4 }, target: { x: 0, y: 0, z: 0 }, fov: 42, focalLength: 50 },
+      renderMode: "solid",
+    },
+  } satisfies Layer
+  const threeDTile = await renderLayerTileForBackingStore(store, sceneLayer, {
+    col: 0,
+    row: 1,
+    tileSize: 64,
+    documentWidth: 128,
+    documentHeight: 96,
+  }, {
+    encodeCanvas: async (canvas) => new Blob([`${canvas.width}x${canvas.height}`]),
+    decodeCanvas: async (blob) => {
+      const [width, height] = (await blob.text()).split("x").map(Number)
+      return fixtureCanvas(width, height, "#ff0000")
+    },
+  })
+  expect(threeDTile.width).toBe(64)
+  expect(threeDTile.height).toBe(32)
+})
+
+test("document tile recomposition stays layer-isolated with masks, effects, adjustments, and clipping", () => {
+  installFixtureDom()
+  const baseCanvas = document.createElement("canvas")
+  baseCanvas.width = 128
+  baseCanvas.height = 96
+  const mask = document.createElement("canvas")
+  mask.width = 128
+  mask.height = 96
+  const clippedCanvas = document.createElement("canvas")
+  clippedCanvas.width = 128
+  clippedCanvas.height = 96
+  const adjustmentCanvas = document.createElement("canvas")
+  adjustmentCanvas.width = 128
+  adjustmentCanvas.height = 96
+  const layers: Layer[] = [
+    {
+      id: "base",
+      name: "Masked Base",
+      kind: "raster",
+      visible: true,
+      locked: false,
+      opacity: 1,
+      fillOpacity: 1,
+      blendMode: "normal",
+      canvas: baseCanvas,
+      mask,
+      maskEnabled: true,
+      style: { dropShadow: { enabled: true, color: "#000000", size: 4, offsetX: 2, offsetY: 2, opacity: 0.5 } },
+    },
+    {
+      id: "clipped",
+      name: "Clipped Texture",
+      kind: "shape",
+      visible: true,
+      locked: false,
+      opacity: 0.75,
+      fillOpacity: 1,
+      blendMode: "multiply",
+      canvas: clippedCanvas,
+      clipped: true,
+      shape: { type: "rect", x: 0, y: 0, w: 128, h: 96, fill: "#4466ee", stroke: null },
+    },
+    {
+      id: "adjustment",
+      name: "Brightness",
+      kind: "adjustment",
+      visible: true,
+      locked: false,
+      opacity: 1,
+      fillOpacity: 1,
+      blendMode: "normal",
+      canvas: adjustmentCanvas,
+      clipped: true,
+      mask,
+      adjustment: { type: "brightness-contrast", params: { brightness: 12, contrast: 0 } },
+    },
+  ]
+  const doc = {
+    id: "doc",
+    name: "Doc",
+    width: 128,
+    height: 96,
+    zoom: 1,
+    layers,
+    activeLayerId: "base",
+    selectedLayerIds: ["base"],
+    background: "#ffffff",
+    colorMode: "RGB",
+    bitDepth: 8,
+    selection: { bounds: null, shape: "rect" },
+  } satisfies PsDocument
+
+  const plan = planDocumentTileRecomposition(doc, {
+    dirtyByLayer: { base: [{ x: 8, y: 8, w: 32, h: 24 }] },
+    tileSize: 32,
+  })
+  expect(plan.strategy).toBe("tile-isolated")
+  expect(plan.tiles.map((tile) => tile.key)).toEqual(["0:0", "1:0"])
+  expect(plan.layersNeedingRecomposition).toEqual(["base", "clipped", "adjustment"])
+  expect(plan.reasons).toEqual(expect.arrayContaining(["mask", "effects", "adjustment", "clipping-group"]))
+})
+
+test("renderTileCanvas crops non-raster layer pixels to stable tile dimensions", () => {
+  installFixtureDom()
+  const source = document.createElement("canvas")
+  source.width = 96
+  source.height = 64
+  const tile = renderTileCanvas(source, { x: 32, y: 16, w: 48, h: 32 })
+  expect(tile.width).toBe(48)
+  expect(tile.height).toBe(32)
 })
 
 test("progressive preview uses bilinear downsampling and cancels stale tile refinement frames", () => {
@@ -229,6 +655,26 @@ test("heap monitor cross-references browser heap usage and detects GC pressure d
   expect(second.gcDetected).toBe(true)
   expect(second.recommendedEvictBytes).toBeGreaterThan(0)
   expect(formatMemoryUsage(second)).toContain("Heap 44.0 MB")
+})
+
+test("runtime memory pressure uses observed heap usage when it exceeds declared allocations", () => {
+  const plan = planRuntimeMemoryPressure({
+    budgetMB: 1024,
+    declaredBytes: 128 * MIB,
+    usedJSHeapSize: 990 * MIB,
+    jsHeapSizeLimit: 1024 * MIB,
+    softRatio: 0.75,
+    hardRatio: 0.95,
+  })
+
+  expect(plan.effectiveUsedBytes).toBe(990 * MIB)
+  expect(plan.level).toBe("hard")
+  expect(plan.actions).toEqual(expect.arrayContaining([
+    "spill-scratch-to-opfs",
+    "disable-composite-cache",
+    "reject-allocation",
+  ]))
+  expect(plan.recommendedEvictBytes).toBeGreaterThan(200 * MIB)
 })
 
 test("incremental autosave compacts near-identical deltas and schedules idle work", async () => {
@@ -338,7 +784,19 @@ test("canvas pool uses size buckets, tracks hit rate, and cleans idle oversized 
 
 test("WebGL compositor planner selects GPU paths for large compatible documents", () => {
   expect(isWebGLBlendModeCompatible("normal")).toBe(true)
-  expect(isWebGLBlendModeCompatible("hue")).toBe(false)
+  expect(isWebGLBlendModeCompatible("hue")).toBe(true)
+
+  expect(planWebGLCompositor({
+    width: 800,
+    height: 600,
+    layerCount: 1,
+    preferWebGL: true,
+    webglAvailable: true,
+    maxTextureSize: 4096,
+  })).toMatchObject({
+    path: "webgl",
+    reason: "webgl-preferred",
+  })
 
   expect(planWebGLCompositor({
     width: 12000,
@@ -358,6 +816,124 @@ test("WebGL compositor planner selects GPU paths for large compatible documents"
     compatibleFilters: ["brightness-contrast"],
     cpuFilters: ["gaussian-blur"],
   })
+})
+
+test("WebGL layer-stack planner keeps complex Photoshop layers on hybrid GPU path", () => {
+  installFixtureDom()
+  const allBlendModes: BlendMode[] = [
+    "normal",
+    "dissolve",
+    "behind",
+    "clear",
+    "darken",
+    "multiply",
+    "color-burn",
+    "linear-burn",
+    "darker-color",
+    "lighten",
+    "screen",
+    "color-dodge",
+    "linear-dodge",
+    "lighter-color",
+    "overlay",
+    "soft-light",
+    "hard-light",
+    "vivid-light",
+    "linear-light",
+    "pin-light",
+    "hard-mix",
+    "difference",
+    "exclusion",
+    "subtract",
+    "divide",
+    "hue",
+    "saturation",
+    "color",
+    "luminosity",
+  ]
+
+  expect(allBlendModes.every((mode) => isWebGLBlendModeCompatible(mode))).toBe(true)
+
+  const base: Layer = {
+    id: "base",
+    name: "Base",
+    kind: "raster",
+    visible: true,
+    locked: false,
+    opacity: 1,
+    blendMode: "normal",
+    canvas: fixtureCanvas(128, 96),
+  }
+  const complex: Layer = {
+    id: "complex",
+    name: "Masked Smart",
+    kind: "smart-object",
+    visible: true,
+    locked: false,
+    opacity: 0.75,
+    fillOpacity: 0.6,
+    blendMode: "hue",
+    canvas: fixtureCanvas(128, 96),
+    mask: fixtureMask(128, 96),
+    maskEnabled: true,
+    vectorMask: {
+      closed: true,
+      points: [
+        { x: 8, y: 8 },
+        { x: 120, y: 8 },
+        { x: 120, y: 88 },
+        { x: 8, y: 88 },
+      ],
+    },
+    clipped: true,
+    style: {
+      dropShadow: { enabled: true, color: "#000000", size: 6, offsetX: 2, offsetY: 3, opacity: 0.4 },
+    },
+    smartFilters: [
+      { id: "sf", filterId: "gaussian-blur", name: "Gaussian Blur", enabled: true, params: { radius: 2 } },
+    ],
+  }
+  const adjustment: Layer = {
+    id: "adjustment",
+    name: "Invert",
+    kind: "adjustment",
+    visible: true,
+    locked: false,
+    opacity: 1,
+    blendMode: "normal",
+    canvas: fixtureCanvas(128, 96),
+    adjustment: { type: "invert", params: {} },
+    clipped: true,
+  }
+
+  expect(getWebGLLayerCapability(complex, { cpuLayerFallbackAvailable: true })).toMatchObject({
+    supported: true,
+    gpuMasks: true,
+    gpuVectorMasks: true,
+    gpuClipping: true,
+    effectFallbacks: ["layer-effects", "smart-filters"],
+    unsupportedReasons: [],
+  })
+
+  const plan = planWebGLLayerStack({
+    width: 16000,
+    height: 9000,
+    layerCount: 3,
+    layers: [base, complex, adjustment],
+    webglAvailable: true,
+    maxTextureSize: 8192,
+    cpuLayerFallbackAvailable: true,
+    cpuAdjustmentFallbackAvailable: true,
+  })
+
+  expect(plan.compatible).toBe(true)
+  expect(plan.path).toBe("tiled-webgl")
+  expect(plan.tileSize).toBe(8192)
+  expect(plan.gpuLayerCount).toBe(2)
+  expect(plan.cpuCheckpointLayerIds).toEqual(["adjustment"])
+  expect(plan.effectFallbacks).toEqual([
+    { layerId: "complex", effects: ["layer-effects", "smart-filters"] },
+  ])
 })
 
 test("priority RAF scheduler coalesces filter previews and skips low priority work over budget", () => {

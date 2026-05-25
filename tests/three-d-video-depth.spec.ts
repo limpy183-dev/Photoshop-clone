@@ -6,7 +6,12 @@ import {
   analyzeThreeDPrintReadiness,
   applyVideoTransition,
   assignPlanarUvs,
+  buildFinalVideoExportPlan,
+  buildThreeDPrintPlan,
   buildOfflineAudioMixSchedule,
+  buildMuxedAudioStreamSchedule,
+  buildVideoClipTrackState,
+  buildVideoTrimHandleModel,
   buildVideoThumbnailPlan,
   buildAudioMixPlan,
   calculateTransitionWeights,
@@ -14,17 +19,22 @@ import {
   createThreeDCrossSection,
   createVideoGroup,
   encodeWavFromAudioBuffer,
+  evaluateThreeDAnimation,
   exportAdvancedThreeDScene,
+  getBrowserMuxCapability,
   importAdvancedThreeDScene,
   paintThreeDSurface,
   rayTraceScene,
   renderVideoTransitionPreview,
+  seekVideoElement,
   resolveVideoExportPreset,
   splitVideoLayerAtPlayhead,
   splitVideoLayer,
   trimVideoClipToFrame,
   trimVideoClip,
   updateThreeDMaterial,
+  upsertThreeDAnimationStack,
+  waitForVideoMetadata,
 } from "../components/photoshop/three-d-video-engine"
 import type { AudioTrack, Layer, TimelineFrame, VideoLayerProps } from "../components/photoshop/types"
 import { installFixtureDom } from "./photoshop-fixtures"
@@ -139,6 +149,146 @@ test("advanced 3D import/export handles 3DS, KMZ, and U3D scene metadata", () =>
   expect(exportedKmz.fileName).toMatch(/\.kmz$/)
 })
 
+test("browser-local 3D completion round-trips binary 3DS, KMZ ZIP, and U3D multi-mesh metadata", () => {
+  const scene = assignPlanarUvs(createPrimitiveThreeDScene("cube"))
+  const secondObject = {
+    ...scene.objects[0],
+    id: "second-object",
+    name: "Second Mesh",
+    materialId: "mat-blue",
+    position: { x: 1.5, y: 0, z: 0 },
+  }
+  const richScene = {
+    ...scene,
+    objects: [
+      { ...scene.objects[0], name: "First Mesh" },
+      secondObject,
+    ],
+    materials: [
+      { ...scene.materials[0], id: scene.objects[0].materialId, name: "Warm Matte", color: "#f06543", roughness: 0.35, metallic: 0.1, opacity: 0.9 },
+      { id: "mat-blue", name: "Cool Gloss", color: "#2477ff", roughness: 0.12, metallic: 0.6, opacity: 1 },
+    ],
+  }
+
+  const threeDsExport = exportAdvancedThreeDScene(richScene, "3ds", "browser-local")
+  const kmzExport = exportAdvancedThreeDScene(richScene, "kmz", "browser-local")
+  const u3dExport = exportAdvancedThreeDScene(richScene, "u3d", "browser-local")
+
+  expect(threeDsExport.fileName).toBe("browser-local.3ds")
+  expect(threeDsExport.data).toBeInstanceOf(Uint8Array)
+  expect((threeDsExport.data as Uint8Array)[0]).toBe(0x4d)
+  expect((threeDsExport.data as Uint8Array)[1]).toBe(0x4d)
+  expect(kmzExport.data).toBeInstanceOf(Uint8Array)
+  expect(Array.from((kmzExport.data as Uint8Array).slice(0, 2), (byte) => String.fromCharCode(byte)).join("")).toBe("PK")
+
+  const imported3ds = importAdvancedThreeDScene(toArrayBuffer(threeDsExport.data as Uint8Array), threeDsExport.fileName)
+  const importedKmz = importAdvancedThreeDScene(toArrayBuffer(kmzExport.data as Uint8Array), kmzExport.fileName)
+  const importedU3d = importAdvancedThreeDScene(toArrayBuffer(new TextEncoder().encode(u3dExport.data as string)), u3dExport.fileName)
+
+  expect(imported3ds.scene.objects).toHaveLength(2)
+  expect(imported3ds.scene.objects[0].uvs?.length).toBeGreaterThan(0)
+  expect(imported3ds.scene.materials.some((material) => material.name === "Warm Matte")).toBe(true)
+  expect(importedKmz.scene.objects[0].faces.length).toBeGreaterThan(0)
+  expect(importedKmz.warnings.join(" ")).toMatch(/KMZ ZIP/i)
+  expect(importedU3d.scene.objects.map((object) => object.name)).toEqual(["First Mesh", "Second Mesh"])
+  expect(importedU3d.scene.materials.map((material) => material.name)).toContain("Cool Gloss")
+})
+
+test("browser-local 3D completion evaluates animation stacks without mutating the source scene", () => {
+  const baseScene = createPrimitiveThreeDScene("cube")
+  const objectId = baseScene.objects[0].id
+  const scene = upsertThreeDAnimationStack(baseScene, {
+    id: "orbit",
+    name: "Orbit",
+    durationMs: 1000,
+    loop: true,
+    tracks: [
+      {
+        id: "move-x",
+        target: "object",
+        targetId: objectId,
+        property: "position",
+        keyframes: [
+          { timeMs: 0, value: { x: 0, y: 0, z: 0 }, easing: "linear" },
+          { timeMs: 1000, value: { x: 2, y: 0, z: 0 }, easing: "linear" },
+        ],
+      },
+      {
+        id: "rotate-y",
+        target: "object",
+        targetId: objectId,
+        property: "rotation",
+        keyframes: [
+          { timeMs: 0, value: { x: 0, y: 0, z: 0 }, easing: "linear" },
+          { timeMs: 1000, value: { x: 0, y: 180, z: 0 }, easing: "linear" },
+        ],
+      },
+    ],
+  })
+
+  const halfway = evaluateThreeDAnimation(scene, "orbit", 500)
+  const looped = evaluateThreeDAnimation(scene, "orbit", 1250)
+
+  expect(scene.objects[0].position.x).toBe(0)
+  expect(halfway.objects[0].position.x).toBeCloseTo(1)
+  expect(halfway.objects[0].rotation.y).toBeCloseTo(90)
+  expect(looped.objects[0].position.x).toBeCloseTo(0.5)
+  expect(looped.currentTimeMs).toBe(250)
+  expect(looped.activeAnimationId).toBe("orbit")
+})
+
+test("browser-local 3D completion uses scene lights, supersampling, and shadow-capable CPU preview", () => {
+  const scene = createPrimitiveThreeDScene("cube")
+  const unlit = { ...scene, lights: [], materials: [{ ...scene.materials[0], color: "#80c8ff", roughness: 0.2, metallic: 0.4 }] }
+  const lit = {
+    ...unlit,
+    lights: [
+      { id: "ambient", name: "Dim Ambient", kind: "ambient" as const, color: "#ffffff", intensity: 0.08 },
+      { id: "key", name: "Key", kind: "point" as const, color: "#ffffff", intensity: 1.4, position: { x: -2, y: 3, z: 4 } },
+    ],
+  }
+
+  const averageBrightness = (image: ImageData) => {
+    let sum = 0
+    let count = 0
+    for (let index = 0; index < image.data.length; index += 4) {
+      if (image.data[index + 3] === 0) continue
+      sum += image.data[index] + image.data[index + 1] + image.data[index + 2]
+      count += 3
+    }
+    return sum / Math.max(1, count)
+  }
+  const uniqueColors = (image: ImageData) => new Set(Array.from({ length: image.width * image.height }, (_, pixel) => {
+    const index = pixel * 4
+    return `${image.data[index]},${image.data[index + 1]},${image.data[index + 2]}`
+  })).size
+
+  const darkPreview = rayTraceScene(unlit, 20, 16, { samples: 1, background: "#000000" })
+  const litPreview = rayTraceScene(lit, 20, 16, { samples: 4, shadows: true, background: "#000000" })
+
+  expect(averageBrightness(litPreview)).toBeGreaterThan(averageBrightness(darkPreview) + 8)
+  expect(uniqueColors(litPreview)).toBeGreaterThan(uniqueColors(darkPreview))
+})
+
+test("browser-local 3D completion builds slicer-style print plan and browser handoff metadata", () => {
+  const scene = createPrimitiveThreeDScene("cube")
+  const plan = buildThreeDPrintPlan(scene, {
+    layerHeight: 0.4,
+    nozzleDiameter: 0.4,
+    filamentDiameter: 1.75,
+    maxBuildSize: { x: 10, y: 10, z: 10 },
+    baseName: "cube-print",
+  })
+
+  expect(plan.readiness.ready).toBe(true)
+  expect(plan.slices.length).toBeGreaterThan(2)
+  expect(plan.slices.some((slice) => slice.segmentCount > 0)).toBe(true)
+  expect(plan.estimatedMaterialVolume).toBeGreaterThan(0)
+  expect(plan.browserHandoff.driverIntegration).toBe(false)
+  expect(plan.browserHandoff.fileName).toBe("cube-print.gcode")
+  expect(plan.gcodePreview).toContain("; Browser-local 3D print handoff")
+})
+
 test("OBJ and DAE parsers reject excessive scene complexity before materializing render data", () => {
   const oversizedObj = `${Array.from({ length: 50_001 }, (_, index) => `v ${index} 0 0`).join("\n")}\nf 1 2 3`
   const oversizedDaePositions = Array.from({ length: 150_003 }, (_, index) => String(index % 3)).join(" ")
@@ -220,6 +370,132 @@ test("frame-accurate video edit helpers snap trim handles, split at playhead, an
   expect(thumbnails.every((item) => item.timeMs % 100 === 0)).toBe(true)
 })
 
+test("video clip track state exposes visual trim handles and split availability", () => {
+  const clip = videoProps({
+    durationMs: 10_000,
+    inPointMs: 1_200,
+    outPointMs: 8_800,
+    currentTimeMs: 4_567,
+    trimHandles: { inMs: 1_200, outMs: 8_800 },
+  })
+
+  const state = buildVideoClipTrackState(clip, 4_567, { fps: 10 })
+
+  expect(state.durationMs).toBe(10_000)
+  expect(state.inPointMs).toBe(1_200)
+  expect(state.outPointMs).toBe(8_800)
+  expect(state.playheadMs).toBe(4_600)
+  expect(state.inPercent).toBeCloseTo(12)
+  expect(state.outPercent).toBeCloseTo(88)
+  expect(state.clipWidthPercent).toBeCloseTo(76)
+  expect(state.playheadPercent).toBeCloseTo(46)
+  expect(state.canSplit).toBe(true)
+  expect(state.labels).toEqual({ in: "1.20s", out: "8.80s", playhead: "4.60s" })
+
+  expect(buildVideoClipTrackState(clip, 1_200, { fps: 10 }).canSplit).toBe(false)
+  expect(buildVideoClipTrackState(clip, 8_800, { fps: 10 }).canSplit).toBe(false)
+})
+
+test("video trim handle model provides frame ticks, thumbnail positions, and keyboard nudge metadata", () => {
+  const clip = videoProps({
+    durationMs: 10_000,
+    inPointMs: 1_200,
+    outPointMs: 8_800,
+    currentTimeMs: 4_567,
+    trimHandles: { inMs: 1_200, outMs: 8_800 },
+  })
+  const thumbnails = buildVideoThumbnailPlan(clip, { count: 5, fps: 10 })
+
+  const model = buildVideoTrimHandleModel(clip, 4_567, { fps: 10, thumbnails, maxTickCount: 6 })
+
+  expect(model.state.frameStepMs).toBe(100)
+  expect(model.keyboardNudgeMs).toBe(100)
+  expect(model.handles.in.frameIndex).toBe(12)
+  expect(model.handles.out.frameIndex).toBe(88)
+  expect(model.handles.playhead.frameIndex).toBe(46)
+  expect(model.thumbnails.map((item) => Math.round(item.leftPercent))).toEqual([12, 31, 50, 69, 88])
+  expect(model.ticks.map((item) => item.timeMs)).toEqual([0, 2000, 4000, 6000, 8000, 10000])
+})
+
+test("browser mux capability reports supported MIME type or an explicit unavailable reason", () => {
+  const original = globalThis.MediaRecorder
+  const mutableGlobal = globalThis as unknown as { MediaRecorder: typeof MediaRecorder | undefined }
+  try {
+    mutableGlobal.MediaRecorder = undefined
+    const unavailable = getBrowserMuxCapability()
+    expect(unavailable.supported).toBe(false)
+    expect(unavailable.reason).toContain("MediaRecorder")
+
+    mutableGlobal.MediaRecorder = {
+      isTypeSupported: (mime: string) => mime === "video/webm;codecs=vp9,opus",
+    } as unknown as typeof MediaRecorder
+    const supported = getBrowserMuxCapability()
+    expect(supported.supported).toBe(true)
+    expect(supported.mimeType).toBe("video/webm;codecs=vp9,opus")
+  } finally {
+    mutableGlobal.MediaRecorder = original
+  }
+})
+
+test("final video export plan resolves real MP4/H.264 muxing when the browser exposes it", () => {
+  const original = globalThis.MediaRecorder
+  const mutableGlobal = globalThis as unknown as { MediaRecorder: typeof MediaRecorder | undefined }
+  try {
+    mutableGlobal.MediaRecorder = {
+      isTypeSupported: (mime: string) => mime === "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+    } as unknown as typeof MediaRecorder
+    const frames: TimelineFrame[] = [
+      { id: "f1", name: "Start", durationMs: 500, layerVisibility: { clip: true }, transition: "hold" },
+      { id: "f2", name: "End", durationMs: 500, layerVisibility: { clip: true }, transition: "dissolve" },
+    ]
+    const audioTracks: AudioTrack[] = [
+      { id: "music", name: "Music", startMs: 0, durationMs: 1000, volume: 0.8, dataUrl: "data:audio/wav;base64,AAAA" },
+    ]
+
+    const preset = resolveVideoExportPreset("social-1080p")
+    const capability = getBrowserMuxCapability({ container: preset.container, codec: preset.codec, audio: true })
+    const plan = buildFinalVideoExportPlan(preset, frames, audioTracks, { muxCapability: capability })
+
+    expect(capability.supported).toBe(true)
+    expect(capability.mimeType).toBe("video/mp4;codecs=avc1.42E01E,mp4a.40.2")
+    expect(plan.mode).toBe("muxed-media")
+    expect(plan.container).toBe("mp4")
+    expect(plan.extension).toBe("mp4")
+    expect(plan.mimeType).toBe("video/mp4;codecs=avc1.42E01E,mp4a.40.2")
+    expect(plan.audioTrackCount).toBe(1)
+    expect(plan.durationMs).toBe(1000)
+    expect(plan.warnings.join("\n")).not.toContain("package")
+  } finally {
+    mutableGlobal.MediaRecorder = original
+  }
+})
+
+test("final video export plan falls back to a deterministic frame and audio package without MediaRecorder", () => {
+  const original = globalThis.MediaRecorder
+  const mutableGlobal = globalThis as unknown as { MediaRecorder: typeof MediaRecorder | undefined }
+  try {
+    mutableGlobal.MediaRecorder = undefined
+    const frames: TimelineFrame[] = [
+      { id: "f1", name: "Start", durationMs: 250, layerVisibility: { clip: true }, transition: "hold" },
+      { id: "f2", name: "End", durationMs: 750, layerVisibility: { clip: true }, transition: "hold" },
+    ]
+    const preset = resolveVideoExportPreset("social-1080p")
+    const plan = buildFinalVideoExportPlan(preset, frames, [], {
+      muxCapability: getBrowserMuxCapability({ container: preset.container, codec: preset.codec }),
+    })
+
+    expect(plan.mode).toBe("timeline-package")
+    expect(plan.container).toBe("zip")
+    expect(plan.extension).toBe("zip")
+    expect(plan.mimeType).toBe("application/zip")
+    expect(plan.durationMs).toBe(1000)
+    expect(plan.warnings.join("\n")).toContain("MediaRecorder")
+    expect(plan.warnings.join("\n")).toContain("frame/audio package")
+  } finally {
+    mutableGlobal.MediaRecorder = original
+  }
+})
+
 test("video transition preview computes cross-dissolve and fade frame weights", () => {
   const from = videoLayer("from").canvas
   const to = videoLayer("to").canvas
@@ -251,6 +527,36 @@ test("audio mixing plan computes playback state, fades, pan, and master gain", (
   expect(mix.peakGain).toBeLessThanOrEqual(1)
 })
 
+test("muxed audio stream schedule exposes fade and pan automation for final audiovisual export", () => {
+  const tracks: AudioTrack[] = [
+    {
+      id: "music",
+      name: "Music",
+      startMs: 100,
+      durationMs: 1200,
+      volume: 0.8,
+      fadeInMs: 200,
+      fadeOutMs: 300,
+      pan: -0.5,
+      dataUrl: "data:audio/wav;base64,AAAA",
+    },
+    { id: "muted", name: "Muted", startMs: 0, durationMs: 1000, volume: 1, muted: true, dataUrl: "data:audio/wav;base64,AAAA" },
+  ]
+
+  const schedule = buildMuxedAudioStreamSchedule(tracks, { masterVolume: 0.5, durationMs: 1500, sampleRate: 48_000 })
+
+  expect(schedule.durationMs).toBe(1500)
+  expect(schedule.tracks).toHaveLength(1)
+  expect(schedule.tracks[0].gain).toBeCloseTo(0.4)
+  expect(schedule.tracks[0].pan).toBe(-0.5)
+  expect(schedule.tracks[0].gainAutomation).toEqual([
+    { timeSeconds: 0.1, value: 0 },
+    { timeSeconds: 0.3, value: 0.4 },
+    { timeSeconds: 1, value: 0.4 },
+    { timeSeconds: 1.3, value: 0 },
+  ])
+})
+
 test("offline audio export plans source gain, fade, pan and writes a WAV container", () => {
   const tracks: AudioTrack[] = [
     { id: "a", name: "Music", startMs: 100, durationMs: 1200, volume: 0.8, fadeInMs: 200, fadeOutMs: 300, pan: -0.5, dataUrl: "data:audio/wav;base64,AAAA" },
@@ -275,6 +581,19 @@ test("offline audio export plans source gain, fade, pan and writes a WAV contain
   expect(schedule.tracks[0].fadeOutSeconds).toBeCloseTo(0.3)
   expect(wavText).toBe("RIFF4\u0000\u0000\u0000WAVE")
   expect(wav.length).toBe(44 + 4 * 2 * 2)
+})
+
+test("source video metadata and seek helpers time out instead of hanging on unreadable media", async () => {
+  const video = {
+    duration: Number.NaN,
+    readyState: 0,
+    currentTime: 0,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+  } as unknown as HTMLVideoElement
+
+  await expect(waitForVideoMetadata(video, { timeoutMs: 5 })).rejects.toThrow(/timed out/i)
+  await expect(seekVideoElement(video, 500, { timeoutMs: 5 })).rejects.toThrow(/timed out/i)
 })
 
 test("video export presets and frame animation conversion support timeline workflows", () => {

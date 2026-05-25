@@ -32,6 +32,15 @@ async function blobToCanvas(blob: Blob): Promise<HTMLCanvasElement> {
   return canvas
 }
 
+function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob)
+      else reject(new Error("Could not encode PSB tile"))
+    }, "image/png")
+  })
+}
+
 export async function readPsbTileViewCanvas(docId: string, col: number, row: number): Promise<HTMLCanvasElement | null> {
   const store = tileStores.get(docId)
   if (!store) return null
@@ -44,4 +53,17 @@ export async function readPsbTileViewCanvas(docId: string, col: number, row: num
   })
   if (!blob) return null
   return blobToCanvas(blob)
+}
+
+export async function writePsbTileViewCanvas(docId: string, col: number, row: number, canvas: HTMLCanvasElement): Promise<boolean> {
+  const store = tileStores.get(docId)
+  if (!store) return false
+  await store.writeLayerTile({
+    layerId: PSB_TILE_VIEW_LAYER_ID,
+    layerKind: "raster",
+    sourceVersion: PSB_TILE_VIEW_SOURCE_VERSION,
+    col,
+    row,
+  }, await canvasToPngBlob(canvas))
+  return true
 }

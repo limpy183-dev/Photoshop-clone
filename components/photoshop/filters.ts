@@ -2693,17 +2693,21 @@ interface LensProfilePreset {
   p2: number
   vignette: number
   chromatic: number
+  defringe: number
   description: string
 }
 const LENS_PROFILE_PRESETS: Record<string, LensProfilePreset> = {
-  custom:        { k1: 0,     k2: 0,    k3: 0,    p1: 0,    p2: 0,    vignette: 0,    chromatic: 0,    description: "Manual" },
-  smartphone:    { k1: 0.16,  k2: 0.04, k3: 0,    p1: 0,    p2: 0,    vignette: 0.18, chromatic: 0.08, description: "Generic phone wide" },
-  "wide-angle":  { k1: 0.34,  k2: 0.10, k3: 0.02, p1: 0,    p2: 0,    vignette: 0.32, chromatic: 0.18, description: "24mm wide" },
-  fisheye:       { k1: 0.62,  k2: 0.30, k3: 0.10, p1: 0,    p2: 0,    vignette: 0.45, chromatic: 0.22, description: "Fisheye 8-15mm" },
-  "standard-50": { k1: 0.04,  k2: 0.01, k3: 0,    p1: 0,    p2: 0,    vignette: 0.08, chromatic: 0.04, description: "Standard 50mm" },
-  telephoto:     { k1: -0.10, k2: -0.02, k3: 0,   p1: 0,    p2: 0,    vignette: 0.10, chromatic: 0.05, description: "85-200mm tele" },
-  "super-tele":  { k1: -0.22, k2: -0.06, k3: -0.01, p1: 0,  p2: 0,    vignette: 0.06, chromatic: 0.03, description: "300mm+ super tele" },
-  "drone-fpv":   { k1: 0.45,  k2: 0.18, k3: 0.05, p1: 0.01, p2: 0.01, vignette: 0.36, chromatic: 0.20, description: "Drone/action cam" },
+  custom:        { k1: 0,     k2: 0,    k3: 0,    p1: 0,    p2: 0,    vignette: 0,    chromatic: 0,    defringe: 0,    description: "Manual" },
+  smartphone:    { k1: 0.16,  k2: 0.04, k3: 0,    p1: 0,    p2: 0,    vignette: 0.18, chromatic: 0.08, defringe: 0.16, description: "Generic phone wide" },
+  "compact-wide": { k1: 0.22, k2: 0.06, k3: 0.01, p1: 0,    p2: 0,    vignette: 0.20, chromatic: 0.12, defringe: 0.16, description: "Compact camera wide" },
+  "wide-angle":  { k1: 0.34,  k2: 0.10, k3: 0.02, p1: 0,    p2: 0,    vignette: 0.32, chromatic: 0.18, defringe: 0.20, description: "24mm wide" },
+  fisheye:       { k1: 0.62,  k2: 0.30, k3: 0.10, p1: 0,    p2: 0,    vignette: 0.45, chromatic: 0.22, defringe: 0.24, description: "Fisheye 8-15mm" },
+  "standard-50": { k1: 0.04,  k2: 0.01, k3: 0,    p1: 0,    p2: 0,    vignette: 0.08, chromatic: 0.04, defringe: 0.08, description: "Standard 50mm" },
+  telephoto:     { k1: -0.10, k2: -0.02, k3: 0,   p1: 0,    p2: 0,    vignette: 0.10, chromatic: 0.05, defringe: 0.10, description: "85-200mm tele" },
+  "macro-100":   { k1: -0.03, k2: -0.01, k3: 0,   p1: 0,    p2: 0,    vignette: 0.05, chromatic: 0.03, defringe: 0.12, description: "100mm macro flat-field" },
+  "super-tele":  { k1: -0.22, k2: -0.06, k3: -0.01, p1: 0,  p2: 0,    vignette: 0.06, chromatic: 0.03, defringe: 0.08, description: "300mm+ super tele" },
+  "drone-fpv":   { k1: 0.45,  k2: 0.18, k3: 0.05, p1: 0.01, p2: 0.01, vignette: 0.36, chromatic: 0.20, defringe: 0.22, description: "Drone/action cam" },
+  "architecture-shift": { k1: 0.08, k2: 0.02, k3: 0, p1: -0.01, p2: 0.01, vignette: 0.14, chromatic: 0.06, defringe: 0.14, description: "Shift lens / architecture" },
 }
 
 function lensCorrection(
@@ -2718,18 +2722,22 @@ function lensCorrection(
   profile: string = "custom",
   autoScale: boolean = false,
   edgeMode: string = "clamp",
+  profileStrength: number = 100,
+  defringe: number = 0,
 ): ImageData {
   const w = src.width, h = src.height, out = new Uint8ClampedArray(src.data.length)
   const cx = (w - 1) / 2, cy = (h - 1) / 2
   const maxR = Math.max(1, Math.hypot(cx, cy))
   const preset = LENS_PROFILE_PRESETS[profile] ?? LENS_PROFILE_PRESETS.custom
-  const k1 = preset.k1 + distortion / 160
-  const k2 = preset.k2 + (k2Strength + distortion * 0.4) / 420
-  const k3 = preset.k3 + k3Strength / 900
-  const p1 = preset.p1 + tangentialX / 1200
-  const p2 = preset.p2 + tangentialY / 1200
-  const ca = (chromatic + preset.chromatic * 100) / 100
-  const vig = (vignette + preset.vignette * 100) / 100
+  const strength = Math.max(0, Math.min(150, profileStrength)) / 100
+  const k1 = preset.k1 * strength + distortion / 160
+  const k2 = preset.k2 * strength + (k2Strength + distortion * 0.4) / 420
+  const k3 = preset.k3 * strength + k3Strength / 900
+  const p1 = preset.p1 * strength + tangentialX / 1200
+  const p2 = preset.p2 * strength + tangentialY / 1200
+  const ca = (chromatic + preset.chromatic * 100 * strength) / 100
+  const vig = (vignette + preset.vignette * 100 * strength) / 100
+  const fringeClean = Math.max(0, Math.min(100, defringe + preset.defringe * 100 * strength)) / 100
   // Compute an auto-scale factor so the corrected image fills the frame
   // without exposing the resampled edge — sample the 4 image corners and
   // scale by the smallest displacement factor.
@@ -2775,9 +2783,19 @@ function lensCorrection(
       } else if (outOfBounds && edgeMode === "white") {
         out[i] = 255; out[i + 1] = 255; out[i + 2] = 255; out[i + 3] = mid[3]
       } else {
-        out[i] = clamp8(red[0] * shade)
-        out[i + 1] = clamp8(mid[1] * shade)
-        out[i + 2] = clamp8(blue[2] * shade)
+        let rr = red[0]
+        let gg = mid[1]
+        let bb = blue[2]
+        if (fringeClean > 0) {
+          const rb = (rr + bb) / 2
+          const clean = fringeClean * radial
+          gg = gg * (1 - clean) + rb * clean
+          rr = rr * (1 - clean * 0.3) + rb * clean * 0.3
+          bb = bb * (1 - clean * 0.3) + rb * clean * 0.3
+        }
+        out[i] = clamp8(rr * shade)
+        out[i + 1] = clamp8(gg * shade)
+        out[i + 2] = clamp8(bb * shade)
         out[i + 3] = mid[3]
       }
     }
@@ -5239,13 +5257,17 @@ export const FILTERS: Record<string, FilterDef> = {
       { type: "select", key: "profile", label: "Lens Profile", default: "custom", options: [
         { value: "custom", label: "Custom (Manual)" },
         { value: "smartphone", label: "Smartphone Wide" },
+        { value: "compact-wide", label: "Compact Wide" },
         { value: "wide-angle", label: "Wide Angle 24mm" },
         { value: "fisheye", label: "Fisheye 8-15mm" },
         { value: "standard-50", label: "Standard 50mm" },
         { value: "telephoto", label: "Telephoto 85-200mm" },
+        { value: "macro-100", label: "Macro 100mm" },
         { value: "super-tele", label: "Super Telephoto 300mm+" },
         { value: "drone-fpv", label: "Drone / Action Cam" },
+        { value: "architecture-shift", label: "Architecture Shift" },
       ] },
+      { type: "slider", key: "profileStrength", label: "Profile Strength", min: 0, max: 150, step: 1, default: 100, suffix: "%" },
       { type: "slider", key: "distortion", label: "Geometric Distortion (k1)", min: -100, max: 100, step: 1, default: 0 },
       { type: "slider", key: "k2", label: "Higher-Order Distortion (k2)", min: -100, max: 100, step: 1, default: 0 },
       { type: "slider", key: "k3", label: "Extreme Distortion (k3)", min: -100, max: 100, step: 1, default: 0 },
@@ -5253,6 +5275,7 @@ export const FILTERS: Record<string, FilterDef> = {
       { type: "slider", key: "tangentialY", label: "Tangential Y (p2)", min: -100, max: 100, step: 1, default: 0 },
       { type: "slider", key: "vignette", label: "Vignette", min: -100, max: 100, step: 1, default: 0 },
       { type: "slider", key: "chromatic", label: "Chromatic Aberration", min: -100, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "defringe", label: "Defringe", min: 0, max: 100, step: 1, default: 0 },
       { type: "checkbox", key: "autoScale", label: "Auto-Scale to Fit", default: false },
       { type: "select", key: "edgeMode", label: "Edge Handling", default: "clamp", options: [
         { value: "clamp", label: "Clamp Edges" },
@@ -5273,6 +5296,8 @@ export const FILTERS: Record<string, FilterDef> = {
       String(p.profile ?? "custom"),
       Boolean(p.autoScale),
       String(p.edgeMode ?? "clamp"),
+      Number(p.profileStrength ?? 100),
+      Number(p.defringe ?? 0),
     ),
   },
 
