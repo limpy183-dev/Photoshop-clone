@@ -203,7 +203,15 @@ export interface PhotoshopPreferences {
   toolBehavior: ToolBehaviorPreferences
   rulerGrid: RulerGridPreferences
   technologyPreviews: TechnologyPreviewPreferences
+  /**
+   * Recent-document IDs the user pinned from the Home/Start workspace.
+   * Persisted with preferences so pinned files survive across sessions
+   * and stay alongside the rest of the editor's user state.
+   */
+  pinnedFiles: string[]
 }
+
+export const MAX_PINNED_FILES = 32
 
 export interface PerformanceEnvironment {
   deviceMemoryGB?: number
@@ -344,6 +352,7 @@ export const DEFAULT_PREFERENCES: PhotoshopPreferences = {
     localGenerativeFill: false,
     cameraRawSidecars: false,
   },
+  pinnedFiles: [],
 }
 
 const TILE_SIZES = [64, 128, 256, 512, 1024]
@@ -771,6 +780,21 @@ function normalizeRulerGrid(input: Record<string, unknown>, legacyGridSize: unkn
   }
 }
 
+function normalizePinnedFiles(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const candidate of value) {
+    if (typeof candidate !== "string") continue
+    const trimmed = candidate.trim().slice(0, 120)
+    if (!trimmed || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    result.push(trimmed)
+    if (result.length >= MAX_PINNED_FILES) break
+  }
+  return result
+}
+
 function normalizeTechnologyPreviews(input: Record<string, unknown>): TechnologyPreviewPreferences {
   const defaults = DEFAULT_PREFERENCES.technologyPreviews
   return TECHNOLOGY_PREVIEW_FLAGS.reduce((flags, flag) => {
@@ -822,6 +846,7 @@ export function normalizePreferences(input?: unknown): PhotoshopPreferences {
     toolBehavior,
     rulerGrid,
     technologyPreviews: normalizeTechnologyPreviews(nestedRecord(raw, "technologyPreviews")),
+    pinnedFiles: normalizePinnedFiles(raw.pinnedFiles),
   })
 }
 
@@ -1117,6 +1142,32 @@ export function applyPreferencesToDocumentSettings(input: unknown): Partial<Pick
     showSmartGuides: prefs.rulerGrid.smartGuides,
     rulerOrigin: { ...prefs.rulerGrid.rulerOrigin },
   }
+}
+
+export function readPinnedFiles(storage?: Pick<Storage, "getItem">): string[] {
+  return loadPreferencesFromStorage(storage).pinnedFiles
+}
+
+/**
+ * Toggle a recent-document ID in the persisted pinned-files list. Returns
+ * the new list so callers don't need to re-read storage.
+ */
+export function togglePinnedFile(
+  id: string,
+  storages: { read?: Pick<Storage, "getItem">; write?: Pick<Storage, "setItem"> } = {},
+): string[] {
+  const trimmed = id.trim().slice(0, 120)
+  if (!trimmed) return readPinnedFiles(storages.read)
+  const current = loadPreferencesFromStorage(storages.read)
+  const exists = current.pinnedFiles.includes(trimmed)
+  const next = exists
+    ? current.pinnedFiles.filter((entry) => entry !== trimmed)
+    : [trimmed, ...current.pinnedFiles].slice(0, MAX_PINNED_FILES)
+  const saved = savePreferencesToStorage({ ...current, pinnedFiles: next }, storages.write)
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("ps-preferences-changed", { detail: saved }))
+  }
+  return saved.pinnedFiles
 }
 
 export function loadPreferencesFromStorage(storage?: Pick<Storage, "getItem">): PhotoshopPreferences {

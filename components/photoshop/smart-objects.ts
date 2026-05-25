@@ -1,5 +1,6 @@
-import type { Layer, PsDocument, SmartFilter, SmartObjectSource } from "./types"
+import type { Layer, PsDocument, SmartFilter, SmartObjectSource, ThreeDScene } from "./types"
 import { uid } from "./uid"
+import { hashThreeDScene, renderThreeDSceneToSmartObjectCanvas, type RayTraceSceneTiledOptions } from "./three-d-video-engine"
 
 function cloneCanvas(src: HTMLCanvasElement | null | undefined): HTMLCanvasElement | null {
   if (!src || typeof document === "undefined" || typeof src.getContext !== "function") return null
@@ -502,6 +503,86 @@ export function reorderSmartFilters(filters: SmartFilter[], filterId: string, of
   const [filter] = next.splice(index, 1)
   next.splice(nextIndex, 0, filter)
   return next
+}
+
+/**
+ * Wraps a 3D scene so a smart-object layer can re-render it on demand. The
+ * helper produces a fresh canvas via the tiled CPU ray tracer and stamps the
+ * scene hash into `sourceHash` so subsequent edits flip the smart object into
+ * the "modified" status until it is re-rendered.
+ *
+ * NOTE: This relies on the browser-local CPU raytracer in
+ * three-d-video-engine.ts. WebGL/WebGPU GPU path tracing is not implemented in
+ * this project (see in-scope-implementation-gaps notes).
+ */
+export function buildThreeDSmartObjectSource(
+  scene: ThreeDScene,
+  width: number,
+  height: number,
+  options: Partial<SmartObjectSource> & { rayTrace?: RayTraceSceneTiledOptions } = {},
+): SmartObjectSource {
+  const { rayTrace, ...sourceOverrides } = options
+  const result = renderThreeDSceneToSmartObjectCanvas(scene, width, height, rayTrace)
+  const fallbackCanvas = result.canvas ?? (typeof document !== "undefined" ? document.createElement("canvas") : null)
+  if (fallbackCanvas && !result.canvas) {
+    fallbackCanvas.width = width
+    fallbackCanvas.height = height
+  }
+  return {
+    id: sourceOverrides.id ?? uid("smart_source"),
+    name: sourceOverrides.name ?? "3D Scene",
+    linkType: sourceOverrides.linkType ?? "embedded",
+    status: sourceOverrides.status ?? "current",
+    embedded: sourceOverrides.embedded ?? true,
+    updatedAt: sourceOverrides.updatedAt ?? Date.now(),
+    width,
+    height,
+    canvas: fallbackCanvas,
+    sourceHash: result.sourceHash,
+    fileName: sourceOverrides.fileName,
+    relativePath: sourceOverrides.relativePath,
+    fileHandle: sourceOverrides.fileHandle,
+    fileHandleName: sourceOverrides.fileHandleName,
+    handlePermission: sourceOverrides.handlePermission,
+    lastKnownModified: sourceOverrides.lastKnownModified,
+    lastKnownSize: sourceOverrides.lastKnownSize,
+    editPackage: sourceOverrides.editPackage,
+    exportedAt: sourceOverrides.exportedAt,
+    relinkedAt: sourceOverrides.relinkedAt,
+  }
+}
+
+/**
+ * Returns true when the supplied 3D scene has diverged from the hash baked
+ * into a smart-object source the last time it was rendered. Editor code can
+ * call this on every scene mutation to flip the smart object into "modified".
+ */
+export function threeDSmartObjectNeedsRerender(source: SmartObjectSource | undefined, scene: ThreeDScene): boolean {
+  if (!source) return true
+  if (!source.sourceHash) return true
+  return source.sourceHash !== hashThreeDScene(scene)
+}
+
+/**
+ * Returns a copy of the layer with smartSource refreshed to match the latest
+ * scene. Use this when persisting the result of an in-place 3D edit back into
+ * the layer that owns the smart-object envelope.
+ */
+export function refreshThreeDSmartObjectLayer(
+  layer: Layer,
+  scene: ThreeDScene,
+  options: { rayTrace?: RayTraceSceneTiledOptions } = {},
+): Layer {
+  const width = layer.smartSource?.width ?? layer.canvas.width
+  const height = layer.smartSource?.height ?? layer.canvas.height
+  const source = buildThreeDSmartObjectSource(scene, width, height, {
+    ...layer.smartSource,
+    status: "current",
+    updatedAt: Date.now(),
+    rayTrace: options.rayTrace,
+  })
+  const canvas = source.canvas ?? layer.canvas
+  return { ...layer, kind: "smart-object", smartObject: true, smartSource: source, canvas, threeD: scene }
 }
 
 export type SmartObjectStackMode = "mean" | "median" | "minimum" | "maximum" | "range"

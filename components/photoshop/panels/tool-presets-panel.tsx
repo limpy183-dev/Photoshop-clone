@@ -21,8 +21,46 @@ type ToolPresetPayload = {
   background: string
 }
 
+export interface ToolPresetFilterOptions {
+  query: string
+  group: string
+  currentToolOnly: boolean
+  tool: ToolId
+  sort: "recent" | "name" | "tool" | "manual"
+}
 
+function presetTool(asset: AssetLibraryItem) {
+  return (asset.payload as Partial<ToolPresetPayload>).tool
+}
 
+export function filterToolPresetAssets(assets: readonly AssetLibraryItem[], options: ToolPresetFilterOptions): AssetLibraryItem[] {
+  const q = options.query.trim().toLowerCase()
+  return assets
+    .filter((asset) => asset.kind === "tool-preset")
+    .filter((preset) => {
+      const payload = preset.payload as Partial<ToolPresetPayload>
+      if (options.group !== "All" && (preset.group ?? "Tools") !== options.group) return false
+      if (options.currentToolOnly && payload.tool !== options.tool) return false
+      return !q || `${preset.name} ${preset.group ?? ""} ${payload.tool ?? ""}`.toLowerCase().includes(q)
+    })
+    .sort((a, b) => {
+      if (options.sort === "name") return a.name.localeCompare(b.name)
+      if (options.sort === "tool") return String(presetTool(a) ?? "").localeCompare(String(presetTool(b) ?? ""))
+      if (options.sort === "manual") return 0
+      return b.createdAt - a.createdAt
+    })
+}
+
+export function reorderToolPresetAssets(assets: readonly AssetLibraryItem[], sourceId: string, targetId: string): AssetLibraryItem[] {
+  if (sourceId === targetId) return [...assets]
+  const next = [...assets]
+  const from = next.findIndex((asset) => asset.id === sourceId)
+  const to = next.findIndex((asset) => asset.id === targetId)
+  if (from < 0 || to < 0) return next
+  const [item] = next.splice(from, 1)
+  next.splice(from < to ? to - 1 : to, 0, item)
+  return next
+}
 
 export function ToolPresetsPanel() {
   const {
@@ -41,22 +79,21 @@ export function ToolPresetsPanel() {
   const [group, setGroup] = React.useState("Tools")
   const [filter, setFilter] = React.useState("")
   const [groupFilter, setGroupFilter] = React.useState("All")
-  const [sort, setSort] = React.useState<"recent" | "name" | "tool">("recent")
+  const [sort, setSort] = React.useState<ToolPresetFilterOptions["sort"]>("recent")
+  const [currentToolOnly, setCurrentToolOnly] = React.useState(false)
+  const [dragPresetId, setDragPresetId] = React.useState<string | null>(null)
   const importRef = React.useRef<HTMLInputElement>(null)
 
   if (!activeDoc) return null
 
   const presets = (activeDoc.assetLibrary ?? []).filter((asset) => asset.kind === "tool-preset")
   const groups = ["All", ...Array.from(new Set(presets.map((preset) => preset.group ?? "Tools"))).sort()]
-  const visible = presets.filter((preset) => {
-    const payload = preset.payload as Partial<ToolPresetPayload>
-    const q = filter.trim().toLowerCase()
-    if (groupFilter !== "All" && (preset.group ?? "Tools") !== groupFilter) return false
-    return !q || `${preset.name} ${preset.group ?? ""} ${payload.tool ?? ""}`.toLowerCase().includes(q)
-  }).sort((a, b) => {
-    if (sort === "name") return a.name.localeCompare(b.name)
-    if (sort === "tool") return String((a.payload as Partial<ToolPresetPayload>).tool ?? "").localeCompare(String((b.payload as Partial<ToolPresetPayload>).tool ?? ""))
-    return b.createdAt - a.createdAt
+  const visible = filterToolPresetAssets(activeDoc.assetLibrary ?? [], {
+    query: filter,
+    group: groupFilter,
+    currentToolOnly,
+    tool,
+    sort,
   })
 
   const savePreset = () => {
@@ -107,6 +144,11 @@ export function ToolPresetsPanel() {
     }
     dispatch({ type: "set-asset-library", assets: [copy, ...(activeDoc.assetLibrary ?? [])] })
     window.setTimeout(() => commit("Duplicate Tool Preset", []), 0)
+  }
+
+  const reorderPreset = (sourceId: string, targetId: string) => {
+    dispatch({ type: "set-asset-library", assets: reorderToolPresetAssets(activeDoc.assetLibrary ?? [], sourceId, targetId) })
+    window.setTimeout(() => commit("Reorder Tool Presets", []), 0)
   }
 
   const exportPresets = () => {
@@ -177,8 +219,17 @@ export function ToolPresetsPanel() {
             <option value="recent">Recent</option>
             <option value="name">Name</option>
             <option value="tool">Tool</option>
+            <option value="manual">Manual</option>
           </select>
         </div>
+        <label className="flex h-6 items-center gap-1.5 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[10px]">
+          <input
+            type="checkbox"
+            checked={currentToolOnly}
+            onChange={(event) => setCurrentToolOnly(event.target.checked)}
+          />
+          Current tool only ({tool})
+        </label>
         <div className="flex items-center gap-1">
           <Button size="sm" variant="outline" onClick={() => importRef.current?.click()}>
             <Upload className="h-3.5 w-3.5" />
@@ -200,10 +251,29 @@ export function ToolPresetsPanel() {
             {visible.map((preset) => {
               const payload = preset.payload as Partial<ToolPresetPayload>
               return (
-                <div key={preset.id} className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
+                <div
+                  key={preset.id}
+                  draggable
+                  onDragStart={(event) => {
+                    setDragPresetId(preset.id)
+                    event.dataTransfer.setData("text/plain", preset.id)
+                  }}
+                  onDragOver={(event) => {
+                    if (dragPresetId && dragPresetId !== preset.id) event.preventDefault()
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault()
+                    const sourceId = dragPresetId ?? event.dataTransfer.getData("text/plain")
+                    if (sourceId && sourceId !== preset.id) reorderPreset(sourceId, preset.id)
+                    setDragPresetId(null)
+                    setSort("manual")
+                  }}
+                  onDragEnd={() => setDragPresetId(null)}
+                  className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2"
+                >
                   <div className="min-w-0">
                     <div className="truncate text-[12px]">{preset.name}</div>
-                    <div className="text-[10px] text-[var(--ps-text-dim)]">{payload.tool ?? "Tool"} - {new Date(preset.createdAt).toLocaleDateString()}</div>
+                    <div className="text-[10px] text-[var(--ps-text-dim)]">{payload.tool ?? "Tool"} - {preset.group ?? "Tools"} - {new Date(preset.createdAt).toLocaleDateString()}</div>
                   </div>
                   <Button variant="ghost" size="icon-sm" title="Apply preset" onClick={() => applyPreset(preset)}>
                     <Check className="h-3.5 w-3.5" />

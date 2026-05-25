@@ -64,7 +64,7 @@ test("start workspace shows pinned files ahead of the recent thumbnail grid", as
   await expect(recentGrid.getByRole("button", { name: /Open Campaign Hero.psproj/i })).toBeVisible()
   await expect(recentGrid.getByRole("button", { name: /Open Portrait Retouch.psd/i })).toBeVisible()
 
-  await page.getByRole("button", { name: /Unpin Campaign Hero.psproj/i }).click()
+  await pinned.getByRole("button", { name: /Unpin Campaign Hero.psproj/i }).click()
   await expect(page.getByTestId("start-pinned-empty")).toBeVisible()
   await expect(page.evaluate(() => localStorage.getItem("ps-pinned-documents-v1"))).resolves.toBe("[]")
 })

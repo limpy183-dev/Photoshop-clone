@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useEditor } from "../editor-context"
-import { Plus, Trash2, Download, Upload, RotateCcw, X } from "lucide-react"
+import { BookOpen, Plus, Trash2, Download, Upload, RotateCcw, X } from "lucide-react"
 import { downloadText } from "../document-io"
 import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
@@ -18,6 +18,70 @@ import {
   type SwatchEntry,
 } from "../swatches-store"
 
+const RECENT_SWATCHES_KEY = "ps-recent-swatches"
+const MAX_RECENT_SWATCHES = 12
+
+export interface LocalColorBook {
+  id: string
+  name: string
+  swatches: SwatchEntry[]
+}
+
+export const LOCAL_COLOR_BOOKS: LocalColorBook[] = [
+  {
+    id: "process-coated",
+    name: "Process Coated",
+    swatches: [
+      { color: "#0057b8", name: "Process Blue", group: "Process Coated" },
+      { color: "#00a3e0", name: "Cyan Lake", group: "Process Coated" },
+      { color: "#009b77", name: "Green C", group: "Process Coated" },
+      { color: "#f2a900", name: "Golden Yellow", group: "Process Coated" },
+      { color: "#ff8200", name: "Orange C", group: "Process Coated" },
+      { color: "#e4002b", name: "Red C", group: "Process Coated" },
+      { color: "#a51890", name: "Purple C", group: "Process Coated" },
+      { color: "#2d2926", name: "Black C", group: "Process Coated" },
+    ],
+  },
+  {
+    id: "web-safe",
+    name: "Web Safe",
+    swatches: [
+      { color: "#000000", name: "Black", group: "Web Safe" },
+      { color: "#333333", name: "Graphite", group: "Web Safe" },
+      { color: "#666666", name: "Gray", group: "Web Safe" },
+      { color: "#ffffff", name: "White", group: "Web Safe" },
+      { color: "#ff0000", name: "Red", group: "Web Safe" },
+      { color: "#00ff00", name: "Green", group: "Web Safe" },
+      { color: "#0000ff", name: "Blue", group: "Web Safe" },
+      { color: "#ffff00", name: "Yellow", group: "Web Safe" },
+    ],
+  },
+]
+
+export function mergeRecentSwatch(recent: readonly SwatchEntry[], swatch: SwatchEntry): SwatchEntry[] {
+  const key = `${swatch.color.toLowerCase()}|${swatch.name ?? ""}|${swatch.group ?? DEFAULT_SWATCH_GROUP}`
+  const next = [
+    { ...swatch, group: swatch.group ?? DEFAULT_SWATCH_GROUP },
+    ...recent.filter((entry) => `${entry.color.toLowerCase()}|${entry.name ?? ""}|${entry.group ?? DEFAULT_SWATCH_GROUP}` !== key),
+  ]
+  return next.slice(0, MAX_RECENT_SWATCHES)
+}
+
+function loadRecentSwatches(): SwatchEntry[] {
+  if (typeof window === "undefined") return []
+  try {
+    return normalizeSwatches(JSON.parse(localStorage.getItem(RECENT_SWATCHES_KEY) ?? "[]")).slice(0, MAX_RECENT_SWATCHES)
+  } catch {
+    return []
+  }
+}
+
+function saveRecentSwatches(swatches: SwatchEntry[]) {
+  try {
+    localStorage.setItem(RECENT_SWATCHES_KEY, JSON.stringify(swatches.slice(0, MAX_RECENT_SWATCHES)))
+  } catch {}
+}
+
 export function SwatchesPanel() {
   const { activeDoc, foreground, dispatch } = useEditor()
   const [swatches, setSwatches] = React.useState<SwatchEntry[]>(() => loadSwatches(activeDoc?.id))
@@ -26,6 +90,8 @@ export function SwatchesPanel() {
   const [sort, setSort] = React.useState<"group" | "name" | "color">("group")
   const [editingIndex, setEditingIndex] = React.useState<number | null>(null)
   const [draftName, setDraftName] = React.useState("")
+  const [recentSwatches, setRecentSwatches] = React.useState<SwatchEntry[]>(loadRecentSwatches)
+  const [colorBookId, setColorBookId] = React.useState(LOCAL_COLOR_BOOKS[0]?.id ?? "")
   const importRef = React.useRef<HTMLInputElement>(null)
 
   React.useEffect(() => {
@@ -77,6 +143,24 @@ export function SwatchesPanel() {
       group: activeGroup !== "All" ? activeGroup : DEFAULT_SWATCH_GROUP,
     }
     save([...swatches, newEntry])
+  }
+
+  const remember = (swatch: SwatchEntry) => {
+    const next = mergeRecentSwatch(recentSwatches, swatch)
+    setRecentSwatches(next)
+    saveRecentSwatches(next)
+  }
+
+  const applySwatch = (swatch: SwatchEntry, target: "foreground" | "background") => {
+    dispatch({ type: target === "foreground" ? "set-foreground" : "set-background", color: swatch.color })
+    remember(swatch)
+  }
+
+  const addColorBook = () => {
+    const book = LOCAL_COLOR_BOOKS.find((candidate) => candidate.id === colorBookId)
+    if (!book) return
+    save([...swatches, ...book.swatches])
+    toast.success(`Added ${book.name} color book.`)
   }
 
   const removeSwatch = (idx: number) => save(swatches.filter((_, i) => i !== idx))
@@ -170,6 +254,40 @@ export function SwatchesPanel() {
         <option value="name">Name</option>
         <option value="color">Color</option>
       </select>
+      <div className="grid grid-cols-[1fr_auto] gap-1">
+        <select
+          value={colorBookId}
+          onChange={(event) => setColorBookId(event.target.value)}
+          className="h-7 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]"
+          aria-label="Local color book"
+        >
+          {LOCAL_COLOR_BOOKS.map((book) => <option key={book.id} value={book.id}>{book.name}</option>)}
+        </select>
+        <button className="h-7 rounded-sm border border-[var(--ps-divider)] px-2 hover:bg-[var(--ps-tool-hover)]" onClick={addColorBook} aria-label="Add local color book">
+          <BookOpen className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      {recentSwatches.length ? (
+        <div className="space-y-1">
+          <div className="text-[10px] uppercase tracking-wide text-[var(--ps-text-dim)]">Recently Used</div>
+          <div className="flex flex-wrap gap-[2px]">
+            {recentSwatches.map((swatch, index) => (
+              <button
+                key={`${swatch.color}-${index}`}
+                className="h-[16px] w-[16px] rounded-[1px] border border-[var(--ps-divider)] transition-colors hover:border-white"
+                style={{ backgroundColor: swatch.color }}
+                title={describeSwatch(swatch)}
+                aria-label={`Set foreground to recent ${describeSwatch(swatch)}`}
+                onClick={() => applySwatch(swatch, "foreground")}
+                onContextMenu={(event) => {
+                  event.preventDefault()
+                  applySwatch(swatch, "background")
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      ) : null}
       <div className="flex flex-wrap gap-[2px]">
         {filtered.map(({ swatch, index }) => {
           const editing = editingIndex === index
@@ -180,10 +298,10 @@ export function SwatchesPanel() {
                 style={{ backgroundColor: swatch.color }}
                 title={describeSwatch(swatch)}
                 aria-label={`Set foreground to ${describeSwatch(swatch)}`}
-                onClick={() => dispatch({ type: "set-foreground", color: swatch.color })}
+                onClick={() => applySwatch(swatch, "foreground")}
                 onContextMenu={(event) => {
                   event.preventDefault()
-                  dispatch({ type: "set-background", color: swatch.color })
+                  applySwatch(swatch, "background")
                 }}
                 onDoubleClick={(event) => {
                   event.preventDefault()

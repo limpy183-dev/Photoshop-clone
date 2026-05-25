@@ -16,6 +16,9 @@ import {
   Scissors,
   Square,
   Trash2,
+  Volume2,
+  VolumeX,
+  X,
 } from "lucide-react"
 import { useEditor } from "../editor-context"
 import {
@@ -37,6 +40,7 @@ import {
   moveFrame,
   renderOnionSkinOverlay,
   renderTimelineFrameComposite,
+  renderTimelineFrameWithTransition,
   reverseFrames,
   setDurationsFromFps,
   splitTimelineFrameAtPlayhead,
@@ -46,7 +50,7 @@ import {
 import {
   bytesToDataUrl,
   collectAnimationFramesAtFps,
-  encodeAnimatedGif,
+  encodeAnimatedGifProgress,
   encodeAnimatedWebP,
   encodeApngFromFrames,
   exportTimelineFrameAsPngBlob,
@@ -55,10 +59,14 @@ import {
   type AnimatedExportFrame,
 } from "../animation-encoding"
 import {
+  audibleAudioTracks,
   buildFinalVideoExportPlan,
   buildMuxedAudioStreamSchedule,
   buildVideoClipTrackState,
   buildVideoThumbnailPlan,
+  computeWaveformPeaks,
+  decodeAudioBufferFromDataUrl,
+  drawWaveformPeaks,
   extractVideoThumbnailStrip,
   renderAudioMixToWavBlob,
   renderVideoTransitionPreview,
@@ -67,6 +75,7 @@ import {
   trimVideoClipToFrame,
   type FinalVideoExportPlan,
   type VideoClipTrackState,
+  type WaveformPeaks,
   updateVideoTransitionDuration,
 } from "../three-d-video-engine"
 import type {
@@ -108,7 +117,14 @@ export function TimelinePanel() {
   const [exportScale, setExportScale] = React.useState(1)
   const [exportMatte, setExportMatte] = React.useState("#ffffff")
   const [webpQuality, setWebpQuality] = React.useState(0.9)
+  const [exportProgress, setExportProgress] = React.useState<{ done: number; total: number; phase: string } | null>(null)
+  const [renderVideoFps, setRenderVideoFps] = React.useState<number | null>(null)
+  const [audioVuLevels, setAudioVuLevels] = React.useState<Record<string, number>>({})
+  const [showAudioMixer, setShowAudioMixer] = React.useState(false)
   const transitionPreviewRef = React.useRef<HTMLCanvasElement | null>(null)
+  const exportAbortRef = React.useRef<AbortController | null>(null)
+  const muxAbortRef = React.useRef<AbortController | null>(null)
+  const playbackOverlayCacheRef = React.useRef<Map<string, ImageBitmap>>(new Map())
 
   const frames = React.useMemo(() => activeDoc?.timelineFrames ?? [], [activeDoc?.timelineFrames])
   const settings = React.useMemo<TimelineSettings>(
@@ -144,6 +160,11 @@ export function TimelinePanel() {
       ...(activeDoc?.layers.flatMap((layer) => layer.video?.audioTracks ?? []) ?? []),
     ],
     [activeDoc?.layers, frames],
+  )
+  const audibleTracks = React.useMemo(() => audibleAudioTracks(audioTracks), [audioTracks])
+  const anyTrackSolo = React.useMemo(
+    () => audioTracks.some((track) => track.solo === true && !track.muted),
+    [audioTracks],
   )
 
   const selectedIndex = React.useMemo(() => {
@@ -203,17 +224,64 @@ export function TimelinePanel() {
     if (!playing || !activeDoc || frames.length === 0) return
     let cancelled = false
     let index = Math.max(0, effectiveIndex)
-    const tick = () => {
+    let rafId = 0
+    let startTs = 0
+    let timeoutId = 0
+    const docId = activeDoc.id
+    const dispatchOverlay = (canvas: HTMLCanvasElement | null) => {
+      window.dispatchEvent(
+        new CustomEvent("ps-timeline-transition-overlay", {
+          detail: { canvas, docId },
+        }),
+      )
+    }
+    const stepFrame = () => {
       if (cancelled) return
       const frame = frames[index % frames.length]
+      const next = frames[(index + 1) % frames.length] ?? null
       applyFrame(frame, false)
       setSelectedId(frame.id)
+      const duration = Math.max(50, frame.durationMs)
+      // Animate the transition between frame and next while the frame is on screen.
+      startTs = performance.now()
+      const hasTransition = frame.transition && frame.transition !== "hold" && next
+      const animateOverlay = () => {
+        if (cancelled) return
+        const elapsed = performance.now() - startTs
+        if (!hasTransition) {
+          dispatchOverlay(null)
+          return
+        }
+        const progress = Math.min(1, elapsed / duration)
+        try {
+          const composite = renderTimelineFrameWithTransition(activeDoc, frame, next, progress, {
+            transparent: true,
+          })
+          dispatchOverlay(composite)
+        } catch {
+          // ignore drawing failures (canvas size mismatch, etc.)
+        }
+        if (progress < 1) {
+          rafId = window.requestAnimationFrame(animateOverlay)
+        }
+      }
+      if (hasTransition) {
+        rafId = window.requestAnimationFrame(animateOverlay)
+      } else {
+        dispatchOverlay(null)
+      }
       index++
-      window.setTimeout(tick, Math.max(50, frame.durationMs))
+      timeoutId = window.setTimeout(stepFrame, duration)
     }
-    tick()
+    stepFrame()
     return () => {
       cancelled = true
+      if (rafId) window.cancelAnimationFrame(rafId)
+      if (timeoutId) window.clearTimeout(timeoutId)
+      // Clear the overlay when playback stops.
+      window.dispatchEvent(
+        new CustomEvent("ps-timeline-transition-overlay", { detail: { canvas: null, docId } }),
+      )
     }
   }, [playing, activeDoc, frames, effectiveIndex, applyFrame])
 
@@ -273,6 +341,38 @@ export function TimelinePanel() {
     toast.success(`Split "${activeVideoLayer.name}" at ${(right.video?.inPointMs ?? videoPlayheadMs) / 1000}s`)
   }, [activeVideoLayer, commit, dispatch, timelineFps, videoPlayheadMs])
 
+  const updateAudioTrack = React.useCallback(
+    (trackId: string, patch: Partial<AudioTrack>) => {
+      if (!activeDoc) return
+      let mutated = false
+      const nextFrames = frames.map((frame) => {
+        if (!frame.audioTracks?.some((t) => t.id === trackId)) return frame
+        mutated = true
+        return {
+          ...frame,
+          audioTracks: frame.audioTracks.map((t) => (t.id === trackId ? { ...t, ...patch } : t)),
+        }
+      })
+      if (mutated) {
+        dispatch({ type: "set-timeline-frames", frames: nextFrames })
+        window.setTimeout(() => commit("Update Audio Track", "all"), 0)
+        return
+      }
+      for (const layer of activeDoc.layers) {
+        const video = layer.video
+        if (!video?.audioTracks?.some((t) => t.id === trackId)) continue
+        const nextVideo: VideoLayerProps = {
+          ...video,
+          audioTracks: video.audioTracks.map((t) => (t.id === trackId ? { ...t, ...patch } : t)),
+        }
+        dispatch({ type: "set-layer-video", id: layer.id, video: nextVideo })
+        window.setTimeout(() => commit("Update Audio Track", [layer.id]), 0)
+        return
+      }
+    },
+    [activeDoc, commit, dispatch, frames],
+  )
+
   const changeTransitionDuration = React.useCallback(
     (durationMs: number) => {
       if (!activeVideo) return
@@ -305,6 +405,21 @@ export function TimelinePanel() {
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [activeVideo, setVideoInPoint, setVideoOutPoint, splitActiveVideo])
+
+  // Global event listener bound to Ctrl+Shift+K through use-shortcuts.ts.
+  React.useEffect(() => {
+    const handler = () => {
+      if (activeVideo) {
+        splitActiveVideo()
+      } else {
+        splitSelectedTimelineFrame()
+      }
+    }
+    window.addEventListener("ps-timeline-split-at-playhead", handler)
+    return () => window.removeEventListener("ps-timeline-split-at-playhead", handler)
+    // splitSelectedTimelineFrame is defined later in this component; we rebind on each render
+    // intentionally so the latest splitSelectedTimelineFrame closure is invoked.
+  })
 
   React.useEffect(() => {
     let cancelled = false
@@ -545,7 +660,13 @@ export function TimelinePanel() {
       toast.error("Capture at least one frame first")
       return
     }
+    if (exportAbortRef.current) {
+      exportAbortRef.current.abort()
+    }
+    const controller = new AbortController()
+    exportAbortRef.current = controller
     setExportBusy(format)
+    setExportProgress({ done: 0, total: 0, phase: format })
     try {
       const animFrames = collectAnimationFramesAtFps(doc, {
         transparent: exportTransparent,
@@ -554,30 +675,61 @@ export function TimelinePanel() {
         matte: exportMatte,
       })
       const loopCount = resolveTimelineSettings(doc).loopCount
+      const total = animFrames.length
+      setExportProgress({ done: 0, total, phase: format })
+      const onProgress = (done: number, totalCount: number, phase: string) => {
+        setExportProgress({ done, total: totalCount, phase })
+      }
       let bytes: Uint8Array
       let mime: string
       let ext: string
       if (format === "gif") {
-        bytes = encodeAnimatedGif(animFrames, { transparent: exportTransparent, loopCount })
+        bytes = await encodeAnimatedGifProgress(animFrames, {
+          transparent: exportTransparent,
+          loopCount,
+          signal: controller.signal,
+          onProgress,
+        })
         mime = "image/gif"
         ext = "gif"
       } else if (format === "apng") {
-        bytes = await encodeApngFromFrames(animFrames, { loopCount })
+        bytes = await encodeApngFromFrames(animFrames, {
+          loopCount,
+          signal: controller.signal,
+          onProgress,
+        })
         mime = "image/apng"
         ext = "png"
       } else {
-        bytes = await encodeAnimatedWebP(animFrames, { transparent: exportTransparent, loopCount, quality: webpQuality })
+        bytes = await encodeAnimatedWebP(animFrames, {
+          transparent: exportTransparent,
+          loopCount,
+          quality: webpQuality,
+          signal: controller.signal,
+          onProgress,
+        })
         mime = "image/webp"
         ext = "webp"
       }
       downloadDataUrl(bytesToDataUrl(bytes, mime), `${doc.name}.${ext}`)
       toast.success(`${format.toUpperCase()} exported (${animFrames.length} sampled frames at ${settings.fps}fps)`)
     } catch (err) {
-      toast.error(`${format} export failed: ${(err as Error).message}`)
+      const error = err as Error
+      if (error?.name === "AbortError") {
+        toast.message(`${format.toUpperCase()} export cancelled`)
+      } else {
+        toast.error(`${format} export failed: ${error.message}`)
+      }
     } finally {
+      if (exportAbortRef.current === controller) exportAbortRef.current = null
       setExportBusy(null)
+      setExportProgress(null)
     }
   }
+
+  const cancelAnimationExport = React.useCallback(() => {
+    exportAbortRef.current?.abort()
+  }, [])
 
   const exportAudioMix = async () => {
     if (!audioTracks.length) {
@@ -658,16 +810,22 @@ export function TimelinePanel() {
       toast.error("Capture at least one frame first")
       return
     }
+    if (muxAbortRef.current) muxAbortRef.current.abort()
+    const muxController = new AbortController()
+    muxAbortRef.current = muxController
     setMuxBusy(true)
     let audioContext: AudioContext | null = null
     try {
-      const plan = buildFinalVideoExportPlan(finalVideoPreset, frames, audioTracks)
+      const effectiveFps = Math.max(1, Math.round(renderVideoFps ?? finalVideoPreset.fps))
+      const muxPreset = resolveVideoExportPreset(finalVideoPreset.id, { fps: effectiveFps })
+      const plan = buildFinalVideoExportPlan(muxPreset, frames, audioTracks)
       const animFrames = collectAnimationFramesAtFps(doc, {
         transparent: false,
         fps: plan.fps,
         scale: exportScale,
         matte: exportMatte,
       })
+      // Cancellation is handled inside the recording loop via muxController.signal.
       if (plan.mode === "timeline-package" || typeof MediaRecorder === "undefined") {
         const zip = await buildTimelineVideoPackage(doc, plan, animFrames, audioTracks)
         downloadBlob(new Blob([zip], { type: "application/zip" }), `${safeFilePart(doc.name)}-timeline-package.zip`)
@@ -753,22 +911,54 @@ export function TimelinePanel() {
         const baseTime = audioContext.currentTime + 0.05
         scheduledStarts.forEach((start) => start(baseTime))
       }
+      let cancelled = false
+      const abortHandler = () => {
+        cancelled = true
+        try {
+          recorder.stop()
+        } catch {
+          // ignore
+        }
+      }
+      muxController.signal.addEventListener("abort", abortHandler)
       for (const frame of animFrames) {
+        if (cancelled || muxController.signal.aborted) break
         ctx.clearRect(0, 0, captureCanvas.width, captureCanvas.height)
         ctx.drawImage(frame.canvas, 0, 0, captureCanvas.width, captureCanvas.height)
         await delay(Math.max(1, frame.durationMs))
+      }
+      muxController.signal.removeEventListener("abort", abortHandler)
+      if (cancelled || muxController.signal.aborted) {
+        try {
+          recorder.stop()
+        } catch {
+          // ignore
+        }
+        await done.catch(() => undefined)
+        toast.message("Video export cancelled")
+        return
       }
       recorder.stop()
       const blob = await done
       downloadBlob(blob, `${safeFilePart(doc.name)}-timeline.${plan.extension}`)
       toast.success(audioSchedule.tracks.length ? `Exported muxed ${plan.extension.toUpperCase()} with audio` : `Exported ${plan.extension.toUpperCase()} timeline video`)
     } catch (err) {
-      toast.error(`Video export failed: ${(err as Error).message}`)
+      const error = err as Error
+      if (error?.name === "AbortError" || muxController.signal.aborted) {
+        toast.message("Video export cancelled")
+      } else {
+        toast.error(`Video export failed: ${error.message}`)
+      }
     } finally {
+      if (muxAbortRef.current === muxController) muxAbortRef.current = null
       await audioContext?.close().catch(() => undefined)
       setMuxBusy(false)
     }
   }
+
+  const cancelMuxExport = React.useCallback(() => {
+    muxAbortRef.current?.abort()
+  }, [])
 
   const insertTween = (toIndex: number, opts: { steps: number; easing: FrameEasing; props: Record<string, boolean> }) => {
     if (toIndex <= 0) return
@@ -876,9 +1066,27 @@ export function TimelinePanel() {
         <TextBtn disabled={!frames.length || exportSequenceBusy} onClick={exportFrameSequence}>
           {exportSequenceBusy ? "ZIP…" : "PNG ZIP"}
         </TextBtn>
-        <TextBtn disabled={!frames.length || muxBusy} onClick={exportMuxedWebm}>
+        <TextBtn
+          disabled={!frames.length || muxBusy}
+          onClick={exportMuxedWebm}
+          title={
+            finalVideoPlan.mode === "muxed-media"
+              ? `Export ${finalVideoPlan.extension.toUpperCase()} via MediaRecorder (${finalVideoPlan.mimeType || "default codec"})`
+              : `MediaRecorder muxed video is unavailable in this browser, so the timeline will be packaged as a deterministic ZIP of PNG frames + WAV audio + manifest. ${finalVideoPlan.warnings.join(" ")}`
+          }
+        >
           {muxBusy ? "Video…" : finalVideoPlan.mode === "muxed-media" ? finalVideoPlan.extension.toUpperCase() : "Package"}
         </TextBtn>
+        {muxBusy ? (
+          <button
+            type="button"
+            onClick={cancelMuxExport}
+            className="flex h-5 items-center gap-1 rounded-sm border border-[var(--ps-divider)] px-1.5 text-[10px] hover:bg-[var(--ps-tool-hover)]"
+            aria-label="Cancel video export"
+          >
+            <X className="h-3 w-3" /> Stop
+          </button>
+        ) : null}
         <TextBtn disabled={!audioTracks.length || audioBusy} onClick={exportAudioMix}>
           {audioBusy ? "WAV…" : "WAV"}
         </TextBtn>
@@ -940,7 +1148,129 @@ export function TimelinePanel() {
           className="h-5 w-12 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]"
           aria-label="Animated WebP quality"
         />
+        <span className="mx-2 text-[10px] text-[var(--ps-text-dim)]">Video FPS</span>
+        <input
+          type="number"
+          min={1}
+          max={60}
+          value={renderVideoFps ?? settings.fps}
+          onChange={(e) =>
+            setRenderVideoFps(Math.max(1, Math.min(60, Number(e.target.value) || settings.fps)))
+          }
+          className="h-5 w-12 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]"
+          aria-label="Render video output FPS"
+          title="Override frame rate used by the muxed WebM/MP4/timeline package exporter"
+        />
+        <TextBtn onClick={() => setRenderVideoFps(null)} disabled={renderVideoFps === null}>Reset</TextBtn>
       </div>
+
+      {/* Muxed video unavailable: surface alternatives */}
+      {frames.length > 0 && finalVideoPlan.mode !== "muxed-media" ? (
+        <div
+          className="flex flex-wrap items-center gap-1 border-b border-amber-400/30 bg-amber-400/10 px-2 py-1.5 text-[10px] text-amber-100"
+          data-testid="timeline-muxed-unavailable-row"
+        >
+          <span className="font-medium">MediaRecorder unavailable in this browser.</span>
+          <span className="text-amber-200/80">
+            {finalVideoPlan.warnings[0] ?? "Muxed MP4/WebM cannot be produced here. The Video button will write a ZIP timeline package instead."}
+          </span>
+          <span className="ml-2 text-[9px] uppercase tracking-wide text-amber-200/70">Try instead:</span>
+          <button
+            type="button"
+            title="Animated PNG preserves 24-bit color and full alpha across frames (no codec runtime required)."
+            onClick={() => exportAnimation("apng")}
+            disabled={!frames.length || exportBusy !== null}
+            className="rounded-sm border border-amber-400/40 bg-amber-400/10 px-1.5 py-0.5 text-[10px] text-amber-100 hover:border-amber-400/70 hover:bg-amber-400/20 disabled:opacity-40"
+          >
+            Use APNG
+          </button>
+          <button
+            type="button"
+            title="Animated WebP supports lossy/lossless frames with alpha and is decoded natively by the browser."
+            onClick={() => exportAnimation("animated-webp")}
+            disabled={!frames.length || exportBusy !== null}
+            className="rounded-sm border border-amber-400/40 bg-amber-400/10 px-1.5 py-0.5 text-[10px] text-amber-100 hover:border-amber-400/70 hover:bg-amber-400/20 disabled:opacity-40"
+          >
+            Use Anim WebP
+          </button>
+          <button
+            type="button"
+            title="GIF is universally supported but limited to a 256-color palette and 1-bit transparency."
+            onClick={() => exportAnimation("gif")}
+            disabled={!frames.length || exportBusy !== null}
+            className="rounded-sm border border-amber-400/40 bg-amber-400/10 px-1.5 py-0.5 text-[10px] text-amber-100 hover:border-amber-400/70 hover:bg-amber-400/20 disabled:opacity-40"
+          >
+            Use GIF
+          </button>
+          <button
+            type="button"
+            title="Deterministic ZIP of full-resolution PNG frames plus a manifest.json (no codec required)."
+            onClick={exportFrameSequence}
+            disabled={!frames.length || exportSequenceBusy}
+            className="rounded-sm border border-amber-400/40 bg-amber-400/10 px-1.5 py-0.5 text-[10px] text-amber-100 hover:border-amber-400/70 hover:bg-amber-400/20 disabled:opacity-40"
+          >
+            Use PNG ZIP
+          </button>
+        </div>
+      ) : null}
+
+      {/* Encoder progress bar (GIF/APNG/WebP) */}
+      {exportBusy && exportProgress ? (
+        <div className="flex items-center gap-2 border-b border-[var(--ps-divider)] px-2 py-1.5">
+          <span className="text-[10px] text-[var(--ps-text-dim)]">
+            Encoding {exportProgress.phase.toUpperCase()} {exportProgress.done}/{Math.max(1, exportProgress.total)}
+          </span>
+          <div
+            className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--ps-panel-2)]"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={Math.max(1, exportProgress.total)}
+            aria-valuenow={exportProgress.done}
+          >
+            <div
+              className="h-full bg-[var(--ps-accent)] transition-[width]"
+              style={{
+                width: `${exportProgress.total ? Math.min(100, (exportProgress.done / exportProgress.total) * 100) : 0}%`,
+              }}
+            />
+          </div>
+          <button
+            type="button"
+            onClick={cancelAnimationExport}
+            className="flex h-5 items-center gap-1 rounded-sm border border-[var(--ps-divider)] px-1.5 text-[10px] hover:bg-[var(--ps-tool-hover)]"
+            aria-label="Cancel animation export"
+          >
+            <X className="h-3 w-3" /> Cancel
+          </button>
+        </div>
+      ) : null}
+
+      {/* Audio mixer */}
+      <div className="flex items-center gap-2 border-b border-[var(--ps-divider)] px-2 py-1.5">
+        <span className="text-[10px] text-[var(--ps-text-dim)]">Audio mixer</span>
+        <span className="text-[10px] text-[var(--ps-text-dim)]">
+          {audibleTracks.length}/{audioTracks.length} audible
+        </span>
+        {anyTrackSolo ? (
+          <span className="rounded-sm bg-[var(--ps-accent)]/30 px-1 text-[10px] text-[var(--ps-text)]">SOLO</span>
+        ) : null}
+        <TextBtn disabled={!audioTracks.length} onClick={() => setShowAudioMixer((v) => !v)}>
+          {showAudioMixer ? "Hide" : "Show"} mixer
+        </TextBtn>
+        <TextBtn disabled={!audioTracks.length || audioBusy} onClick={exportAudioMix}>
+          {audioBusy ? "Mixing WAV…" : "Export WAV"}
+        </TextBtn>
+      </div>
+      {showAudioMixer && audioTracks.length ? (
+        <AudioMixerSection
+          tracks={audioTracks}
+          playing={playing}
+          playheadMs={timelinePlayheadMs}
+          vuLevels={audioVuLevels}
+          onVuLevels={setAudioVuLevels}
+          onUpdate={updateAudioTrack}
+        />
+      ) : null}
 
       {/* Onion skin & video poster bar */}
       <div className="flex flex-wrap items-center gap-1 border-b border-[var(--ps-divider)] px-2 py-1.5">
@@ -1017,8 +1347,21 @@ export function TimelinePanel() {
             <span className="w-16 text-right text-[10px] text-[var(--ps-text-dim)]">
               {timelinePlayheadFrameIndex >= 0 ? `#${timelinePlayheadFrameIndex + 1}` : "--"}
             </span>
-            <TextBtn disabled={frames.length < 1} onClick={splitSelectedTimelineFrame}>Split frame</TextBtn>
+            <TextBtn disabled={frames.length < 1} onClick={splitSelectedTimelineFrame} title="Split frame at playhead (Ctrl+Shift+K)">
+              <Scissors className="mr-1 inline h-3 w-3" />Split frame
+            </TextBtn>
           </div>
+          <TimelineThumbnailStrip
+            doc={doc}
+            frames={frames}
+            playheadMs={timelinePlayheadMs}
+            playheadFrameIndex={timelinePlayheadFrameIndex}
+            cache={playbackOverlayCacheRef.current}
+            onSeekFrame={(idx) => {
+              const before = frames.slice(0, idx).reduce((sum, f) => sum + Math.max(0, f.durationMs), 0)
+              seekTimelinePlayhead(before)
+            }}
+          />
         </div>
       ) : null}
 
@@ -1689,16 +2032,19 @@ function TextBtn({
   children,
   disabled,
   onClick,
+  title,
 }: {
   children: React.ReactNode
   disabled?: boolean
   onClick: (event?: React.MouseEvent<HTMLButtonElement>) => void
+  title?: string
 }) {
   return (
     <button
       type="button"
       disabled={disabled}
       onClick={onClick}
+      title={title}
       className="h-6 rounded-sm px-2 text-[10px] hover:bg-[var(--ps-tool-hover)] disabled:cursor-default disabled:opacity-40"
     >
       {children}
@@ -1708,6 +2054,364 @@ function TextBtn({
 
 function PanelEmpty({ text }: { text: string }) {
   return <div className="px-4 py-8 text-center text-[11px] text-[var(--ps-text-dim)]">{text}</div>
+}
+
+/* ---------------------- Timeline thumbnail strip -------------------------- */
+
+function TimelineThumbnailStrip({
+  doc,
+  frames,
+  playheadMs,
+  playheadFrameIndex,
+  cache,
+  onSeekFrame,
+}: {
+  doc: PsDocument
+  frames: TimelineFrame[]
+  playheadMs: number
+  playheadFrameIndex: number
+  cache: Map<string, ImageBitmap>
+  onSeekFrame: (index: number) => void
+}) {
+  const totalMs = frames.reduce((sum, f) => sum + Math.max(0, f.durationMs), 0) || 1
+  const trackWidth = 100
+  return (
+    <div
+      className="relative flex h-12 w-full items-stretch gap-px overflow-x-auto rounded-sm border border-[var(--ps-divider)] bg-black/30"
+      role="group"
+      aria-label="Timeline frame thumbnails"
+    >
+      {frames.map((frame, idx) => {
+        const widthPct = (Math.max(0, frame.durationMs) / totalMs) * trackWidth
+        return (
+          <TimelineThumbnailCell
+            key={frame.id}
+            doc={doc}
+            frame={frame}
+            cache={cache}
+            isActive={idx === playheadFrameIndex}
+            widthPct={Math.max(2, widthPct)}
+            onClick={() => onSeekFrame(idx)}
+            label={`Frame ${idx + 1}: ${frame.name}`}
+          />
+        )
+      })}
+      {/* Playhead indicator overlay */}
+      <div
+        className="pointer-events-none absolute top-0 h-full w-0.5 bg-[var(--ps-accent)]"
+        style={{
+          left: `${Math.min(100, (playheadMs / totalMs) * 100)}%`,
+        }}
+        aria-hidden="true"
+      />
+    </div>
+  )
+}
+
+function TimelineThumbnailCell({
+  doc,
+  frame,
+  cache,
+  isActive,
+  widthPct,
+  onClick,
+  label,
+}: {
+  doc: PsDocument
+  frame: TimelineFrame
+  cache: Map<string, ImageBitmap>
+  isActive: boolean
+  widthPct: number
+  onClick: () => void
+  label: string
+}) {
+  const canvasRef = React.useRef<HTMLCanvasElement | null>(null)
+  React.useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const cacheKey = `${doc.id}:${frame.id}:${doc.layers.length}`
+    const cached = cache.get(cacheKey)
+    const targetW = 72
+    const aspect = Math.max(1, doc.width) / Math.max(1, doc.height)
+    const targetH = Math.max(20, Math.round(targetW / aspect))
+    canvas.width = targetW
+    canvas.height = targetH
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+    ctx.clearRect(0, 0, targetW, targetH)
+    if (cached) {
+      try {
+        ctx.drawImage(cached, 0, 0, targetW, targetH)
+        return
+      } catch {
+        // fall through to re-render
+      }
+    }
+    let cancelled = false
+    try {
+      const rendered = renderTimelineFrameComposite(doc, frame, { transparent: true })
+      ctx.drawImage(rendered, 0, 0, targetW, targetH)
+      // Cache the rendered ImageBitmap asynchronously for future scrubbing.
+      if (typeof createImageBitmap === "function") {
+        createImageBitmap(rendered)
+          .then((bm) => {
+            if (cancelled) return
+            cache.set(cacheKey, bm)
+          })
+          .catch(() => undefined)
+      }
+    } catch {
+      // ignore canvas errors (small docs etc.)
+    }
+    return () => {
+      cancelled = true
+    }
+  }, [doc, frame, cache])
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={onClick}
+      className={`group relative h-full shrink-0 border-r border-[var(--ps-divider)] ${
+        isActive ? "ring-1 ring-inset ring-[var(--ps-accent)]" : ""
+      }`}
+      style={{ width: `${widthPct}%`, minWidth: 8 }}
+    >
+      <canvas ref={canvasRef} className="h-full w-full object-cover" />
+      <span className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-black/60 px-0.5 text-[8px] text-white">
+        {Math.round(frame.durationMs)}ms
+      </span>
+    </button>
+  )
+}
+
+/* ---------------------- Audio mixer + waveform widget --------------------- */
+
+function AudioMixerSection({
+  tracks,
+  playing,
+  playheadMs,
+  vuLevels,
+  onVuLevels,
+  onUpdate,
+}: {
+  tracks: AudioTrack[]
+  playing: boolean
+  playheadMs: number
+  vuLevels: Record<string, number>
+  onVuLevels: React.Dispatch<React.SetStateAction<Record<string, number>>>
+  onUpdate: (trackId: string, patch: Partial<AudioTrack>) => void
+}) {
+  const anySolo = React.useMemo(
+    () => tracks.some((t) => t.solo === true && !t.muted),
+    [tracks],
+  )
+  return (
+    <div className="grid gap-1 border-b border-[var(--ps-divider)] px-2 py-1.5">
+      {tracks.map((track) => (
+        <AudioMixerRow
+          key={track.id}
+          track={track}
+          playing={playing}
+          anySolo={anySolo}
+          playheadMs={playheadMs}
+          vu={vuLevels[track.id] ?? 0}
+          setVu={(value) =>
+            onVuLevels((prev) => (prev[track.id] === value ? prev : { ...prev, [track.id]: value }))
+          }
+          onUpdate={onUpdate}
+        />
+      ))}
+    </div>
+  )
+}
+
+function AudioMixerRow({
+  track,
+  playing,
+  anySolo,
+  playheadMs,
+  vu,
+  setVu,
+  onUpdate,
+}: {
+  track: AudioTrack
+  playing: boolean
+  anySolo: boolean
+  playheadMs: number
+  vu: number
+  setVu: (value: number) => void
+  onUpdate: (trackId: string, patch: Partial<AudioTrack>) => void
+}) {
+  const peaksRef = React.useRef<WaveformPeaks | null>(null)
+  const waveformRef = React.useRef<HTMLCanvasElement | null>(null)
+  const [peaksReady, setPeaksReady] = React.useState(false)
+
+  React.useEffect(() => {
+    let cancelled = false
+    setPeaksReady(false)
+    peaksRef.current = null
+    const canvas = waveformRef.current
+    if (canvas) {
+      const ctx = canvas.getContext("2d")
+      ctx?.clearRect(0, 0, canvas.width, canvas.height)
+    }
+    if (!track.dataUrl) return undefined
+    decodeAudioBufferFromDataUrl(track.dataUrl)
+      .then((buffer) => {
+        if (cancelled) return
+        const buckets = Math.max(64, Math.min(1024, Math.round(buffer.duration * 80)))
+        const peaks = computeWaveformPeaks(buffer, buckets)
+        peaksRef.current = peaks
+        setPeaksReady(true)
+        const cv = waveformRef.current
+        if (cv) {
+          const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1
+          const cw = cv.clientWidth || 160
+          const ch = cv.clientHeight || 28
+          const targetW = Math.max(160, Math.round(cw * dpr))
+          const targetH = Math.max(28, Math.round(ch * dpr))
+          if (cv.width !== targetW) cv.width = targetW
+          if (cv.height !== targetH) cv.height = targetH
+          drawWaveformPeaks(cv, peaks, {
+            background: "rgba(0,0,0,0)",
+            color: track.muted ? "#666" : "#7c9cff",
+          })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setPeaksReady(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [track.dataUrl, track.muted])
+
+  React.useEffect(() => {
+    if (!playing) {
+      setVu(0)
+      return undefined
+    }
+    let raf = 0
+    const tick = () => {
+      const peaks = peaksRef.current
+      if (!peaks || peaks.durationSeconds <= 0) {
+        setVu(0)
+      } else {
+        const localMs = playheadMs - track.startMs
+        if (localMs < 0 || localMs > track.durationMs) {
+          setVu(0)
+        } else {
+          const localSeconds = localMs / 1000
+          const bucket = Math.max(
+            0,
+            Math.min(
+              peaks.max.length - 1,
+              Math.floor((localSeconds / peaks.durationSeconds) * peaks.max.length),
+            ),
+          )
+          const mag = Math.max(Math.abs(peaks.max[bucket] ?? 0), Math.abs(peaks.min[bucket] ?? 0))
+          const muted = track.muted === true || (anySolo && track.solo !== true)
+          const gain = muted ? 0 : Math.max(0, Math.min(2, track.volume ?? 1))
+          setVu(Math.max(0, Math.min(1, mag * gain)))
+        }
+      }
+      raf = window.requestAnimationFrame(tick)
+    }
+    tick()
+    return () => {
+      if (raf) window.cancelAnimationFrame(raf)
+    }
+  }, [
+    playing,
+    playheadMs,
+    track.startMs,
+    track.durationMs,
+    track.muted,
+    track.solo,
+    track.volume,
+    anySolo,
+    setVu,
+  ])
+
+  const muted = track.muted === true || (anySolo && track.solo !== true)
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_120px_44px_70px] items-center gap-2 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)]/30 px-2 py-1">
+      <div className="min-w-0">
+        <div className="truncate text-[10px] text-[var(--ps-text)]" title={track.name}>
+          {track.name || "Audio track"}
+        </div>
+        <canvas
+          ref={waveformRef}
+          aria-label={`Waveform for ${track.name}`}
+          className="mt-0.5 h-7 w-full rounded-sm border border-[var(--ps-divider)] bg-black/30"
+        />
+        {!peaksReady && track.dataUrl ? (
+          <div className="text-[9px] text-[var(--ps-text-dim)]">Decoding waveform…</div>
+        ) : null}
+        {!track.dataUrl ? (
+          <div className="text-[9px] text-[var(--ps-text-dim)]">No source media (cue-only)</div>
+        ) : null}
+      </div>
+      <button
+        type="button"
+        title={track.muted ? "Unmute" : "Mute"}
+        aria-label={track.muted ? `Unmute ${track.name}` : `Mute ${track.name}`}
+        onClick={() => onUpdate(track.id, { muted: !track.muted })}
+        className={`flex h-6 w-6 items-center justify-center rounded-sm border ${
+          track.muted
+            ? "border-[var(--ps-accent)] bg-[var(--ps-accent)]/30 text-[var(--ps-text)]"
+            : "border-[var(--ps-divider)] hover:bg-[var(--ps-tool-hover)]"
+        }`}
+      >
+        {track.muted ? <VolumeX className="h-3 w-3" /> : <Volume2 className="h-3 w-3" />}
+      </button>
+      <button
+        type="button"
+        title={track.solo ? "Un-solo" : "Solo"}
+        aria-label={track.solo ? `Un-solo ${track.name}` : `Solo ${track.name}`}
+        onClick={() => onUpdate(track.id, { solo: !track.solo })}
+        className={`flex h-6 w-6 items-center justify-center rounded-sm border text-[10px] font-semibold ${
+          track.solo
+            ? "border-[var(--ps-accent)] bg-[var(--ps-accent)] text-black"
+            : "border-[var(--ps-divider)] hover:bg-[var(--ps-tool-hover)]"
+        }`}
+      >
+        S
+      </button>
+      <input
+        type="range"
+        min={0}
+        max={150}
+        value={Math.round(Math.max(0, Math.min(1.5, track.volume ?? 1)) * 100)}
+        onChange={(e) =>
+          onUpdate(track.id, {
+            volume: Math.max(0, Math.min(1.5, Number(e.target.value) / 100)),
+          })
+        }
+        className="h-5 w-full"
+        aria-label={`Volume for ${track.name}`}
+      />
+      <span className="text-right text-[10px] text-[var(--ps-text-dim)]">
+        {Math.round((track.volume ?? 1) * 100)}%
+      </span>
+      <div
+        className="h-3 overflow-hidden rounded-sm border border-[var(--ps-divider)] bg-black"
+        role="meter"
+        aria-label={`VU meter for ${track.name}`}
+        aria-valuenow={Math.round(vu * 100)}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        title={`${Math.round(vu * 100)}%${muted ? " (muted)" : ""}`}
+      >
+        <div
+          className={`h-full transition-[width] ${muted ? "bg-[var(--ps-text-dim)]/40" : "bg-[var(--ps-accent)]"}`}
+          style={{ width: `${Math.max(0, Math.min(100, vu * 100))}%` }}
+        />
+      </div>
+    </div>
+  )
 }
 
 async function buildTimelineVideoPackage(

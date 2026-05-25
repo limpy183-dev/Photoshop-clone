@@ -107,6 +107,16 @@ export function DocumentTabs() {
                   Close
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={() =>
+                    window.dispatchEvent(
+                      new CustomEvent("ps-reveal-source", { detail: { docId: d.id } }),
+                    )
+                  }
+                >
+                  Reveal Source…
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => reopenClosedDocument()} disabled={!closedDocuments.length}>
                   Reopen Closed Document
                 </DropdownMenuItem>

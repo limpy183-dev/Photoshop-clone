@@ -1,6 +1,6 @@
 import { isAdjustmentNoop } from "./adjustment-layers"
 import { compositeLayer } from "./blend-modes"
-import { isEmptyDirtyRect, intersectDirtyRect, unionDirtyRects, type DirtyRect } from "./dirty-rect"
+import { isEmptyDirtyRect, intersectDirtyRect, unionDirtyRect, unionDirtyRects, type DirtyRect } from "./dirty-rect"
 import { getFilter } from "./filters"
 import { planExpensiveFilterTiling } from "./filter-worker"
 import { renderLayerContentTile, type TileCanvasRect } from "./layer-tile-renderer"
@@ -511,6 +511,841 @@ export function composeDocumentTile(
     compositeLayer(ctx, tile, layer.blendMode, layer.opacity, layer.fillOpacity ?? 1, layer.advancedBlending)
   }
   return canvas
+}
+
+/* ------------------------------------------------------------------------- *
+ * Tile-only viewport compositor planning
+ *
+ * The full document compositor (canvas-view.tsx) still builds an HTMLCanvasElement
+ * sized to the *visible* viewport on every frame, and historically the same code
+ * path materialized every layer's canvas at full document resolution before
+ * cropping. For huge tile-mode documents we want the compositor to compute the
+ * viewport-intersecting set of tiles and only request those tile rects from the
+ * layer renderer — everything else stays cold in the tile store / OPFS.
+ *
+ * `planTileOnlyViewportCompose` is the pure planner the compositor calls to
+ * decide which tiles to materialize at full res, which tiles to draw from the
+ * progressive cache, and which tiles can stay on disk.
+ *
+ * NOTE (unflushed paths, intentionally documented):
+ *   - canvas-view.tsx already tile-recomposes when `dirtyByLayer` is set, but
+ *     the initial full compose still flattens the document into a canvas before
+ *     drawing it. That is acceptable for documents that fit memory; for
+ *     tile-only docs the caller should drive `planTileOnlyViewportCompose`
+ *     manually and feed `composeDocumentTile` per visible tile.
+ *   - WebGL compositor path in webgl-compositor.ts still allocates one large
+ *     texture for the document. Item 18 tracks a tiled WebGL backend.
+ *   - PSD I/O (document-io.ts) still flattens during *save* — this is not on
+ *     the tile-only path because PSD encoding inherently needs the full
+ *     composite for compatibility layer 0.
+ * ------------------------------------------------------------------------- */
+
+export interface TileOnlyViewportComposeInput {
+  documentWidth: number
+  documentHeight: number
+  tileSize?: number
+  /** Viewport rect in document space. */
+  viewport: DirtyRect
+  /** Optional overscan so adjacent tiles can be prefetched. */
+  prefetchPadding?: number
+  /** Tiles that are known to be dirty and must re-render this frame. */
+  dirtyRects?: readonly DirtyRect[]
+  /** Tiles whose pixels are already cached. */
+  cachedTileKeys?: readonly string[]
+  /** Tiles that have been spilled to OPFS. */
+  spilledTileKeys?: readonly string[]
+}
+
+export interface TileOnlyViewportTile extends TileOnlyTile {
+  /** Tile intersects the visible viewport; must be at full res. */
+  viewport: boolean
+  /** Tile is inside the prefetch ring but outside the viewport. */
+  prefetch: boolean
+  /** Tile is dirty (something marked it so) and must be (re)rendered. */
+  dirty: boolean
+  /** Tile already has cached pixels available without re-rendering. */
+  cached: boolean
+  /** Tile sits on OPFS and must be paged in before composite. */
+  spilled: boolean
+}
+
+export interface TileOnlyViewportComposePlan {
+  strategy: "tile-local" | "fallback-full"
+  tileSize: number
+  viewport: DirtyRect
+  prefetch: DirtyRect
+  /** Tiles that need to be materialized this frame at full resolution. */
+  materializeTiles: TileOnlyViewportTile[]
+  /** Tiles that can be drawn from the existing tile cache (no work needed). */
+  reuseTiles: TileOnlyViewportTile[]
+  /** Tiles that should be paged in from OPFS before composite. */
+  pageInTiles: TileOnlyViewportTile[]
+  /** Tiles that should remain cold (off-screen + not adjacent + still cached). */
+  retainColdTiles: TileOnlyViewportTile[]
+  /** Tiles outside viewport+prefetch that are safe to evict to OPFS. */
+  evictableTiles: TileOnlyViewportTile[]
+  /** Pixel union of tiles that need to be redrawn into the framebuffer. */
+  dirtyUnion: DirtyRect
+  /** Pixel union of viewport-intersecting tiles. */
+  viewportUnion: DirtyRect
+  materializesFullDocument: false
+  reasons: string[]
+}
+
+/**
+ * Plan the compositor's per-tile work for a single frame. For huge documents
+ * this avoids ever allocating a full-document canvas: only viewport tiles are
+ * materialized, prefetch tiles can be queued, off-screen tiles can be evicted.
+ */
+export function planTileOnlyViewportCompose(input: TileOnlyViewportComposeInput): TileOnlyViewportComposePlan {
+  const width = positiveInt(input.documentWidth, 1)
+  const height = positiveInt(input.documentHeight, 1)
+  const tileSize = positiveInt(input.tileSize, DEFAULT_TILE_SIZE)
+  const viewport = normalizeRect(input.viewport, width, height)
+  const prefetchPadding = Math.max(0, Math.ceil(Number(input.prefetchPadding ?? tileSize / 2)))
+  const prefetch = inflateRect(viewport, prefetchPadding, width, height)
+  const cached = new Set(input.cachedTileKeys ?? [])
+  const spilled = new Set(input.spilledTileKeys ?? [])
+  const dirtyKeys = new Set<string>()
+  if (input.dirtyRects?.length) {
+    for (const rect of input.dirtyRects) {
+      for (const tile of tilesForRect(rect, width, height, tileSize)) dirtyKeys.add(tile.key)
+    }
+  }
+  const grid = planTileGrid(width, height, tileSize)
+  const viewportKeys = new Set(tilesForRect(viewport, width, height, tileSize).map((tile) => tile.key))
+  const prefetchKeys = new Set(tilesForRect(prefetch, width, height, tileSize).map((tile) => tile.key))
+
+  const materializeTiles: TileOnlyViewportTile[] = []
+  const reuseTiles: TileOnlyViewportTile[] = []
+  const pageInTiles: TileOnlyViewportTile[] = []
+  const retainColdTiles: TileOnlyViewportTile[] = []
+  const evictableTiles: TileOnlyViewportTile[] = []
+  let dirtyUnion: DirtyRect = { x: 0, y: 0, w: 0, h: 0 }
+  let viewportUnion: DirtyRect = { x: 0, y: 0, w: 0, h: 0 }
+
+  for (let row = 0; row < grid.tileRows; row++) {
+    for (let col = 0; col < grid.tileColumns; col++) {
+      const key = `${col}:${row}`
+      const rect = tileRect(col, row, width, height, tileSize)
+      const inViewport = viewportKeys.has(key)
+      const inPrefetch = prefetchKeys.has(key) && !inViewport
+      const isDirty = dirtyKeys.has(key)
+      const isCached = cached.has(key)
+      const isSpilled = spilled.has(key)
+      const tile: TileOnlyViewportTile = {
+        key,
+        col,
+        row,
+        rect,
+        viewport: inViewport,
+        prefetch: inPrefetch,
+        dirty: isDirty,
+        cached: isCached,
+        spilled: isSpilled,
+      }
+      if (inViewport) {
+        viewportUnion = unionDirtyRect(viewportUnion, rect)
+        if (isDirty || (!isCached && !isSpilled)) {
+          materializeTiles.push(tile)
+          dirtyUnion = unionDirtyRect(dirtyUnion, rect)
+        } else if (isSpilled) {
+          pageInTiles.push(tile)
+        } else {
+          reuseTiles.push(tile)
+        }
+      } else if (inPrefetch) {
+        if (isDirty) materializeTiles.push(tile)
+        else if (isSpilled) pageInTiles.push(tile)
+        else if (isCached) reuseTiles.push(tile)
+        else retainColdTiles.push(tile)
+      } else {
+        if (isCached) evictableTiles.push(tile)
+        else retainColdTiles.push(tile)
+      }
+    }
+  }
+  const reasons = [
+    `viewport:${viewportKeys.size}`,
+    `prefetch-padding:${prefetchPadding}`,
+    `materialize:${materializeTiles.length}`,
+    `reuse:${reuseTiles.length}`,
+    `page-in:${pageInTiles.length}`,
+    `cold:${retainColdTiles.length}`,
+    `evict:${evictableTiles.length}`,
+  ]
+  return {
+    strategy: "tile-local",
+    tileSize,
+    viewport,
+    prefetch,
+    materializeTiles,
+    reuseTiles,
+    pageInTiles,
+    retainColdTiles,
+    evictableTiles,
+    dirtyUnion,
+    viewportUnion,
+    materializesFullDocument: false,
+    reasons,
+  }
+}
+
+/* ------------------------------------------------------------------------- *
+ * Paint-stroke damaged-tile tracking
+ *
+ * For brush/eraser/clone/heal/dodge-burn/sponge, the tool reads and writes only
+ * the tiles a stroke physically touches. The reducer used to allocate a layer-
+ * sized backing canvas per stroke; in tile-only mode, we instead compute the
+ * `damagedTiles` set as the stroke advances and flush only those tiles back to
+ * the tile store on commit.
+ *
+ * Usage:
+ *   const tracker = createDamagedTileTracker({
+ *     documentWidth: doc.width,
+ *     documentHeight: doc.height,
+ *     tileSize: 512,
+ *     toolHalo: brushRadius + softnessHalo,
+ *   })
+ *   for (const sample of strokeSamples) tracker.touchPoint(sample.x, sample.y)
+ *   const plan = tracker.commit() // -> writeTiles[], readTiles[] (with halo)
+ * ------------------------------------------------------------------------- */
+
+export interface DamagedTileTrackerInput {
+  documentWidth: number
+  documentHeight: number
+  tileSize?: number
+  /** Halo (px) applied to every stamp so the read set picks up neighbors. */
+  toolHalo?: number
+}
+
+export interface DamagedTileCommitPlan {
+  writeTiles: TileOnlyTile[]
+  readTiles: TileOnlyTile[]
+  damagedRect: DirtyRect
+  haloRect: DirtyRect
+  materializesFullDocument: false
+}
+
+export interface DamagedTileTracker {
+  /** Mark a paint stamp/dab. */
+  touchStamp(rect: DirtyRect): void
+  /** Convenience: mark a single point with the configured tool halo. */
+  touchPoint(x: number, y: number, radius?: number): void
+  /** Number of distinct touched tiles so far. */
+  size(): number
+  /** Snapshot the damaged tile keys; useful for live status / cursor previews. */
+  damagedTileKeys(): string[]
+  /** Snapshot of the damaged pixel rect so far (no halo). */
+  damagedRect(): DirtyRect
+  /** Build the final commit plan and reset internal state for the next stroke. */
+  commit(): DamagedTileCommitPlan
+}
+
+export function createDamagedTileTracker(input: DamagedTileTrackerInput): DamagedTileTracker {
+  const width = positiveInt(input.documentWidth, 1)
+  const height = positiveInt(input.documentHeight, 1)
+  const tileSize = positiveInt(input.tileSize, DEFAULT_TILE_SIZE)
+  const halo = Math.max(0, Math.ceil(Number(input.toolHalo ?? 0)))
+  const damaged = new Map<string, TileOnlyTile>()
+  let damageRect: DirtyRect = { x: 0, y: 0, w: 0, h: 0 }
+
+  const touchStamp = (rect: DirtyRect) => {
+    const clipped = normalizeRect(rect, width, height)
+    if (isEmptyDirtyRect(clipped)) return
+    damageRect = unionDirtyRect(damageRect, clipped)
+    for (const tile of tilesForRect(clipped, width, height, tileSize)) damaged.set(tile.key, tile)
+  }
+
+  return {
+    touchStamp,
+    touchPoint(x, y, radius) {
+      const r = Math.max(0, Math.ceil(Number(radius ?? halo)))
+      const stamp: DirtyRect = { x: x - r, y: y - r, w: r * 2 + 1, h: r * 2 + 1 }
+      touchStamp(stamp)
+    },
+    size() {
+      return damaged.size
+    },
+    damagedTileKeys() {
+      return [...damaged.keys()].sort()
+    },
+    damagedRect() {
+      return { ...damageRect }
+    },
+    commit() {
+      const writeTiles = [...damaged.values()].sort((a, b) => a.row - b.row || a.col - b.col)
+      const haloRect = inflateRect(damageRect, halo, width, height)
+      const readTiles = tilesForRect(haloRect, width, height, tileSize)
+      const plan: DamagedTileCommitPlan = {
+        writeTiles,
+        readTiles,
+        damagedRect: { ...damageRect },
+        haloRect,
+        materializesFullDocument: false,
+      }
+      damaged.clear()
+      damageRect = { x: 0, y: 0, w: 0, h: 0 }
+      return plan
+    },
+  }
+}
+
+/* ------------------------------------------------------------------------- *
+ * Smart-object source-change re-render planning
+ * ------------------------------------------------------------------------- */
+
+export interface TileOnlySmartObjectUpdateInput {
+  documentWidth: number
+  documentHeight: number
+  tileSize?: number
+  layerId: string
+  /** The smart object's bounding rect on the final composite (document space). */
+  renderBounds: DirtyRect
+  /** Optional sub-rect of the source that changed; defaults to whole bounds. */
+  sourceDirtyRect?: DirtyRect
+  /** Edge halo (e.g., transform anti-aliasing) added around the dirty rect. */
+  edgeHalo?: number
+}
+
+export interface TileOnlySmartObjectUpdatePlan {
+  strategy: "tile-local"
+  layerId: string
+  operationKind: "smart-object"
+  reRenderRect: DirtyRect
+  writeRect: DirtyRect
+  writeTiles: TileOnlyTile[]
+  readTiles: TileOnlyTile[]
+  materializesFullDocument: false
+  reasons: string[]
+}
+
+/**
+ * When a smart object's source updates, only the tiles within the layer's
+ * render bounds intersected with the source-dirty rect need to be re-rendered.
+ * Other tiles can keep their cached pixel data.
+ */
+export function planTileOnlySmartObjectUpdate(input: TileOnlySmartObjectUpdateInput): TileOnlySmartObjectUpdatePlan {
+  const width = positiveInt(input.documentWidth, 1)
+  const height = positiveInt(input.documentHeight, 1)
+  const tileSize = positiveInt(input.tileSize, DEFAULT_TILE_SIZE)
+  const halo = Math.max(0, Math.ceil(Number(input.edgeHalo ?? 0)))
+  const bounds = normalizeRect(input.renderBounds, width, height)
+  const dirty = input.sourceDirtyRect ? normalizeRect(input.sourceDirtyRect, width, height) : bounds
+  const intersected = intersectDirtyRect(bounds, dirty)
+  const writeRect = isEmptyDirtyRect(intersected) ? { x: 0, y: 0, w: 0, h: 0 } : intersected
+  const inflated = halo > 0 ? inflateRect(writeRect, halo, width, height) : writeRect
+  return {
+    strategy: "tile-local",
+    layerId: input.layerId,
+    operationKind: "smart-object",
+    reRenderRect: inflated,
+    writeRect,
+    writeTiles: tilesForRect(writeRect, width, height, tileSize),
+    readTiles: tilesForRect(inflated, width, height, tileSize),
+    materializesFullDocument: false,
+    reasons: [
+      `smart-object:${input.layerId}`,
+      `bounds:${bounds.w}x${bounds.h}`,
+      `halo:${halo}`,
+    ],
+  }
+}
+
+/* ------------------------------------------------------------------------- *
+ * 3D / video tile-store routing
+ *
+ * The existing ray-tracer is already tiled (see three-d-video-engine
+ * `rayTraceSceneTiled`). For huge documents in tile mode the renderer should
+ * NOT allocate a full-frame canvas; instead each rendered tile is written
+ * directly to a tile-store-shaped sink.
+ *
+ * `routeTiledRayTraceToTileStore` exposes the sink interface the engine wants:
+ * the caller provides an `onTile(tile, imageData)` that writes into a
+ * TiledBackingStore. Returning a function lets the caller bind a specific
+ * layer/document id.
+ *
+ * The same sink works for tiled video-frame decoders (e.g., when the active
+ * video frame is at the same canvas size as the document and is decomposed
+ * into the same tile grid).
+ * ------------------------------------------------------------------------- */
+
+export interface TileOnlyRayTraceRouteInput {
+  documentWidth: number
+  documentHeight: number
+  tileSize?: number
+  /** Layer id whose tile store should receive the writes. */
+  layerId: string
+  /** Optional sub-region in document space; defaults to whole document. */
+  bounds?: DirtyRect
+}
+
+export interface TileOnlyRayTraceRoutePlan {
+  strategy: "tile-local"
+  layerId: string
+  operationKind: "3d" | "video"
+  writeRect: DirtyRect
+  writeTiles: TileOnlyTile[]
+  materializesFullDocument: false
+  reasons: string[]
+}
+
+export function planTileOnlyRayTraceRoute(
+  input: TileOnlyRayTraceRouteInput & { kind?: "3d" | "video" },
+): TileOnlyRayTraceRoutePlan {
+  const width = positiveInt(input.documentWidth, 1)
+  const height = positiveInt(input.documentHeight, 1)
+  const tileSize = positiveInt(input.tileSize, DEFAULT_TILE_SIZE)
+  const bounds = input.bounds ? normalizeRect(input.bounds, width, height) : { x: 0, y: 0, w: width, h: height }
+  const writeTiles = tilesForRect(bounds, width, height, tileSize)
+  return {
+    strategy: "tile-local",
+    layerId: input.layerId,
+    operationKind: input.kind ?? "3d",
+    writeRect: bounds,
+    writeTiles,
+    materializesFullDocument: false,
+    reasons: [`route:tile-store`, `tile-count:${writeTiles.length}`],
+  }
+}
+
+export interface TileOnlySink {
+  /** Called once per rendered tile. Implementations should write to the tile store. */
+  onTile(tile: TileOnlyTile, image: ImageData): void | Promise<void>
+}
+
+/**
+ * Wraps a TileOnlySink to be compatible with three-d-video-engine's
+ * `rayTraceSceneTiled` `onTile` callback shape. Routes each engine tile to the
+ * appropriate sink tile by `(col, row)` lookup so the engine can keep its own
+ * scheduling/yield logic while the tile store stays the source of truth for
+ * pixels — no full-frame canvas allocation needed.
+ */
+export function createTileOnlyRayTraceAdapter(
+  plan: Pick<TileOnlyRayTraceRoutePlan, "writeTiles">,
+  sink: TileOnlySink,
+) {
+  const byKey = new Map<string, TileOnlyTile>()
+  for (const tile of plan.writeTiles) byKey.set(`${tile.col}:${tile.row}`, tile)
+  return (engineTile: { key: string; col: number; row: number; rect: TileCanvasRect }, image: ImageData) => {
+    const tile = byKey.get(`${engineTile.col}:${engineTile.row}`)
+    if (!tile) return
+    return sink.onTile(tile, image)
+  }
+}
+
+/* ------------------------------------------------------------------------- *
+ * Filter tile-margin routing
+ *
+ * `planTileOnlyFilter` already returns a `readHalo`. For kernel filters that
+ * need neighbor samples, `planTileOnlyFilterMargin` lets the caller request an
+ * inflated *read* rect per output tile so the worker has enough context to
+ * avoid edge seams. The resulting pairs (writeTile, readRect) feed directly
+ * into `applyFilterTiled` in filter-worker.ts via its `overlap` option.
+ * ------------------------------------------------------------------------- */
+
+export interface TileOnlyFilterMarginInput extends TileOnlyFilterInput {
+  /** Override the auto-computed margin (e.g., raise for non-separable kernels). */
+  overrideMargin?: number
+}
+
+export interface TileOnlyFilterMarginPair {
+  tile: TileOnlyTile
+  readRect: DirtyRect
+  readTiles: TileOnlyTile[]
+}
+
+export interface TileOnlyFilterMarginPlan extends TileOnlyFilterPlan {
+  /** Per-output-tile read rect inflated by the margin. */
+  marginPairs: TileOnlyFilterMarginPair[]
+  /** Effective margin in pixels (>= readHalo). */
+  margin: number
+}
+
+export function planTileOnlyFilterMargin(input: TileOnlyFilterMarginInput): TileOnlyFilterMarginPlan {
+  const base = planTileOnlyFilter(input)
+  const width = positiveInt(input.documentWidth, 1)
+  const height = positiveInt(input.documentHeight, 1)
+  const tileSize = positiveInt(input.tileSize, DEFAULT_TILE_SIZE)
+  const margin = Math.max(base.readHalo, Math.max(0, Math.ceil(Number(input.overrideMargin ?? 0))))
+  const marginPairs: TileOnlyFilterMarginPair[] = base.writeTiles.map((tile) => {
+    const readRect = inflateRect(tile.rect, margin, width, height)
+    return {
+      tile,
+      readRect,
+      readTiles: tilesForRect(readRect, width, height, tileSize),
+    }
+  })
+  return {
+    ...base,
+    margin,
+    marginPairs,
+  }
+}
+
+/* ------------------------------------------------------------------------- *
+ * Tiled selection mask storage
+ *
+ * Marquee/lasso/wand should write into the relevant tiles only rather than
+ * filling a full-document Uint8ClampedArray. The runtime store below holds
+ * grayscale 8bpp tiles (one byte per pixel) and offers the same writeRect/
+ * unionRect API as the pixel tile store. Memory is bounded by the document
+ * dimensions and the configured tileSize.
+ *
+ * Marquee tools call `writeRect(rect, value=255)` then `commit()` to get the
+ * dirty tile list; lasso/polygon tools call `writeMask(rect, maskBytes)` with
+ * a precomputed pixel mask; wand tools call `applyMaskPredicate` per tile.
+ * ------------------------------------------------------------------------- */
+
+export type SelectionTileOp = "replace" | "add" | "subtract" | "intersect"
+
+export interface TileOnlySelectionMaskInput {
+  documentWidth: number
+  documentHeight: number
+  tileSize?: number
+}
+
+export interface TileOnlySelectionMaskSnapshot {
+  totalTiles: number
+  populatedTiles: number
+  bytesAllocated: number
+  bounds: DirtyRect
+}
+
+export class TileOnlySelectionMask {
+  readonly width: number
+  readonly height: number
+  readonly tileSize: number
+  readonly tileColumns: number
+  readonly tileRows: number
+  private readonly tiles = new Map<string, Uint8ClampedArray>()
+  private dirtyBounds: DirtyRect = { x: 0, y: 0, w: 0, h: 0 }
+
+  constructor(input: TileOnlySelectionMaskInput) {
+    this.width = positiveInt(input.documentWidth, 1)
+    this.height = positiveInt(input.documentHeight, 1)
+    this.tileSize = positiveInt(input.tileSize, DEFAULT_TILE_SIZE)
+    const grid = planTileGrid(this.width, this.height, this.tileSize)
+    this.tileColumns = grid.tileColumns
+    this.tileRows = grid.tileRows
+  }
+
+  private tileAt(col: number, row: number): Uint8ClampedArray | null {
+    return this.tiles.get(`${col}:${row}`) ?? null
+  }
+
+  private ensureTile(col: number, row: number): Uint8ClampedArray {
+    const key = `${col}:${row}`
+    let tile = this.tiles.get(key)
+    if (tile) return tile
+    const x = col * this.tileSize
+    const y = row * this.tileSize
+    const w = Math.min(this.tileSize, this.width - x)
+    const h = Math.min(this.tileSize, this.height - y)
+    tile = new Uint8ClampedArray(Math.max(1, w * h))
+    this.tiles.set(key, tile)
+    return tile
+  }
+
+  writeRect(rect: DirtyRect, value: number, op: SelectionTileOp = "replace"): TileOnlyTile[] {
+    const clipped = normalizeRect(rect, this.width, this.height)
+    if (isEmptyDirtyRect(clipped)) return []
+    const touched: TileOnlyTile[] = []
+    const v = Math.max(0, Math.min(255, Math.round(value)))
+    for (const tile of tilesForRect(clipped, this.width, this.height, this.tileSize)) {
+      const overlap = intersectDirtyRect(clipped, tile.rect)
+      if (isEmptyDirtyRect(overlap)) continue
+      const bytes = this.ensureTile(tile.col, tile.row)
+      const tileW = tile.rect.w
+      for (let yy = 0; yy < overlap.h; yy++) {
+        const localY = overlap.y - tile.rect.y + yy
+        const rowStart = localY * tileW + (overlap.x - tile.rect.x)
+        for (let xx = 0; xx < overlap.w; xx++) {
+          const offset = rowStart + xx
+          const current = bytes[offset]
+          if (op === "replace") bytes[offset] = v
+          else if (op === "add") bytes[offset] = Math.min(255, current + v)
+          else if (op === "subtract") bytes[offset] = Math.max(0, current - v)
+          else if (op === "intersect") bytes[offset] = Math.min(current, v)
+        }
+      }
+      touched.push(tile)
+    }
+    this.dirtyBounds = unionDirtyRect(this.dirtyBounds, clipped)
+    return touched
+  }
+
+  writeMask(rect: DirtyRect, mask: Uint8ClampedArray | Uint8Array, op: SelectionTileOp = "replace"): TileOnlyTile[] {
+    const clipped = normalizeRect(rect, this.width, this.height)
+    if (isEmptyDirtyRect(clipped)) return []
+    const touched: TileOnlyTile[] = []
+    for (const tile of tilesForRect(clipped, this.width, this.height, this.tileSize)) {
+      const overlap = intersectDirtyRect(clipped, tile.rect)
+      if (isEmptyDirtyRect(overlap)) continue
+      const bytes = this.ensureTile(tile.col, tile.row)
+      const tileW = tile.rect.w
+      for (let yy = 0; yy < overlap.h; yy++) {
+        const localY = overlap.y - tile.rect.y + yy
+        const maskY = overlap.y - clipped.y + yy
+        for (let xx = 0; xx < overlap.w; xx++) {
+          const offset = localY * tileW + (overlap.x - tile.rect.x) + xx
+          const m = mask[maskY * clipped.w + (overlap.x - clipped.x) + xx]
+          const current = bytes[offset]
+          if (op === "replace") bytes[offset] = m
+          else if (op === "add") bytes[offset] = Math.min(255, current + m)
+          else if (op === "subtract") bytes[offset] = Math.max(0, current - m)
+          else if (op === "intersect") bytes[offset] = Math.min(current, m)
+        }
+      }
+      touched.push(tile)
+    }
+    this.dirtyBounds = unionDirtyRect(this.dirtyBounds, clipped)
+    return touched
+  }
+
+  readRect(rect: DirtyRect): Uint8ClampedArray | null {
+    const clipped = normalizeRect(rect, this.width, this.height)
+    if (isEmptyDirtyRect(clipped)) return null
+    const out = new Uint8ClampedArray(clipped.w * clipped.h)
+    for (const tile of tilesForRect(clipped, this.width, this.height, this.tileSize)) {
+      const bytes = this.tileAt(tile.col, tile.row)
+      if (!bytes) continue
+      const overlap = intersectDirtyRect(clipped, tile.rect)
+      if (isEmptyDirtyRect(overlap)) continue
+      const tileW = tile.rect.w
+      for (let yy = 0; yy < overlap.h; yy++) {
+        const localY = overlap.y - tile.rect.y + yy
+        const dstY = overlap.y - clipped.y + yy
+        const srcStart = localY * tileW + (overlap.x - tile.rect.x)
+        const dstStart = dstY * clipped.w + (overlap.x - clipped.x)
+        out.set(bytes.subarray(srcStart, srcStart + overlap.w), dstStart)
+      }
+    }
+    return out
+  }
+
+  /** Sample a single mask byte (0 if outside or unallocated). */
+  sample(x: number, y: number): number {
+    if (x < 0 || y < 0 || x >= this.width || y >= this.height) return 0
+    const col = Math.floor(x / this.tileSize)
+    const row = Math.floor(y / this.tileSize)
+    const tile = this.tileAt(col, row)
+    if (!tile) return 0
+    const tileX = col * this.tileSize
+    const tileY = row * this.tileSize
+    const tileW = Math.min(this.tileSize, this.width - tileX)
+    return tile[(y - tileY) * tileW + (x - tileX)]
+  }
+
+  clear(): void {
+    this.tiles.clear()
+    this.dirtyBounds = { x: 0, y: 0, w: 0, h: 0 }
+  }
+
+  snapshot(): TileOnlySelectionMaskSnapshot {
+    let bytesAllocated = 0
+    for (const tile of this.tiles.values()) bytesAllocated += tile.byteLength
+    return {
+      totalTiles: this.tileColumns * this.tileRows,
+      populatedTiles: this.tiles.size,
+      bytesAllocated,
+      bounds: { ...this.dirtyBounds },
+    }
+  }
+}
+
+/* ------------------------------------------------------------------------- *
+ * Tile-by-tile export streaming
+ *
+ * Many raster encoders accept the document as a single ImageData. For huge
+ * documents we instead want the export pipeline to pull tiles one at a time
+ * from a generator and stream them into the encoder. PNG (scanline-oriented)
+ * and JPEG (8x8 MCU-oriented) can both accept row-major tiles. Other formats
+ * (TIFF strip/tile, OpenEXR scanline) can also stream directly.
+ *
+ * `streamTileSequenceToScanlines` is a generator-friendly helper: given a
+ * row-major tile producer, it yields full document rows so an encoder that
+ * wants scanlines can call `for await` and never holds more than ~one tile
+ * row of memory.
+ *
+ * For formats that *cannot* stream (some metadata-laden containers), the
+ * caller should materialize to an OPFS-backed temp buffer first via
+ * `materializeTileStreamToOpfsBlob`.
+ * ------------------------------------------------------------------------- */
+
+export interface TileStreamProducer {
+  width: number
+  height: number
+  tileSize: number
+  tileColumns: number
+  tileRows: number
+  /** Pulls the ImageData for one tile (row-major: row=0 col=0 then col=1 ... then row=1 col=0). */
+  getTile(col: number, row: number): Promise<ImageData> | ImageData
+}
+
+/**
+ * Yield one full document scanline at a time. Maintains a buffer of at most
+ * `tileSize` rows (one tile row worth of pixels) and pulls tiles lazily.
+ */
+export async function* streamTileSequenceToScanlines(
+  producer: TileStreamProducer,
+): AsyncGenerator<{ y: number; row: Uint8ClampedArray }, void, void> {
+  const { width, height, tileSize, tileColumns, tileRows } = producer
+  for (let tileRow = 0; tileRow < tileRows; tileRow++) {
+    const baseY = tileRow * tileSize
+    const rowsInBand = Math.min(tileSize, height - baseY)
+    const band = new Uint8ClampedArray(width * rowsInBand * 4)
+    for (let tileCol = 0; tileCol < tileColumns; tileCol++) {
+      const baseX = tileCol * tileSize
+      const tileW = Math.min(tileSize, width - baseX)
+      const image = await producer.getTile(tileCol, tileRow)
+      for (let yy = 0; yy < rowsInBand; yy++) {
+        const srcStart = yy * tileW * 4
+        const dstStart = (yy * width + baseX) * 4
+        band.set(image.data.subarray(srcStart, srcStart + tileW * 4), dstStart)
+      }
+    }
+    for (let yy = 0; yy < rowsInBand; yy++) {
+      yield {
+        y: baseY + yy,
+        row: band.subarray(yy * width * 4, (yy + 1) * width * 4),
+      }
+    }
+  }
+}
+
+export interface TileStreamMaterializeOptions {
+  /** Storage adapter (OPFS, IDB, in-memory) used to back the temp blob. */
+  write: (key: string, blob: Blob) => Promise<void> | void
+  /** Scratch key prefix; uniques per tile are appended. */
+  keyPrefix: string
+}
+
+/**
+ * Stream tiles to a sequence of small blobs in the provided storage adapter,
+ * returning the manifest of stored chunks. Callers can then read the chunks
+ * back into an encoder that needs the full image (e.g., a WASM encoder that
+ * cannot accept scanlines). The whole stream never holds more than one tile
+ * in JS memory at a time.
+ */
+export async function materializeTileStreamToOpfsBlob(
+  producer: TileStreamProducer,
+  options: TileStreamMaterializeOptions,
+): Promise<{ keys: string[]; totalBytes: number; tileCount: number }> {
+  const keys: string[] = []
+  let totalBytes = 0
+  for (let tileRow = 0; tileRow < producer.tileRows; tileRow++) {
+    for (let tileCol = 0; tileCol < producer.tileColumns; tileCol++) {
+      const image = await producer.getTile(tileCol, tileRow)
+      const bytes = new Uint8Array(image.data.buffer.slice(0))
+      const blob = new Blob([bytes])
+      const key = `${options.keyPrefix}-${tileCol}-${tileRow}`
+      await options.write(key, blob)
+      keys.push(key)
+      totalBytes += bytes.byteLength
+    }
+  }
+  return { keys, totalBytes, tileCount: keys.length }
+}
+
+/**
+ * Adapter: convert a `composeDocumentTile`-style function into a
+ * TileStreamProducer that streams the whole document one tile at a time. The
+ * compositor stays oblivious to the export — it just renders each tile rect.
+ *
+ * NOTE: the per-tile compose still relies on the layer renderer being able to
+ * crop sources. Layer kinds rejected by `supportsTileOnlyLayer` (e.g., groups
+ * without a pre-flattened canvas) will fall back to the browser-canvas path
+ * upstream via `planTileOnlyExport`.
+ */
+export function createComposeTileStreamProducer(
+  width: number,
+  height: number,
+  tileSize: number,
+  compose: (rect: TileCanvasRect) => HTMLCanvasElement,
+): TileStreamProducer {
+  const grid = planTileGrid(width, height, tileSize)
+  return {
+    width,
+    height,
+    tileSize,
+    tileColumns: grid.tileColumns,
+    tileRows: grid.tileRows,
+    async getTile(col, row) {
+      const x = col * tileSize
+      const y = row * tileSize
+      const w = Math.min(tileSize, width - x)
+      const h = Math.min(tileSize, height - y)
+      const canvas = compose({ x, y, w, h })
+      const ctx = canvas.getContext("2d")
+      if (!ctx) return new ImageData(Math.max(1, w), Math.max(1, h))
+      return ctx.getImageData(0, 0, canvas.width, canvas.height)
+    },
+  }
+}
+
+/* ------------------------------------------------------------------------- *
+ * Documented remaining unflushed paths
+ *
+ * Items below still flatten to a full-document or full-layer canvas. They are
+ * intentionally not silently degraded: callers can query
+ * `getTileOnlyUnflushedPaths()` to surface limitations in diagnostics UI.
+ *
+ * Each entry has:
+ *   - id:   stable identifier
+ *   - area: human-readable subsystem
+ *   - why:  reason a tile-local path is not yet wired
+ *   - mitigation: what the runtime falls back to today
+ * ------------------------------------------------------------------------- */
+
+export interface TileOnlyUnflushedPath {
+  id: string
+  area: string
+  why: string
+  mitigation: string
+}
+
+export const TILE_ONLY_UNFLUSHED_PATHS: readonly TileOnlyUnflushedPath[] = [
+  {
+    id: "webgl-compositor-full-texture",
+    area: "WebGL compositor",
+    why: "The WebGL backend still uploads one large texture per layer; the tiled-WebGL path is tracked under Item 18 in the in-scope gaps report.",
+    mitigation: "Canvas 2D tile path is used automatically when WebGL is bypassed.",
+  },
+  {
+    id: "psd-save-flatten",
+    area: "PSD save (document-io)",
+    why: "PSD compatibility layer 0 requires a full composite; that flatten is intrinsic to the format, not a tile-store limitation.",
+    mitigation: "Save streams layer 0 once and writes individual layers without re-flattening.",
+  },
+  {
+    id: "filter-context-required",
+    area: "Filters needing extra context (match-color, apply-image, calculations)",
+    why: "These filters consume multiple layers/documents and cannot accept a single ImageData tile.",
+    mitigation: "Run on the main thread with a downsampled preview when the document is too large to fit memory.",
+  },
+  {
+    id: "vector-text-rasterization",
+    area: "Text + vector rasterization",
+    why: "Text and vector layers rasterize through the platform canvas which is layer-sized, not tile-sized.",
+    mitigation: "Crop the rasterized canvas into per-tile reads at compose time; for very large layers this still allocates the full layer canvas.",
+  },
+  {
+    id: "history-snapshots",
+    area: "History store",
+    why: "Snapshots before/after each edit currently capture the whole layer canvas to compress with WebP.",
+    mitigation: "Older entries are spilled to WebP blobs and rehydrated lazily; bounded to last 12 raw entries.",
+  },
+  {
+    id: "single-canvas-export",
+    area: "Browser-canvas export fallback",
+    why: "When a layer kind is not in supportsTileOnlyLayer (e.g., unsupported group flattening), planTileOnlyExport returns mode=single-canvas.",
+    mitigation: "exportRasterTileSequenceBlob throws so the caller can switch to the browser-canvas path or remove the unsupported layer.",
+  },
+] as const
+
+export function getTileOnlyUnflushedPaths(): readonly TileOnlyUnflushedPath[] {
+  return TILE_ONLY_UNFLUSHED_PATHS
 }
 
 export function planTileOnlyExport(input: TileOnlyExportInput): TileOnlyExportPlan {

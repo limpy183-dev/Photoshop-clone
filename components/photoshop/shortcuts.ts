@@ -53,6 +53,8 @@ export const DEFAULT_SHORTCUTS: Shortcut[] = [
   // Filter
   { id: "filter-last", keys: "Ctrl+F", action: "Last Filter", category: "Filter" },
   { id: "filter-liquify", keys: "Ctrl+Shift+X", action: "Liquify", category: "Filter" },
+  // Timeline / Video
+  { id: "timeline-split-frame", keys: "Ctrl+Shift+K", action: "Split Timeline Frame at Playhead", category: "Timeline" },
   // View
   { id: "view-zoomin", keys: "Ctrl++", action: "Zoom In", category: "View" },
   { id: "view-zoomout", keys: "Ctrl+-", action: "Zoom Out", category: "View" },

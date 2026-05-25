@@ -43,6 +43,7 @@ const TOOL_COMMANDS: { tool: ToolId; title: string; hint: string }[] = [
   { tool: "move", title: "Move Tool", hint: "V" },
   { tool: "brush", title: "Brush Tool", hint: "B" },
   { tool: "mixer-brush", title: "Mixer Brush Tool", hint: "B" },
+  { tool: "color-replace", title: "Color Replacement Tool", hint: "B" },
   { tool: "pattern-stamp", title: "Pattern Stamp Tool", hint: "S" },
   { tool: "art-history-brush", title: "Art History Brush Tool", hint: "Y" },
   { tool: "eraser", title: "Eraser Tool", hint: "E" },
@@ -161,8 +162,16 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
     const needsClosedDocument = closedDocuments.length ? undefined : "No closed documents"
     const needsOtherDocument = activeDoc ? undefined : "Open a document first"
     const runPurge = (target: PurgeTarget) => {
-      const result = purgeCaches(target)
-      toast.info(formatPurgeStatus(target, result.freedBytes))
+      // Clipboard purge is non-destructive (no history loss) — run inline.
+      // All other purges go through the menu-bar's confirmation dialog via
+      // the ps-purge-request event so the user gets a "cannot be undone"
+      // prompt before any history/cache state is dropped.
+      if (target === "clipboard") {
+        const result = purgeCaches(target)
+        toast.info(formatPurgeStatus(target, result.freedBytes))
+      } else {
+        dispatchPhotoshopEvent("ps-purge-request", { target })
+      }
       close()
     }
     const items: CommandItem[] = [

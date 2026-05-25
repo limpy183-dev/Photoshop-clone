@@ -255,9 +255,21 @@ function isDefaultBlendIfRange(range: BlendIfRange): boolean {
   return range.black === 0 && range.blackFeather === 0 && range.whiteFeather === 255 && range.white === 255
 }
 
+function hasPerChannelBlendIf(channels: AdvancedBlending["blendIfThisChannels"]): boolean {
+  if (!channels) return false
+  for (const key of Object.keys(channels) as Array<keyof typeof channels>) {
+    const range = channels[key]
+    if (range && !isDefaultBlendIfRange(range)) return true
+  }
+  return false
+}
+
 function hasBlendIf(ab: AdvancedBlending | undefined): boolean {
   if (!ab) return false
-  return !isDefaultBlendIfRange(ab.blendIfThis) || !isDefaultBlendIfRange(ab.blendIfUnderlying)
+  if (!isDefaultBlendIfRange(ab.blendIfThis) || !isDefaultBlendIfRange(ab.blendIfUnderlying)) return true
+  if (hasPerChannelBlendIf(ab.blendIfThisChannels)) return true
+  if (hasPerChannelBlendIf(ab.blendIfUnderlyingChannels)) return true
+  return false
 }
 
 /* =========================================================================
@@ -326,10 +338,25 @@ export function compositeLayer(
         const srcLum = pixelLuminosity255(srcData[si], srcData[si + 1], srcData[si + 2])
         sa *= blendIfFactor(srcLum, advancedBlending.blendIfThis)
         if (sa <= 0) continue
+        // Per-channel Blend If: This Layer (R/G/B)
+        const thisCh = advancedBlending.blendIfThisChannels
+        if (thisCh) {
+          if (thisCh.r) sa *= blendIfFactor(srcData[si], thisCh.r)
+          if (sa > 0 && thisCh.g) sa *= blendIfFactor(srcData[si + 1], thisCh.g)
+          if (sa > 0 && thisCh.b) sa *= blendIfFactor(srcData[si + 2], thisCh.b)
+          if (sa <= 0) continue
+        }
         // Blend If: Underlying Layer — attenuate based on destination pixel luminosity
         const destLum = pixelLuminosity255(destData[di], destData[di + 1], destData[di + 2])
         sa *= blendIfFactor(destLum, advancedBlending.blendIfUnderlying)
         if (sa <= 0) continue
+        const underCh = advancedBlending.blendIfUnderlyingChannels
+        if (underCh) {
+          if (underCh.r) sa *= blendIfFactor(destData[di], underCh.r)
+          if (sa > 0 && underCh.g) sa *= blendIfFactor(destData[di + 1], underCh.g)
+          if (sa > 0 && underCh.b) sa *= blendIfFactor(destData[di + 2], underCh.b)
+          if (sa <= 0) continue
+        }
       }
 
       // Channel masking: zero out disabled channels

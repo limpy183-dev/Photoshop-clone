@@ -413,16 +413,32 @@ export function analyzePreflightDocument(doc: PsDocument): PreflightReport {
       : "No overprint-like blending or transparency risks detected.",
     overprintLikeLayers.length ? warnOnly("Flatten/proof separations", "Review knockout/overprint behavior in a production separations preview.") : undefined,
   ))
+  const layersWithMasks = rasterish.filter((layer) => !!layer.mask || !!layer.vectorMask)
+  const alphaDependencyHints: string[] = []
+  if (savedAlphaChannels.length) {
+    alphaDependencyHints.push(
+      `${savedAlphaChannels.length} saved alpha channel${savedAlphaChannels.length === 1 ? "" : "s"}`,
+    )
+  }
+  if (layersWithMasks.length) {
+    alphaDependencyHints.push(
+      `${layersWithMasks.length} layer mask${layersWithMasks.length === 1 ? "" : "s"}`,
+    )
+  }
+  const flattenTransparencyDetail = partialAlphaLayers.length
+    ? `${partialAlphaLayers.length} visible layer${partialAlphaLayers.length === 1 ? "" : "s"} contain semi-transparent pixels. Use Layer > Flatten Transparency before raster handoff when the target format or print workflow cannot preserve alpha.` +
+      (alphaDependencyHints.length
+        ? ` Note: ${alphaDependencyHints.join(" and ")} rely on alpha — Clear Alpha will discard transparency they need.`
+        : "")
+    : "No visible layer pixels carry partial alpha transparency."
   findings.push(finding(
     "flatten-transparency",
     "separations",
     partialAlphaLayers.length ? "warn" : "pass",
     "Flatten transparency",
+    flattenTransparencyDetail,
     partialAlphaLayers.length
-      ? `${partialAlphaLayers.length} visible layer${partialAlphaLayers.length === 1 ? "" : "s"} contain semi-transparent pixels. Use Layer > Flatten Transparency before raster handoff when the target format or print workflow cannot preserve alpha.`
-      : "No visible layer pixels carry partial alpha transparency.",
-    partialAlphaLayers.length
-      ? manualFix("rasterize-or-flatten", "Flatten transparency", "Composite partial-alpha pixels against the chosen foreground/background matte, then proof the result.")
+      ? manualFix("rasterize-or-flatten", "Flatten transparency", "Composite partial-alpha pixels against the chosen foreground/background matte, then proof the result. Choose Preserve Alpha when downstream masks, saved channels, or transparent-format exports still need the alpha channel.")
       : undefined,
   ))
   findings.push(finding(

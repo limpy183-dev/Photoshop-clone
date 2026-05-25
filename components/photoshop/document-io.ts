@@ -157,13 +157,20 @@ import {
 } from "./psd-compatibility"
 import {
   deserializeHighBitImagePayload,
+  ensureLayerHighBitImage,
   getHighBitExportImage,
+  getLayerHighBitImage,
   renderDocumentHighBitPreviewCanvas,
   serializeHighBitImagePayload,
   type HighBitDocument,
   type HighBitLayer,
 } from "./high-bit-document"
-import { writeNativeCompositePsd } from "./psd-native-writer"
+import {
+  canWriteNativeLayeredPsd,
+  writeNativeCompositePsd,
+  writeNativeLayeredPsd,
+  type NativeLayeredPsdLayerInput,
+} from "./psd-native-writer"
 import { createHighBitImageFromImageData } from "./color-pipeline"
 
 function loadPsdCodec() {

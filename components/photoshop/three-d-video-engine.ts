@@ -4,14 +4,19 @@ import type {
   Layer,
   ThreeDCrossSection,
   ThreeDMaterial,
+  ThreeDMaterialMaps,
   ThreeDObject,
   ThreeDPrintReport,
   ThreeDScene,
+  ThreeDTextureMap,
   ThreeDTexturePixel,
+  ThreeDTextureRef,
+  ThreeDVertexAnimationFrame,
   TimelineFrame,
   Vec3,
   ThreeDAnimationKeyframe,
   ThreeDAnimationStack,
+  ThreeDAnimationTrack,
   VideoExportPreset,
   VideoGroupProps,
   VideoLayerProps,
@@ -557,7 +562,21 @@ function parse3ds(buffer: ArrayBuffer): AdvancedThreeDImportResult {
     faces: number[][]
     uvs: Array<{ u: number; v: number }>
     faceMaterials: string[]
+    smoothingGroups: number[]
   }> = []
+  // Keyframer (0xB000) animation records collected for round-trip into our
+  // ThreeDAnimationStack. 3DS stores POS/ROT/SCL tracks under OBJECT_NODE_TAG.
+  const keyTracks: Array<{
+    objectName: string
+    property: "position" | "rotation" | "scale"
+    keyframes: Array<{ frame: number; value: Vec3 }>
+  }> = []
+  let keyframeFps = 30
+  let keyframeStart = 0
+  let keyframeEnd = 0
+  // Cameras (0x4700) discovered alongside meshes so we can pick a sensible
+  // default camera for the imported scene.
+  const cameraRecords: Array<{ name: string; position: Vec3; target: Vec3; fov: number }> = []
 
   const readCString = (offset: number, end: number, fallback: string) => {
     const bytes: number[] = []
@@ -589,9 +608,54 @@ function parse3ds(buffer: ArrayBuffer): AdvancedThreeDImportResult {
     return "#f4b15f"
   }
 
+  // 3DS percentage chunk: 0x0030 INT_PERCENTAGE (i16) or 0x0031 FLOAT_PERCENTAGE (f32)
+  const readPercent = (start: number, end: number): number | undefined => {
+    let offset = start
+    while (offset + 6 <= end) {
+      const id = view.getUint16(offset, true)
+      const size = view.getUint32(offset + 2, true)
+      const body = offset + 6
+      const next = offset + size
+      if (size < 6 || next > view.byteLength || next > end) break
+      if (id === 0x0030 && body + 2 <= next) return clamp(view.getInt16(body, true) / 100, 0, 1)
+      if (id === 0x0031 && body + 4 <= next) return clamp(view.getFloat32(body, true), 0, 1)
+      offset = next
+    }
+    return undefined
+  }
+
+  // 3DS material map sub-chunk parser. Captures file name (0xA300), optional
+  // strength percentage, and tiling mode flags (0xA351) when present.
+  const parseMaterialMap = (start: number, end: number): ThreeDTextureRef => {
+    const ref: ThreeDTextureRef = {}
+    const strength = readPercent(start, end)
+    if (strength !== undefined) ref.strength = strength
+    let offset = start
+    while (offset + 6 <= end) {
+      const id = view.getUint16(offset, true)
+      const size = view.getUint32(offset + 2, true)
+      const body = offset + 6
+      const next = offset + size
+      if (size < 6 || next > view.byteLength || next > end) break
+      if (id === 0xa300) {
+        ref.fileName = readCString(body, next, "").text || undefined
+      } else if (id === 0xa351 && body + 2 <= next) {
+        const flags = view.getUint16(body, true)
+        ref.wrap = (flags & 0x10) ? "mirror" : (flags & 0x01) ? "clamp" : "repeat"
+      }
+      offset = next
+    }
+    return ref
+  }
+
   const parseMaterial = (start: number, end: number) => {
     let name = `3DS Material ${materialByName.size + 1}`
     let color = "#f4b15f"
+    let specularColor: string | undefined
+    let shininess: number | undefined
+    let opacity: number | undefined
+    let emissive: number | undefined
+    const maps: ThreeDMaterialMaps = {}
     let offset = start
     while (offset + 6 <= end) {
       const id = view.getUint16(offset, true)
@@ -603,13 +667,50 @@ function parse3ds(buffer: ArrayBuffer): AdvancedThreeDImportResult {
         name = readCString(body, next, name).text
       } else if (id === 0xa020) {
         color = readColor(body, next)
+      } else if (id === 0xa030) {
+        specularColor = readColor(body, next)
+      } else if (id === 0xa040) {
+        // SHININESS percentage (sharpness of specular)
+        shininess = readPercent(body, next)
+      } else if (id === 0xa050) {
+        // TRANSPARENCY percentage -> opacity = 1 - transparency
+        const t = readPercent(body, next)
+        if (t !== undefined) opacity = clamp(1 - t, 0, 1)
+      } else if (id === 0xa084) {
+        // SELF_ILPCT (self-illumination percentage)
+        emissive = readPercent(body, next)
+      } else if (id === 0xa200) {
+        maps.diffuse = parseMaterialMap(body, next)
+      } else if (id === 0xa204) {
+        maps.specular = parseMaterialMap(body, next)
+      } else if (id === 0xa210) {
+        maps.opacity = parseMaterialMap(body, next)
+      } else if (id === 0xa230) {
+        maps.bump = parseMaterialMap(body, next)
+      } else if (id === 0xa33a || id === 0xa33c) {
+        maps.emissive = parseMaterialMap(body, next)
+      } else if (id === 0xa033) {
+        // REFL_BLUR percentage -> piggyback into normal/reflectance strength
+        maps.normal = maps.normal ?? { strength: readPercent(body, next) }
       }
       offset = next
     }
-    materialByName.set(name, { id: uid("mat"), name, color, metallic: 0, roughness: 0.45, opacity: 1 })
+    const material: ThreeDMaterial = {
+      id: uid("mat"),
+      name,
+      color,
+      metallic: 0,
+      roughness: clamp(1 - (shininess ?? 0.55), 0, 1),
+      opacity: opacity ?? 1,
+    }
+    if (Object.keys(maps).length) material.maps = maps
+    if (specularColor) material.specularColor = specularColor
+    if (shininess !== undefined) material.shininess = shininess
+    if (emissive !== undefined && emissive > 0) material.emissiveStrength = emissive
+    materialByName.set(name, material)
   }
 
-  const parseFaceMaterialGroups = (record: { faces: number[][]; faceMaterials: string[] }, start: number, end: number) => {
+  const parseFaceMaterialGroups = (record: { faces: number[][]; faceMaterials: string[]; smoothingGroups: number[] }, start: number, end: number) => {
     let offset = start
     while (offset + 6 <= end) {
       const id = view.getUint16(offset, true)
@@ -626,14 +727,40 @@ function parse3ds(buffer: ArrayBuffer): AdvancedThreeDImportResult {
           if (faceIndex >= 0 && faceIndex < record.faces.length) record.faceMaterials[faceIndex] = named.text
           cursor += 2
         }
+      } else if (id === 0x4150) {
+        // SMOOTHING_GROUP_LIST: one u32 bitmask per face.
+        const groups: number[] = []
+        let cursor = body
+        for (let i = 0; i < record.faces.length && cursor + 4 <= next; i++) {
+          groups.push(view.getUint32(cursor, true))
+          cursor += 4
+        }
+        record.smoothingGroups = groups
       }
       offset = next
     }
   }
 
+  const parseCamera = (start: number, end: number, name: string) => {
+    if (start + 32 > end) return
+    const position = vec(view.getFloat32(start, true), view.getFloat32(start + 4, true), view.getFloat32(start + 8, true))
+    const target = vec(view.getFloat32(start + 12, true), view.getFloat32(start + 16, true), view.getFloat32(start + 20, true))
+    // skip bank angle at +24, focal length at +28 (in mm). FOV approx 2 * atan(18/focal)
+    const focal = view.getFloat32(start + 28, true)
+    const fov = focal > 0 ? clamp((2 * Math.atan(18 / focal) * 180) / Math.PI, 5, 170) : 42
+    cameraRecords.push({ name, position, target, fov })
+  }
+
   const parseObject = (start: number, end: number) => {
     const named = readCString(start, end, `3DS Mesh ${objectRecords.length + 1}`)
-    const record = { name: named.text, vertices: [] as Vec3[], faces: [] as number[][], uvs: [] as Array<{ u: number; v: number }>, faceMaterials: [] as string[] }
+    const record = {
+      name: named.text,
+      vertices: [] as Vec3[],
+      faces: [] as number[][],
+      uvs: [] as Array<{ u: number; v: number }>,
+      faceMaterials: [] as string[],
+      smoothingGroups: [] as number[],
+    }
     const walkRecord = (chunkStart: number, chunkEnd: number) => {
       let offset = chunkStart
       while (offset + 6 <= chunkEnd) {
@@ -671,6 +798,8 @@ function parse3ds(buffer: ArrayBuffer): AdvancedThreeDImportResult {
             cursor += 8
           }
           record.uvs = parsed
+        } else if (id === 0x4700) {
+          parseCamera(body, next, record.name)
         } else {
           walkRecord(body, next)
         }
@@ -679,6 +808,77 @@ function parse3ds(buffer: ArrayBuffer): AdvancedThreeDImportResult {
     }
     walkRecord(named.next, end)
     if (record.vertices.length && record.faces.length) objectRecords.push(record)
+  }
+
+  // Keyframer (0xB000) chunk parser. Captures POS_TRACK_TAG (0xB020),
+  // ROT_TRACK_TAG (0xB021), SCL_TRACK_TAG (0xB022) for each OBJECT_NODE_TAG.
+  const parseTrack = (start: number, end: number, property: "position" | "rotation" | "scale", objectName: string) => {
+    // Track header layout: flags (2), unknown (8), keyCount (4). Then per-key:
+    // frame (4), accel flags (2), [tension+continuity+bias+ease-in+ease-out if flagged], x/y/z (12).
+    if (start + 14 > end) return
+    let cursor = start + 10
+    const keyCount = view.getUint32(cursor, true)
+    cursor += 4
+    const keys: Array<{ frame: number; value: Vec3 }> = []
+    for (let i = 0; i < keyCount && cursor + 6 <= end; i++) {
+      const frame = view.getInt32(cursor, true)
+      const accel = view.getUint16(cursor + 4, true)
+      cursor += 6
+      // accel bits: 0x01 tension, 0x02 continuity, 0x04 bias, 0x08 ease-in, 0x10 ease-out
+      const splineBits = (accel & 0x01 ? 1 : 0) + (accel & 0x02 ? 1 : 0) + (accel & 0x04 ? 1 : 0) + (accel & 0x08 ? 1 : 0) + (accel & 0x10 ? 1 : 0)
+      cursor += splineBits * 4
+      if (cursor + 12 > end) break
+      const value = vec(view.getFloat32(cursor, true), view.getFloat32(cursor + 4, true), view.getFloat32(cursor + 8, true))
+      cursor += 12
+      keys.push({ frame, value })
+    }
+    if (keys.length) keyTracks.push({ objectName, property, keyframes: keys })
+  }
+
+  const parseObjectNode = (start: number, end: number) => {
+    let name = ""
+    let offset = start
+    while (offset + 6 <= end) {
+      const id = view.getUint16(offset, true)
+      const size = view.getUint32(offset + 2, true)
+      const body = offset + 6
+      const next = offset + size
+      if (size < 6 || next > view.byteLength || next > end) break
+      if (id === 0xb010) {
+        // Name (cstring) + 6 bytes of hierarchy info
+        const named = readCString(body, next, "")
+        name = named.text
+      } else if (id === 0xb020) {
+        parseTrack(body, next, "position", name)
+      } else if (id === 0xb021) {
+        parseTrack(body, next, "rotation", name)
+      } else if (id === 0xb022) {
+        parseTrack(body, next, "scale", name)
+      }
+      offset = next
+    }
+  }
+
+  const parseKeyframer = (start: number, end: number) => {
+    let offset = start
+    while (offset + 6 <= end) {
+      const id = view.getUint16(offset, true)
+      const size = view.getUint32(offset + 2, true)
+      const body = offset + 6
+      const next = offset + size
+      if (size < 6 || next > view.byteLength || next > end) break
+      if (id === 0xb009 && body + 8 <= next) {
+        keyframeStart = view.getInt32(body, true)
+        keyframeEnd = view.getInt32(body + 4, true)
+      } else if (id === 0xb00a && body + 14 <= next) {
+        // KFHDR: revision (2), filename (cstring), animation length (4).
+        // We approximate fps by examining filename slot — most exports use 30.
+        keyframeFps = 30
+      } else if (id === 0xb002) {
+        parseObjectNode(body, next)
+      }
+      offset = next
+    }
   }
 
   const parseObjectChunks = (start: number, end: number): typeof objectRecords[number] | null => {
@@ -695,6 +895,7 @@ function parse3ds(buffer: ArrayBuffer): AdvancedThreeDImportResult {
       }
       if (id === 0x4000) parseObject(body, next)
       else if (id === 0xafff) parseMaterial(body, next)
+      else if (id === 0xb000) parseKeyframer(body, next)
       else parseObjectChunks(body, next)
       offset = next
     }
@@ -719,7 +920,7 @@ function parse3ds(buffer: ArrayBuffer): AdvancedThreeDImportResult {
     }
     const fallbackMaterialId = materialIdByName.get(record.faceMaterials.find(Boolean) ?? "") ?? materials[recordIndex % materials.length]?.id ?? materials[0].id
     const object = createObject(record.name, normalizeMesh(record.vertices), record.faces, fallbackMaterialId)
-    return {
+    const built: ThreeDObject = {
       ...object,
       uvs: record.uvs.length === record.vertices.length ? record.uvs : object.uvs,
       faces: object.faces.map((face, faceIndex) => ({
@@ -728,7 +929,45 @@ function parse3ds(buffer: ArrayBuffer): AdvancedThreeDImportResult {
         uvIndices: record.uvs.length === record.vertices.length ? [...face.indices] : face.uvIndices,
       })),
     }
+    if (record.smoothingGroups.length) built.smoothingGroups = record.smoothingGroups
+    return built
   })
+
+  // Build optional animation stack from collected keyframer tracks.
+  const objectIdByName = new Map(objects.map((object) => [object.name, object.id]))
+  const tracks: ThreeDAnimationTrack[] = []
+  for (const t of keyTracks) {
+    const objectId = objectIdByName.get(t.objectName)
+    if (!objectId) continue
+    tracks.push({
+      id: uid("track"),
+      target: "object",
+      targetId: objectId,
+      property: t.property,
+      keyframes: t.keyframes.map((key) => ({
+        id: uid("key"),
+        timeMs: Math.round((key.frame / keyframeFps) * 1000),
+        value: key.value,
+        easing: "linear",
+      })),
+    })
+  }
+  const animations = tracks.length
+    ? [{
+        id: uid("anim"),
+        name: "3DS Keyframer",
+        durationMs: Math.max(1, Math.round(((keyframeEnd - keyframeStart) / keyframeFps) * 1000)),
+        loop: false,
+        tracks,
+      }]
+    : undefined
+
+  if (tracks.length) warnings.push(`3DS keyframer recovered ${tracks.length} object track(s).`)
+  if (cameraRecords.length) warnings.push(`3DS imported ${cameraRecords.length} camera record(s); first one became the default view.`)
+
+  const defaultCamera = cameraRecords[0]
+    ? { position: cameraRecords[0].position, target: cameraRecords[0].target, fov: cameraRecords[0].fov, focalLength: 50 }
+    : { position: vec(0, 0.2, 5), target: vec(0, 0, 0), fov: 42, focalLength: 50 }
 
   return {
     format: "3ds",
@@ -736,13 +975,90 @@ function parse3ds(buffer: ArrayBuffer): AdvancedThreeDImportResult {
       objects,
       materials,
       lights: sceneLights(),
-      camera: { position: vec(0, 0.2, 5), target: vec(0, 0, 0), fov: 42, focalLength: 50 },
+      camera: defaultCamera,
       renderMode: "solid-wire",
       background: "transparent",
       selectedObjectId: objects[0]?.id,
+      animations,
+      activeAnimationId: animations?.[0]?.id,
     },
     warnings,
   }
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  // Chunked encoder avoids "Maximum call stack" on large payloads.
+  const chunk = 0x8000
+  let binary = ""
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, Math.min(bytes.length, i + chunk)))
+  }
+  return typeof btoa === "function" ? btoa(binary) : Buffer.from(bytes).toString("base64")
+}
+
+function mimeForFileName(name: string): string | undefined {
+  const lower = name.toLowerCase()
+  if (lower.endsWith(".png")) return "image/png"
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg"
+  if (lower.endsWith(".gif")) return "image/gif"
+  if (lower.endsWith(".bmp")) return "image/bmp"
+  if (lower.endsWith(".tga")) return "image/x-tga"
+  if (lower.endsWith(".webp")) return "image/webp"
+  return undefined
+}
+
+function decodeDaeImageRefs(daeText: string): Map<string, string> {
+  // Returns a Map<imageId, init_from path> from <library_images>.
+  const map = new Map<string, string>()
+  const lib = daeText.match(/<library_images[\s\S]*?<\/library_images>/i)
+  if (!lib) return map
+  const re = /<image\b([^>]*)>([\s\S]*?)<\/image>/gi
+  let match: RegExpExecArray | null
+  while ((match = re.exec(lib[0]))) {
+    const attrs = match[1]
+    const body = match[2]
+    const idMatch = attrs.match(/\bid\s*=\s*"([^"]+)"/i)
+    const initFrom = body.match(/<init_from>([\s\S]*?)<\/init_from>/i)
+    if (idMatch && initFrom) {
+      const path = initFrom[1].trim().replace(/^file:\/\//, "")
+      map.set(idMatch[1], path)
+    }
+  }
+  return map
+}
+
+function attachKmzTexturesToScene(scene: ThreeDScene, daeText: string, entries: Array<{ name: string; data: Uint8Array; method: number }>): { scene: ThreeDScene; attached: number } {
+  const imageRefs = decodeDaeImageRefs(daeText)
+  if (!imageRefs.size || !scene.materials.length) return { scene, attached: 0 }
+  // Map of normalized basename -> entry data for fast lookup.
+  const entryByName = new Map<string, { name: string; data: Uint8Array; method: number }>()
+  for (const entry of entries) {
+    const basename = entry.name.split("/").pop() ?? entry.name
+    entryByName.set(basename.toLowerCase(), entry)
+  }
+  // Map material name (which usually matches surface/effect id) to first
+  // imageRef. COLLADA round-trip in this app is light, so we simply attach the
+  // first discovered image to each material that lacks a diffuse map.
+  const refsArray = [...imageRefs.values()]
+  let attached = 0
+  const materials = scene.materials.map((material, index) => {
+    const path = refsArray[index] ?? refsArray[0]
+    if (!path) return material
+    const basename = path.split("/").pop()?.toLowerCase()
+    if (!basename) return material
+    const entry = entryByName.get(basename)
+    if (!entry || entry.method !== 0) return material
+    attached += 1
+    const ref: ThreeDTextureRef = {
+      fileName: entry.name,
+      mime: mimeForFileName(entry.name),
+      dataBase64: bytesToBase64(entry.data),
+      wrap: "repeat",
+    }
+    const maps: ThreeDMaterialMaps = { ...(material.maps ?? {}), diffuse: material.maps?.diffuse ?? ref }
+    return { ...material, maps }
+  })
+  return { scene: { ...scene, materials }, attached }
 }
 
 function parseKmz(buffer: ArrayBuffer): AdvancedThreeDImportResult {
@@ -752,8 +1068,12 @@ function parseKmz(buffer: ArrayBuffer): AdvancedThreeDImportResult {
     if (entries.length) {
       const dae = entries.find((entry) => /\.dae$/i.test(entry.name))
       if (dae && dae.method === 0) {
-        const scene = parseDaeToScene(new TextDecoder().decode(dae.data))
-        return { format: "kmz", scene, warnings: [`KMZ ZIP package parsed from ${dae.name}; compression method store is preserved for browser-local round-trip.`] }
+        const daeText = new TextDecoder().decode(dae.data)
+        const baseScene = parseDaeToScene(daeText)
+        const { scene, attached } = attachKmzTexturesToScene(baseScene, daeText, entries)
+        const notes = [`KMZ ZIP package parsed from ${dae.name}; compression method store is preserved for browser-local round-trip.`]
+        if (attached) notes.push(`Attached ${attached} embedded texture(s) discovered in KMZ entries.`)
+        return { format: "kmz", scene, warnings: notes }
       }
       if (dae) {
         return { format: "kmz", scene: createPrimitiveThreeDScene("cube"), warnings: [`KMZ entry ${dae.name} uses unsupported compression method ${dae.method}; imported a cube placeholder.`] }
@@ -770,6 +1090,24 @@ function parseKmz(buffer: ArrayBuffer): AdvancedThreeDImportResult {
   return { format: "kmz", scene: createPrimitiveThreeDScene("cube"), warnings: ["No embedded COLLADA payload found; imported a cube placeholder."] }
 }
 
+function rehydrateThreeDScene(raw: ThreeDScene): ThreeDScene {
+  // Re-establish Uint8ClampedArray fields lost through JSON.parse and ensure
+  // every object/material has the expected shape.
+  return {
+    ...raw,
+    materials: raw.materials.map((material) => {
+      let texture = material.texture
+      if (texture && Array.isArray((texture as unknown as { bakedBytes?: number[] }).bakedBytes)) {
+        const arr = (texture as unknown as { bakedBytes: number[] }).bakedBytes
+        texture = { ...texture, bakedBytes: new Uint8ClampedArray(arr) }
+      } else if (texture && texture.bakedBytes && !(texture.bakedBytes instanceof Uint8ClampedArray)) {
+        texture = { ...texture, bakedBytes: new Uint8ClampedArray(texture.bakedBytes as ArrayLike<number>) }
+      }
+      return { ...material, texture }
+    }),
+  }
+}
+
 function parseU3d(buffer: ArrayBuffer): AdvancedThreeDImportResult {
   const text = new TextDecoder().decode(buffer)
   if (/^U3D-BROWSER-SUBSET\b/.test(text.trimStart())) {
@@ -778,15 +1116,16 @@ function parseU3d(buffer: ArrayBuffer): AdvancedThreeDImportResult {
       try {
         const payload = JSON.parse(text.slice(jsonStart)) as { scene?: ThreeDScene }
         if (payload.scene?.objects?.length && payload.scene.materials?.length) {
+          const rehydrated = rehydrateThreeDScene(payload.scene)
           return {
             format: "u3d",
             scene: {
-              ...payload.scene,
-              lights: payload.scene.lights?.length ? payload.scene.lights : sceneLights(),
-              camera: payload.scene.camera ?? { position: vec(0, 0.2, 5), target: vec(0, 0, 0), fov: 42, focalLength: 50 },
-              renderMode: payload.scene.renderMode ?? "solid-wire",
+              ...rehydrated,
+              lights: rehydrated.lights?.length ? rehydrated.lights : sceneLights(),
+              camera: rehydrated.camera ?? { position: vec(0, 0.2, 5), target: vec(0, 0, 0), fov: 42, focalLength: 50 },
+              renderMode: rehydrated.renderMode ?? "solid-wire",
             },
-            warnings: ["U3D browser-local metadata subset parsed with mesh, material, UV, and animation records."],
+            warnings: ["U3D browser-local metadata subset parsed with mesh, material, UV, map, smoothing, vertex-animation, and animation records."],
           }
         }
       } catch {
@@ -823,26 +1162,66 @@ export function importAdvancedThreeDScene(buffer: ArrayBuffer, fileName: string)
   return { format: "u3d", scene: createPrimitiveThreeDScene("cube"), warnings: [`Unsupported advanced 3D extension "${ext ?? "unknown"}"; imported a cube placeholder.`] }
 }
 
+function intPercentChunk(value: number) {
+  // 0x0030 INT_PERCENTAGE wrapped as a sub-chunk body.
+  const buf = new Uint8Array(2)
+  new DataView(buf.buffer).setInt16(0, clamp(Math.round(value * 100), -32768, 32767), true)
+  return chunk3ds(0x0030, buf)
+}
+
+function materialMapChunk(id: number, ref: ThreeDTextureRef) {
+  // 3DS material map sub-chunks need a percentage (strength) and at minimum
+  // the texture filename (0xA300). Other wrap flags are optional.
+  const strength = clamp(ref.strength ?? 1, 0, 1)
+  const parts: Uint8Array[] = [intPercentChunk(strength)]
+  if (ref.fileName) parts.push(chunk3ds(0xa300, cString(ref.fileName)))
+  if (ref.wrap) {
+    const flags = ref.wrap === "mirror" ? 0x10 : ref.wrap === "clamp" ? 0x01 : 0x00
+    parts.push(chunk3ds(0xa351, le16(flags)))
+  }
+  return chunk3ds(id, ...parts)
+}
+
 function encode3dsScene(scene: ThreeDScene) {
   const materialById = new Map(scene.materials.map((material) => [material.id, material]))
   const materialChunks = scene.materials.map((material) => {
     const rgb = hexToRgb(material.color)
-    return chunk3ds(
-      0xafff,
+    const parts: Uint8Array[] = [
       chunk3ds(0xa000, cString(material.name)),
       chunk3ds(0xa020, chunk3ds(0x0011, new Uint8Array([rgb.r, rgb.g, rgb.b]))),
-    )
+    ]
+    if (material.specularColor) {
+      const spec = hexToRgb(material.specularColor)
+      parts.push(chunk3ds(0xa030, chunk3ds(0x0011, new Uint8Array([spec.r, spec.g, spec.b]))))
+    }
+    if (material.shininess !== undefined) {
+      parts.push(chunk3ds(0xa040, intPercentChunk(material.shininess)))
+    }
+    if (material.opacity < 1) {
+      parts.push(chunk3ds(0xa050, intPercentChunk(1 - material.opacity)))
+    }
+    if (material.emissiveStrength) {
+      parts.push(chunk3ds(0xa084, intPercentChunk(material.emissiveStrength)))
+    }
+    if (material.maps?.diffuse) parts.push(materialMapChunk(0xa200, material.maps.diffuse))
+    if (material.maps?.specular) parts.push(materialMapChunk(0xa204, material.maps.specular))
+    if (material.maps?.opacity) parts.push(materialMapChunk(0xa210, material.maps.opacity))
+    if (material.maps?.bump) parts.push(materialMapChunk(0xa230, material.maps.bump))
+    if (material.maps?.emissive) parts.push(materialMapChunk(0xa33a, material.maps.emissive))
+    return chunk3ds(0xafff, ...parts)
   })
 
   const objectChunks = scene.objects
     .filter((object) => object.vertices.length && object.faces.length)
     .map((object) => {
       const vertices = object.vertices.slice(0, 65_535).map((vertex) => transformVertex(vertex, object))
-      const triangleRecords: Array<{ indices: number[]; materialId: string }> = []
-      for (const face of object.faces) {
+      const triangleRecords: Array<{ indices: number[]; materialId: string; smoothing: number }> = []
+      for (let faceIndex = 0; faceIndex < object.faces.length; faceIndex++) {
+        const face = object.faces[faceIndex]
         const indices = face.indices.filter((index) => index >= 0 && index < vertices.length)
+        const smoothing = object.smoothingGroups?.[faceIndex] ?? 0
         for (let i = 1; i + 1 < indices.length && triangleRecords.length < 65_535; i++) {
-          triangleRecords.push({ indices: [indices[0], indices[i], indices[i + 1]], materialId: face.materialId ?? object.materialId })
+          triangleRecords.push({ indices: [indices[0], indices[i], indices[i + 1]], materialId: face.materialId ?? object.materialId, smoothing })
         }
       }
       const vertexBytes = concatBytes([
@@ -860,10 +1239,14 @@ function encode3dsScene(scene: ThreeDScene) {
         le16(indices.length),
         ...indices.map(le16),
       ))
+      const smoothingChunk = object.smoothingGroups?.length
+        ? chunk3ds(0x4150, ...triangleRecords.map((record) => le32(record.smoothing >>> 0)))
+        : new Uint8Array(0)
       const faceBytes = concatBytes([
         le16(triangleRecords.length),
         ...triangleRecords.flatMap((record) => [le16(record.indices[0]), le16(record.indices[1]), le16(record.indices[2]), le16(0)]),
         ...faceMaterialChunks,
+        smoothingChunk,
       ])
       const uvs = object.uvs?.length === object.vertices.length ? object.uvs : vertices.map(() => ({ u: 0, v: 0 }))
       const uvBytes = concatBytes([
@@ -880,6 +1263,35 @@ function encode3dsScene(scene: ThreeDScene) {
   return chunk3ds(0x4d4d, chunk3ds(0x0002, le32(3)), chunk3ds(0x3d3d, ...materialChunks, ...objectChunks))
 }
 
+function cloneTextureRef(ref: ThreeDTextureRef): ThreeDTextureRef {
+  return { ...ref }
+}
+
+function cloneMaterialMaps(maps: ThreeDMaterialMaps): ThreeDMaterialMaps {
+  const out: ThreeDMaterialMaps = {}
+  if (maps.diffuse) out.diffuse = cloneTextureRef(maps.diffuse)
+  if (maps.specular) out.specular = cloneTextureRef(maps.specular)
+  if (maps.normal) out.normal = cloneTextureRef(maps.normal)
+  if (maps.opacity) out.opacity = cloneTextureRef(maps.opacity)
+  if (maps.bump) out.bump = cloneTextureRef(maps.bump)
+  if (maps.emissive) out.emissive = cloneTextureRef(maps.emissive)
+  return out
+}
+
+function cloneTextureMap(texture: ThreeDTextureMap): ThreeDTextureMap {
+  return {
+    ...texture,
+    pixels: texture.pixels.map((pixel) => ({ ...pixel })),
+    // Preserve the baked atlas bytes by allocating a new Uint8ClampedArray;
+    // dataUrl is a primitive and copies by value already.
+    bakedBytes: texture.bakedBytes ? new Uint8ClampedArray(texture.bakedBytes) : undefined,
+  }
+}
+
+function cloneVertexAnimation(frames: ThreeDVertexAnimationFrame[]): ThreeDVertexAnimationFrame[] {
+  return frames.map((frame) => ({ timeMs: frame.timeMs, positions: frame.positions.map((p) => ({ ...p })) }))
+}
+
 function serializableThreeDScene(scene: ThreeDScene): ThreeDScene {
   return {
     ...scene,
@@ -888,10 +1300,13 @@ function serializableThreeDScene(scene: ThreeDScene): ThreeDScene {
       vertices: object.vertices.map((vertex) => ({ ...vertex })),
       faces: object.faces.map((face) => ({ ...face, indices: [...face.indices], uvIndices: face.uvIndices ? [...face.uvIndices] : undefined })),
       uvs: object.uvs?.map((uv) => ({ ...uv })),
+      smoothingGroups: object.smoothingGroups ? [...object.smoothingGroups] : undefined,
+      vertexAnimation: object.vertexAnimation ? cloneVertexAnimation(object.vertexAnimation) : undefined,
     })),
     materials: scene.materials.map((material) => ({
       ...material,
-      texture: material.texture ? { ...material.texture, pixels: material.texture.pixels.map((pixel) => ({ ...pixel })) } : undefined,
+      texture: material.texture ? cloneTextureMap(material.texture) : undefined,
+      maps: material.maps ? cloneMaterialMaps(material.maps) : undefined,
     })),
     lights: scene.lights.map((light) => ({ ...light, position: light.position ? { ...light.position } : undefined, direction: light.direction ? { ...light.direction } : undefined })),
     camera: { ...scene.camera, position: { ...scene.camera.position }, target: { ...scene.camera.target } },
@@ -1020,12 +1435,50 @@ function interpolateKeyframes(keyframes: ThreeDAnimationKeyframe[], timeMs: numb
   return progress < 1 ? prev.value : next.value
 }
 
+function applyVertexAnimation(object: ThreeDObject, timeMs: number): ThreeDObject {
+  const frames = object.vertexAnimation
+  if (!frames?.length) return object
+  const sorted = [...frames].sort((a, b) => a.timeMs - b.timeMs)
+  if (timeMs <= sorted[0].timeMs) return { ...object, vertices: sorted[0].positions.map((p) => ({ ...p })) }
+  if (timeMs >= sorted[sorted.length - 1].timeMs) return { ...object, vertices: sorted[sorted.length - 1].positions.map((p) => ({ ...p })) }
+  const nextIndex = sorted.findIndex((frame) => frame.timeMs >= timeMs)
+  const prev = sorted[Math.max(0, nextIndex - 1)]
+  const next = sorted[nextIndex]
+  if (!prev || !next) return object
+  const span = Math.max(1, next.timeMs - prev.timeMs)
+  const progress = clamp((timeMs - prev.timeMs) / span, 0, 1)
+  // Linear interpolation between corresponding vertices. Frames are expected
+  // to share the same vertex count; if not, we fall back to the earlier frame
+  // to avoid producing invalid geometry.
+  if (prev.positions.length !== next.positions.length) {
+    return { ...object, vertices: prev.positions.map((p) => ({ ...p })) }
+  }
+  const vertices = prev.positions.map((p, index) => ({
+    x: lerp(p.x, next.positions[index].x, progress),
+    y: lerp(p.y, next.positions[index].y, progress),
+    z: lerp(p.z, next.positions[index].z, progress),
+  }))
+  return { ...object, vertices }
+}
+
 export function evaluateThreeDAnimation(scene: ThreeDScene, animationId: string | undefined = scene.activeAnimationId, timeMs = scene.currentTimeMs ?? 0): ThreeDScene {
   const stack = scene.animations?.find((animation) => animation.id === animationId) ?? scene.animations?.[0]
-  if (!stack) return { ...scene, currentTimeMs: Math.max(0, Math.round(timeMs)) }
+  if (!stack) {
+    // Even without an animation stack, apply per-object vertex animations.
+    const hasVertexAnim = scene.objects.some((object) => object.vertexAnimation?.length)
+    const baseTime = Math.max(0, Math.round(timeMs))
+    if (!hasVertexAnim) return { ...scene, currentTimeMs: baseTime }
+    return {
+      ...scene,
+      currentTimeMs: baseTime,
+      objects: scene.objects.map((object) => applyVertexAnimation(object, baseTime)),
+    }
+  }
   const duration = Math.max(1, Math.round(stack.durationMs))
   const localTime = stack.loop ? ((Math.round(timeMs) % duration) + duration) % duration : clamp(Math.round(timeMs), 0, duration)
   const out = cloneThreeDScene(scene)
+  // Apply mesh morph targets first so animated transforms compose on top.
+  out.objects = out.objects.map((object) => applyVertexAnimation(object, localTime))
   for (const track of stack.tracks) {
     const value = interpolateKeyframes(track.keyframes, localTime)
     if (value === undefined) continue
@@ -1057,6 +1510,156 @@ export function evaluateThreeDAnimation(scene: ThreeDScene, animationId: string 
   return { ...out, activeAnimationId: stack.id, currentTimeMs: localTime }
 }
 
+/**
+ * Default texture atlas size when none is set. 512x512 is a reasonable balance
+ * between memory and visible detail for browser-local painting; users can
+ * pre-allocate a different size by populating `material.texture` first.
+ */
+const DEFAULT_TEXTURE_ATLAS_SIZE = 512
+
+function ensureBakedBytes(texture: ThreeDTextureMap): Uint8ClampedArray {
+  const width = Math.max(1, Math.round(texture.width || DEFAULT_TEXTURE_ATLAS_SIZE))
+  const height = Math.max(1, Math.round(texture.height || DEFAULT_TEXTURE_ATLAS_SIZE))
+  const expected = width * height * 4
+  if (texture.bakedBytes && texture.bakedBytes.length === expected) return new Uint8ClampedArray(texture.bakedBytes)
+  return new Uint8ClampedArray(expected)
+}
+
+function blendPixel(
+  dest: Uint8ClampedArray,
+  index: number,
+  src: { r: number; g: number; b: number },
+  alpha: number,
+  blendMode: ThreeDTexturePixel["blendMode"] = "normal",
+) {
+  const dr = dest[index]
+  const dg = dest[index + 1]
+  const db = dest[index + 2]
+  const da = dest[index + 3]
+  let mr = src.r
+  let mg = src.g
+  let mb = src.b
+  if (blendMode === "multiply") {
+    mr = (dr * src.r) / 255
+    mg = (dg * src.g) / 255
+    mb = (db * src.b) / 255
+  } else if (blendMode === "screen") {
+    mr = 255 - ((255 - dr) * (255 - src.r)) / 255
+    mg = 255 - ((255 - dg) * (255 - src.g)) / 255
+    mb = 255 - ((255 - db) * (255 - src.b)) / 255
+  } else if (blendMode === "overlay") {
+    mr = dr < 128 ? (2 * dr * src.r) / 255 : 255 - (2 * (255 - dr) * (255 - src.r)) / 255
+    mg = dg < 128 ? (2 * dg * src.g) / 255 : 255 - (2 * (255 - dg) * (255 - src.g)) / 255
+    mb = db < 128 ? (2 * db * src.b) / 255 : 255 - (2 * (255 - db) * (255 - src.b)) / 255
+  }
+  // Source-over compositing for the alpha layer keeps the dataUrl preview
+  // readable when the surface starts fully transparent.
+  const outA = clamp(da + alpha * 255 * (1 - da / 255), 0, 255)
+  dest[index] = clamp(mr * alpha + dr * (1 - alpha), 0, 255)
+  dest[index + 1] = clamp(mg * alpha + dg * (1 - alpha), 0, 255)
+  dest[index + 2] = clamp(mb * alpha + db * (1 - alpha), 0, 255)
+  dest[index + 3] = outA
+}
+
+function stampPixelOnAtlas(bytes: Uint8ClampedArray, width: number, height: number, pixel: ThreeDTexturePixel) {
+  const cx = clamp(pixel.u, 0, 1) * width
+  const cy = clamp(pixel.v, 0, 1) * height
+  const radiusPixels = Math.max(0.5, pixel.radius * Math.max(width, height))
+  const minX = Math.max(0, Math.floor(cx - radiusPixels))
+  const maxX = Math.min(width - 1, Math.ceil(cx + radiusPixels))
+  const minY = Math.max(0, Math.floor(cy - radiusPixels))
+  const maxY = Math.min(height - 1, Math.ceil(cy + radiusPixels))
+  const rgb = hexToRgb(pixel.color)
+  const opacity = clamp(pixel.opacity, 0, 1)
+  const r2 = radiusPixels * radiusPixels
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      const dx = x - cx
+      const dy = y - cy
+      const dist2 = dx * dx + dy * dy
+      if (dist2 > r2) continue
+      // Soft-edge falloff: 1 at center, 0 at radius edge.
+      const falloff = 1 - Math.sqrt(dist2) / radiusPixels
+      const alpha = clamp(opacity * Math.max(0, falloff), 0, 1)
+      if (alpha <= 0) continue
+      const idx = (y * width + x) * 4
+      blendPixel(bytes, idx, rgb, alpha, pixel.blendMode)
+    }
+  }
+}
+
+function dataUrlFromAtlas(bytes: Uint8ClampedArray, width: number, height: number): string | undefined {
+  if (typeof document === "undefined" || typeof document.createElement !== "function") return undefined
+  try {
+    const canvas = document.createElement("canvas")
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return undefined
+    const image = new ImageData(new Uint8ClampedArray(bytes), width, height)
+    ctx.putImageData(image, 0, 0)
+    return canvas.toDataURL("image/png")
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Returns the baked texture atlas for a material as an editable ImageData
+ * snapshot. Returns null when the material has no baked bytes yet (callers
+ * should treat this as "atlas not yet started").
+ */
+export function getBakedTextureImageData(scene: ThreeDScene, materialId: string): ImageData | null {
+  const material = scene.materials.find((item) => item.id === materialId)
+  if (!material?.texture?.bakedBytes) return null
+  const { width, height, bakedBytes } = material.texture
+  if (!bakedBytes.length || bakedBytes.length !== width * height * 4) return null
+  return new ImageData(new Uint8ClampedArray(bakedBytes), width, height)
+}
+
+/**
+ * Returns the baked texture atlas as an HTMLCanvasElement suitable for
+ * dropping into a layer.canvas slot. Caller must verify the document object
+ * exists (browser-only).
+ */
+export function getBakedTextureCanvas(scene: ThreeDScene, materialId: string): HTMLCanvasElement | null {
+  if (typeof document === "undefined") return null
+  const data = getBakedTextureImageData(scene, materialId)
+  if (!data) return null
+  const canvas = document.createElement("canvas")
+  canvas.width = data.width
+  canvas.height = data.height
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return null
+  ctx.putImageData(data, 0, 0)
+  return canvas
+}
+
+/**
+ * Replaces the baked atlas for a material wholesale. Useful for round-tripping
+ * an externally edited texture back into the scene (e.g. a Photoshop layer the
+ * user finished painting on).
+ */
+export function replaceBakedTexture(scene: ThreeDScene, materialId: string, image: ImageData): ThreeDScene {
+  return {
+    ...scene,
+    materials: scene.materials.map((material) => {
+      if (material.id !== materialId) return material
+      const bakedBytes = new Uint8ClampedArray(image.data)
+      const texture: ThreeDTextureMap = {
+        ...(material.texture ?? { pixels: [] as ThreeDTexturePixel[] }),
+        width: image.width,
+        height: image.height,
+        bakedBytes,
+        dataUrl: dataUrlFromAtlas(bakedBytes, image.width, image.height),
+        // Clear the pixel list since the atlas is now authoritative.
+        pixels: [],
+      }
+      return { ...material, texture }
+    }),
+  }
+}
+
 export function paintThreeDSurface(
   scene: ThreeDScene,
   objectId: string,
@@ -1076,27 +1679,65 @@ export function paintThreeDSurface(
     ...scene,
     materials: scene.materials.map((material) => {
       if (material.id !== object.materialId) return material
-      const texture = material.texture ?? { width: 512, height: 512, pixels: [] }
-      return { ...material, texture: { ...texture, pixels: [...texture.pixels, sample] } }
+      const base: ThreeDTextureMap = material.texture ?? { width: DEFAULT_TEXTURE_ATLAS_SIZE, height: DEFAULT_TEXTURE_ATLAS_SIZE, pixels: [] }
+      const width = Math.max(1, Math.round(base.width || DEFAULT_TEXTURE_ATLAS_SIZE))
+      const height = Math.max(1, Math.round(base.height || DEFAULT_TEXTURE_ATLAS_SIZE))
+      // Bake into a real atlas so the result round-trips as an editable image
+      // and can be lifted into a layer canvas via getBakedTextureCanvas.
+      const bakedBytes = ensureBakedBytes({ ...base, width, height })
+      stampPixelOnAtlas(bakedBytes, width, height, sample)
+      const dataUrl = dataUrlFromAtlas(bakedBytes, width, height)
+      return {
+        ...material,
+        texture: {
+          ...base,
+          width,
+          height,
+          // Keep the pixel record for legacy callers and U3D round-trip; the
+          // atlas is now the authoritative cached render.
+          pixels: [...base.pixels, sample],
+          bakedBytes,
+          dataUrl: dataUrl ?? base.dataUrl,
+        },
+      }
     }),
   }
 }
 
-function trianglesForScene(scene: ThreeDScene) {
+type TraceTriangle = {
+  a: Vec3
+  b: Vec3
+  c: Vec3
+  normal: Vec3
+  material: ThreeDMaterial
+  // Per-vertex UVs in the triangle's order (a/b/c). Undefined when the object
+  // has no UV data; ray-tracer falls back to material.color in that case.
+  uvA?: { u: number; v: number }
+  uvB?: { u: number; v: number }
+  uvC?: { u: number; v: number }
+}
+
+function trianglesForScene(scene: ThreeDScene): TraceTriangle[] {
   const materialById = new Map(scene.materials.map((material) => [material.id, material]))
-  const triangles: Array<{ a: Vec3; b: Vec3; c: Vec3; normal: Vec3; material: ThreeDMaterial }> = []
+  const triangles: TraceTriangle[] = []
   for (const object of scene.objects) {
     if (object.visible === false) continue
     const world = object.vertices.map((vertex) => transformVertex(vertex, object))
+    const uvs = object.uvs ?? []
     for (const face of object.faces) {
       if (face.indices.length < 3) continue
       const fan = face.indices
+      const uvFan = face.uvIndices && face.uvIndices.length === fan.length ? face.uvIndices : fan
       for (let i = 1; i + 1 < fan.length; i++) {
         const a = world[fan[0]]
         const b = world[fan[i]]
         const c = world[fan[i + 1]]
         const normal = normalize(cross(sub(b, a), sub(c, a)))
-        triangles.push({ a, b, c, normal, material: materialById.get(face.materialId ?? object.materialId) ?? scene.materials[0] ?? createMaterial() })
+        const material = materialById.get(face.materialId ?? object.materialId) ?? scene.materials[0] ?? createMaterial()
+        const uvA = uvs[uvFan[0]]
+        const uvB = uvs[uvFan[i]]
+        const uvC = uvs[uvFan[i + 1]]
+        triangles.push({ a, b, c, normal, material, uvA, uvB, uvC })
       }
     }
   }
@@ -1118,6 +1759,43 @@ function intersectTriangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: V
   if (v < 0 || u + v > 1) return null
   const distance = dot(edge2, q) * inv
   return distance > 1e-4 ? distance : null
+}
+
+// Variant that also returns barycentric weights so the renderer can resolve
+// UVs at the hit position. Returns null when no hit.
+function intersectTriangleBary(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: Vec3) {
+  const edge1 = sub(b, a)
+  const edge2 = sub(c, a)
+  const p = cross(direction, edge2)
+  const det = dot(edge1, p)
+  if (Math.abs(det) < 1e-7) return null
+  const inv = 1 / det
+  const t = sub(origin, a)
+  const u = dot(t, p) * inv
+  if (u < 0 || u > 1) return null
+  const q = cross(t, edge1)
+  const v = dot(direction, q) * inv
+  if (v < 0 || u + v > 1) return null
+  const distance = dot(edge2, q) * inv
+  if (distance <= 1e-4) return null
+  return { distance, u, v }
+}
+
+function sampleBakedAtlas(material: ThreeDMaterial, u: number, v: number): { r: number; g: number; b: number; a: number } | null {
+  const texture = material.texture
+  if (!texture?.bakedBytes?.length) return null
+  const width = Math.max(1, Math.round(texture.width || DEFAULT_TEXTURE_ATLAS_SIZE))
+  const height = Math.max(1, Math.round(texture.height || DEFAULT_TEXTURE_ATLAS_SIZE))
+  if (texture.bakedBytes.length !== width * height * 4) return null
+  const wrap = (value: number) => {
+    if (!Number.isFinite(value)) return 0
+    const wrapped = value - Math.floor(value)
+    return wrapped < 0 ? wrapped + 1 : wrapped
+  }
+  const px = Math.min(width - 1, Math.max(0, Math.floor(wrap(u) * width)))
+  const py = Math.min(height - 1, Math.max(0, Math.floor(wrap(v) * height)))
+  const i = (py * width + px) * 4
+  return { r: texture.bakedBytes[i], g: texture.bakedBytes[i + 1], b: texture.bakedBytes[i + 2], a: texture.bakedBytes[i + 3] }
 }
 
 export function rayTraceScene(scene: ThreeDScene, width: number, height: number, options: RayTraceOptions = {}): ImageData {
@@ -1152,16 +1830,27 @@ export function rayTraceScene(scene: ThreeDScene, width: number, height: number,
     return false
   }
 
-  const shadeHit = (point: Vec3, direction: Vec3, normal: Vec3, material: ThreeDMaterial) => {
-    const base = hexToRgb(material.color)
+  const shadeHit = (point: Vec3, direction: Vec3, normal: Vec3, material: ThreeDMaterial, uv?: { u: number; v: number }) => {
+    const materialRgb = hexToRgb(material.color)
+    // When a baked atlas exists and the hit triangle had UVs, modulate the
+    // material color with the sampled texel. Falls back to the flat color.
+    const sample = uv ? sampleBakedAtlas(material, uv.u, uv.v) : null
+    const base = sample && sample.a > 0
+      ? {
+          r: (materialRgb.r * (255 - sample.a) + sample.r * sample.a) / 255,
+          g: (materialRgb.g * (255 - sample.a) + sample.g * sample.a) / 255,
+          b: (materialRgb.b * (255 - sample.a) + sample.b * sample.a) / 255,
+        }
+      : materialRgb
     const roughness = clamp(material.roughness ?? 0.45, 0, 1)
     const metallic = clamp(material.metallic ?? 0, 0, 1)
     const opacity = clamp(material.opacity ?? 1, 0, 1)
+    const emissive = clamp(material.emissiveStrength ?? 0, 0, 1)
     const surfaceNormal = dot(normal, direction) > 0 ? mul(normal, -1) : normal
     const viewDirection = normalize(mul(direction, -1))
-    let r = 0
-    let g = 0
-    let b = 0
+    let r = base.r * emissive
+    let g = base.g * emissive
+    let b = base.b * emissive
     if (!lights.length) {
       r += base.r * 0.04
       g += base.g * 0.04
@@ -1205,15 +1894,24 @@ export function rayTraceScene(scene: ThreeDScene, width: number, height: number,
     const py = (0.5 - sampleY / documentHeight) * 2 * fov
     const direction = normalize(add(add(forward, mul(right, px)), mul(up, py)))
     let best = Infinity
-    let hit: { point: Vec3; normal: Vec3; material: ThreeDMaterial } | null = null
+    let hit: { point: Vec3; normal: Vec3; material: ThreeDMaterial; uv?: { u: number; v: number } } | null = null
     for (const triangle of triangles) {
-      const distance = intersectTriangle(camera.position, direction, triangle.a, triangle.b, triangle.c)
-      if (distance !== null && distance < best) {
-        best = distance
-        hit = { point: add(camera.position, mul(direction, distance)), normal: triangle.normal, material: triangle.material }
+      const intersection = intersectTriangleBary(camera.position, direction, triangle.a, triangle.b, triangle.c)
+      if (intersection !== null && intersection.distance < best) {
+        best = intersection.distance
+        // Interpolate UVs barycentrically when the triangle carries them.
+        let uv: { u: number; v: number } | undefined
+        if (triangle.uvA && triangle.uvB && triangle.uvC) {
+          const w0 = 1 - intersection.u - intersection.v
+          uv = {
+            u: triangle.uvA.u * w0 + triangle.uvB.u * intersection.u + triangle.uvC.u * intersection.v,
+            v: triangle.uvA.v * w0 + triangle.uvB.v * intersection.u + triangle.uvC.v * intersection.v,
+          }
+        }
+        hit = { point: add(camera.position, mul(direction, intersection.distance)), normal: triangle.normal, material: triangle.material, uv }
       }
     }
-    return hit ? shadeHit(hit.point, direction, hit.normal, hit.material) : { r: background.r, g: background.g, b: background.b, a: 255 }
+    return hit ? shadeHit(hit.point, direction, hit.normal, hit.material, hit.uv) : { r: background.r, g: background.g, b: background.b, a: 255 }
   }
 
   for (let y = 0; y < h; y++) {
@@ -1237,6 +1935,178 @@ export function rayTraceScene(scene: ThreeDScene, width: number, height: number,
     }
   }
   return new ImageData(data, w, h)
+}
+
+export interface ThreeDTilePlan {
+  /** Tile edge length in document-space pixels. */
+  tileSize: number
+  /** Total tile count for the destination canvas. */
+  tileCount: number
+  tileColumns: number
+  tileRows: number
+  /** Tile rectangles in document space, ordered row-major. */
+  tiles: Array<{ key: string; col: number; row: number; rect: { x: number; y: number; w: number; h: number } }>
+}
+
+export interface RayTraceSceneTiledOptions extends RayTraceOptions {
+  tileSize?: number
+  /**
+   * Invoked after each tile finishes with the per-tile ImageData and tile
+   * descriptor, allowing callers to stream rendered tiles into a backing
+   * store, layer canvas, or progress UI.
+   */
+  onTile?: (tile: { key: string; col: number; row: number; rect: { x: number; y: number; w: number; h: number } }, image: ImageData) => void
+  /** Soft cap for how many tiles to render this call. Useful for chunked yield. */
+  maxTiles?: number
+}
+
+/**
+ * Builds a row-major tile plan for a destination ray-trace canvas. The pattern
+ * mirrors `filter-worker.ts` so the same scheduling primitives can drive both
+ * filter and 3D rendering passes.
+ */
+export function planRayTraceTiles(width: number, height: number, tileSize = 256): ThreeDTilePlan {
+  const w = Math.max(1, Math.round(width))
+  const h = Math.max(1, Math.round(height))
+  const size = Math.max(16, Math.round(tileSize))
+  const tileColumns = Math.max(1, Math.ceil(w / size))
+  const tileRows = Math.max(1, Math.ceil(h / size))
+  const tiles: ThreeDTilePlan["tiles"] = []
+  for (let row = 0; row < tileRows; row++) {
+    for (let col = 0; col < tileColumns; col++) {
+      const x = col * size
+      const y = row * size
+      const tileW = Math.min(size, w - x)
+      const tileH = Math.min(size, h - y)
+      if (tileW <= 0 || tileH <= 0) continue
+      tiles.push({ key: `${col}:${row}`, col, row, rect: { x, y, w: tileW, h: tileH } })
+    }
+  }
+  return { tileSize: size, tileCount: tiles.length, tileColumns, tileRows, tiles }
+}
+
+/**
+ * Tiled ray-trace: iterates the destination canvas in row-major tiles so the
+ * main thread can yield between tiles or hand a tile off to a worker. Each
+ * tile is rendered by calling `rayTraceScene` with a sub-viewport. The first
+ * call to `onTile` lets callers stream results before the full image is done.
+ * Returns the fully assembled ImageData when complete.
+ *
+ * NOTE: WebGL/WebGPU GPU path tracing is not implemented in this app — see the
+ * 3D in-scope-implementation-gaps notes. The CPU ray-tracer reused here is the
+ * browser-local equivalent and tiling matches the worker-friendly pattern used
+ * by `filter-worker.ts`.
+ */
+export function rayTraceSceneTiled(scene: ThreeDScene, width: number, height: number, options: RayTraceSceneTiledOptions = {}): ImageData {
+  const w = Math.max(1, Math.round(width))
+  const h = Math.max(1, Math.round(height))
+  const plan = planRayTraceTiles(w, h, options.tileSize ?? 256)
+  const documentWidth = Math.max(1, Math.round(options.documentWidth ?? w))
+  const documentHeight = Math.max(1, Math.round(options.documentHeight ?? h))
+  const baseViewport = options.viewport ?? { x: 0, y: 0, w, h }
+  const data = new Uint8ClampedArray(w * h * 4)
+  const maxTiles = options.maxTiles && options.maxTiles > 0 ? Math.min(options.maxTiles, plan.tiles.length) : plan.tiles.length
+  for (let i = 0; i < maxTiles; i++) {
+    const tile = plan.tiles[i]
+    const tileViewport = {
+      x: baseViewport.x + tile.rect.x,
+      y: baseViewport.y + tile.rect.y,
+      w: tile.rect.w,
+      h: tile.rect.h,
+    }
+    const image = rayTraceScene(scene, tile.rect.w, tile.rect.h, {
+      ...options,
+      viewport: tileViewport,
+      documentWidth,
+      documentHeight,
+    })
+    // Blit tile pixels into the assembly buffer.
+    for (let row = 0; row < tile.rect.h; row++) {
+      const srcOffset = row * tile.rect.w * 4
+      const dstOffset = ((tile.rect.y + row) * w + tile.rect.x) * 4
+      data.set(image.data.subarray(srcOffset, srcOffset + tile.rect.w * 4), dstOffset)
+    }
+    options.onTile?.(tile, image)
+  }
+  return new ImageData(data, w, h)
+}
+
+/**
+ * Lightweight deterministic hash of a 3D scene used to detect changes that
+ * should trigger a smart-object re-render. Captures geometry, materials,
+ * camera, and animation timing.
+ */
+export function hashThreeDScene(scene: ThreeDScene): string {
+  let hash = 0x811c9dc5
+  const mix = (value: number) => {
+    hash = (hash ^ Math.imul(value | 0, 16777619)) >>> 0
+  }
+  for (const object of scene.objects) {
+    mix(object.vertices.length)
+    mix(object.faces.length)
+    for (const vertex of object.vertices) mix(Math.round((vertex.x + vertex.y + vertex.z) * 1000))
+    mix(Math.round(object.position.x * 1000) + Math.round(object.position.y * 1000) + Math.round(object.position.z * 1000))
+    mix(Math.round(object.rotation.x * 1000) + Math.round(object.rotation.y * 1000) + Math.round(object.rotation.z * 1000))
+    mix(Math.round(object.scale.x * 1000) + Math.round(object.scale.y * 1000) + Math.round(object.scale.z * 1000))
+  }
+  for (const material of scene.materials) {
+    mix(hexToRgb(material.color).r * 65536 + hexToRgb(material.color).g * 256 + hexToRgb(material.color).b)
+    mix(Math.round((material.opacity ?? 1) * 1000))
+    mix(Math.round((material.roughness ?? 0) * 1000))
+    mix(Math.round((material.metallic ?? 0) * 1000))
+    if (material.texture?.bakedBytes?.length) mix(material.texture.bakedBytes.length)
+  }
+  mix(Math.round(scene.camera.position.x * 1000) + Math.round(scene.camera.position.y * 1000) + Math.round(scene.camera.position.z * 1000))
+  mix(Math.round(scene.camera.target.x * 1000) + Math.round(scene.camera.target.y * 1000) + Math.round(scene.camera.target.z * 1000))
+  mix(Math.round(scene.camera.fov * 100))
+  mix(scene.currentTimeMs ?? 0)
+  return hash.toString(16).padStart(8, "0")
+}
+
+export interface ThreeDSmartObjectRender {
+  /** Hashed digest of the source scene; written into SmartObjectSource.sourceHash. */
+  sourceHash: string
+  /** Composed canvas suitable for SmartObjectSource.canvas / layer.canvas. */
+  canvas: HTMLCanvasElement | null
+  /** True when the renderer was unable to allocate a canvas (e.g. SSR). */
+  fallback: boolean
+  /** Plan used; helpful for tests and the progress UI. */
+  plan: ThreeDTilePlan
+}
+
+/**
+ * Renders a 3D scene through `rayTraceSceneTiled` and packages the result for
+ * insertion into a SmartObjectSource. Callers wire the returned canvas and
+ * sourceHash into the layer's smartSource so editing the underlying 3D scene
+ * marks the smart object as out-of-date and re-renders deterministically on
+ * the next commit.
+ *
+ * The renderer is intentionally synchronous so it can run inside the editor's
+ * reducer flow; if you need to keep the main thread responsive for very large
+ * scenes, drive `rayTraceSceneTiled` directly with `maxTiles` and yield
+ * between tiles via `requestIdleCallback`.
+ */
+export function renderThreeDSceneToSmartObjectCanvas(
+  scene: ThreeDScene,
+  width: number,
+  height: number,
+  options: RayTraceSceneTiledOptions = {},
+): ThreeDSmartObjectRender {
+  const w = Math.max(1, Math.round(width))
+  const h = Math.max(1, Math.round(height))
+  const plan = planRayTraceTiles(w, h, options.tileSize ?? 256)
+  const sourceHash = hashThreeDScene(scene)
+  if (typeof document === "undefined") {
+    return { sourceHash, canvas: null, fallback: true, plan }
+  }
+  const image = rayTraceSceneTiled(scene, w, h, options)
+  const canvas = document.createElement("canvas")
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return { sourceHash, canvas: null, fallback: true, plan }
+  ctx.putImageData(image, 0, 0)
+  return { sourceHash, canvas, fallback: false, plan }
 }
 
 function axisValue(point: Vec3, axis: ThreeDCrossSection["axis"]) {
@@ -1838,10 +2708,21 @@ function fadeEnvelope(track: AudioTrack, localTimeMs: number) {
   return gain
 }
 
+/**
+ * When any track is marked `solo`, only solo tracks should play; all others
+ * are silenced for the duration of the mix. This mirrors the standard DAW
+ * solo bus behaviour used by every audio mixer UI.
+ */
+export function audibleAudioTracks(tracks: AudioTrack[]): AudioTrack[] {
+  const anySolo = tracks.some((track) => track.solo && !track.muted)
+  return tracks.filter((track) => !track.muted && (!anySolo || track.solo === true))
+}
+
 export function buildAudioMixPlan(tracks: AudioTrack[], timeMs: number, options: { masterVolume?: number } = {}): AudioMixPlan {
   const masterVolume = clamp(options.masterVolume ?? 1, 0, 1)
-  const activeTracks = tracks
-    .filter((track) => !track.muted && timeMs >= track.startMs && timeMs <= track.startMs + track.durationMs)
+  const audible = audibleAudioTracks(tracks)
+  const activeTracks = audible
+    .filter((track) => timeMs >= track.startMs && timeMs <= track.startMs + track.durationMs)
     .map((track) => {
       const localTimeMs = timeMs - track.startMs
       const gain = clamp(fadeEnvelope(track, localTimeMs) * masterVolume, 0, 1)
@@ -1861,8 +2742,9 @@ export function buildOfflineAudioMixSchedule(
 ): OfflineAudioMixSchedule {
   const masterVolume = clamp(options.masterVolume ?? 1, 0, 1)
   const sampleRate = Math.max(8000, Math.round(options.sampleRate ?? 48_000))
-  const scheduled = tracks
-    .filter((track) => !track.muted && !!track.dataUrl && track.durationMs > 0)
+  const audible = audibleAudioTracks(tracks)
+  const scheduled = audible
+    .filter((track) => !!track.dataUrl && track.durationMs > 0)
     .map((track) => {
       const gain = clamp((track.volume ?? 1) * masterVolume, 0, 1)
       const pan = clamp(track.pan ?? 0, -1, 1)
@@ -2147,6 +3029,110 @@ export async function renderAudioMixToWavBlob(
 ): Promise<Blob> {
   const buffer = await renderAudioMixToAudioBuffer(tracks, options)
   return new Blob([encodeWavFromAudioBuffer(buffer)], { type: "audio/wav" })
+}
+
+/**
+ * Decode an audio data URL into an AudioBuffer using an OfflineAudioContext.
+ *
+ * Each call creates a short-lived 1-channel/1-sample OfflineAudioContext purely
+ * to access `decodeAudioData`; the returned buffer can be sampled freely by the
+ * UI without touching the live AudioContext used for playback.
+ */
+export async function decodeAudioBufferFromDataUrl(dataUrl: string, sampleRate = 48_000): Promise<AudioBuffer> {
+  const OfflineCtx = offlineAudioContextCtor()
+  const context = new OfflineCtx(1, 1, Math.max(8000, Math.round(sampleRate)))
+  const data = dataUrlToArrayBuffer(dataUrl)
+  return context.decodeAudioData(data.slice(0))
+}
+
+export interface WaveformPeaks {
+  /** Min sample per peak bucket, range [-1, 1]. */
+  min: Float32Array
+  /** Max sample per peak bucket, range [-1, 1]. */
+  max: Float32Array
+  /** Sample rate the peaks were derived from. */
+  sampleRate: number
+  /** Source channel count. Peaks are flattened to mono by averaging. */
+  channels: number
+  /** Duration covered by the peaks in seconds. */
+  durationSeconds: number
+}
+
+/**
+ * Compute min/max peak pairs from an AudioBuffer suitable for drawing a
+ * waveform thumbnail. Channels are averaged to mono before bucketing.
+ */
+export function computeWaveformPeaks(buffer: AudioBuffer, buckets: number): WaveformPeaks {
+  const targetBuckets = Math.max(1, Math.floor(buckets))
+  const channelCount = Math.max(1, buffer.numberOfChannels)
+  const length = buffer.length
+  const min = new Float32Array(targetBuckets)
+  const max = new Float32Array(targetBuckets)
+  if (length === 0) {
+    return { min, max, sampleRate: buffer.sampleRate, channels: channelCount, durationSeconds: 0 }
+  }
+  const channels: Float32Array[] = []
+  for (let c = 0; c < channelCount; c++) channels.push(buffer.getChannelData(c))
+  const samplesPerBucket = Math.max(1, Math.floor(length / targetBuckets))
+  for (let bucket = 0; bucket < targetBuckets; bucket++) {
+    const start = bucket * samplesPerBucket
+    const end = bucket === targetBuckets - 1 ? length : Math.min(length, start + samplesPerBucket)
+    let lo = Infinity
+    let hi = -Infinity
+    for (let i = start; i < end; i++) {
+      let sum = 0
+      for (let c = 0; c < channelCount; c++) sum += channels[c][i]
+      const sample = sum / channelCount
+      if (sample < lo) lo = sample
+      if (sample > hi) hi = sample
+    }
+    if (!Number.isFinite(lo)) lo = 0
+    if (!Number.isFinite(hi)) hi = 0
+    min[bucket] = clamp(lo, -1, 1)
+    max[bucket] = clamp(hi, -1, 1)
+  }
+  return {
+    min,
+    max,
+    sampleRate: buffer.sampleRate,
+    channels: channelCount,
+    durationSeconds: length / buffer.sampleRate,
+  }
+}
+
+/**
+ * Draw a min/max waveform onto a target 2D canvas. The canvas is sized to
+ * match its CSS box so the caller can use simple `width`/`height` props.
+ */
+export function drawWaveformPeaks(
+  canvas: HTMLCanvasElement,
+  peaks: WaveformPeaks,
+  options: { color?: string; background?: string; centerLine?: boolean } = {},
+): void {
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return
+  const width = canvas.width
+  const height = canvas.height
+  ctx.clearRect(0, 0, width, height)
+  if (options.background) {
+    ctx.fillStyle = options.background
+    ctx.fillRect(0, 0, width, height)
+  }
+  ctx.fillStyle = options.color ?? "#7dd3fc"
+  const midY = height / 2
+  const bucketCount = peaks.min.length
+  if (bucketCount === 0) return
+  const xStep = width / bucketCount
+  for (let bucket = 0; bucket < bucketCount; bucket++) {
+    const x = bucket * xStep
+    const top = midY - peaks.max[bucket] * midY
+    const bottom = midY - peaks.min[bucket] * midY
+    ctx.fillRect(x, Math.min(top, bottom), Math.max(0.5, xStep - 0.5), Math.max(1, Math.abs(bottom - top)))
+  }
+  if (options.centerLine !== false) {
+    ctx.fillStyle = "rgba(255,255,255,0.18)"
+    ctx.fillRect(0, midY - 0.5, width, 1)
+  }
 }
 
 export function resolveVideoExportPreset(id: string, overrides: Partial<VideoExportPreset> = {}): VideoExportPreset {

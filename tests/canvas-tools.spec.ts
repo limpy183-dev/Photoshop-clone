@@ -45,7 +45,7 @@ async function clickCanvas(page: Page, point: { x: number; y: number }) {
 
 test("canvas creation tools commit useful document state", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/")
+  await page.goto("/editor")
   await expect(page.locator("[data-canvas-stage]")).toBeVisible()
 
   await selectToolFromGroup(page, /Rectangle Tool|Custom Shape Tool/, "Custom Shape Tool")
@@ -69,7 +69,7 @@ test("canvas creation tools commit useful document state", async ({ page }) => {
 
 test("new first-class tools commit local editable state", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/")
+  await page.goto("/editor")
   await expect(page.locator("[data-canvas-stage]")).toBeVisible()
 
   await openCommand(page, "Vertical Type Tool")
@@ -107,7 +107,7 @@ test("new first-class tools commit local editable state", async ({ page }) => {
 
 test("advanced tool options expose polygon, magnetic, quick selection, and slice export controls", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/")
+  await page.goto("/editor")
   await expect(page.locator("[data-canvas-stage]")).toBeVisible()
 
   await openCommand(page, "Polygon Tool")
@@ -150,7 +150,7 @@ test("advanced tool options expose polygon, magnetic, quick selection, and slice
 
 test("lock image pixels blocks gradient strokes on the active layer", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/")
+  await page.goto("/editor")
   await expect(page.locator("[data-canvas-stage]")).toBeVisible()
 
   await page.getByLabel("Lower panel picker").selectOption("layers")
@@ -170,7 +170,7 @@ test("lock image pixels blocks gradient strokes on the active layer", async ({ p
 
 test("brush strokes repaint the visible composite canvas", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/")
+  await page.goto("/editor")
   await expect(page.locator("[data-canvas-stage]")).toBeVisible()
 
   await openCommand(page, "Brush Tool")

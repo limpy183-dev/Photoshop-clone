@@ -143,6 +143,12 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
         return
       }
 
+      if (isShortcut("timeline-split-frame")) {
+        e.preventDefault()
+        window.dispatchEvent(new CustomEvent("ps-timeline-split-at-playhead"))
+        return
+      }
+
       if (isShortcut("file-new")) {
         e.preventDefault()
         onOpenNew()

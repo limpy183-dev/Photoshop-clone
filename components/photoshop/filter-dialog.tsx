@@ -116,8 +116,55 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
       if (refA) ctx.calcSourceA = matchSourceData(refA, documents)
       if (refB) ctx.calcSourceB = matchSourceData(refB, documents)
     }
+    // Equalize honours an explicit selection mask. We rasterize the current
+    // selection into a 0/255 Uint8Array sized w*h so the filter can decide
+    // between selection-only and whole-image modes without re-querying the DOM.
+    if (filter.id === "equalize" && activeDoc?.selection) {
+      const sel = activeDoc.selection
+      if (sel.mask || sel.bounds) {
+        try {
+          const maskCanvas = sel.mask
+            ?? (() => {
+              const c = document.createElement("canvas")
+              c.width = activeDoc.width
+              c.height = activeDoc.height
+              const cctx = c.getContext("2d")
+              if (cctx && sel.bounds) {
+                cctx.fillStyle = "#fff"
+                if (sel.shape === "ellipse") {
+                  cctx.beginPath()
+                  cctx.ellipse(
+                    sel.bounds.x + sel.bounds.w / 2,
+                    sel.bounds.y + sel.bounds.h / 2,
+                    sel.bounds.w / 2,
+                    sel.bounds.h / 2,
+                    0,
+                    0,
+                    Math.PI * 2,
+                  )
+                  cctx.fill()
+                } else {
+                  cctx.fillRect(sel.bounds.x, sel.bounds.y, sel.bounds.w, sel.bounds.h)
+                }
+              }
+              return c
+            })()
+          const cctx = maskCanvas.getContext("2d")
+          if (cctx) {
+            const img = cctx.getImageData(0, 0, activeDoc.width, activeDoc.height)
+            const out = new Uint8Array(activeDoc.width * activeDoc.height)
+            for (let i = 0; i < out.length; i++) out[i] = img.data[i * 4 + 3] > 8 ? 255 : 0
+            ctx.selectionMask = out
+            ctx.selectionMode = (String(params.mode ?? "image") as "image" | "selection-only" | "selection-source")
+          }
+        } catch {
+          // Selection canvas may be tainted in cross-origin demos; fall back
+          // to image-wide equalization.
+        }
+      }
+    }
     return ctx
-  }, [filter, params.matchSource, params.mapSource, params.applySource, params.sourceA, params.sourceB, documents])
+  }, [filter, params.matchSource, params.mapSource, params.applySource, params.sourceA, params.sourceB, params.mode, documents, activeDoc])
 
   React.useEffect(() => {
     if (!filter || !activeDoc) return

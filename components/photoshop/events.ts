@@ -12,6 +12,10 @@ export type PhotoshopEventMap = {
   "ps-request-zoom": { zoom?: number; factor?: number }
   "ps-request-print-size-view": undefined
   "ps-set-dock-width": number
+  "ps-purge-request": { target: import("./purge-commands").PurgeTarget }
+  "ps-open-learn": { topic: string }
+  "ps-show-home": { open?: boolean } | undefined
+  "ps-open-file": undefined
 }
 
 type PhotoshopEventName = keyof PhotoshopEventMap

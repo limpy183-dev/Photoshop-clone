@@ -5,6 +5,7 @@ import type {
   PathProps,
   PsDocument,
   ShapeProps,
+  StylisticSetKey,
   TextAntiAliasMode,
   TextProps,
   TypographyEmbeddedFont,
@@ -111,6 +112,12 @@ export interface FindReplaceOptions {
   wholeWord?: boolean
   useRegex?: boolean
   previewOnly?: boolean
+  /** Additional GREP flags to apply when useRegex is true (case-sensitive flag is derived from caseSensitive). */
+  regexFlags?: { multiline?: boolean; dotAll?: boolean }
+  /** Only the first match across the document is replaced (Replace Next). */
+  replaceNext?: boolean
+  /** Skip matches whose absolute (layer-id + index) precedes this cursor. */
+  startCursor?: { layerId: string; index: number }
 }
 
 export interface FindReplaceResult {
@@ -280,7 +287,22 @@ const OPEN_TYPE_FEATURE_TOGGLES: OpenTypeFeatureToggle[] = [
   { key: "smallCaps", tag: "smcp", label: "Small Caps", defaultEnabled: false },
   { key: "oldstyleFigures", tag: "onum", label: "Oldstyle Figures", defaultEnabled: false },
   { key: "tabularFigures", tag: "tnum", label: "Tabular Figures", defaultEnabled: false },
+  { key: "proportionalFigures", tag: "pnum", label: "Proportional Figures", defaultEnabled: false },
+  { key: "liningFigures", tag: "lnum", label: "Lining Figures", defaultEnabled: false },
+  { key: "historicalForms", tag: "hist", label: "Historical Forms", defaultEnabled: false },
+  { key: "titling", tag: "titl", label: "Titling Alternates", defaultEnabled: false },
 ]
+
+const STYLISTIC_SET_KEYS: StylisticSetKey[] = [
+  "ss01", "ss02", "ss03", "ss04", "ss05",
+  "ss06", "ss07", "ss08", "ss09", "ss10",
+  "ss11", "ss12", "ss13", "ss14", "ss15",
+  "ss16", "ss17", "ss18", "ss19", "ss20",
+]
+
+export function listStylisticSetKeys(): readonly StylisticSetKey[] {
+  return STYLISTIC_SET_KEYS
+}
 
 const OPEN_TYPE_FEATURE_SAMPLES: Record<string, string> = {
   liga: "office affinity",
@@ -1910,7 +1932,11 @@ export function findReplaceTextLayers(layers: readonly Layer[], options: FindRep
     return empty()
   }
 
-  const flags = options.caseSensitive ? "g" : "gi"
+  let flags = options.caseSensitive ? "g" : "gi"
+  if (options.useRegex && options.regexFlags) {
+    if (options.regexFlags.multiline && !flags.includes("m")) flags += "m"
+    if (options.regexFlags.dotAll && !flags.includes("s")) flags += "s"
+  }
   const source = options.useRegex ? options.find : escapeRegExp(options.find)
   const pattern = options.wholeWord ? `\\b(?:${source})\\b` : source
   let regex: RegExp
@@ -1923,6 +1949,19 @@ export function findReplaceTextLayers(layers: readonly Layer[], options: FindRep
   const matches: FindReplaceResult["matches"] = []
   const changedLayerIds: string[] = []
   let replacements = 0
+
+  // For Replace Next, track whether we've consumed our one allowed replacement.
+  let nextReplacementConsumed = false
+
+  const cursor = options.startCursor
+  const passesCursor = (layerId: string, index: number) => {
+    if (!cursor) return true
+    if (layerId !== cursor.layerId) {
+      // Cursor lives in a different layer — accept any match in this layer.
+      return true
+    }
+    return index >= cursor.index
+  }
 
   const nextLayers = layers.map((layer) => {
     if (!layer.text) return layer
@@ -1939,6 +1978,23 @@ export function findReplaceTextLayers(layers: readonly Layer[], options: FindRep
       })
     }
     if (options.previewOnly) return layer
+    if (options.replaceNext) {
+      // Replace only the first eligible match (respecting cursor).
+      if (nextReplacementConsumed) return layer
+      const target = layerMatches.find((match) => passesCursor(layer.id, match.index ?? 0))
+      if (!target) return layer
+      const start = target.index ?? 0
+      const end = start + target[0].length
+      const replaced = options.useRegex
+        ? target[0].replace(regex, options.replace)
+        : options.replace
+      const content = `${original.slice(0, start)}${replaced}${original.slice(end)}`
+      if (content === original) return layer
+      replacements += 1
+      nextReplacementConsumed = true
+      changedLayerIds.push(layer.id)
+      return { ...layer, text: { ...layer.text, content } }
+    }
     replacements += layerMatches.length
     const content = options.useRegex
       ? original.replace(regex, options.replace)

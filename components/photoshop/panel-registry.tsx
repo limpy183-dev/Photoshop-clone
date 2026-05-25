@@ -81,28 +81,28 @@ const CommentsPanel = lazyPanel(
   () => import("./panels/gap-panels").then((m) => ({ default: m.CommentsPanel })),
 )
 const DiscoverPanel = lazyPanel(
-  () => import("./panels/gap-panels").then((m) => ({ default: m.DiscoverPanel })),
+  () => import("./panels/discover-panel").then((m) => ({ default: m.DiscoverPanel })),
 )
 const GlyphsPanel = lazyPanel(
-  () => import("./panels/gap-panels").then((m) => ({ default: m.GlyphsPanel })),
+  () => import("./panels/glyphs-panel").then((m) => ({ default: m.GlyphsPanel })),
 )
 const LearnPanel = lazyPanel(
-  () => import("./panels/gap-panels").then((m) => ({ default: m.LearnPanel })),
+  () => import("./panels/learn-panel").then((m) => ({ default: m.LearnPanel })),
 )
 const LibrariesPanel = lazyPanel(
-  () => import("./panels/gap-panels").then((m) => ({ default: m.LibrariesPanel })),
+  () => import("./panels/libraries-panel").then((m) => ({ default: m.LibrariesPanel })),
 )
 const MeasurementLogPanel = lazyPanel(
-  () => import("./panels/gap-panels").then((m) => ({ default: m.MeasurementLogPanel })),
+  () => import("./panels/measurement-log-panel").then((m) => ({ default: m.MeasurementLogPanel })),
 )
 const NotesPanel = lazyPanel(
-  () => import("./panels/gap-panels").then((m) => ({ default: m.NotesPanel })),
+  () => import("./panels/notes-panel").then((m) => ({ default: m.NotesPanel })),
 )
 const ShapesPanel = lazyPanel(
-  () => import("./panels/gap-panels").then((m) => ({ default: m.ShapesPanel })),
+  () => import("./panels/shapes-panel").then((m) => ({ default: m.ShapesPanel })),
 )
 const StylesPanel = lazyPanel(
-  () => import("./panels/gap-panels").then((m) => ({ default: m.StylesPanel })),
+  () => import("./panels/styles-panel").then((m) => ({ default: m.StylesPanel })),
 )
 const GradientsPanel = lazyPanel(
   () => import("./panels/gradients-panel").then((m) => ({ default: m.GradientsPanel })),

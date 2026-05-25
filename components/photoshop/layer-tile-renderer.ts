@@ -3,7 +3,7 @@ import { compositeLayer } from "./blend-modes"
 import { getFilter } from "./filters"
 import { planTileGrid } from "./performance-engine"
 import { smartFilterMaskAmountAt, smartFilterMaskToImageData } from "./smart-filter-masks"
-import { rayTraceScene } from "./three-d-video-engine"
+import { planRayTraceTiles, rayTraceScene, rayTraceSceneTiled, type ThreeDTilePlan } from "./three-d-video-engine"
 import type { Layer, PsDocument } from "./types"
 import {
   createLayerTileAddress,
@@ -478,6 +478,42 @@ export function renderThreeDLayerTilePreview(
     documentWidth: documentSize.width,
     documentHeight: documentSize.height,
   })
+}
+
+export interface ThreeDLayerTiledPreviewOptions {
+  tileSize?: number
+  onTile?: (tile: { key: string; col: number; row: number; rect: TileCanvasRect }, image: ImageData) => void
+  maxTiles?: number
+}
+
+/**
+ * Tile-by-tile preview pass for 3D layers — mirrors the filter-worker tile
+ * pattern so callers can yield between tiles and stream progress. Useful for
+ * large 3D layers where a single full-frame raytrace would block the main
+ * thread for too long.
+ */
+export function renderThreeDLayerTilePreviewTiled(
+  layer: Pick<Layer, "threeD">,
+  rect: TileCanvasRect,
+  documentSize: { width: number; height: number },
+  options: ThreeDLayerTiledPreviewOptions = {},
+): { image: ImageData; plan: ThreeDTilePlan } {
+  if (!layer.threeD) {
+    return {
+      image: new ImageData(Math.max(1, rect.w), Math.max(1, rect.h)),
+      plan: planRayTraceTiles(Math.max(1, rect.w), Math.max(1, rect.h), options.tileSize ?? 256),
+    }
+  }
+  const plan = planRayTraceTiles(Math.max(1, rect.w), Math.max(1, rect.h), options.tileSize ?? 256)
+  const image = rayTraceSceneTiled(layer.threeD, rect.w, rect.h, {
+    viewport: rect,
+    documentWidth: documentSize.width,
+    documentHeight: documentSize.height,
+    tileSize: options.tileSize,
+    maxTiles: options.maxTiles,
+    onTile: options.onTile,
+  })
+  return { image, plan }
 }
 
 function rectToTiles(rect: DirtyRect, width: number, height: number, tileSize: number): DocumentRecompositionTile[] {

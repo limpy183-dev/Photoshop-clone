@@ -812,6 +812,25 @@ export function CanvasView() {
     // this to decide whether they can reuse a cached filter output.
     let prefixFp = ""
     const shallowKnockoutBackdrops = new Map<string, HTMLCanvasElement>()
+    // Deep knockout punches all the way through to the document base layer (the
+    // locked "Background" layer if present, otherwise transparency). Compute it
+    // up-front so every deep-knockout layer reveals the same backdrop regardless
+    // of its parent group.
+    let deepKnockoutBackdrop: HTMLCanvasElement | null = null
+    const baseLayer = activeDoc.layers.find(
+      (l) =>
+        l.visible &&
+        l.kind !== "group" &&
+        l.kind !== "adjustment" &&
+        (l.locked || l.lockAll) &&
+        typeof l.canvas.getContext === "function" &&
+        /^background$/i.test(l.name ?? ""),
+    )
+    if (baseLayer) {
+      const baseSnapshot = makeCanvas(cv.width, cv.height)
+      baseSnapshot.getContext("2d")!.drawImage(baseLayer.canvas, 0, 0)
+      deepKnockoutBackdrop = baseSnapshot
+    }
     for (const layer of activeDoc.layers) {
       if (!layer.visible) continue
       if (layer.kind === "group") continue
@@ -836,7 +855,12 @@ export function CanvasView() {
         applyAdjustmentLayer(ctx, layer, activeDoc.width, activeDoc.height, clipMask, prefixFp)
       } else {
         const advanced = normalizeAdvancedBlending(layer.advancedBlending)
-        const knockoutBackdrop = advanced.knockout === "shallow" ? shallowKnockoutBackdrops.get(groupKey) ?? null : null
+        const knockoutBackdrop =
+          advanced.knockout === "shallow"
+            ? shallowKnockoutBackdrops.get(groupKey) ?? null
+            : advanced.knockout === "deep"
+              ? deepKnockoutBackdrop
+              : null
         drawLayer(ctx, layer, clipMask, filterPreviews[layer.id], knockoutBackdrop)
       }
       // Extend prefix fingerprint with this layer's contribution so the next
@@ -2886,6 +2910,38 @@ export function CanvasView() {
   React.useEffect(() => {
     drawBlurGalleryOverlay(blurGalleryOverlay)
   }, [blurGalleryOverlay, activeDoc?.id, activeDoc?.width, activeDoc?.height])
+
+  /**
+   * Timeline transition overlay: during playback the timeline panel emits a
+   * baked transition canvas via "ps-timeline-transition-overlay". We draw it
+   * onto the existing overlay canvas so the user sees the live dissolve/fade/
+   * wipe compositing without mutating layer state.
+   */
+  React.useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ canvas?: HTMLCanvasElement | null; docId?: string } | null>).detail
+      const ov = overlayRef.current
+      if (!ov) return
+      const ctx = ov.getContext("2d")
+      if (!ctx) return
+      if (!detail || !detail.canvas) {
+        ctx.clearRect(0, 0, ov.width, ov.height)
+        return
+      }
+      if (detail.docId && activeDoc?.id && detail.docId !== activeDoc.id) {
+        ctx.clearRect(0, 0, ov.width, ov.height)
+        return
+      }
+      ctx.clearRect(0, 0, ov.width, ov.height)
+      try {
+        ctx.drawImage(detail.canvas, 0, 0, ov.width, ov.height)
+      } catch {
+        // canvas may have been disposed by the panel; ignore
+      }
+    }
+    window.addEventListener("ps-timeline-transition-overlay", handler)
+    return () => window.removeEventListener("ps-timeline-transition-overlay", handler)
+  }, [activeDoc?.id])
 
   const emitBlurGalleryParams = React.useCallback((filterId: BlurGalleryFilterId, params: BlurGalleryParams) => {
     window.dispatchEvent(new CustomEvent("ps-blur-gallery-overlay-change", { detail: { filterId, params } }))

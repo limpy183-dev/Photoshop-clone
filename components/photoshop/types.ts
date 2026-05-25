@@ -84,13 +84,21 @@ export interface SelectionOptions {
   tolerance: number
   contiguous: boolean
   sampleAllLayers?: boolean
-  sampleSize?: "point" | "3x3" | "5x5"
+  /**
+   * Sample size used when the wand / quick-selection / object-select tools
+   * read a source pixel. Matches Photoshop's eyedropper sample-size pop-up.
+   */
+  sampleSize?: "point" | "3x3" | "5x5" | "11x11" | "31x31" | "51x51" | "101x101"
+  /** Auto-enhance edges when applying Quick Selection. */
+  autoEnhance?: boolean
   quickGrowAmount?: number
   magneticWidth?: number
   magneticContrast?: number
   magneticHysteresis?: number
   magneticSmoothing?: number
   magneticFrequency?: number
+  /** Modulate magnetic-lasso width by stylus pressure (Pen Pressure toggle). */
+  magneticPenPressure?: boolean
 }
 
 export interface TextOptions {
@@ -218,6 +226,28 @@ export interface TypographyEmbeddedFont {
   hash: string
 }
 
+export type StylisticSetKey =
+  | "ss01"
+  | "ss02"
+  | "ss03"
+  | "ss04"
+  | "ss05"
+  | "ss06"
+  | "ss07"
+  | "ss08"
+  | "ss09"
+  | "ss10"
+  | "ss11"
+  | "ss12"
+  | "ss13"
+  | "ss14"
+  | "ss15"
+  | "ss16"
+  | "ss17"
+  | "ss18"
+  | "ss19"
+  | "ss20"
+
 export interface OpenTypeControls {
   ligatures?: boolean
   discretionaryLigatures?: boolean
@@ -232,6 +262,18 @@ export interface OpenTypeControls {
   smallCaps?: boolean
   oldstyleFigures?: boolean
   tabularFigures?: boolean
+  /** Use proportional figure widths (pnum). */
+  proportionalFigures?: boolean
+  /** Use lining figures (lnum). */
+  liningFigures?: boolean
+  /** Enable historical forms (hist). */
+  historicalForms?: boolean
+  /** Enable titling alternates (titl). */
+  titling?: boolean
+  /** Per-stylistic-set toggle map (ss01..ss20). */
+  stylisticSets?: Partial<Record<StylisticSetKey, boolean>>
+  /** Optional display names for stylistic sets from the font's name table. */
+  stylisticSetNames?: Partial<Record<StylisticSetKey, string>>
 }
 
 export interface TextExtrusionOptions {
@@ -273,6 +315,8 @@ export interface TextProps {
   verticalWritingMode?: "rl" | "lr"
   /** Tate-chu-yoko: render runs of Latin chars upright inside vertical lines. */
   tateChuYoko?: boolean
+  /** Width (in characters) of horizontal runs picked up by tate-chu-yoko grouping. Defaults to 2. */
+  tateChuYokoWidth?: number
   /** CSS text-orientation behavior for vertical type. */
   textOrientation?: "mixed" | "upright" | "sideways"
   /** Vertical flow alignment within an area text box. */
@@ -602,12 +646,24 @@ export interface BlendIfRange {
   white: number
 }
 
+/** Channel selector for Blend If sliders. "gray" matches Photoshop's luminance default. */
+export type BlendIfChannel = "gray" | "r" | "g" | "b"
+
+/** Optional per-channel Blend If ranges. Missing entries default to a full pass-through range. */
+export type BlendIfChannels = Partial<Record<BlendIfChannel, BlendIfRange>>
+
 export interface AdvancedBlending {
   fillOpacity: number
   knockout: "none" | "shallow" | "deep"
   channels: { r: boolean; g: boolean; b: boolean }
   blendIfThis: BlendIfRange
   blendIfUnderlying: BlendIfRange
+  /** Per-channel Blend If overrides for the source ("This Layer") slider. Gray range mirrors blendIfThis. */
+  blendIfThisChannels?: BlendIfChannels
+  /** Per-channel Blend If overrides for the underlying-layer slider. Gray range mirrors blendIfUnderlying. */
+  blendIfUnderlyingChannels?: BlendIfChannels
+  /** UI-only: which channel the Blend If sliders are currently editing. */
+  blendIfActiveChannel?: BlendIfChannel
   /** When false, layer effects use a full layer rectangle instead of the layer's transparency. Defaults true. */
   transparencyShapesLayer?: boolean
   /** When true, the raster layer mask also clips layer effects. Defaults false. */
@@ -767,6 +823,44 @@ export interface ThreeDTextureMap {
   height: number
   pixels: ThreeDTexturePixel[]
   sourceName?: string
+  /**
+   * Optional baked atlas data. When painting accumulates into a real bitmap,
+   * we store the bytes here so the texture round-trips as an editable image.
+   * `dataUrl` is preferred for serialization round-trip (PSD app-preservation
+   * envelope, U3D JSON subset, etc.); `bakedBytes` is populated for in-memory
+   * hand-offs to layer canvases.
+   */
+  bakedBytes?: Uint8ClampedArray
+  dataUrl?: string
+}
+
+export interface ThreeDTextureRef {
+  /** Filename inside the source package (e.g. KMZ texture entries, MTL refs). */
+  fileName?: string
+  /** Mime type when known (image/png, image/jpeg). */
+  mime?: string
+  /** Optional base64-encoded payload when the source bundled the pixels. */
+  dataBase64?: string
+  /** Optional intensity / strength channel multiplier expressed in 0..1. */
+  strength?: number
+  /** UV tile/wrap mode when the source format records it. */
+  wrap?: "repeat" | "clamp" | "mirror"
+}
+
+export interface ThreeDMaterialMaps {
+  diffuse?: ThreeDTextureRef
+  specular?: ThreeDTextureRef
+  normal?: ThreeDTextureRef
+  opacity?: ThreeDTextureRef
+  bump?: ThreeDTextureRef
+  emissive?: ThreeDTextureRef
+}
+
+export interface ThreeDVertexAnimationFrame {
+  /** Frame time in milliseconds since stack start. */
+  timeMs: number
+  /** Per-vertex positions for this frame. Length must equal mesh vertex count. */
+  positions: Vec3[]
 }
 
 export interface ThreeDFace {
@@ -788,6 +882,14 @@ export interface ThreeDMaterial {
   uvOffset?: { u: number; v: number }
   normalStrength?: number
   doubleSided?: boolean
+  /** Optional per-channel external texture references discovered on import. */
+  maps?: ThreeDMaterialMaps
+  /** Free-form RGB specular tint, useful when 3DS/COLLADA records 0xA040+0xA041. */
+  specularColor?: string
+  /** Self-illumination ratio in 0..1 (3DS 0xA084 SHIN_STRENGTH / 0xA08A SELF_ILPCT). */
+  emissiveStrength?: number
+  /** Shininess in 0..1 used by formats with 0xA040 SHININESS. */
+  shininess?: number
 }
 
 export interface ThreeDObject {
@@ -802,6 +904,18 @@ export interface ThreeDObject {
   scale: Vec3
   visible?: boolean
   crossSection?: ThreeDCrossSection
+  /**
+   * Optional smoothing-group bitmask per face (3DS 0x4150). Bit n set means the
+   * face contributes to smoothing group n+1, used to average normals across
+   * neighboring faces in same group during shading.
+   */
+  smoothingGroups?: number[]
+  /**
+   * Optional vertex animation frames (morph targets / mesh shape keys).
+   * Each frame holds per-vertex positions captured at `timeMs`. The browser
+   * preview interpolates linearly between adjacent frames.
+   */
+  vertexAnimation?: ThreeDVertexAnimationFrame[]
 }
 
 export interface ThreeDCrossSection {
@@ -945,6 +1059,8 @@ export interface AudioTrack {
   durationMs: number
   volume: number
   muted?: boolean
+  /** When any track in the mix is soloed, only soloed tracks should play. */
+  solo?: boolean
   dataUrl?: string
   pan?: number
   fadeInMs?: number
@@ -1096,24 +1212,41 @@ export interface VariableDataSet {
 export interface DocumentModeSettings {
   mode: "RGB" | "CMYK" | "Grayscale" | "Duotone" | "Indexed" | "Multichannel" | "Bitmap"
   duotone?: {
+    /** Number of inks: 1=mono, 2=duo, 3=tri, 4=quad. Defaults to 2 for back-compat. */
+    inkCount?: 1 | 2 | 3 | 4
     ink1: string
     ink2: string
+    ink3?: string
+    ink4?: string
+    /** Legacy single curve exponent (kept for back-compat). */
     curve: number
     ink1Name?: string
     ink2Name?: string
+    ink3Name?: string
+    ink4Name?: string
     opacity1?: number
     opacity2?: number
+    opacity3?: number
+    opacity4?: number
     balance?: number
+    /** Per-ink response curve (13 control points 0..255 mapping input coverage). */
+    curves?: { ink1?: number[]; ink2?: number[]; ink3?: number[]; ink4?: number[] }
+    /** Optional preset key the dialog last applied. */
+    preset?: string
   }
   indexed?: {
     colors: number
     dither: boolean
-    palette?: "adaptive" | "perceptual" | "web" | "uniform" | "grayscale" | "custom"
+    palette?: "adaptive" | "perceptual" | "web" | "uniform" | "grayscale" | "custom" | "selective" | "exact" | "system"
     ditherMethod?: "none" | "ordered" | "diffusion" | "noise"
+    /** Dither amount 0..100. Defaults to 75. */
+    ditherAmount?: number
     colorTable?: string[]
     transparency?: boolean
     matte?: string
     forced?: "none" | "black-white" | "primaries" | "web"
+    /** When true, palette-exact pixels skip dithering and pass through unchanged. */
+    preserveExact?: boolean
   }
   multichannel?: { channels: { r: boolean; g: boolean; b: boolean; c?: boolean; m?: boolean; y?: boolean; k?: boolean } }
   bitmap?: {
@@ -1783,6 +1916,7 @@ export interface MacroStep {
 export interface MacroAction {
   id: string
   name: string
+  folder?: string
   createdAt: number
   updatedAt: number
   steps: MacroStep[]
@@ -1803,6 +1937,13 @@ export interface BrushSettings {
     softness: number
     aspectRatio: number
     rotation: number
+    /**
+     * Accumulated wear across strokes (0-100). Increments while painting,
+     * driving the heightfield simulation; reset by "Sharpen Tip".
+     */
+    wear?: number
+    /** Tip silhouette shape — controls the unworn profile. */
+    shape?: "round" | "flat" | "chisel" | "calligraphic"
   }
   bristleTip?: {
     length: number
@@ -1811,6 +1952,12 @@ export interface BrushSettings {
     stiffness: number
     splay: number
     wetness: number
+    /** Number of bristles modelled. When omitted, derived from density. */
+    bristles?: number
+    /** Bristle bundle rotation in degrees relative to the stroke direction. */
+    angle?: number
+    /** Stroke spacing override for bristle dabs as % of tip size. */
+    spacing?: number
   }
   sizeControl?: "off" | "pressure" | "tilt" | "velocity" | "fade" | "random"
   angleControl?: "off" | "pressure" | "tilt" | "velocity" | "fade" | "random"
@@ -1869,6 +2016,14 @@ export interface BrushSettings {
     sampleAllLayers: boolean
     cleanAfterStroke: boolean
     reservoirColor?: string
+    /** Reservoir alpha (0-1). Drops as paint deposits and is replenished on load. */
+    reservoirAlpha?: number
+    /** Replenish amount applied at the start of each stroke (0-100). */
+    loadPerStroke?: number
+    /** When true the reservoir reloads at the start of every stroke. */
+    autoLoad?: boolean
+    /** When true the reservoir is cleaned at the start of every stroke. */
+    autoClean?: boolean
   }
   colorReplacement?: {
     sampling: "continuous" | "once" | "background-swatch"
@@ -1878,9 +2033,23 @@ export interface BrushSettings {
     antiAlias: boolean
   }
   artHistory?: {
-    style: "tight-short" | "tight-medium" | "loose-long" | "dab" | "curl"
+    style:
+      | "tight-short"
+      | "tight-medium"
+      | "tight-long"
+      | "loose-medium"
+      | "loose-long"
+      | "dab"
+      | "tight-curl"
+      | "loose-curl"
+      | "tight-curl-long"
+      | "loose-curl-long"
+      /** @deprecated retained for compatibility with previously saved presets. */
+      | "curl"
     area: number
     fidelity: number
+    /** Tonal distance between source and dab area; lower = paint only flat regions. */
+    tolerance?: number
   }
   /** Other */
   wetEdges?: boolean

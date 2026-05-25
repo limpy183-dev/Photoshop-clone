@@ -43,6 +43,11 @@ const ADJUSTMENTS: AdjustmentType[] = [
   "gradient-map",
   "selective-color",
   "shadows-highlights",
+  "hdr-toning",
+  "desaturate",
+  "match-color",
+  "replace-color",
+  "equalize",
 ]
 
 const ADJUSTMENT_EDIT_DEBOUNCE_MS = 60

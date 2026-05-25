@@ -304,6 +304,167 @@ function boolParam(params: Record<string, number | string | boolean>, key: strin
   return typeof params[key] === "boolean" ? params[key] as boolean : fallback
 }
 
+function bilinearSampleHighBit(source: HighBitImage, x: number, y: number): [number, number, number, number] {
+  const { width, height } = source
+  const ix = Math.max(0, Math.min(width - 1, x))
+  const iy = Math.max(0, Math.min(height - 1, y))
+  const x0 = Math.floor(ix)
+  const y0 = Math.floor(iy)
+  const x1 = Math.min(width - 1, x0 + 1)
+  const y1 = Math.min(height - 1, y0 + 1)
+  const fx = ix - x0
+  const fy = iy - y0
+  const i00 = (y0 * width + x0) * 4
+  const i10 = (y0 * width + x1) * 4
+  const i01 = (y1 * width + x0) * 4
+  const i11 = (y1 * width + x1) * 4
+  const out: [number, number, number, number] = [0, 0, 0, 0]
+  for (let c = 0; c < 4; c++) {
+    const a = readUnit(source, i00 + c)
+    const b = readUnit(source, i10 + c)
+    const c0 = readUnit(source, i01 + c)
+    const d = readUnit(source, i11 + c)
+    out[c] = a * (1 - fx) * (1 - fy) + b * fx * (1 - fy) + c0 * (1 - fx) * fy + d * fx * fy
+  }
+  return out
+}
+
+function gaussianBlurHighBit(source: HighBitImage, radius: number): HighBitImage {
+  if (radius <= 0) return cloneHighBitImage(source)
+  // 3 passes of box blur approximating Gaussian — matches filters.ts gaussianBlur
+  const r = Math.max(1, Math.round(radius / 3))
+  let out = boxBlur(source, r)
+  out = boxBlur(out, r)
+  out = boxBlur(out, r)
+  return out
+}
+
+function unsharpMaskHighBit(source: HighBitImage, amount: number, radius: number): HighBitImage {
+  const blurred = gaussianBlurHighBit(source, radius)
+  const out = new Float32Array(source.data.length)
+  const k = amount / 100
+  for (let i = 0; i < source.data.length; i += 4) {
+    for (let c = 0; c < 3; c++) {
+      const v = readUnit(source, i + c)
+      const blur = readUnit(blurred, i + c)
+      out[i + c] = v + (v - blur) * k
+    }
+    out[i + 3] = readUnit(source, i + 3)
+  }
+  return floatToSourceStorage(source, out)
+}
+
+function smartSharpenHighBit(
+  source: HighBitImage,
+  amount: number,
+  radius: number,
+  threshold: number,
+  shadowFade: number,
+  highlightFade: number,
+  remove: string,
+): HighBitImage {
+  let blurred: HighBitImage
+  if (remove === "motion") {
+    blurred = motionBlur(source, Math.max(0.5, radius), 0)
+  } else {
+    blurred = gaussianBlurHighBit(source, Math.max(0.5, radius))
+  }
+  const out = new Float32Array(source.data.length)
+  const k = amount / 100
+  const shadowK = 1 - shadowFade / 100
+  const highlightK = 1 - highlightFade / 100
+  const thresholdUnit = threshold / 255
+  for (let i = 0; i < source.data.length; i += 4) {
+    const r = readUnit(source, i)
+    const g = readUnit(source, i + 1)
+    const b = readUnit(source, i + 2)
+    const br = readUnit(blurred, i)
+    const bg = readUnit(blurred, i + 1)
+    const bb = readUnit(blurred, i + 2)
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b
+    const edgeMag = (Math.abs(r - br) + Math.abs(g - bg) + Math.abs(b - bb)) / 3
+    if (edgeMag < thresholdUnit) {
+      out[i] = r
+      out[i + 1] = g
+      out[i + 2] = b
+      out[i + 3] = readUnit(source, i + 3)
+      continue
+    }
+    let fade = 1
+    if (lum < 64 / 255) fade *= shadowK + (1 - shadowK) * (lum / (64 / 255))
+    else if (lum > 192 / 255) fade *= highlightK + (1 - highlightK) * ((1 - lum) / (63 / 255))
+    const effectiveK = k * fade
+    out[i] = r + (r - br) * effectiveK
+    out[i + 1] = g + (g - bg) * effectiveK
+    out[i + 2] = b + (b - bb) * effectiveK
+    out[i + 3] = readUnit(source, i + 3)
+  }
+  return floatToSourceStorage(source, out)
+}
+
+function pseudoDitherHighBit(seed: number): number {
+  const x = Math.sin(seed * 78.233 + 12.9898) * 43758.5453
+  return x - Math.floor(x)
+}
+
+function radialBlurHighBit(
+  source: HighBitImage,
+  amount: number,
+  method: string,
+  quality: string,
+  centerX: number,
+  centerY: number,
+): HighBitImage {
+  const { width, height } = source
+  const cx = clamp(centerX / 100) * (width - 1)
+  const cy = clamp(centerY / 100) * (height - 1)
+  const strength = Math.max(0, Math.min(100, amount)) / 100
+  if (strength <= 0) return cloneHighBitImage(source)
+  const steps = quality === "best" ? 48 : quality === "good" ? 24 : 12
+  const diag = Math.hypot(width, height)
+  const out = new Float32Array(source.data.length)
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const dx = x - cx
+      const dy = y - cy
+      const dist = Math.hypot(dx, dy)
+      const accum = [0, 0, 0, 0]
+      let wSum = 0
+      for (let s = 0; s < steps; s++) {
+        const stepWeight = 1 - Math.abs((s / Math.max(1, steps - 1)) - 0.5) * 2
+        const jitter = quality === "best" ? (pseudoDitherHighBit(y * width + x + s * 17) - 0.5) / steps : 0
+        const t = (s / Math.max(1, steps - 1) - 0.5 + jitter) * strength
+        let sx = x
+        let sy = y
+        if (method === "zoom") {
+          const scale = 1 + t * 1.3
+          sx = cx + dx * scale
+          sy = cy + dy * scale
+        } else {
+          const arc = t * (diag * 0.5) / Math.max(8, dist)
+          const cos = Math.cos(arc)
+          const sin = Math.sin(arc)
+          sx = cx + dx * cos - dy * sin
+          sy = cy + dx * sin + dy * cos
+        }
+        const sample = bilinearSampleHighBit(source, sx, sy)
+        accum[0] += sample[0] * stepWeight
+        accum[1] += sample[1] * stepWeight
+        accum[2] += sample[2] * stepWeight
+        accum[3] += sample[3] * stepWeight
+        wSum += stepWeight
+      }
+      const o = (y * width + x) * 4
+      const inv = wSum > 0 ? 1 / wSum : 0
+      out[o] = accum[0] * inv
+      out[o + 1] = accum[1] * inv
+      out[o + 2] = accum[2] * inv
+      out[o + 3] = accum[3] * inv
+    }
+  }
+  return floatToSourceStorage(source, out)
+}
+
 function boxBlur(source: HighBitImage, radius: number): HighBitImage {
   const r = Math.max(0, Math.round(radius))
   if (r <= 0) return cloneHighBitImage(source)
@@ -709,9 +870,36 @@ export function applyHighBitFilter(
   if (filterId === "motion-blur") {
     return motionBlur(source, numberParam(params, "distance", 10), numberParam(params, "angle", 0))
   }
+  if (filterId === "gaussian-blur") {
+    return gaussianBlurHighBit(source, numberParam(params, "radius", 4))
+  }
+  if (filterId === "radial-blur") {
+    return radialBlurHighBit(
+      source,
+      numberParam(params, "amount", 25),
+      String(params.method ?? "spin"),
+      String(params.quality ?? "good"),
+      numberParam(params, "centerX", 50),
+      numberParam(params, "centerY", 50),
+    )
+  }
   if (BLUR_FILTERS.has(filterId)) {
     const radius = filterId === "blur" ? 1 : filterId === "blur-more" ? 2 : numberParam(params, "radius", numberParam(params, "blur", 2))
     return boxBlur(source, radius)
+  }
+  if (filterId === "unsharp-mask") {
+    return unsharpMaskHighBit(source, numberParam(params, "amount", 100), numberParam(params, "radius", 1))
+  }
+  if (filterId === "smart-sharpen") {
+    return smartSharpenHighBit(
+      source,
+      numberParam(params, "amount", 100),
+      numberParam(params, "radius", 1),
+      numberParam(params, "threshold", 0),
+      numberParam(params, "shadowAmount", 0),
+      numberParam(params, "highlightAmount", 0),
+      String(params.remove ?? "gaussian"),
+    )
   }
   if (SHARPEN_FILTERS.has(filterId)) {
     return sharpen(source, filterId === "sharpen-more" ? 90 : numberParam(params, "amount", 50))

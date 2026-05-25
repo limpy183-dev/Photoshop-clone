@@ -12,9 +12,15 @@ import {
   createAssetLibraryBundle,
   filterAssetLibrary,
 } from "../components/photoshop/asset-library-bundles"
+import { filterLocalLibraryAssets, parseLibraryTagInput, type LibraryAssetRecord } from "../components/photoshop/libraries-store"
 import { searchLearningIndex, buildLearningIndex } from "../components/photoshop/learning-index"
+import { LEARNING_PANEL_SOURCES, learningPanelSourceIds } from "../components/photoshop/learning-panel-sources"
 import { deserializeProject, serializeProject } from "../components/photoshop/document-io"
 import { normalizeImportedAssetLibrary } from "../components/photoshop/panels/assets-panel"
+import { __glyphsPanelInternals } from "../components/photoshop/panels/glyphs-panel"
+import { __learnPanelInternals } from "../components/photoshop/panels/learn-panel"
+import { __notesPanelInternals } from "../components/photoshop/panels/notes-panel"
+import type { Note } from "../components/photoshop/types"
 import { richFixtureDocument } from "./photoshop-fixtures"
 
 test("project round trip preserves threaded review comments and annotation geometry", async () => {
@@ -149,3 +155,164 @@ test("learning index searches commands docs panels and workflows", () => {
   expect(searchLearningIndex(items, "export review report")[0]).toMatchObject({ id: "workflow-review-export", type: "workflow" })
   expect(searchLearningIndex(items, "project file docs").some((item) => item.type === "doc")).toBe(true)
 })
+
+test("glyphs panel lists glyphs from an embedded OpenType cmap", () => {
+  const font = buildMinimalFormat4Font([0x0041, 0x03a9, 0x20ac])
+
+  expect(__glyphsPanelInternals.parseOpenTypeCmap(font)).toEqual([0x0041, 0x03a9, 0x20ac])
+  expect(
+    __glyphsPanelInternals.glyphCellsFromCodepoints([0x0041, 0x20ac]).map((cell) => ({
+      char: cell.char,
+      hex: cell.hex,
+    })),
+  ).toEqual([
+    { char: "A", hex: "0041" },
+    { char: "€", hex: "20AC" },
+  ])
+})
+
+test("local library panel filtering matches names groups tags descriptions and parses tag input", () => {
+  const records: LibraryAssetRecord[] = [
+    {
+      id: "lib_hero",
+      name: "Hero Button",
+      kind: "image",
+      group: "Brand",
+      description: "Mobile campaign primary call to action",
+      tags: ["hero", "mobile"],
+      createdAt: 300,
+    },
+    {
+      id: "lib_texture",
+      name: "Paper Texture",
+      kind: "image",
+      group: "Textures",
+      description: "Background material",
+      tags: ["grain"],
+      createdAt: 200,
+    },
+  ]
+
+  expect(filterLocalLibraryAssets(records, { query: "hero mobile", group: "Brand" }).map((asset) => asset.id)).toEqual(["lib_hero"])
+  expect(filterLocalLibraryAssets(records, { query: "background texture", group: "all" }).map((asset) => asset.id)).toEqual(["lib_texture"])
+  expect(parseLibraryTagInput("Hero, Mobile\nhero,  Print Ready  ")).toEqual(["hero", "mobile", "print-ready"])
+})
+
+test("notes panel filters sticky notes separately from annotation threads", () => {
+  const now = 1_800_000_000_000
+  const notes: Note[] = [
+    noteFixture("old", "Ada", now - 10 * 24 * 60 * 60 * 1000, "note"),
+    noteFixture("new", "Ada", now - 1_000, "note"),
+    noteFixture("annotation", "Ada", now - 500, "annotation"),
+    noteFixture("comment", "Bo", now - 100, "comment"),
+  ]
+
+  const visible = __notesPanelInternals.filterAndSortNotes(notes, {
+    authorFilter: "Ada",
+    dateBucket: "week",
+    sortMode: "oldest",
+    now,
+  })
+
+  expect(visible.map((note) => note.id)).toEqual(["new"])
+  expect(__notesPanelInternals.filterAndSortNotes(notes, { authorFilter: "all", dateBucket: "all", sortMode: "newest", now }).map((note) => note.id)).toEqual(["new", "old"])
+})
+
+test("learn and discover panels share complete panel sources for requested panel gaps", () => {
+  const ids = new Set(learningPanelSourceIds())
+
+  for (const id of ["glyphs", "notes", "libraries", "discover", "learn"]) {
+    expect(ids.has(id)).toBe(true)
+  }
+
+  const indexed = buildLearningIndex({ panels: LEARNING_PANEL_SOURCES, filters: [] })
+  expect(searchLearningIndex(indexed, "unicode glyphs panel")[0]).toMatchObject({ id: "panel-glyphs" })
+  expect(searchLearningIndex(indexed, "sticky note timestamps")[0]).toMatchObject({ id: "panel-notes" })
+  expect(searchLearningIndex(indexed, "local library gallery")[0]).toMatchObject({ id: "panel-libraries" })
+})
+
+test("learn panel exposes step-by-step guide content for panel workflows", () => {
+  const guideIds = new Set(__learnPanelInternals.LEARN_GUIDES.map((guide) => guide.id))
+
+  expect(guideIds.has("glyphs-special-characters")).toBe(true)
+  expect(guideIds.has("libraries-place-asset")).toBe(true)
+  expect(guideIds.has("notes-review-pass")).toBe(true)
+  expect(__learnPanelInternals.LEARN_GUIDES.every((guide) => guide.steps.length >= 3)).toBe(true)
+})
+
+function noteFixture(id: string, author: string, createdAt: number, kind: Note["kind"]): Note {
+  return {
+    id,
+    x: 12,
+    y: 16,
+    author,
+    text: `${id} text`,
+    color: "#facc15",
+    kind,
+    createdAt,
+  }
+}
+
+function buildMinimalFormat4Font(codepoints: number[]): Uint8Array {
+  const sorted = [...codepoints].sort((a, b) => a - b)
+  const segCount = sorted.length + 1
+  const format4Length = 16 + segCount * 8
+  const cmapOffset = 28
+  const subtableOffset = 12
+  const cmapLength = subtableOffset + format4Length
+  const font = new Uint8Array(cmapOffset + cmapLength)
+  const view = new DataView(font.buffer)
+
+  view.setUint32(0, 0x00010000)
+  view.setUint16(4, 1)
+  writeTag(font, 12, "cmap")
+  view.setUint32(20, cmapOffset)
+  view.setUint32(24, cmapLength)
+
+  view.setUint16(cmapOffset, 0)
+  view.setUint16(cmapOffset + 2, 1)
+  view.setUint16(cmapOffset + 4, 3)
+  view.setUint16(cmapOffset + 6, 1)
+  view.setUint32(cmapOffset + 8, subtableOffset)
+
+  const table = cmapOffset + subtableOffset
+  view.setUint16(table, 4)
+  view.setUint16(table + 2, format4Length)
+  view.setUint16(table + 4, 0)
+  view.setUint16(table + 6, segCount * 2)
+  view.setUint16(table + 8, 0)
+  view.setUint16(table + 10, 0)
+  view.setUint16(table + 12, 0)
+
+  let cursor = table + 14
+  for (const cp of sorted) {
+    view.setUint16(cursor, cp)
+    cursor += 2
+  }
+  view.setUint16(cursor, 0xffff)
+  cursor += 2
+  view.setUint16(cursor, 0)
+  cursor += 2
+  for (const cp of sorted) {
+    view.setUint16(cursor, cp)
+    cursor += 2
+  }
+  view.setUint16(cursor, 0xffff)
+  cursor += 2
+  for (const cp of sorted) {
+    view.setInt16(cursor, 1 - cp)
+    cursor += 2
+  }
+  view.setInt16(cursor, 1)
+  cursor += 2
+  for (let i = 0; i < segCount; i++) {
+    view.setUint16(cursor, 0)
+    cursor += 2
+  }
+
+  return font
+}
+
+function writeTag(bytes: Uint8Array, offset: number, tag: string) {
+  for (let i = 0; i < tag.length; i++) bytes[offset + i] = tag.charCodeAt(i)
+}

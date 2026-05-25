@@ -106,6 +106,11 @@ import {
   type PurgeTarget,
 } from "./purge-commands"
 import { purgePsbTileViewCaches } from "./psb-tile-view"
+import {
+  loadActionEnvelopes,
+  playAction as playActionWithConditions,
+  readPlaybackSpeedDelayMs,
+} from "./action-conditionals"
 
 /* ----------------------------- helpers --------------------------------- */
 
@@ -1197,7 +1202,15 @@ function flattenLayerStylePixels(layer: Layer): Layer {
   }
 }
 
-type RasterizeLayerOption = "layer" | "type" | "shape" | "smart-object" | "layer-style" | "all"
+type RasterizeLayerOption =
+  | "layer"
+  | "type"
+  | "shape"
+  | "smart-object"
+  | "layer-style"
+  | "video"
+  | "3d"
+  | "all"
 
 function rasterizeLayerForOption(layer: Layer, option: RasterizeLayerOption, doc: PsDocument): Layer {
   if (layer.kind === "group") return layer
@@ -1207,6 +1220,8 @@ function rasterizeLayerForOption(layer: Layer, option: RasterizeLayerOption, doc
   if (option === "type" && next.kind !== "text") return next
   if (option === "shape" && next.kind !== "shape" && !next.path) return next
   if (option === "smart-object" && !next.smartObject && next.kind !== "smart-object") return next
+  if (option === "video" && next.kind !== "video" && !next.video) return next
+  if (option === "3d" && next.kind !== "3d" && !next.threeD) return next
   if (option === "layer-style") return next
 
   return {
@@ -1221,8 +1236,8 @@ function rasterizeLayerForOption(layer: Layer, option: RasterizeLayerOption, doc
     adjustment: option === "layer" || option === "all" ? undefined : next.adjustment,
     frame: option === "layer" || option === "all" ? undefined : next.frame,
     artboard: option === "layer" || option === "all" ? undefined : next.artboard,
-    threeD: option === "layer" || option === "all" ? undefined : next.threeD,
-    video: option === "layer" || option === "all" ? undefined : next.video,
+    threeD: option === "3d" || option === "layer" || option === "all" ? undefined : next.threeD,
+    video: option === "video" || option === "layer" || option === "all" ? undefined : next.video,
   }
 }
 
@@ -1458,8 +1473,14 @@ export type Action =
   | { type: "flatten-all-layer-effects"; ids?: string[] }
   | { type: "flatten-all-masks"; ids?: string[] }
   | { type: "delete-empty-layers" }
-  | { type: "rasterize-layers"; ids?: string[]; option: "layer" | "type" | "shape" | "smart-object" | "layer-style" | "all" }
-  | { type: "flatten-transparency"; matte: string; alphaMode?: FlattenTransparencyAlphaMode; layerIds?: string[] }
+  | { type: "rasterize-layers"; ids?: string[]; option: "layer" | "type" | "shape" | "smart-object" | "layer-style" | "video" | "3d" | "all" }
+  | {
+      type: "flatten-transparency"
+      matte: string
+      alphaMode?: FlattenTransparencyAlphaMode
+      layerIds?: string[]
+      scope?: "document" | "selected" | "visible"
+    }
   | { type: "link-selected" }
   | { type: "unlink-selected" }
   | { type: "group-selected"; groupId: string }
@@ -1563,9 +1584,9 @@ export type Action =
   | { type: "feather-selection"; radius: number }
   | { type: "border-selection"; width: number }
   | { type: "smooth-selection"; radius: number }
-  | { type: "save-selection"; channel: AlphaChannel }
-  | { type: "load-selection"; channelId: string; mode?: SelectionChannelLoadMode; invert?: boolean }
-  | { type: "update-channel"; channelId: string; patch: Partial<AlphaChannel> }
+  | { type: "save-selection"; channel: AlphaChannel; targetDocId?: string }
+  | { type: "load-selection"; channelId: string; mode?: SelectionChannelLoadMode; invert?: boolean; sourceDocId?: string }
+  | { type: "update-channel"; channelId: string; patch: Partial<AlphaChannel>; targetDocId?: string }
   | { type: "delete-channel"; channelId: string }
   | { type: "mark-document-dirty"; id: string }
   | { type: "mark-document-saved"; id: string; lifecycle?: Partial<DocumentLifecycleState> }
@@ -2553,15 +2574,24 @@ export function reducer(state: EditorState, action: Action): EditorState {
       })
     case "flatten-transparency":
       return mutateActiveDoc(state, (d) => {
-        const targetIds = new Set(
-          action.layerIds?.length
-            ? action.layerIds
-            : d.selectedLayerIds.length
+        // Resolve the target layer set based on scope, with explicit layerIds
+        // taking precedence (used by tests and programmatic callers).
+        let targetIds: Set<string>
+        if (action.layerIds?.length) {
+          targetIds = new Set(action.layerIds)
+        } else if (action.scope === "document") {
+          targetIds = new Set(d.layers.map((l) => l.id))
+        } else if (action.scope === "visible") {
+          targetIds = new Set(d.layers.filter((l) => l.visible).map((l) => l.id))
+        } else {
+          targetIds = new Set(
+            d.selectedLayerIds.length
               ? d.selectedLayerIds
               : d.activeLayerId
                 ? [d.activeLayerId]
                 : [],
-        )
+          )
+        }
         if (!targetIds.size) return d
 
         let changed = false
@@ -3609,24 +3639,52 @@ export function reducer(state: EditorState, action: Action): EditorState {
         const next = smoothSelectionMask(base, Math.max(1, action.radius))
         return { ...d, selection: selectionFromMask(next, "freehand", d.selection.feather) }
       })
-    case "save-selection":
-      return mutateActiveDoc(state, (d) => ({
-        ...d,
-        channels: [...(d.channels ?? []), action.channel],
-      }))
-    case "load-selection":
+    case "save-selection": {
+      // Optionally route the saved channel into another open document (used by
+      // the Save Selection dialog's Document destination dropdown).
+      const targetId = action.targetDocId ?? state.activeDocId
+      if (!targetId) return state
+      return {
+        ...state,
+        documents: state.documents.map((d) =>
+          d.id === targetId ? { ...d, channels: [...(d.channels ?? []), action.channel] } : d,
+        ),
+      }
+    }
+    case "load-selection": {
+      // Optionally read the source channel from another open document so the
+      // active document can pull in a saved selection from anywhere.
+      const sourceDoc = action.sourceDocId
+        ? state.documents.find((d) => d.id === action.sourceDocId)
+        : null
       return mutateActiveDoc(state, (d) => {
-        const ch = (d.channels ?? []).find((c) => c.id === action.channelId)
+        const channelOwner = sourceDoc ?? d
+        const ch = (channelOwner.channels ?? []).find((c) => c.id === action.channelId)
         if (!ch) return d
+        // When pulling from another doc, only accept channels whose canvas
+        // matches our document dimensions; otherwise the selection mask would
+        // be garbage.
+        if (sourceDoc && (ch.canvas.width !== d.width || ch.canvas.height !== d.height)) return d
         return { ...d, selection: selectionFromMask(combineSelectionWithChannel(d, ch, action.mode, action.invert), "freehand") }
       })
-    case "update-channel":
-      return mutateActiveDoc(state, (d) => ({
-        ...d,
-        channels: (d.channels ?? []).map((channel) =>
-          channel.id === action.channelId ? { ...channel, ...action.patch } : channel,
+    }
+    case "update-channel": {
+      const targetId = action.targetDocId ?? state.activeDocId
+      if (!targetId) return state
+      return {
+        ...state,
+        documents: state.documents.map((d) =>
+          d.id === targetId
+            ? {
+                ...d,
+                channels: (d.channels ?? []).map((channel) =>
+                  channel.id === action.channelId ? { ...channel, ...action.patch } : channel,
+                ),
+              }
+            : d,
         ),
-      }))
+      }
+    }
     case "delete-channel":
       return mutateActiveDoc(state, (d) => ({
         ...d,
@@ -4165,12 +4223,14 @@ const initialState: EditorState = {
     contiguous: true,
     sampleAllLayers: false,
     sampleSize: "point",
+    autoEnhance: false,
     quickGrowAmount: 3,
     magneticWidth: 12,
     magneticContrast: 24,
     magneticHysteresis: 45,
     magneticSmoothing: 35,
     magneticFrequency: 57,
+    magneticPenPressure: false,
   },
   histories: {
     [initialDoc.id]: {
@@ -4830,11 +4890,46 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
       if (!action || !action.steps.length) return
       dispatch({ type: "set-playing-action", playing: true })
       try {
-        for (const step of action.steps) {
-          dispatch({ type: "restore-history-entry", entry: step.entry })
-          requestRender()
-          await new Promise((resolve) => window.setTimeout(resolve, 60))
-        }
+        const envelope = loadActionEnvelopes()[id] ?? { steps: {} }
+        await playActionWithConditions(
+          action,
+          envelope,
+          {
+            getContext: (step) => {
+              const current = stateRef.current
+              const doc = current.documents.find((d) => d.id === current.activeDocId) ?? activeDoc ?? current.documents[0]
+              const activeLayer = doc?.layers.find((layer) => layer.id === doc.activeLayerId) ?? null
+              const docForContext = doc ?? ({
+                id: "action-playback-context",
+                name: step.entry.label,
+                width: step.entry.width ?? 1,
+                height: step.entry.height ?? 1,
+                zoom: 1,
+                layers: [],
+                activeLayerId: step.entry.activeLayerId,
+                selectedLayerIds: step.entry.selectedLayerIds,
+                background: "#ffffff",
+                colorMode: step.entry.colorMode ?? "RGB",
+                bitDepth: 8,
+                selection: step.entry.selection ?? { bounds: null, shape: "rect" },
+              } as PsDocument)
+              return {
+                doc: docForContext,
+                activeLayer,
+                entry: step.entry,
+                selection: docForContext.selection ?? null,
+              }
+            },
+          },
+          {
+            applyStep: async (step) => {
+              dispatch({ type: "restore-history-entry", entry: step.entry })
+              requestRender()
+              const delay = readPlaybackSpeedDelayMs()
+              if (delay > 0) await new Promise((resolve) => window.setTimeout(resolve, delay))
+            },
+          },
+        )
         await new Promise((resolve) => window.setTimeout(resolve, 0))
         const current = stateRef.current
         const doc = current.documents.find((d) => d.id === current.activeDocId)

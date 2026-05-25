@@ -20,6 +20,36 @@ export interface DecodedRaster {
 export type TiffCompression = "none" | "lzw" | "deflate"
 export type PnmExportFormat = "ppm" | "pgm" | "pbm"
 
+export interface RasterExportEditEntry {
+  /** Stable identifier for this edit entry, e.g. a history step id. */
+  id?: string
+  /** Short human-readable label describing what happened. */
+  label: string
+  /** ISO 8601 timestamp for when the edit was committed. */
+  at?: string
+  /** Optional tool/action name (e.g. "brush", "filter:gaussian-blur"). */
+  tool?: string
+  /** Optional redacted parameters; values that look user-identifying are stripped. */
+  parameters?: Record<string, unknown>
+}
+
+export interface RasterExportProvenance {
+  /** Display name of the creator (user-configurable). Optional. */
+  creator?: string
+  /** Producing software identifier. Defaults to "Photoshop Web". */
+  software?: string
+  /** Software version string (e.g. package.json version). */
+  softwareVersion?: string
+  /** ISO 8601 timestamp at export time. Defaults to creationDate or now. */
+  createdAt?: string
+  /** Redacted edit list (most-recent first or chronological); usually last N history actions. */
+  editList?: RasterExportEditEntry[]
+  /** Optional document-level claim title. */
+  title?: string
+  /** Optional descriptive claim text. */
+  assertion?: string
+}
+
 export interface RasterExportMetadata {
   title?: string
   author?: string
@@ -29,7 +59,16 @@ export interface RasterExportMetadata {
   keywords?: string[]
   credit?: string
   source?: string
+  /** GPS coordinates in decimal degrees; written into EXIF GPSInfo when supported. */
+  gps?: {
+    latitude?: number
+    longitude?: number
+    altitude?: number
+    /** ISO 8601 timestamp captured with the coordinates. Optional. */
+    capturedAt?: string
+  }
   contentCredentials?: ContentCredential[]
+  provenance?: RasterExportProvenance
   fonts?: TypographyEmbeddedFont[]
   iccProfileName?: string
   iccProfile?: Uint8Array
@@ -39,6 +78,8 @@ export interface RasterExportMetadata {
     method?: number
     exactAlpha?: boolean
     quality?: number
+    alphaQuality?: number
+    alphaFilter?: "none" | "fast" | "best"
   }
   avif?: {
     lossless?: boolean
@@ -48,6 +89,14 @@ export interface RasterExportMetadata {
     tileColsLog2?: number
     bitDepth?: number
     quality?: number
+  }
+  tga?: {
+    jobName?: string
+    softwareId?: string
+    aspectRatioNumerator?: number
+    aspectRatioDenominator?: number
+    /** Linear gamma value, e.g. 2.2 — stored as a TGA Extension rational. */
+    gamma?: number
   }
   netpbm?: {
     comments?: string[]
@@ -1480,22 +1529,65 @@ function tiffWriteField(
   }
 }
 
-function buildExifIfdBytes(metadata: RasterExportMetadata, baseOffset: number): Uint8Array {
+function rationalBytes64(numerator: number, denominator: number): Uint8Array {
+  const num = Math.max(0, Math.round(numerator))
+  const den = Math.max(1, Math.round(denominator))
+  return concatUint8([tiffU32LE(num), tiffU32LE(den)])
+}
+
+function decimalDegreesToRational(decimal: number): Uint8Array {
+  // Convert to deg/min/sec rationals.
+  const abs = Math.abs(decimal)
+  const degrees = Math.floor(abs)
+  const minutesFloat = (abs - degrees) * 60
+  const minutes = Math.floor(minutesFloat)
+  const seconds = (minutesFloat - minutes) * 60
+  // Encode seconds at millisecond precision (×1000).
+  return concatUint8([
+    rationalBytes64(degrees, 1),
+    rationalBytes64(minutes, 1),
+    rationalBytes64(Math.round(seconds * 1000), 1000),
+  ])
+}
+
+function buildGpsIfdBytes(metadata: RasterExportMetadata, baseOffset: number): Uint8Array | null {
+  const gps = metadata.gps
+  if (!gps || (gps.latitude === undefined && gps.longitude === undefined)) return null
   const fields: TiffField[] = []
-  const dateTime = tiffDateTime(metadata.creationDate)
-  if (dateTime) {
-    const data = tiffAsciiBytes(dateTime)
-    fields.push({ tag: 36867, type: 2, count: data.byteLength, data })
-    fields.push({ tag: 36868, type: 2, count: data.byteLength, data })
+  // GPS Version ID (tag 0): 2.2.0.0
+  fields.push({ tag: 0, type: 1, count: 4, data: new Uint8Array([2, 2, 0, 0]) })
+  if (typeof gps.latitude === "number" && Number.isFinite(gps.latitude)) {
+    fields.push({ tag: 1, type: 2, count: 2, data: tiffAsciiBytes(gps.latitude >= 0 ? "N" : "S") })
+    fields.push({ tag: 2, type: 5, count: 3, data: decimalDegreesToRational(gps.latitude) })
   }
-  const comment = cleanMetadataText(metadata.description, 512)
-  if (comment) {
-    const data = concatUint8([asciiBytes("ASCII"), new Uint8Array([0, 0, 0]), asciiBytes(comment)])
-    fields.push({ tag: 37510, type: 7, count: data.byteLength, data })
+  if (typeof gps.longitude === "number" && Number.isFinite(gps.longitude)) {
+    fields.push({ tag: 3, type: 2, count: 2, data: tiffAsciiBytes(gps.longitude >= 0 ? "E" : "W") })
+    fields.push({ tag: 4, type: 5, count: 3, data: decimalDegreesToRational(gps.longitude) })
   }
-  fields.push({ tag: 40961, type: 3, count: 1, value: metadata.iccProfileName && !/srgb/i.test(metadata.iccProfileName) ? 0xffff : 1 })
-  if (!fields.length) return new Uint8Array([0, 0, 0, 0, 0, 0])
+  if (typeof gps.altitude === "number" && Number.isFinite(gps.altitude)) {
+    fields.push({ tag: 5, type: 1, count: 1, data: new Uint8Array([gps.altitude < 0 ? 1 : 0]) })
+    fields.push({ tag: 6, type: 5, count: 1, data: rationalBytes64(Math.round(Math.abs(gps.altitude) * 100), 100) })
+  }
+  if (gps.capturedAt) {
+    const date = new Date(gps.capturedAt)
+    if (!Number.isNaN(date.getTime())) {
+      const pad = (n: number) => String(n).padStart(2, "0")
+      const dateStamp = tiffAsciiBytes(`${date.getUTCFullYear()}:${pad(date.getUTCMonth() + 1)}:${pad(date.getUTCDate())}`)
+      const timeStamp = concatUint8([
+        rationalBytes64(date.getUTCHours(), 1),
+        rationalBytes64(date.getUTCMinutes(), 1),
+        rationalBytes64(date.getUTCSeconds(), 1),
+      ])
+      fields.push({ tag: 29, type: 2, count: dateStamp.byteLength, data: dateStamp })
+      fields.push({ tag: 7, type: 5, count: 3, data: timeStamp })
+    }
+  }
+  if (fields.length <= 1) return null
   fields.sort((a, b) => a.tag - b.tag)
+  return packTiffSubIfd(fields, baseOffset)
+}
+
+function packTiffSubIfd(fields: TiffField[], baseOffset: number): Uint8Array {
   const tagCount = fields.length
   const ifdSize = 2 + tagCount * 12 + 4
   let extraLength = 0
@@ -1513,6 +1605,35 @@ function buildExifIfdBytes(metadata: RasterExportMetadata, baseOffset: number): 
   }
   view.setUint32(entry, 0, true)
   return bytes
+}
+
+function buildExifIfdBytes(metadata: RasterExportMetadata, baseOffset: number): Uint8Array {
+  const fields: TiffField[] = []
+  const dateTime = tiffDateTime(metadata.creationDate)
+  if (dateTime) {
+    const data = tiffAsciiBytes(dateTime)
+    fields.push({ tag: 36867, type: 2, count: data.byteLength, data })
+    fields.push({ tag: 36868, type: 2, count: data.byteLength, data })
+  }
+  if (metadata.creationDate) {
+    const offsetMatch = /([+-]\d{2}:\d{2}|Z)$/.exec(metadata.creationDate)
+    if (offsetMatch) {
+      const value = offsetMatch[0] === "Z" ? "+00:00" : offsetMatch[0]
+      const data = tiffAsciiBytes(value)
+      // OffsetTimeOriginal (36881) and OffsetTimeDigitized (36882) — Exif 2.31
+      fields.push({ tag: 36881, type: 2, count: data.byteLength, data })
+      fields.push({ tag: 36882, type: 2, count: data.byteLength, data })
+    }
+  }
+  const comment = cleanMetadataText(metadata.description, 512)
+  if (comment) {
+    const data = concatUint8([asciiBytes("ASCII"), new Uint8Array([0, 0, 0]), asciiBytes(comment)])
+    fields.push({ tag: 37510, type: 7, count: data.byteLength, data })
+  }
+  fields.push({ tag: 40961, type: 3, count: 1, value: metadata.iccProfileName && !/srgb/i.test(metadata.iccProfileName) ? 0xffff : 1 })
+  if (!fields.length) return new Uint8Array([0, 0, 0, 0, 0, 0])
+  fields.sort((a, b) => a.tag - b.tag)
+  return packTiffSubIfd(fields, baseOffset)
 }
 
 function iptcDataset(record: number, dataset: number, value: string): Uint8Array {
@@ -2307,6 +2428,15 @@ function pngScanlines(imageData: ImageData, interlaced: boolean): Uint8Array {
 
 const PNG_SIGNATURE = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
+function buildC2paItxtChunk(metadata: RasterExportMetadata | undefined): Uint8Array | undefined {
+  const json = c2paJsonLdBytesFromRasterMetadata(metadata)
+  if (!json) return undefined
+  // iTXt: keyword \0 compressionFlag(0) compressionMethod(0) languageTag \0 translatedKeyword \0 text
+  const keyword = asciiBytes("c2pa")
+  const separators = new Uint8Array([0, 0, 0, 0, 0])
+  return pngChunk("iTXt", concatUint8([keyword, separators, json]))
+}
+
 export async function encodePngImageData(imageData: ImageData, options: PngEncodeOptions = {}): Promise<ArrayBuffer> {
   const width = imageData.width
   const height = imageData.height
@@ -2321,10 +2451,12 @@ export async function encodePngImageData(imageData: ImageData, options: PngEncod
   ihdr[12] = options.interlaced ? 1 : 0
   const compressed = await deflateZlib(pngScanlines(imageData, !!options.interlaced))
   const c2pa = c2paManifestStoreFromRasterMetadata(options.metadata)
+  const c2paItxt = buildC2paItxtChunk(options.metadata)
   return exactArrayBuffer(concatUint8([
     PNG_SIGNATURE,
     pngChunk("IHDR", ihdr),
     ...textMetadataChunks(options.metadata),
+    ...(c2paItxt ? [c2paItxt] : []),
     ...(c2pa ? [pngChunk("caBX", c2pa)] : []),
     pngChunk("IDAT", compressed),
     pngChunk("IEND", new Uint8Array(0)),
@@ -2368,23 +2500,175 @@ function metadataBox(type: string, data: Uint8Array): Uint8Array {
   return concatUint8([u32BE(data.byteLength + 8), asciiBytes(type), data])
 }
 
-export function c2paManifestStoreFromRasterMetadata(metadata: RasterExportMetadata | undefined): Uint8Array | undefined {
-  const credentials = metadata?.contentCredentials?.filter((credential) => credential && credential.id) ?? []
-  if (!credentials.length) return undefined
-  const createdAt = metadata?.creationDate ?? credentials[0]?.createdAt ?? ""
-  const manifestJson = new TextEncoder().encode(JSON.stringify({
-    app: "Photoshop Web",
-    format: "c2pa-manifest-store",
-    version: 1,
-    label: "c2pa",
-    manifestStoreUuid: "63327061-0011-0010-8000-00aa00389b71",
-    signatureStatus: "unsigned-local",
-    generatedAt: createdAt,
-    title: metadata?.title,
-    author: metadata?.author,
-    description: metadata?.description,
-    credentials,
+const C2PA_REDACTION_KEYS = new Set([
+  "email",
+  "phone",
+  "address",
+  "ip",
+  "ipv4",
+  "ipv6",
+  "userid",
+  "username",
+  "password",
+  "secret",
+  "token",
+  "filepath",
+  "path",
+  "filename",
+  "creator",
+  "creatorname",
+  "creatorid",
+  "user",
+])
+
+function redactValue(value: unknown, depth = 0): unknown {
+  if (depth > 4) return "[redacted-depth]"
+  if (value === null || value === undefined) return value
+  if (typeof value === "string") {
+    if (value.length > 240) return `${value.slice(0, 240)}…`
+    return value
+  }
+  if (typeof value === "number" || typeof value === "boolean") return value
+  if (Array.isArray(value)) {
+    return value.slice(0, 16).map((entry) => redactValue(entry, depth + 1))
+  }
+  if (typeof value === "object") {
+    const out: Record<string, unknown> = {}
+    let kept = 0
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      if (kept >= 24) {
+        out["…"] = "[redacted-overflow]"
+        break
+      }
+      const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "")
+      if (C2PA_REDACTION_KEYS.has(normalized)) {
+        out[key] = "[redacted]"
+      } else {
+        out[key] = redactValue(entry, depth + 1)
+      }
+      kept += 1
+    }
+    return out
+  }
+  return String(value)
+}
+
+function redactEditList(entries: RasterExportEditEntry[] | undefined, limit: number): RasterExportEditEntry[] {
+  if (!entries?.length) return []
+  const tail = entries.slice(-Math.max(0, limit))
+  return tail.map((entry) => ({
+    id: entry.id,
+    label: typeof entry.label === "string" ? entry.label.slice(0, 240) : "edit",
+    at: entry.at,
+    tool: entry.tool,
+    parameters: entry.parameters ? (redactValue(entry.parameters) as Record<string, unknown>) : undefined,
   }))
+}
+
+/**
+ * Stable, deterministic FNV-1a-style 64-bit hash of a string.
+ *
+ * The C2PA spec recommends SHA-256, but `crypto.subtle.digest` is async and the
+ * encoder paths here are synchronous. This hash is sufficient for an unsigned
+ * local provenance label that callers can verify against the payload bytes; it
+ * is NOT a cryptographic hash and we mark the algorithm as `fnv1a-64`.
+ */
+function fnv1aHash64(value: string): string {
+  let hi = 0xcbf29ce4
+  let lo = 0x84222325
+  for (let i = 0; i < value.length; i++) {
+    const ch = value.charCodeAt(i) & 0xffff
+    let nlo = (lo ^ ch) >>> 0
+    let nhi = hi >>> 0
+    const aLo = nlo
+    const aHi = nhi
+    // multiply by 0x100000001b3 = 1099511628211 -> hi=0x100, lo=0x000001b3
+    const mLo = 0x000001b3
+    const mHi = 0x100
+    const productLo = (aLo * mLo) >>> 0
+    const carry = Math.floor(((aLo >>> 0) * mLo) / 0x100000000)
+    const productHi = ((aHi * mLo + aLo * mHi + carry) >>> 0)
+    nlo = productLo
+    nhi = productHi
+    hi = nhi >>> 0
+    lo = nlo >>> 0
+  }
+  return `${hi.toString(16).padStart(8, "0")}${lo.toString(16).padStart(8, "0")}`
+}
+
+export interface C2paProvenancePayload {
+  "@context": Record<string, string>
+  "@type": "c2pa:Manifest"
+  label: "c2pa"
+  signatureStatus: "unsigned-local"
+  manifestStoreUuid: string
+  software: { name: string; version: string }
+  creator?: string
+  createdAt: string
+  title?: string
+  description?: string
+  author?: string
+  copyright?: string
+  assertion?: string
+  editList: RasterExportEditEntry[]
+  credentials: ContentCredential[]
+  hash: { algorithm: "fnv1a-64"; value: string; scope: "payload" }
+}
+
+/**
+ * Build the canonical C2PA-style provenance JSON-LD payload from raster export
+ * metadata. Returns `undefined` when there is nothing to embed.
+ */
+export function buildC2paProvenancePayload(metadata: RasterExportMetadata | undefined): C2paProvenancePayload | undefined {
+  if (!metadata) return undefined
+  const credentials = metadata.contentCredentials?.filter((credential) => credential && credential.id) ?? []
+  const provenance = metadata.provenance
+  const editList = redactEditList(provenance?.editList, 12)
+  if (!credentials.length && !editList.length && !provenance?.creator && !provenance?.title && !provenance?.assertion) {
+    return undefined
+  }
+  const createdAt = provenance?.createdAt ?? metadata.creationDate ?? credentials[0]?.createdAt ?? new Date().toISOString()
+  const payload: C2paProvenancePayload = {
+    "@context": {
+      "@vocab": "https://c2pa.org/specifications/specifications/1.4/specs/_attachments/C2PA_Specification.html#",
+      psweb: "https://photoshop-web.local/c2pa/1.0/",
+    },
+    "@type": "c2pa:Manifest",
+    label: "c2pa",
+    signatureStatus: "unsigned-local",
+    manifestStoreUuid: "63327061-0011-0010-8000-00aa00389b71",
+    software: {
+      name: provenance?.software ?? "Photoshop Web",
+      version: provenance?.softwareVersion ?? "0.1.0",
+    },
+    creator: provenance?.creator,
+    createdAt,
+    title: provenance?.title ?? metadata.title,
+    description: metadata.description,
+    author: metadata.author,
+    copyright: metadata.copyright,
+    assertion: provenance?.assertion,
+    editList,
+    credentials,
+    // Placeholder; rewritten after stringify with stable hash.
+    hash: { algorithm: "fnv1a-64", value: "0000000000000000", scope: "payload" },
+  }
+  // Compute hash over the canonicalized payload (excluding the hash field itself).
+  const { hash: _hash, ...hashable } = payload
+  void _hash
+  const hashable_json = JSON.stringify(hashable)
+  payload.hash = { algorithm: "fnv1a-64", value: fnv1aHash64(hashable_json), scope: "payload" }
+  return payload
+}
+
+function serializeC2paPayload(payload: C2paProvenancePayload): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify(payload))
+}
+
+export function c2paManifestStoreFromRasterMetadata(metadata: RasterExportMetadata | undefined): Uint8Array | undefined {
+  const payload = buildC2paProvenancePayload(metadata)
+  if (!payload) return undefined
+  const manifestJson = serializeC2paPayload(payload)
   const description = metadataBox("jumd", concatUint8([
     C2PA_MANIFEST_STORE_UUID,
     new Uint8Array([0]),
@@ -2392,6 +2676,16 @@ export function c2paManifestStoreFromRasterMetadata(metadata: RasterExportMetada
   ]))
   const manifest = metadataBox("json", manifestJson)
   return metadataBox("jumb", concatUint8([description, manifest]))
+}
+
+/**
+ * Build the textual JSON-LD bytes for the C2PA payload, suitable for an
+ * iTXt chunk or other text-based carrier (separate from the JUMBF box).
+ */
+export function c2paJsonLdBytesFromRasterMetadata(metadata: RasterExportMetadata | undefined): Uint8Array | undefined {
+  const payload = buildC2paProvenancePayload(metadata)
+  if (!payload) return undefined
+  return serializeC2paPayload(payload)
 }
 
 function buildXmpPacket(metadata: RasterExportMetadata | undefined): string {
@@ -2597,18 +2891,41 @@ function insertJpegXmp(bytes: Uint8Array, metadata: RasterExportMetadata | undef
 function insertJpegC2paManifest(bytes: Uint8Array, metadata: RasterExportMetadata | undefined): Uint8Array {
   const manifest = c2paManifestStoreFromRasterMetadata(metadata)
   if (!manifest || bytes[0] !== 0xff || bytes[1] !== 0xd8) return bytes
+  // ISO/IEC 19566-5 JUMBF in JPEG-1 uses APP11 markers with a fixed prefix:
+  //   APP11 marker (FFEB), 2-byte length, CI "JP" (2 bytes), En (2 BE), Z (4 BE),
+  //   then the next slice of the JUMBF payload. The first segment also carries
+  //   the LBox/TBox header bytes from the JUMBF box itself.
   const segments: Uint8Array[] = []
-  const maxPayload = 0xffff - 2
-  for (let offset = 0; offset < manifest.byteLength; offset += maxPayload) {
-    const part = manifest.subarray(offset, Math.min(manifest.byteLength, offset + maxPayload))
-    const length = part.byteLength + 2
-    const segment = new Uint8Array(4 + part.byteLength)
-    segment[0] = 0xff
-    segment[1] = 0xeb
-    segment[2] = (length >>> 8) & 255
-    segment[3] = length & 255
-    segment.set(part, 4)
+  // Maximum payload bytes per APP11 segment = 0xffff (length field max) minus
+  // segment length field (2) - CI (2) - En (2) - Z (4) = 0xffff - 10 = 65525.
+  const prefixSize = 2 /* length */ + 2 /* CI */ + 2 /* En */ + 4 /* Z */
+  const maxPayloadPerSegment = 0xffff - prefixSize
+  const totalPayloadBytes = manifest.byteLength
+  let sequenceNumber = 1
+  for (let offset = 0; offset < totalPayloadBytes; offset += maxPayloadPerSegment) {
+    const chunk = manifest.subarray(offset, Math.min(totalPayloadBytes, offset + maxPayloadPerSegment))
+    const length = prefixSize + chunk.byteLength // length field counts itself
+    const segment = new Uint8Array(2 /* marker */ + length)
+    let cursor = 0
+    segment[cursor++] = 0xff
+    segment[cursor++] = 0xeb
+    // length field
+    segment[cursor++] = (length >>> 8) & 255
+    segment[cursor++] = length & 255
+    // CI "JP"
+    segment[cursor++] = 0x4a // 'J'
+    segment[cursor++] = 0x50 // 'P'
+    // En (box instance, 1)
+    segment[cursor++] = 0x00
+    segment[cursor++] = 0x01
+    // Z (sequence number, 1-based, BE)
+    segment[cursor++] = (sequenceNumber >>> 24) & 255
+    segment[cursor++] = (sequenceNumber >>> 16) & 255
+    segment[cursor++] = (sequenceNumber >>> 8) & 255
+    segment[cursor++] = sequenceNumber & 255
+    segment.set(chunk, cursor)
     segments.push(segment)
+    sequenceNumber += 1
   }
   return concatUint8([bytes.subarray(0, 2), ...segments, bytes.subarray(2)])
 }

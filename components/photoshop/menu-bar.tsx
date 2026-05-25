@@ -4,6 +4,7 @@ import * as React from "react"
 import { toast } from "sonner"
 import {
   Menubar,
+  MenubarCheckboxItem as DropdownMenuCheckboxItem,
   MenubarContent as DropdownMenuContent,
   MenubarItem as DropdownMenuItem,
   MenubarLabel as DropdownMenuLabel,
@@ -15,6 +16,16 @@ import {
   MenubarSubTrigger as DropdownMenuSubTrigger,
   MenubarTrigger as DropdownMenuTrigger,
 } from "@/components/ui/menubar"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { useEditor, makeDocument, makeCanvas, type DocumentLifecycleState, type FileSystemFileHandleLike } from "./editor-context"
 import { compositeLayer } from "./blend-modes"
 import { FILTER_META, getFilterName } from "./filters-meta"
@@ -42,6 +53,9 @@ const CanvasSizeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolea
 )
 const StrokeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
   () => import("./stroke-dialog").then((m) => ({ default: m.StrokeDialog })),
+)
+const FlattenTransparencyDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./flatten-transparency-dialog").then((m) => ({ default: m.FlattenTransparencyDialog })),
 )
 const ColorRangeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
   () => import("./color-range-dialog").then((m) => ({ default: m.ColorRangeDialog })),
@@ -113,6 +127,13 @@ const SelectAndMaskDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boo
 const FileInfoDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
   () => import("./file-info-dialog").then((m) => ({ default: m.FileInfoDialog })),
 )
+const RevealSourceDialog = lazyDialog<{
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  docId?: string | null
+}>(
+  () => import("./reveal-source-dialog").then((m) => ({ default: m.RevealSourceDialog })),
+)
 const AdvancedSubsystemsDialog = lazyDialog<{
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -155,6 +176,9 @@ const PreferencesDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boole
 )
 const KeyboardShortcutsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
   () => import("./keyboard-shortcuts-dialog").then((m) => ({ default: m.KeyboardShortcutsDialog })),
+)
+const PresetManagerDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./preset-manager-dialog").then((m) => ({ default: m.PresetManagerDialog })),
 )
 const AboutDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
   () => import("./about-dialog").then((m) => ({ default: m.AboutDialog })),
@@ -232,6 +256,34 @@ const GuideLayoutDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boole
 const NewGuideDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
   () => import("./workspace-dialogs").then((m) => ({ default: m.NewGuideDialog })),
 )
+// Task 27 — Adjustment workflows. Each of these adjustments has UI that does
+// not fit the generic FilterDialog renderer (eyedroppers, presets,
+// dialog-prompt flows, "Save As Defaults" persistence), so they ship as
+// purpose-built dialogs lazily mounted only when their menu entry is used.
+const ShadowsHighlightsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./adjustment-dialogs").then((m) => ({ default: m.ShadowsHighlightsDialog })),
+)
+const HdrToningDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./adjustment-dialogs").then((m) => ({ default: m.HdrToningDialog })),
+)
+const MatchColorDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./adjustment-dialogs").then((m) => ({ default: m.MatchColorDialog })),
+)
+const ReplaceColorDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./adjustment-dialogs").then((m) => ({ default: m.ReplaceColorDialog })),
+)
+const EqualizePromptDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./adjustment-dialogs").then((m) => ({ default: m.EqualizePromptDialog })),
+)
+type AutoAlgorithmId = "monochromatic-contrast" | "per-channel-contrast" | "dark-light-colors" | "brightness-contrast"
+const AutoOptionsDialog = lazyDialog<{
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  initialAlgorithm?: AutoAlgorithmId
+  label?: string
+}>(
+  () => import("./adjustment-dialogs").then((m) => ({ default: m.AutoOptionsDialog })),
+)
 import {
   PANEL_CATEGORIES,
   PANEL_DEFINITIONS,
@@ -289,7 +341,6 @@ import { PURGE_COMMANDS, formatPurgeStatus, type PurgeTarget } from "./purge-com
 import { supportedIccProfileNames } from "./color-pipeline"
 import {
   revealSourceInBrowser,
-  sourceInfoForDocument,
   sourceInfoForSmartObject,
   type SourceFileHandleLike,
 } from "./source-location"
@@ -414,6 +465,7 @@ export function MenuBar({
   const [imageSizeOpen, setImageSizeOpen] = React.useState(false)
   const [canvasSizeOpen, setCanvasSizeOpen] = React.useState(false)
   const [strokeOpen, setStrokeOpen] = React.useState(false)
+  const [flattenTransparencyOpen, setFlattenTransparencyOpen] = React.useState(false)
   const [colorRangeOpen, setColorRangeOpen] = React.useState(false)
   const [refineEdgeOpen, setRefineEdgeOpen] = React.useState(false)
   const [liquifyOpen, setLiquifyOpen] = React.useState(false)
@@ -439,6 +491,8 @@ export function MenuBar({
   const [contactSheetOpen, setContactSheetOpen] = React.useState(false)
   const [photomergeOpen, setPhotomergeOpen] = React.useState(false)
   const [fileInfoOpen, setFileInfoOpen] = React.useState(false)
+  const [revealSourceOpen, setRevealSourceOpen] = React.useState(false)
+  const [revealSourceDocId, setRevealSourceDocId] = React.useState<string | null>(null)
   const [advancedOpen, setAdvancedOpen] = React.useState(false)
   const [advancedTab, setAdvancedTab] = React.useState<AdvancedSubsystemTab>("3d")
   const [algorithmOpen, setAlgorithmOpen] = React.useState(false)
@@ -446,12 +500,20 @@ export function MenuBar({
   const [colorModeTarget, setColorModeTarget] = React.useState<import("./color-mode-dialog").ColorModeDialogTarget | null>(null)
   const [preferencesOpen, setPreferencesOpen] = React.useState(false)
   const [shortcutsOpen, setShortcutsOpen] = React.useState(false)
+  const [presetManagerOpen, setPresetManagerOpen] = React.useState(false)
   const [aboutOpen, setAboutOpen] = React.useState(false)
   const [recentManagerOpen, setRecentManagerOpen] = React.useState(false)
   const [workspaceManagerOpen, setWorkspaceManagerOpen] = React.useState(false)
   const [selectionOperation, setSelectionOperation] = React.useState<SelectionOperation | null>(null)
   const [saveSelectionOpen, setSaveSelectionOpen] = React.useState(false)
   const [loadSelectionOpen, setLoadSelectionOpen] = React.useState(false)
+  // Task 27 — Adjustment workflow dialog state.
+  const [shadowsHighlightsOpen, setShadowsHighlightsOpen] = React.useState(false)
+  const [hdrToningOpen, setHdrToningOpen] = React.useState(false)
+  const [matchColorOpen, setMatchColorOpen] = React.useState(false)
+  const [replaceColorOpen, setReplaceColorOpen] = React.useState(false)
+  const [equalizePromptOpen, setEqualizePromptOpen] = React.useState(false)
+  const [autoOptions, setAutoOptions] = React.useState<{ algorithm: AutoAlgorithmId; label: string } | null>(null)
   const [savedWorkspaces, setSavedWorkspaces] = React.useState<{ name: string; savedAt?: number }[]>([])
   const [recentDocuments, setRecentDocuments] = React.useState<RecentDocument[]>([])
   const [largeDocumentRecovery, setLargeDocumentRecovery] = React.useState<{
@@ -687,10 +749,29 @@ export function MenuBar({
   // still the old value.
   const undo = () => stepHistoryBy(-1)
   const redo = () => stepHistoryBy(1)
-  const runPurge = (target: PurgeTarget) => {
+  const [pendingPurge, setPendingPurge] = React.useState<PurgeTarget | null>(null)
+  const executePurge = React.useCallback((target: PurgeTarget) => {
     const result = purgeCaches(target)
     toast.info(formatPurgeStatus(target, result.freedBytes))
-  }
+  }, [purgeCaches])
+  const runPurge = React.useCallback((target: PurgeTarget) => {
+    // Clipboard purge is non-destructive (no history loss) — skip confirmation.
+    if (target === "clipboard") {
+      executePurge(target)
+      return
+    }
+    setPendingPurge(target)
+  }, [executePurge])
+  // Listen for cross-component purge requests (e.g. from command palette).
+  React.useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ target: PurgeTarget }>).detail
+      if (detail?.target) runPurge(detail.target)
+    }
+    window.addEventListener("ps-purge-request", handler as EventListener)
+    return () => window.removeEventListener("ps-purge-request", handler as EventListener)
+  }, [runPurge])
+  const pendingPurgeCommand = pendingPurge ? PURGE_COMMANDS.find((c) => c.target === pendingPurge) : null
   const openAdvancedTab = (tab: AdvancedSubsystemTab) => {
     setAdvancedTab(tab)
     setAdvancedOpen(true)
@@ -809,7 +890,7 @@ export function MenuBar({
     setTimeout(() => commit("Delete All Empty Layers", "all"), 0)
   }
 
-  const rasterizeLayers = (option: "layer" | "type" | "shape" | "smart-object" | "layer-style" | "all") => {
+  const rasterizeLayers = (option: "layer" | "type" | "shape" | "smart-object" | "layer-style" | "video" | "3d" | "all") => {
     if (!activeDoc) {
       toast.info("Open a document before rasterizing layers.")
       return
@@ -830,7 +911,11 @@ export function MenuBar({
             ? "Rasterize Smart Object"
             : option === "layer-style"
               ? "Rasterize Layer Style"
-              : "Rasterize Layer"
+              : option === "video"
+                ? "Rasterize Video"
+                : option === "3d"
+                  ? "Rasterize 3D"
+                  : "Rasterize Layer"
     setTimeout(() => commit(label, option === "all" ? "all" : selectedLayers.map((layer) => layer.id)), 0)
   }
 
@@ -1721,9 +1806,14 @@ export function MenuBar({
       toast.info("Open a document before revealing its source.")
       return
     }
-    const info = sourceInfoForDocument(activeDoc, documentStatuses[activeDoc.id])
-    await revealSourceHandle(info.fileHandle, info.unavailableReason)
-  }, [activeDoc, documentStatuses, revealSourceHandle])
+    setRevealSourceDocId(activeDoc.id)
+    setRevealSourceOpen(true)
+  }, [activeDoc])
+
+  const openRevealSourceDialog = React.useCallback((docId: string | null) => {
+    setRevealSourceDocId(docId)
+    setRevealSourceOpen(true)
+  }, [])
 
   const revealSmartObjectSourceFromMenu = React.useCallback(async () => {
     if (!activeLayer || (!activeLayer.smartObject && activeLayer.kind !== "smart-object")) {
@@ -1735,12 +1825,18 @@ export function MenuBar({
   }, [activeLayer, revealSourceHandle])
 
   React.useEffect(() => {
-    const handler = () => {
-      void revealDocumentSourceFromMenu()
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ docId?: string } | undefined>).detail
+      const docId = detail?.docId ?? activeDoc?.id ?? null
+      if (!docId) {
+        toast.info("Open a document before revealing its source.")
+        return
+      }
+      openRevealSourceDialog(docId)
     }
     window.addEventListener("ps-reveal-source", handler)
     return () => window.removeEventListener("ps-reveal-source", handler)
-  }, [revealDocumentSourceFromMenu])
+  }, [openRevealSourceDialog, activeDoc?.id])
 
   const writeProjectHandle = async (handle: FileSystemFileHandleLike, text: string) => {
     const writable = await handle.createWritable()
@@ -2199,6 +2295,116 @@ export function MenuBar({
                 <DropdownMenuItem onSelect={() => setGapWorkflow("image-assets")}>Generate Image Assets...</DropdownMenuItem>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger disabled={!activeDoc}>Generate</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <DropdownMenuCheckboxItem
+                  checked={activeDoc?.metadata?.imageAssetGenerator?.enabled !== false}
+                  onCheckedChange={(value) => {
+                    if (!activeDoc) return
+                    dispatch({
+                      type: "set-document-metadata",
+                      metadata: {
+                        ...(activeDoc.metadata ?? {}),
+                        imageAssetGenerator: {
+                          ...(activeDoc.metadata?.imageAssetGenerator ?? {}),
+                          enabled: value === true,
+                        },
+                      },
+                    })
+                  }}
+                >
+                  Image Assets
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  disabled={!activeDoc}
+                  onSelect={() => {
+                    if (!activeDoc) return
+                    window.dispatchEvent(new CustomEvent("ps-image-assets-generator-run", { detail: { docId: activeDoc.id } }))
+                  }}
+                >
+                  Run Image Assets Now
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={!activeDoc}
+                  onSelect={() => {
+                    if (!activeDoc) return
+                    const picker = (window as typeof window & {
+                      showDirectoryPicker?: () => Promise<{ name?: string }>
+                    }).showDirectoryPicker
+                    if (!picker) {
+                      toast.error("Folder auto-export requires File System Access support.")
+                      return
+                    }
+                    void (async () => {
+                      try {
+                        const directoryHandle = await picker()
+                        window.dispatchEvent(new CustomEvent("ps-image-assets-generator-directory", {
+                          detail: { docId: activeDoc.id, directoryHandle },
+                        }))
+                        dispatch({
+                          type: "set-document-metadata",
+                          metadata: {
+                            ...(activeDoc.metadata ?? {}),
+                            imageAssetGenerator: {
+                              ...(activeDoc.metadata?.imageAssetGenerator ?? {}),
+                              outputFolderName: directoryHandle.name ?? "Selected folder",
+                            },
+                          },
+                        })
+                      } catch (err) {
+                        if (!(err instanceof DOMException && err.name === "AbortError")) {
+                          toast.error(err instanceof Error ? err.message : "Could not connect folder")
+                        }
+                      }
+                    })()
+                  }}
+                >
+                  Choose Output Folder…
+                  {activeDoc?.metadata?.imageAssetGenerator?.outputFolderName ? (
+                    <DropdownMenuShortcut>{activeDoc.metadata.imageAssetGenerator.outputFolderName}</DropdownMenuShortcut>
+                  ) : null}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuCheckboxItem
+                  checked={activeDoc?.metadata?.imageAssetGenerator?.autoExportOnSave !== false}
+                  onCheckedChange={(value) => {
+                    if (!activeDoc) return
+                    dispatch({
+                      type: "set-document-metadata",
+                      metadata: {
+                        ...(activeDoc.metadata ?? {}),
+                        imageAssetGenerator: {
+                          ...(activeDoc.metadata?.imageAssetGenerator ?? {}),
+                          autoExportOnSave: value === true,
+                        },
+                      },
+                    })
+                  }}
+                >
+                  Auto-export on save
+                </DropdownMenuCheckboxItem>
+                <DropdownMenuCheckboxItem
+                  checked={activeDoc?.metadata?.imageAssetGenerator?.autoExportOnChange === true}
+                  onCheckedChange={(value) => {
+                    if (!activeDoc) return
+                    dispatch({
+                      type: "set-document-metadata",
+                      metadata: {
+                        ...(activeDoc.metadata ?? {}),
+                        imageAssetGenerator: {
+                          ...(activeDoc.metadata?.imageAssetGenerator ?? {}),
+                          autoExportOnChange: value === true,
+                        },
+                      },
+                    })
+                  }}
+                >
+                  Auto-export on change
+                </DropdownMenuCheckboxItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
             <DropdownMenuItem onSelect={() => setBatchProcessingOpen(true)}>
               Batch Processing...
             </DropdownMenuItem>
@@ -2260,7 +2466,7 @@ export function MenuBar({
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => setFileInfoOpen(true)}>File Info…</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => void revealDocumentSourceFromMenu()} disabled={!activeDoc}>
-              Reveal Source in Folder...
+              Reveal Source…
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => openAdvancedTab("formats")}>
               Advanced Import / Metadata...
@@ -2408,6 +2614,39 @@ export function MenuBar({
                 ))}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>Presets</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <DropdownMenuItem onSelect={() => setPresetManagerOpen(true)}>
+                  Preset Manager…
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "brush" }))}>
+                  Brushes Panel
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "swatches" }))}>
+                  Swatches Panel
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "gradients" }))}>
+                  Gradients Panel
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "patterns" }))}>
+                  Patterns Panel
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "styles" }))}>
+                  Styles Panel
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "shapes" }))}>
+                  Shapes Panel
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "tool-presets" }))}>
+                  Tool Presets Panel
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "assets" }))}>
+                  Assets Panel
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
             <DropdownMenuItem onSelect={() => setPreferencesOpen(true)}>
               Preferences
             </DropdownMenuItem>
@@ -2525,23 +2764,37 @@ export function MenuBar({
                 <DropdownMenuItem onSelect={() => addAdjustmentLayer("selective-color")}>
                   Selective Color…
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("shadows-highlights")}>
+                <DropdownMenuItem onSelect={() => setShadowsHighlightsOpen(true)} disabled={!activeDoc}>
                   Shadows/Highlights…
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("hdr-toning")}>
+                <DropdownMenuItem onSelect={() => setHdrToningOpen(true)} disabled={!activeDoc}>
                   HDR Toning…
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => addAdjustmentLayer("desaturate")}>
                   Desaturate
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("match-color")}>
-                  Match Color
+                <DropdownMenuItem onSelect={() => setMatchColorOpen(true)} disabled={!activeDoc}>
+                  Match Color…
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("replace-color")}>
+                <DropdownMenuItem onSelect={() => setReplaceColorOpen(true)} disabled={!activeDoc}>
                   Replace Color…
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("equalize")}>
-                  Equalize
+                <DropdownMenuItem
+                  onSelect={() => {
+                    // Photoshop's Equalize either runs immediately (no selection)
+                    // or prompts the user when a selection is active. We
+                    // reproduce that prompt only when a selection is present;
+                    // otherwise we apply directly.
+                    if (!activeDoc) return
+                    if (activeDoc.selection.bounds || activeDoc.selection.mask) {
+                      setEqualizePromptOpen(true)
+                    } else {
+                      addAdjustmentLayer("equalize")
+                    }
+                  }}
+                  disabled={!activeDoc}
+                >
+                  Equalize…
                 </DropdownMenuItem>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
@@ -2591,6 +2844,25 @@ export function MenuBar({
                 <DropdownMenuItem onSelect={autoContrast}>Auto Contrast</DropdownMenuItem>
                 <DropdownMenuItem onSelect={autoColor}>Auto Color</DropdownMenuItem>
                 <DropdownMenuItem onSelect={autoWhiteBalance}>Auto White Balance</DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={() => setAutoOptions({ algorithm: "per-channel-contrast", label: "Auto Tone" })}
+                  disabled={!activeDoc}
+                >
+                  Auto Tone Options…
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => setAutoOptions({ algorithm: "monochromatic-contrast", label: "Auto Contrast" })}
+                  disabled={!activeDoc}
+                >
+                  Auto Contrast Options…
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => setAutoOptions({ algorithm: "dark-light-colors", label: "Auto Color" })}
+                  disabled={!activeDoc}
+                >
+                  Auto Color Options…
+                </DropdownMenuItem>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
             <DropdownMenuSeparator />
@@ -2759,6 +3031,18 @@ export function MenuBar({
                 <DropdownMenuItem onSelect={() => rasterizeLayers("layer-style")} disabled={!activeLayer?.style}>
                   Layer Style
                 </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => rasterizeLayers("video")}
+                  disabled={!activeLayer || (activeLayer.kind !== "video" && !activeLayer.video)}
+                >
+                  Video
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => rasterizeLayers("3d")}
+                  disabled={!activeLayer || (activeLayer.kind !== "3d" && !activeLayer.threeD)}
+                >
+                  3D
+                </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => rasterizeLayers("layer")} disabled={!activeLayer}>
                   Layer
@@ -2867,8 +3151,16 @@ export function MenuBar({
             >
               Merge Selected
             </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={!activeDoc}
+              onSelect={() => setFlattenTransparencyOpen(true)}
+            >
+              Flatten Transparency…
+            </DropdownMenuItem>
             <DropdownMenuSub>
-              <DropdownMenuSubTrigger disabled={!activeLayer}>Flatten Transparency</DropdownMenuSubTrigger>
+              <DropdownMenuSubTrigger disabled={!activeLayer}>
+                Flatten Transparency Presets
+              </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
                 <DropdownMenuItem onSelect={() => flattenTransparency("clear", background, "Background Color")}>
                   Background Color
@@ -3717,6 +4009,9 @@ export function MenuBar({
               )
             })}
             <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => openPanel("browser-diagnostics")}>
+              Browser Diagnostics
+            </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => setLayerCompsOpen(true)}>
               Layer Comps...
             </DropdownMenuItem>
@@ -3783,6 +4078,10 @@ export function MenuBar({
       <ImageSizeDialog open={imageSizeOpen} onOpenChange={setImageSizeOpen} />
       <CanvasSizeDialog open={canvasSizeOpen} onOpenChange={setCanvasSizeOpen} />
       <StrokeDialog open={strokeOpen} onOpenChange={setStrokeOpen} />
+      <FlattenTransparencyDialog
+        open={flattenTransparencyOpen}
+        onOpenChange={setFlattenTransparencyOpen}
+      />
       <ColorRangeDialog open={colorRangeOpen} onOpenChange={setColorRangeOpen} />
       <RefineEdgeDialog open={refineEdgeOpen} onOpenChange={setRefineEdgeOpen} />
       <LiquifyDialog open={liquifyOpen} onOpenChange={setLiquifyOpen} />
@@ -3803,12 +4102,32 @@ export function MenuBar({
       <ContactSheetDialog open={contactSheetOpen} onOpenChange={setContactSheetOpen} />
       <PhotomergeDialog open={photomergeOpen} onOpenChange={setPhotomergeOpen} />
       <FileInfoDialog open={fileInfoOpen} onOpenChange={setFileInfoOpen} />
+      <RevealSourceDialog
+        open={revealSourceOpen}
+        onOpenChange={(value) => {
+          setRevealSourceOpen(value)
+          if (!value) setRevealSourceDocId(null)
+        }}
+        docId={revealSourceDocId}
+      />
+      <ShadowsHighlightsDialog open={shadowsHighlightsOpen} onOpenChange={setShadowsHighlightsOpen} />
+      <HdrToningDialog open={hdrToningOpen} onOpenChange={setHdrToningOpen} />
+      <MatchColorDialog open={matchColorOpen} onOpenChange={setMatchColorOpen} />
+      <ReplaceColorDialog open={replaceColorOpen} onOpenChange={setReplaceColorOpen} />
+      <EqualizePromptDialog open={equalizePromptOpen} onOpenChange={setEqualizePromptOpen} />
+      <AutoOptionsDialog
+        open={autoOptions !== null}
+        onOpenChange={(v) => { if (!v) setAutoOptions(null) }}
+        initialAlgorithm={autoOptions?.algorithm}
+        label={autoOptions?.label}
+      />
       <AdvancedSubsystemsDialog open={advancedOpen} onOpenChange={setAdvancedOpen} initialTab={advancedTab} />
       <AlgorithmicOperationsDialog open={algorithmOpen} onOpenChange={setAlgorithmOpen} />
       <GapWorkflowDialog workflow={gapWorkflow} onOpenChange={(open) => !open && setGapWorkflow(null)} />
       <ColorModeDialog target={colorModeTarget} onOpenChange={(open) => !open && setColorModeTarget(null)} />
       <PreferencesDialog open={preferencesOpen} onOpenChange={setPreferencesOpen} />
       <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+      <PresetManagerDialog open={presetManagerOpen} onOpenChange={setPresetManagerOpen} />
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
       <LargeDocumentRecoveryDialog
         open={!!largeDocumentRecovery}
@@ -3848,6 +4167,31 @@ export function MenuBar({
           if (!open) setSelectionOperation(null)
         }}
       />
+      <AlertDialog
+        open={pendingPurge !== null}
+        onOpenChange={(open) => { if (!open) setPendingPurge(null) }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{pendingPurgeCommand?.label ?? "Purge"}</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action cannot be undone. Continue?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const target = pendingPurge
+                setPendingPurge(null)
+                if (target) executePurge(target)
+              }}
+            >
+              OK
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <SaveSelectionDialog open={saveSelectionOpen} onOpenChange={setSaveSelectionOpen} />
       <LoadSelectionDialog open={loadSelectionOpen} onOpenChange={setLoadSelectionOpen} />
     </>

@@ -39,8 +39,9 @@ const selectionConfigs: Record<
 > = {
   expand: { title: "Expand Selection", label: "Expand by", defaultValue: 10, min: 1, max: 1000, actionLabel: "Expand" },
   contract: { title: "Contract Selection", label: "Contract by", defaultValue: 10, min: 1, max: 1000, actionLabel: "Contract" },
-  grow: { title: "Grow Selection", label: "Tolerance", defaultValue: 32, min: 0, max: 255, actionLabel: "Grow" },
-  similar: { title: "Similar Selection", label: "Tolerance", defaultValue: 32, min: 0, max: 255, actionLabel: "Select Similar" },
+  // Photoshop defaults Grow to use the wand tolerance and expand by 16 px-equivalent fuzziness.
+  grow: { title: "Grow Selection", label: "Tolerance", defaultValue: 16, min: 0, max: 255, actionLabel: "Grow" },
+  similar: { title: "Similar Selection", label: "Tolerance", defaultValue: 16, min: 0, max: 255, actionLabel: "Select Similar" },
   transform: { title: "Transform Selection", label: "Scale", defaultValue: 1, min: 0.01, max: 20, actionLabel: "Transform" },
   feather: { title: "Feather Selection", label: "Radius", defaultValue: 5, min: 0, max: 250, actionLabel: "Feather" },
   border: { title: "Border Selection", label: "Width", defaultValue: 3, min: 1, max: 500, actionLabel: "Border" },
@@ -424,8 +425,16 @@ export function SaveSelectionDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const { activeDoc, dispatch, commit } = useEditor()
-  const channels = activeDoc?.channels ?? []
+  const { activeDoc, documents, dispatch, commit } = useEditor()
+  // Photoshop's Save Selection dialog lets you pick which open document
+  // receives the new channel — usually the current one, but you can route
+  // it into another doc whose pixel dimensions match.
+  const [docId, setDocId] = React.useState(activeDoc?.id ?? "")
+  const targetDoc = documents.find((d) => d.id === docId) ?? activeDoc ?? null
+  const channels = targetDoc?.channels ?? []
+  const eligibleDocs = activeDoc
+    ? documents.filter((d) => d.id === activeDoc.id || (d.width === activeDoc.width && d.height === activeDoc.height))
+    : documents
   const [name, setName] = React.useState("Alpha Selection")
   const [destination, setDestination] = React.useState("new")
   const [mode, setMode] = React.useState<SelectionChannelMode>("replace")
@@ -433,10 +442,11 @@ export function SaveSelectionDialog({
   const [spotColor, setSpotColor] = React.useState("#ff3b30")
   const [spotOpacity, setSpotOpacity] = React.useState(50)
   const [invert, setInvert] = React.useState(false)
-  const canSave = !!activeDoc?.selection.bounds
+  const canSave = !!activeDoc?.selection.bounds && !!targetDoc
 
   React.useEffect(() => {
     if (!open) return
+    setDocId(activeDoc?.id ?? "")
     setName(`Alpha ${channels.length + 1}`)
     setDestination("new")
     setMode("replace")
@@ -444,12 +454,26 @@ export function SaveSelectionDialog({
     setSpotColor("#ff3b30")
     setSpotOpacity(50)
     setInvert(false)
-  }, [channels.length, open])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDoc?.id, open])
+
+  // When switching destination document, reset the destination channel
+  // dropdown so we never reference a stale id from a different document.
+  React.useEffect(() => {
+    setDestination("new")
+  }, [docId])
 
   const save = () => {
-    if (!activeDoc || !canSave) return
+    if (!activeDoc || !canSave || !targetDoc) return
     const selectionMask = selectionToMaskCanvas(activeDoc.width, activeDoc.height, activeDoc.selection)
     if (!selectionMask) return
+    // When routing to a different document, fail closed if pixel dimensions
+    // don't match. Eligible docs are filtered to matching sizes already, but
+    // belt-and-braces here.
+    if (targetDoc.id !== activeDoc.id && (targetDoc.width !== activeDoc.width || targetDoc.height !== activeDoc.height)) {
+      toast.warning("Destination document must match current document size.")
+      return
+    }
     const incoming = invert ? invertMaskInPlace(selectionMask) : selectionMask
     const cleanName = name.trim() || `Alpha ${channels.length + 1}`
     const patch = {
@@ -462,6 +486,7 @@ export function SaveSelectionDialog({
     if (destination === "new") {
       dispatch({
         type: "save-selection",
+        targetDocId: targetDoc.id,
         channel: {
           id: uid("channel"),
           canvas: cloneMaskCanvas(incoming),
@@ -473,6 +498,7 @@ export function SaveSelectionDialog({
       if (!existing) return
       dispatch({
         type: "update-channel",
+        targetDocId: targetDoc.id,
         channelId: existing.id,
         patch: {
           ...patch,
@@ -498,6 +524,30 @@ export function SaveSelectionDialog({
             <Label className="text-[11px]">Channel name</Label>
             <Input aria-label="Channel name" value={name} onChange={(event) => setName(event.target.value)} className="h-8 bg-[var(--ps-panel-2)] text-[11px]" />
           </div>
+          <label className="grid gap-1">
+            <span className="text-[var(--ps-text-dim)]">Document</span>
+            <select
+              aria-label="Destination document"
+              value={docId}
+              onChange={(event) => setDocId(event.target.value)}
+              className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px]"
+            >
+              {eligibleDocs.length === 0 ? (
+                <option value="">No matching documents</option>
+              ) : (
+                eligibleDocs.map((doc) => (
+                  <option key={doc.id} value={doc.id}>
+                    {doc.name}{doc.id === activeDoc?.id ? " (current)" : ""}
+                  </option>
+                ))
+              )}
+            </select>
+            {activeDoc && documents.length > eligibleDocs.length ? (
+              <span className="text-[10px] text-[var(--ps-text-dim)]">
+                Only documents that match {activeDoc.width}×{activeDoc.height}px appear here.
+              </span>
+            ) : null}
+          </label>
           <div className="grid grid-cols-2 gap-3">
             <label className="grid gap-1">
               <span className="text-[var(--ps-text-dim)]">Destination channel</span>
@@ -585,6 +635,33 @@ export function SaveSelectionDialog({
   )
 }
 
+function ChannelThumb({ canvas, label, selected }: { canvas: HTMLCanvasElement; label: string; selected: boolean }) {
+  const ref = React.useRef<HTMLCanvasElement>(null)
+  React.useEffect(() => {
+    const cv = ref.current
+    if (!cv) return
+    const max = 64
+    const r = Math.min(max / canvas.width, max / canvas.height, 1)
+    cv.width = Math.max(1, Math.floor(canvas.width * r))
+    cv.height = Math.max(1, Math.floor(canvas.height * r))
+    const ctx = cv.getContext("2d")
+    if (!ctx) return
+    // Render channel as white-on-black for parity with Photoshop's channel panel.
+    ctx.fillStyle = "#000"
+    ctx.fillRect(0, 0, cv.width, cv.height)
+    ctx.drawImage(canvas, 0, 0, cv.width, cv.height)
+  }, [canvas])
+  return (
+    <div
+      className={`flex flex-col items-center gap-1 rounded-sm border p-1 ${selected ? "border-cyan-300 bg-[var(--ps-panel-2)]" : "border-[var(--ps-divider)]"}`}
+      data-selected={selected}
+    >
+      <canvas ref={ref} className="block" aria-hidden="true" />
+      <span className="block max-w-[72px] truncate text-[10px] text-[var(--ps-text-dim)]" title={label}>{label}</span>
+    </div>
+  )
+}
+
 export function LoadSelectionDialog({
   open,
   onOpenChange,
@@ -592,8 +669,15 @@ export function LoadSelectionDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const { activeDoc, dispatch, commit } = useEditor()
-  const channels = activeDoc?.channels ?? []
+  const { activeDoc, documents, dispatch, commit } = useEditor()
+  // Photoshop's Load Selection dialog lets you read a channel saved in any
+  // open document whose pixel dimensions match the active one.
+  const [sourceDocId, setSourceDocId] = React.useState(activeDoc?.id ?? "")
+  const eligibleSourceDocs = activeDoc
+    ? documents.filter((d) => d.id === activeDoc.id || (d.width === activeDoc.width && d.height === activeDoc.height))
+    : []
+  const sourceDoc = documents.find((d) => d.id === sourceDocId) ?? activeDoc ?? null
+  const channels = sourceDoc?.channels ?? []
   const [channelId, setChannelId] = React.useState("")
   const [mode, setMode] = React.useState<SelectionChannelMode>("replace")
   const [invert, setInvert] = React.useState(false)
@@ -602,24 +686,38 @@ export function LoadSelectionDialog({
 
   React.useEffect(() => {
     if (!open) return
+    setSourceDocId(activeDoc?.id ?? "")
+    setMode("replace")
+    setInvert(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDoc?.id, open])
+
+  React.useEffect(() => {
     const first = channels[0]
     setChannelId(first?.id ?? "")
     setRename(first?.name ?? "")
-    setMode("replace")
-    setInvert(false)
-  }, [channels, open])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceDocId, channels.length])
 
   React.useEffect(() => {
     if (selected) setRename(selected.name)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id])
 
   const load = () => {
-    if (!selected) return
+    if (!selected || !sourceDoc) return
+    const isCross = sourceDoc.id !== activeDoc?.id
     const cleanRename = rename.trim()
-    if (cleanRename && cleanRename !== selected.name) {
+    if (!isCross && cleanRename && cleanRename !== selected.name) {
       dispatch({ type: "update-channel", channelId: selected.id, patch: { name: cleanRename } })
     }
-    dispatch({ type: "load-selection", channelId: selected.id, mode, invert })
+    dispatch({
+      type: "load-selection",
+      channelId: selected.id,
+      mode,
+      invert,
+      sourceDocId: isCross ? sourceDoc.id : undefined,
+    })
     window.setTimeout(() => commit("Load Selection", []), 0)
     onOpenChange(false)
   }
@@ -635,6 +733,25 @@ export function LoadSelectionDialog({
         </DialogHeader>
         <div className="grid gap-3 text-[11px]">
           <label className="grid gap-1">
+            <span className="text-[var(--ps-text-dim)]">Source document</span>
+            <select
+              aria-label="Source document"
+              value={sourceDocId}
+              onChange={(event) => setSourceDocId(event.target.value)}
+              className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px]"
+            >
+              {eligibleSourceDocs.length === 0 ? (
+                <option value="">No matching documents</option>
+              ) : (
+                eligibleSourceDocs.map((doc) => (
+                  <option key={doc.id} value={doc.id}>
+                    {doc.name}{doc.id === activeDoc?.id ? " (current)" : ""}
+                  </option>
+                ))
+              )}
+            </select>
+          </label>
+          <label className="grid gap-1">
             <span className="text-[var(--ps-text-dim)]">Source channel</span>
             <select
               aria-label="Source channel"
@@ -646,6 +763,29 @@ export function LoadSelectionDialog({
               {channels.map((channel) => <option key={channel.id} value={channel.id}>{channel.name}</option>)}
             </select>
           </label>
+          {channels.length ? (
+            <div className="grid gap-1">
+              <span className="text-[var(--ps-text-dim)]">Channel previews</span>
+              <div
+                className="flex flex-wrap gap-2 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2"
+                role="listbox"
+                aria-label="Channel previews"
+              >
+                {channels.map((channel) => (
+                  <button
+                    key={channel.id}
+                    type="button"
+                    role="option"
+                    aria-selected={selected?.id === channel.id}
+                    onClick={() => setChannelId(channel.id)}
+                    className="cursor-pointer rounded-sm focus:outline-none"
+                  >
+                    <ChannelThumb canvas={channel.canvas} label={channel.name} selected={selected?.id === channel.id} />
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <div className="grid grid-cols-2 gap-3">
             <label className="grid gap-1">
               <span className="text-[var(--ps-text-dim)]">Load operation</span>
@@ -668,7 +808,7 @@ export function LoadSelectionDialog({
                 aria-label="Rename selected channel"
                 value={rename}
                 onChange={(event) => setRename(event.target.value)}
-                disabled={!selected}
+                disabled={!selected || sourceDocId !== activeDoc?.id}
                 className="h-8 bg-[var(--ps-panel-2)] text-[11px] disabled:opacity-50"
               />
             </label>
@@ -686,7 +826,7 @@ export function LoadSelectionDialog({
           </label>
           {!channels.length ? (
             <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-3 text-center text-[var(--ps-text-dim)]">
-              No saved channels
+              No saved channels{sourceDocId && sourceDocId !== activeDoc?.id ? " in the selected document" : ""}
             </div>
           ) : null}
         </div>

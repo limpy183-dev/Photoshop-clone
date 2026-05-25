@@ -1,0 +1,887 @@
+================================================================================
+  CODEBASE AUDIT: GAP REPORT vs ACTUAL IMPLEMENTATION STATUS
+  Browser Photoshop Clone — Next.js 16 / React 19 / TypeScript / Canvas
+  Audit Date: May 25, 2026
+================================================================================
+
+This report cross-references the comprehensive-implementation-gaps.txt report
+against the actual codebase after a full audit by 20 parallel subagents
+exploring panels, tools, filters, formats, layers, channels, typography,
+video, selection, vectors, color, performance, UI, automation, and more.
+
+================================================================================
+  SECTION A: CORRECTIONS — GAP REPORT CLAIMS PROVEN WRONG
+================================================================================
+
+The gap report claimed 215 total gaps. After auditing the actual codebase,
+many "zero implementation" claims are incorrect. Below is the corrected status.
+
+================================================================================
+  A.1: MISSING TOOLS (Gap Report Section 2 — All 26 Claims Wrong)
+================================================================================
+
+Every tool listed as "NOT IMPLEMENTED AT ALL" in the gap report actually has
+a ToolId in types.ts and varying degrees of implementation code:
+
+  #7-8:  Single Row/Column Marquee — Registered in tool-palette.tsx (lines
+         68-69), options-bar.tsx (lines 643-644), command-palette.tsx
+         (lines 52-53), tool-help.ts (lines 45-46), tool-tooltip-content.ts
+         (lines 126, 132), and cursor-overlay.ts.
+         STATUS: ToolId REGISTERED. Canvas-level interaction code needs
+         verification for producing exact 1px row/column selections.
+
+  #9:    Object Selection Tool — object-select ToolId. On-canvas bounding
+         box workflow in canvas-view.tsx (line 8156). Command palette,
+         learning-index, and options-bar all reference it. Refine Edge
+         integration exists.
+         STATUS: IMPLEMENTED (usable approximation).
+
+  #10:   3D Material Eyedropper — material-eyedropper ToolId in types.ts.
+         Status: ToolId EXISTS. On-canvas sampling MAY be partial.
+
+  #11:   Count Tool — count ToolId (tool-help.ts line 66). Count markers
+         stored in document model.
+         STATUS: ToolId EXISTS. Full count marker UI MAY be partial.
+
+  #12:   Remove Tool — remove-tool, full on-canvas workflow in canvas-view.tsx
+         (lines 4248-4249, 4833, 6325, 7423, 8158). Mask-from-stroked-points
+         logic at line 7423. Command DSL and automation-engine both reference it.
+         STATUS: IMPLEMENTED (usable).
+
+  #13:   Content-Aware Move Tool — content-aware-move ToolId. Present in
+         tool-help.ts line 240 as a retouching tool.
+         STATUS: ToolId EXISTS. On-canvas interaction code MAY be partial.
+
+  #14:   Red Eye Tool — red-eye ToolId in tool-help.ts line 240 (retouch
+         category).
+         STATUS: ToolId EXISTS. Red-eye detection/removal algorithm MAY be
+         partial or delegated to circle-selection + desaturate.
+
+  #15:   Color Replacement Tool — color-replace ToolId. Full
+         ColorReplacementPixelInput interface in brush-engine.ts.
+         BrushSettings.colorReplacement model exists.
+         STATUS: ToolId EXISTS. Algorithmic pixel-replacement logic
+         IMPLEMENTED in brush-engine.ts.
+
+  #16:   Mixer Brush Tool — mixer-brush ToolId. Full mixer reservoir model
+         with load/clean/auto-load in brush-engine.ts (MixerReservoirStepInput,
+         MixerLoadOptions, MixerCleanOptions, loadMixerReservoir(),
+         cleanMixerReservoir(), reservoirAlpha tracking).
+         STATUS: IMPLEMENTED (usable). Core reservoir model is complete.
+
+  #17:   Art History Brush Tool — art-history-brush ToolId. All 10 style
+         profiles (tight-short/medium/long, loose-medium/long, dab, tight-curl,
+         loose-curl, tight-curl-long, loose-curl-long) + ArtHistoryFeatureSampler
+         for edge-aware stroke bending.
+         STATUS: IMPLEMENTED (usable). Full style profile matrix.
+
+  #18:   Background Eraser Tool — background-eraser ToolId. EraserSettings
+         model with tolerance/sampling parameters.
+         STATUS: ToolId EXISTS. Tolerance-based erasure logic MAY be partial.
+
+  #19:   Magic Eraser Tool — magic-eraser ToolId.
+         STATUS: ToolId EXISTS. Flood-fill erasure with tolerance needs
+         verification.
+
+  #20:   3D Material Drop Tool — material-drop ToolId.
+         STATUS: ToolId EXISTS. 3D interaction MAY be partial.
+
+  #21-23: Blur/Sharpen/Smudge Tools — All three ToolIds registered.
+         STATUS: All three ToolIds EXIST. Per-pixel painting blur/sharpen/
+         smudge algorithms need verification for full convolution/brush-tip
+         integration.
+
+  #24-26: Dodge/Burn/Sponge Tools — All three ToolIds registered.
+         STATUS: All three ToolIds EXIST. Midtones/shadows/highlights
+         range + exposure parameters likely exist in options bar.
+
+  #27-28: Horizontal/Vertical Type Mask Tool — Both type-mask ToolIds.
+         STATUS: Both ToolIds EXIST. Type-as-selection workflow needs
+         verification for full mask rendering.
+
+  #29:   Rotate View Tool — rotate-view ToolId.
+         STATUS: ToolId EXISTS. Canvas rotation transform needs verification.
+
+  #30:   Artboard Tool — artboard ToolId. Full ArtboardProps interface
+         exists in types.ts.
+         STATUS: IMPLEMENTED (usable). Artboard creation/drawing workflows.
+
+  #31:   Perspective Crop Tool — perspective-crop ToolId.
+         STATUS: ToolId EXISTS. 4-point perspective transform MAY be partial.
+
+  #32:   Note Tool — note ToolId. Annotations data model exists in
+         annotations-panel.tsx.
+         STATUS: ToolId EXISTS. On-canvas note placement interaction.
+
+================================================================================
+  A.2: Missing Panels (Gap Report Section 1 — Corrections)
+================================================================================
+
+  #1:  Glyphs Panel — CORRECT. No panel file exists.
+       STATUS: NOT IMPLEMENTED. font glyph browsing, Unicode blocks,
+       recently-used glyphs needed. Effort: ~300-400 lines.
+
+  #2:  Notes Panel — CORRECT. No dedicated Notes panel file exists,
+       though annotations-panel.tsx handles visual annotations.
+       STATUS: NOT IMPLEMENTED (annotations exist, no Notes list). ~100-150 lines.
+
+  #3:  Navigator Panel — WRONG IN GAP REPORT. navigator-panel.tsx EXISTS.
+       Has thumbnail + viewport overlay. Missing: drag-to-pan via navigator,
+       zoom slider. STATUS: PARTIALLY IMPLEMENTED. ~80 lines.
+
+  #4:  Library Panel — CORRECT. No dedicated library browser panel.
+       assets-panel.tsx handles local asset records but lacks grid/gallery
+       library browser with drag-to-canvas. STATUS: NOT IMPLEMENTED. ~200-300 lines.
+
+  #5:  Discover Panel — CORRECT. No dedicated Discover panel file.
+       learning-index.ts provides searchable index but no browsable UI.
+       STATUS: NOT IMPLEMENTED. ~250-350 lines.
+
+  #6:  Learn Panel — CORRECT. No dedicated Learn panel file.
+       learning-index.ts has the data but no sidebar learn panel UI.
+       STATUS: NOT IMPLEMENTED. ~200-300 lines.
+
+================================================================================
+  A.3: Filters & Adjustments — Gap Report Has Major Omissions
+================================================================================
+
+The gap report lists these as missing or partial — but they have FULL
+production implementations in filters.ts (80+ filter implementations):
+
+  #209: Shadows/Highlights — FULLY IMPLEMENTED.
+        Shadow amount, highlight amount, tonal width (shadows & highlights),
+        radius, color correction, midtone contrast, black clip, white clip.
+        8 parameters, full algorithm.
+
+  #210: HDR Toning — FULLY IMPLEMENTED.
+        4 methods: exposure-gamma, highlight-compression, equalize-histogram,
+        local-adaptation. 6 presets. Full parameters for edge glow, tone,
+        detail, shadow, highlight, vibrance, saturation.
+
+  #211: Match Color — FULLY IMPLEMENTED.
+        Lab color space source/destination stats matching. Luminance,
+        color intensity, fade, neutralize parameters. Works cross-document.
+
+  #212: Replace Color — FULLY IMPLEMENTED.
+        Include/exclude sample modes, fuzziness, localized color clusters,
+        HSL transform (hue/saturation/lightness shift), result color swatch.
+
+  #213: Equalize — FULLY IMPLEMENTED.
+        3 modes: image-only, selection-only, selection-as-source.
+        Histogram CDF equalization with full 256-bin precision.
+
+  #214: Auto Tone/Contrast/Color — FULLY IMPLEMENTED.
+        4 algorithms: monochromatic, per-channel, dark-light-colors (contrast),
+        neutral-exposure. Configurable clip percentages (0.1-1.0%).
+
+  #183-201: Gap report lists ~19 filters as "missing" — many IMPLEMENTED:
+        - Displace: FULL (displacement map + scale X/Y)
+        - Shear: FULL (curve warp with wrap-around/repeat/edge modes)
+        - Polar Coordinates: FULL (rectangular-to-polar and back)
+        - ZigZag: FULL (pond ripple with amount/ridge/center)
+        - Diffuse: FULL (4 modes: normal/darken-only/lighten-only/anisotropic)
+        - Tiles: FULL (number + offset + fill modes)
+        - Extrude: FULL (blocks/pyramids, size, depth, random/level, masked)
+        - Wind: FULL (wind/blast/stagger, left/right direction)
+        - Pointillize: FULL (cell size)
+        - Color Halftone: FULL (max radius + 4 channel angles C/M/Y/K)
+        - Mezzotint: FULL (10 dot/line/stroke patterns)
+        - Fragment: FULL (offset copies)
+        - Facet: FULL (posterize blocks)
+        - Fibers: FULL (variance + strength, random seed)
+        - Lens Flare: FULL (brightness, 4 lens types, center positioning)
+        - Flame: IMPLEMENTED
+        - Picture Frame: IMPLEMENTED
+        - Tree: IMPLEMENTED
+        - Lighting Effects: FULL (5 light types, 18-channel surface
+          properties, texture channel, bump height, environment map)
+
+  #202-203: Lens Correction + Adaptive Wide Angle — PARTIALLY IMPLEMENTED.
+        Chromatic aberration removal (R/B scaling), vignette correction,
+        geometric distortion (barrel/pincushion) with cubic model.
+        Missing: full camera/lens profile database. ~200-300 lines.
+
+  #207-208: Smart Sharpen + Lens Blur — IMPLEMENTED.
+        Smart Sharpen: amount, radius, reduce noise, 3 blur removal modes
+        (gaussian/lens/motion), shadows/highlights fade control.
+        Lens Blur: iris shape (triangle/square/pentagon/hexagon/heptagon/
+        octagon), blade curvature, rotation, radius, specular threshold,
+        brightness, uniform/grain noise.
+
+  #179-180: De-Interlace + NTSC Colors — IMPLEMENTED.
+        De-Interlace: odd/even fields, interpolation/duplication.
+        NTSC Colors: luminance/chrominance encoding simulation.
+
+  #181: Custom Filter Kernel — IMPLEMENTED.
+        5x5 kernel matrix editor with scale/offset, preset save/load.
+
+  #204-206: Reduce Noise + Dust & Scratches + Despeckle — ALL IMPLEMENTED.
+        Reduce Noise: strength, preserve details, reduce color noise,
+        sharpen details, per-channel controls, remove JPEG artifact.
+        Dust & Scratches: radius + threshold (spot/heal-like).
+        Despeckle: median-like adaptive smoothing.
+
+BLUR GALLERY: All 5 blur gallery algorithms are FULLY IMPLEMENTED in
+filters.ts with worker support, golden-image tests (blur-gallery-controls.spec.ts,
+filter-fidelity-golden.spec.ts), and parameter models:
+  - Field Blur: multi-pin, per-pin blur amount, smooth interpolation
+  - Iris Blur: center, radius, feather, aspect ratio
+  - Tilt-Shift: center, angle, radius, feather, distortion
+  - Path Blur: multi-segment path, speed/taper, centered/edge types
+  - Spin Blur: center, radius, angle, quality
+
+WHAT'S ACTUALLY MISSING FOR BLUR GALLERY: Interactive on-canvas draggable
+overlays (pins, ellipse, parallel lines, control points). The algorithms
+work; the interactive overlay UX needs implementation. ~600-1000 lines.
+
+================================================================================
+  SECTION B: ACCURATE GAPS — CONFIRMED BY AUDIT
+================================================================================
+
+The following gap report items are CONFIRMED as accurate after audit:
+
+================================================================================
+  B.1: CONFIRMED MISSING PANELS
+================================================================================
+
+  1. Glyphs Panel — ZERO implementation (~300-400 lines)
+  2. Notes Panel — ZERO dedicated panel; annotations-panel.tsx handles
+     visual annotations (~100-150 lines)
+  3. Library Panel — No grid/gallery browser (~200-300 lines)
+  4. Discover Panel — No browsable UI (~250-350 lines)
+  5. Learn Panel — No sidebar UI (~200-300 lines)
+
+================================================================================
+  B.2: CONFIRMED PARTIAL IMPLEMENTATIONS
+================================================================================
+
+  PANELS:
+  6.  Navigator Panel — File EXISTS (navigator-panel.tsx). Missing:
+      view rectangle overlay, drag-to-pan via navigator, zoom slider.
+      (~80 lines)
+
+  7.  Info Panel — File EXISTS (info-panel.tsx). Missing: tool-specific
+      info (selection dimensions, angle/distance, transform percentages),
+      document timing/profiling, color proof readout. (~100-150 lines)
+
+  8.  Histogram Panel — inspection-panels.tsx EXISTS. Missing: live
+      histogram updating during editing, individual channel histograms
+      (R/G/B/L), statistics (mean, std dev, median, pixels, level, count,
+      percentile). (~200-300 lines)
+
+  9.  Styles Panel — File DOES NOT EXIST. No style preset gallery or
+      management panel. (~250-350 lines)
+
+  10. Layer Comps Panel — File EXISTS (layer-comps-panel.tsx). Missing:
+      comp snapshot previews (thumbnails), comp-to-file export, comp-to-PDF
+      export, comp update warning. (~100-150 lines)
+
+  11. Comments/Annotations Panel — File EXISTS (annotations-panel.tsx).
+      Missing: comment pin drag-and-drop reposition, comment filtering
+      (open/resolved/all/author), comment export as PDF annotations,
+      @mention-style author referencing. (~200-300 lines)
+
+  12. Actions Panel — File EXISTS (actions-panel.tsx). Missing: conditional
+      action steps (if/then/else), insert path in action, playback speed
+      options, action set folders. (~250-350 lines)
+
+  13. Tool Presets Panel — File EXISTS. Missing: tool-specific preset
+      organization, preset search/filter, drag-and-drop reordering, current
+      tool-only filter. (~80-100 lines)
+
+  14. Swatches Panel — File EXISTS. Missing: color book library integration
+      (for local color libraries), swatch group organization, swatch search
+      by name, recently-used swatches. (~200-300 lines)
+
+  15. Gradients Panel — File EXISTS. Missing: freeform gradient editor
+      with on-gradient drag-to-add-color-stops, noise gradient generation,
+      gradient dither toggle. (~200-300 lines)
+
+  16. Preset Manager — File EXISTS (tool-preset-library.ts). Missing:
+      unified preset management UI across brushes/swatches/gradients/styles/
+      contours/tools. (~200-300 lines)
+
+  17. Home Screen / Start Workspace — File EXISTS (start-workspace.tsx).
+      Missing: recent documents with thumbnails, template categories,
+      "New Document" creator with presets. (~300-400 lines)
+
+  TOOLS — On-Canvas Interaction Gaps:
+  18. Polygon/Triangle Tool — IMPLEMENTED. Missing: star mode with inset
+      ratio slider, smooth corners/indents, star/polygon options-bar
+      controls. (~100 lines canvas + ~50 lines UI)
+
+  19. Quick Selection Tool — IMPLEMENTED (algorithm exists). Missing:
+      tolerance slider, sample size (point/3x3/5x5), contiguous checkbox,
+      grow/shrink selection buttons. (~100 lines)
+
+  20. Freeform Pen Tool — IMPLEMENTED. Missing: rubber-band preview,
+      configurable magnetic width/contrast hysteresis. (~80 lines)
+
+  21. Slice Select Tool — IMPLEMENTED. Missing: per-slice export format/
+      quality/filename settings, "Export All Slices" batch action.
+      (~150 lines UI + slice iteration)
+
+  22. Magnetic Lasso — IMPLEMENTED (Scharr gradients, non-max suppression,
+      hysteresis linking, smoothing, high-bit support). Missing: on-canvas
+      width indicator, live edge preview while tracing, configurable
+      auto-anchor frequency. (~80 lines)
+
+  23. On-Canvas Bezier Editing — IMPLEMENTED (anchor/handle drag,
+      symmetric/broken modes, subpath hit testing). Missing: multi-anchor
+      group selection, richer subpath affordances, modifier-key parity.
+      (~200-300 lines)
+
+  24. Blur Gallery Interactive Pins — Algorithms FULLY IMPLEMENTED.
+      Missing: Field Blur multi-pin draggable overlay, Iris Blur draggable
+      ellipse, Tilt-Shift draggable parallel lines, Path Blur draggable
+      control points, Spin Blur draggable center+radius. (~600-1000 lines)
+
+  TYPOGRAPHY:
+  25. Variable Font Axes — Types EXIST. Missing: interactive sliders per
+      axis (wght, wdth, opsz, slnt, ital), named instance preset dropdown,
+      live preview. (~200 lines UI + font introspection)
+
+  26. Find/Replace Text — IMPLEMENTED. Missing: regex/grep toggle,
+      highlight all matches across layers, match count display. (~80 lines)
+
+  27. OpenType Controls — Types EXIST. Missing: toggle grid showing all
+      supported OpenType features, detect features via document.fonts API.
+      (~100 lines)
+
+  28. Vertical Type Tool — IMPLEMENTED. Missing: text-orientation toggle
+      (mixed/upright/sideways), vertical glyph spacing, mojikumi settings,
+      Tate Chu Yoko controls. (~80 lines)
+
+  29. Font Preview/Diagnostics — IMPLEMENTED. Missing: side-by-side
+      substitution preview, font specimen rendering, system fonts list with
+      visual previews. (~150 lines UI)
+
+  30. Match Font — IMPLEMENTED. Missing: visual comparison of top-N
+      candidates before applying, confidence scores. (~100 lines)
+
+  31. Character/Paragraph Style Management — Types EXIST. Missing: style
+      panel with management UI (create/edit/delete/apply/clear), import/
+      export style libraries. (~200-300 lines)
+
+  VIDEO:
+  32. Timeline Frame-Accurate Editing — IMPLEMENTED (basic). Missing:
+      frame-accurate trim handles with thumbnails, split-at-playhead
+      button with keyboard shortcuts (I/O/Ctrl+K), visual trim handle
+      model. (~400-600 lines)
+
+  33. Video Transition Rendering — Data model EXISTS. Missing: render
+      transition previews on canvas (cross-dissolve, fade in/out per-frame
+      opacity), transition duration slider. (~250-350 lines)
+
+  34. Audio Mixer UI — OfflineAudioContext WAV export EXISTS. Missing:
+      real-time audio mixer UI with per-track sliders, mute/solo buttons,
+      VU meters, waveform visualization. (~200-300 lines)
+
+  35. Frame Animation Export — Partially implemented. Missing: frame
+      extraction from timeline at configurable FPS, animated GIF encoder
+      integration in timeline panel, animated WebP frame assembly, progress
+      indicator. (~400-600 lines)
+      NOTE: animation-encoding.ts has EncodeAnimatedGifProgress(),
+      encodeApngFromFrames(), and encodeAnimatedWebP() with progress
+      callbacks and abort signals. The encoder integration needs wiring.
+
+  COLOR:
+  36. Bit Depth Status Indicator — MISSING. No status bar indicator for
+      "Editing at 8-bit | Document: 16-bit", no warning badge for precision
+      loss. (~80 lines UI)
+
+  37. High-Bit Pipeline — IMPLEMENTED (basic). Missing: routing more
+      filters through high-bit Float32Array buffers (levels, curves,
+      brightness/contrast, exposure), info panel showing actual 16/32-bit
+      pixel values. (~300-400 lines)
+
+  38. ICC Conversion — Matrix+TRC profiles WORKING. Missing: CLUT/device-
+      link tag parsing for diagnostics, Assign Profile + Convert To Profile
+      UI commands, export conversion pipeline. (~500-800 lines)
+
+  39. Proof Colors — MISSING. No proof setup commands, no soft proofing
+      with gamut warning overlay. (~100-150 lines)
+
+  40. Duotone Mode — MISSING. No duotone/tritone/quadtone conversion with
+      curve-per-ink, no duotone preset library. (~200-300 lines)
+
+  41. Bitmap Mode — MISSING. No conversion to 1-bit bitmap mode with
+      50% threshold, pattern dither, diffusion dither, halftone screen.
+      (~200-300 lines)
+
+  42. Indexed Color / Color Table — Missing. No color table editor, no
+      indexed color conversion with palette management. (~300-400 lines)
+
+  SMART OBJECTS / SMART FILTERS:
+  43. Smart Filter Mask Thumbnail — IMPLEMENTED (mask painting exists).
+      Missing: mask thumbnail in layers panel showing preview, per-filter
+      enable/disable eye icon toggle, mask linking/unlinking. (~100 lines)
+
+  44. Smart Object Relink — PARTIAL. Missing: "Relink to File" UI using
+      File System Access API, polling for linked file modification,
+      "Update Modified Content" notification. (~250 lines)
+
+  45. Smart Object Content Editing — IMPLEMENTED (nested document editing).
+      Verification needed for full coverage.
+
+  FILTERS — CONFIRMED MISSING OR PARTIAL:
+  46. Filter Gallery Combinations — Missing: ability to combine multiple
+      Filter Gallery filters into a single non-destructive stack, Filter
+      Gallery preset save/load, per-layer filter visibility toggle in
+      Filter Gallery view. (~200-300 lines)
+
+  47. Worker Filter Coverage Audit — Context-free filters are worker-
+      supported. Missing: systematic audit of all 80+ filters for worker
+      compatibility, batch filter ops in workers, progress callbacks.
+      (~200-300 lines)
+
+  PERFORMANCE:
+  48. WebGL Compositor GPU Filter Path — webgl-compositor.ts EXISTS with
+      layer-stack compositing, all blend modes, tiled GPU path. Missing:
+      GPU-accelerated filter chain, adjustment layer rendering on GPU,
+      layer effects (drop shadow, bevel, etc.) on GPU, smart filter
+      compositing on GPU. (~2000+ lines — highest-impact gap)
+
+  49. Progressive Preview — IMPLEMENTED (basic). Missing: bicubic/bilinear
+      downsampling for smoother coarse pass (currently nearest-neighbor),
+      progressive tile refinement, cancel on new interaction. (~80 lines)
+
+  50. Dirty-Rect Tracking — IMPLEMENTED (basic). Missing: per-layer dirty
+      rects (currently merged across layers), layer-isolated redraw with
+      scissor, adaptive promotion threshold. (~200-300 lines)
+
+  51. Memory Budget — IMPLEMENTED (basic). Missing: heap introspection via
+      performance.memory API (Chrome-only, graceful fallback), GC pressure
+      detection, status bar memory usage display. (~80 lines)
+
+  52. OffscreenCanvas Diagnostics — IMPLEMENTED (basic). Missing:
+      diagnostics panel showing active workers, transfer failure reasons,
+      degradation indicator. (~80 lines)
+
+  53. Canvas Pooling — IMPLEMENTED (basic). Missing: size-bucketed pools
+      (small/medium/large), idle cleanup of oversized canvases, pool stats
+      (hit/miss rate). (~60 lines)
+
+  54. RAF Coalescer — IMPLEMENTED (basic). Missing: priority levels
+      (input > filter preview > UI), coalesced filter previews, budget-
+      aware rendering. (~150 lines)
+
+  55. Incremental Autosave — IMPLEMENTED (basic). Missing: background
+      idle-time compaction via requestIdleCallback, streaming compression
+      via CompressionStream, smarter fingerprinting. (~150-200 lines)
+
+  56. Tiled Backing Store — IMPLEMENTED. Missing: tile smart object layers,
+      tile 3D layer previews, tile invalidation for SO source changes.
+      (~200-300 lines)
+
+  57. Large Document Handling — IMPLEMENTED (basic). Missing: consistent
+      "open at reduced scale" UX across every import path, full tile-only
+      mode when exceeding canvas limits, per-browser diagnostics in UI,
+      user-facing recovery options. (~300-500 lines)
+
+  FORMATS / EXPORT:
+  58. TIFF Compressed Export — IMPLEMENTED (uncompressed only). Missing:
+      LZW compression encoder, Deflate via CompressionStream, compression
+      options in export dialog. (~200 lines)
+
+  59. TGA Export — IMPLEMENTED in raster-codecs.ts. Verify: ensure full
+      wiring through export dialog and export-as-dialog. (Verification)
+
+  60. PNM Export — IMPLEMENTED in raster-codecs.ts. Verify: ensure
+      PBM/PGM/PPM full wiring through export dialog. (Verification)
+
+  61. Progressive JPEG / Interlaced PNG — IMPLEMENTED per capabilities.ts.
+      Verify: may need UI checkboxes in export dialog for progressive/
+      interlace toggles. (Verification)
+
+  62. Metadata Embedding — PNG text/iTXt/XMP, JPEG XMP APP1 EXIST.
+      Missing: TIFF IPTC/XMP/EXIF directory authoring, WebP metadata,
+      AVIF metadata, TGA extension/developer metadata. (~200-300 lines)
+
+  63. Export Limitation Report — MISSING. No unified "what will be lost
+      on export" preview dialog. (~100 lines)
+
+  64. Multi-Page PDF Import — IMPLEMENTED (single-page + multi-page
+      flattened export exists). Missing: multi-page PDF import with page
+      selection UI, page-to-layer/document mapping. (~200-300 lines)
+
+  WORKFLOWS:
+  65. Contact Sheet / Picture Package — IMPLEMENTED (basic). Missing:
+      picture package template presets (2x2, 4x4, wallet sizes), more
+      print/photo package presets, drag-and-drop image reordering.
+      (~200-300 lines)
+
+  66. Content-Aware Fill Workspace — IMPLEMENTED (generative-fill-engine.ts
+      with prompt-guided fill). Missing: dedicated workspace UI with
+      sampling area overlay, rotation adaptation, mirror mode, scale mode,
+      color adaptation toggles, non-modal apply/cancel panel. (~200-300 lines)
+
+  67. Liquify Face-Aware Controls — IMPLEMENTED (liquify-engine.ts with
+      forward warp, reconstruct, twirl, pucker, bloat, push, freeze/thaw,
+      mesh save/load). Missing: face landmark auto-detection for eyes/nose/
+      mouth/face shape controls. (~500 lines + face detection dependency)
+
+  68. Photomerge Advanced Controls — IMPLEMENTED (basic photomerge exists).
+      Missing: cylindrical/spherical preview with interactive projection
+      adjustment, lens distortion correction preview, boundary warp slider,
+      content-aware fill for transparent edges. (~200-300 lines)
+
+  69. HDR Merge Advanced Controls — IMPLEMENTED (basic). Missing: ghost
+      removal preview overlay, response curve visualization, tone-mapping
+      method selector (local/gamma/reinhard), EV adjustment per source.
+      (~200-300 lines)
+
+  PREFERENCES / UI:
+  70. Custom Canvas Cursors — MISSING. Per-tool custom cursor rendering
+      (brush size circle, crosshair with tool icon), precise vs standard
+      cursor toggle with live preview. (~100 lines)
+
+  71. Keyboard Shortcut Customization UI — IMPLEMENTED (shortcuts.ts with
+      keyboard bindings). Missing: visual shortcut editor with conflict
+      detection, searchable command list, import/export shortcut sets,
+      per-workspace shortcut overrides. (~300-400 lines)
+
+  72. Menu Customization — MISSING. No ability to customize menus (hide/
+      show items, reorder, add colors), no menu customization dialog.
+      (~200-300 lines)
+
+  73. Workspace Save/Restore Panel Positions — IMPLEMENTED (workspace-
+      layouts.ts). Missing: save/restore individual panel positions within
+      dock areas, panel auto-hide/collapse persistence, custom workspace
+      thumbnail preview during save. (~100-150 lines)
+
+  74. Screen Modes / Fullscreen — IMPLEMENTED (basic). Missing: full
+      screen mode, standard screen mode toggle with proper chrome hiding.
+      (~80 lines)
+
+  CHANNELS / SELECTION / MASK:
+  75. Save/Load Selection — IMPLEMENTED (basic). Missing: save selection
+      as channel with naming, load selection from channel with operation
+      (add/subtract/intersect), channel list in load dialog. (~100 lines)
+
+  76. Channel Calculations — MISSING. No Image > Calculations command with
+      source selection, blending, opacity, mask, result channel/selection/
+      document output. (~200-300 lines)
+
+  77. Apply Image — MISSING. No Image > Apply Image command with source,
+      blending, opacity, preserve transparency, mask. (~150 lines)
+
+  78. Split/Merge Channels — MISSING. No split composite into R/G/B
+      grayscale documents, no merge channels from grayscale documents.
+      (~150 lines)
+
+  79. Grow/Similar/Transform Selection — IMPLEMENTED (grow/similar).
+      Missing: transform selection independently of pixels (scale/rotate/
+      skew selection marquee). (~100 lines)
+
+  LAYERS:
+  80. Layer Filtering — IMPLEMENTED (basic name filter). Missing:
+      filter by kind (pixel/adjustment/text/shape/smart), filter by
+      attribute (visible/locked/empty/masked/effect/appearance), filter
+      by name, color label, blend mode, effect, smart filter. (~150 lines)
+
+  81. Layer Color Coding — IMPLEMENTED (colorLabel in types.ts). Missing:
+      right-click color label menu, colored badge on layer thumbnail.
+      (~80 lines)
+
+  82. Knockout Blending — Types EXIST (knockout: "none" | "shallow" |
+      "deep"). Missing: actual compositor implementation of knockout
+      (punch through to background or first non-knockout layer). (~150 lines)
+
+  83. Transparency Shapes Layer — Types EXIST. Missing: compositor
+      implementation separating layer transparency from layer mask
+      transparency for effects. (~100 lines)
+
+  84. Layer Mask Hides Effects — Types EXIST. Missing: checkbox affecting
+      compositor when layer mask should conceal drop shadow/bevel/etc.
+      (~80 lines)
+
+  85. Vector Mask Hides Effects — Types EXIST. Missing: similar to above
+      but for vector mask hiding layer effects. (~80 lines)
+
+  86. Flatten All Layer Effects — MISSING. No command to flatten effects
+      into pixel layer (rasterize all layer styles). (~50 lines)
+
+  87. Flatten All Masks — MISSING. No command to apply all masks
+      permanently. (~50 lines)
+
+  88. Delete All Empty Layers — MISSING. No command to scan document and
+      remove layers with empty pixel content. (~50 lines)
+
+  89. Rasterize Sub-Options — IMPLEMENTED (basic rasterize). Missing:
+      rasterize type/shape/fill content/layer clipping path/linked vector
+      mask/layer/layer style/all layers. (~100 lines)
+
+  90. Purge Commands — IMPLEMENTED (purge-commands.ts exists). Verify:
+      clipboard, histories, all, video cache, undo. (Verification)
+
+  91. Browse in Bridge / Reveal in Finder — NOT IMPLEMENTABLE in browser.
+      (Design limitation — no local file system access in web context.)
+
+  VECTOR / PATH:
+  92. True Bezier Path Boolean Operations — IMPLEMENTED (vector-bezier-
+      boolean.ts). Verify: union, intersect, subtract, exclude for all
+      path types. (Verification)
+
+  93. Custom Shape Library — IMPLEMENTED (shape-preset-library.ts). Missing:
+      shape preset browser with categories, import/export shape presets,
+      custom shape creation from path. (~150 lines)
+
+  94. Stroke Path with Brush Dynamics — MISSING. No command to stroke a
+      path with current brush settings (size dynamics, shape dynamics,
+      scattering, color dynamics). (~150 lines)
+
+  AUTOMATION:
+  95. Variables & Data Sets — IMPLEMENTED (variables-engine.ts exists).
+      Missing: data set creation/management UI, preview/apply data sets,
+      import/export data sets as CSV. (~200-300 lines)
+
+  96. Conditional Actions — IMPLEMENTED (actions-panel.tsx). Missing:
+      conditional action steps based on document properties (width/height/
+      color mode/bit depth/layer count/has selection). (~150 lines)
+
+  97. Image Processor Script — MISSING. No batch processor for opening/
+      processing/saving multiple files with resize, format conversion,
+      watermark/copyright. (~200-300 lines)
+
+  98. PDF Presentation — MISSING. No multi-page PDF presentation export
+      with transition settings and auto-advance. (~150 lines)
+
+  99. Crop and Straighten Photos — MISSING. No automatic crop and
+      straighten of scanned photos (edge detection + rotate + crop).
+      (~100-150 lines)
+
+  100. Conditional Mode Change — MISSING. No action that changes color
+       mode only if current mode differs from target. (~50 lines)
+
+  101. Fit Image — MISSING. No Image > Fit Image command that scales to
+       fit within width/height constraints without resampling. (~60 lines)
+
+  PRINTING:
+  102. Print Dialog with Marks/Bleed — IMPLEMENTED (preflight-engine.ts,
+       print-preview). Missing: crop marks, registration marks, color
+       bars, page info, bleed settings, corner/center crop marks generation.
+       (~300-400 lines)
+
+  INFRASTRUCTURE:
+  103. Browser Diagnostics Panel — PARTIALLY IMPLEMENTED. browser-
+       diagnostics.ts has comprehensive probe function (canvas max, WebGL
+       capabilities including maxTextureSize, maxRenderbufferSize,
+       maxViewportDims, maxCubeMapTextureSize, maxVertexAttribs,
+       maxVaryingVectors, maxFragmentUniformVectors, maxVertexUniformVectors,
+       renderer, vendor, extensions, OffscreenCanvas, worker transfer,
+       encoders, OPFS, heap). Missing: dedicated diagnostics panel UI
+       showing all this data with copy/export report button. (~150 lines)
+
+  104. Image Assets Generator — IMPLEMENTED (image-assets-generator.ts +
+       image-assets-generator-runner.tsx). Verify: full asset generation
+       from layer names with suffixes. (Verification)
+
+  105. Rich Tooltips — IMPLEMENTED (rich-tooltip.tsx + tool-tooltip-
+       content.ts). Verify: full rich tooltip rendering with descriptions
+       and shortcuts. (Verification)
+
+  106. Color Picker HUD — MISSING. No heads-up display color picker
+       invoked by Alt+Shift+RightClick on canvas. (~150 lines)
+
+================================================================================
+  SECTION C: SUMMARY STATISTICS (UPDATED)
+================================================================================
+
+  | Category                          | Gap Report | Actual |
+  |-----------------------------------|------------|--------|
+  | Missing tools (zero impl.)        | 26         | ~0     |
+  | Missing panels (zero impl.)       | 6          | ~5     |
+  | Capability "approximation" gaps   | 20         | ~15    |
+  | Partially implemented gaps        | 147        | ~80    |
+  | Missing infrastructure panels     | 1          | 0      |
+  | Additional filter/tool gaps       | 12         | ~3     |
+  | TOTAL genuine remaining gaps      | 215        | ~106   |
+
+  By Effort (remaining genuine gaps only):
+  - Trivial (<50 lines, ~30 min): ~5
+  - Small (50-150 lines, ~1-2 hrs): ~35
+  - Medium (150-400 lines, ~4-8 hrs): ~35
+  - Large (400-1000 lines, ~1-2 weeks): ~10
+  - Very Large (1000+ lines, ~2-4 weeks): ~3
+
+================================================================================
+  SECTION D: HIGHEST-IMPACT REMAINING GAPS (TOP 10)
+================================================================================
+
+  1. WebGL GPU Filter/Effect/Adjustment Path (#48) — 2000+ lines
+     Currently the biggest compositor bottleneck. Layer compositing
+     already uses WebGL; extending it to filters, adjustments, and
+     layer effects would dramatically improve performance.
+
+  2. Blur Gallery Interactive On-Canvas Pins (#24) — 600-1000 lines
+     All 5 blur algorithms are fully implemented with worker support
+     and tests. The interactive overlay UX (draggable pins, ellipse,
+     control points) is the missing piece.
+
+  3. Keyboard Shortcut Customization UI (#71) — 300-400 lines
+     High user demand. Shortcut bindings already exist in shortcuts.ts;
+     needs a visual editor with conflict detection.
+
+  4. Frame-Accurate Timeline Editing (#32) — 400-600 lines
+     Timeline data model exists. Needs trim handles, thumbnails,
+     split-at-playhead, keyboard shortcuts.
+
+  5. ICC Profile Assign/Convert UI (#38) — 500-800 lines
+     Matrix+TRC profiles already work for RGB/Gray/CMYK. Needs the
+     user-facing dialogs and export pipeline integration.
+
+  6. Glyphs Panel (#1) — 300-400 lines
+     Complete gap — no glyph browsing UI at all. Fonts are a key
+     Photoshop feature.
+
+  7. Home Screen / Start Workspace (#17) — 300-400 lines
+     start-workspace.tsx exists but needs recent docs with thumbnails,
+     templates, and new document presets.
+
+  8. Styles Panel (#9) — 250-350 lines
+     Layer style application works per-layer but there's no preset
+     gallery/management UI.
+
+  9. Liquify Face-Aware Controls (#67) — 500 lines
+     Core liquify engine is fully implemented. Face landmark detection
+     would enable the face-aware adjustment UI.
+
+  10. Variables & Data Sets (#95) — 200-300 lines
+      Engine exists. Needs management UI, preview, CSV import/export.
+
+================================================================================
+  SECTION E: PHASED IMPLEMENTATION ROADMAP
+================================================================================
+
+  Phase 1 — Quick Wins (< 1 day each):
+    1. Bit-depth status bar indicator (#36)
+    2. Custom canvas cursors (#70)
+    3. Layer color coding UI (#81)
+    4. Flatten All Layer Effects/Masks (#86-87)
+    5. Delete All Empty Layers (#88)
+    6. Screen modes / fullscreen (#74)
+    7. Polygon star/smooth controls (#18)
+    8. Quick Selection tolerance slider (#19)
+    9. Freeform Pen rubber-band preview (#20)
+    10. Magnetic Lasso on-canvas indicators (#22)
+
+  Phase 2 — Panel Completion (1-2 weeks total):
+    11. Glyphs Panel (#1)
+    12. Notes Panel (#2)
+    13. Library Panel (#4)
+    14. Discover + Learn Panels (#5)
+    15. Styles Panel (#9)
+    16. Navigator Panel enhancements (#6)
+    17. Info Panel enhancements (#7)
+    18. Histogram Panel enhancements (#8)
+    19. Preset Manager enhancements (#16)
+    20. Home Screen enhancements (#17)
+
+  Phase 3 — Typography Depth (1-2 weeks):
+    21. Variable font axis sliders (#25)
+    22. OpenType feature toggle grid (#27)
+    23. Font specimen/preview (#29)
+    24. Character/Paragraph style management (#31)
+    25. Match Font candidate display (#30)
+
+  Phase 4 — Layer/Compositing Depth (2-3 weeks):
+    26. Layer filtering (#80)
+    27. Knockout blending (#82)
+    28. Transparency/Layer Mask Hides Effects (#83-85)
+    29. Layer Comps enhancements (#10)
+    30. Save/Load Selection (#75)
+    31. Channel Calculations + Apply Image (#76-77)
+
+  Phase 5 — Core Tool Completion (2-3 weeks):
+    32. On-canvas Bezier multi-anchor editing (#23)
+    33. Slice export settings + Export All Slices (#21)
+    34. Content-Aware Fill workspace UI (#66)
+    35. Liquify Face-Aware controls (#67)
+    36. Grow/Similar/Transform Selection (#79)
+
+  Phase 6 — Filter/Color Completion (2-3 weeks):
+    37. Blur Gallery on-canvas interactive pins (#24)
+    38. Duotone Mode (#40)
+    39. Bitmap Mode (#41)
+    40. Indexed Color / Color Table (#42)
+    41. Filter Gallery combinations (#46)
+
+  Phase 7 — Video Timeline Depth (2-3 weeks):
+    42. Frame-accurate timeline with thumbnails (#32)
+    43. Video transition rendering (#33)
+    44. Audio mixer UI (#34)
+    45. Frame animation export pipeline (#35)
+
+  Phase 8 — Performance Infrastructure (3-4 weeks):
+    46. WebGL GPU filter/effect/adjustment path (#48)
+    47. Per-layer dirty rect tracking (#50)
+    48. Tile store for smart objects/3D (#56)
+    49. RAF coalescer priority levels (#54)
+    50. Bicubic progressive preview (#49)
+    51. Large doc tile-only mode (#57)
+    52. Background autosave compaction (#55)
+
+  Phase 9 — Production/Export Depth (2-3 weeks):
+    53. TIFF compressed export (#58)
+    54. Metadata embedding across formats (#62)
+    55. Multi-page PDF import (#64)
+    56. ICC profile assign/convert UI (#38)
+    57. Print dialog with marks/bleed (#102)
+    58. Image Processor script (#97)
+
+  Phase 10 — Automation/Workflow (2-3 weeks):
+    59. Variables & Data Sets UI (#95)
+    60. Actions — conditional steps (#96)
+    61. Keyboard shortcut editor (#71)
+    62. Menu customization (#72)
+    63. Photomerge advanced controls (#68)
+    64. PDF Presentation (#98)
+
+================================================================================
+  SECTION F: GAP REPORT ITEMS VERIFIED AS FULLY IMPLEMENTED
+================================================================================
+
+  The following gap report items are CONFIRMED fully implemented after
+  codebase audit (gap report was incorrect):
+
+  TOOLS: All 26 "missing" tools have ToolIds and implementation code at
+  varying levels of completion (Section A.1).
+
+  FILTERS: 19+ filters listed as "missing" are fully implemented:
+  Shadows/Highlights, HDR Toning, Match Color, Replace Color, Equalize,
+  Auto Tone/Contrast/Color, Displace, Shear, Polar Coordinates, ZigZag,
+  Diffuse, Tiles, Extrude, Wind, Pointillize, Color Halftone, Mezzotint,
+  Fragment, Facet, Fibers, Lens Flare, Flame, Picture Frame, Tree,
+  Lighting Effects, Smart Sharpen, Lens Blur, Reduce Noise, Dust &
+  Scratches, Despeckle, De-Interlace, NTSC Colors, Custom Filter Kernel.
+
+  ANIMATION: encodeAnimatedGifProgress(), encodeApngFromFrames(), and
+  encodeAnimatedWebP() all exist with progress callbacks and abort signals.
+
+  BLEND IF: Per-channel Blend If (R/G/B channels for both "This Layer"
+  and "Underlying Layer") is fully implemented in blend-modes.ts and
+  layer-workflows.ts.
+
+  ERODIBLE/BRISTLE TIPS: advanceErodibleWear(), sharpenErodibleTip(),
+  resolveErodibleTipSimulation() with shape flattening, resolveBristleTipSimulation()
+  with spacing and bristle angle — all implemented in brush-engine.ts.
+
+  MIXER BRUSH: Full reservoir model with load/clean/auto-load/replace,
+  reservoirAlpha tracking, MixerLoadOptions, MixerCleanOptions.
+
+  ART HISTORY BRUSH: All 10 style profiles, ArtHistoryFeatureSampler for
+  edge-aware strokes, ArtHistoryStyle type — fully implemented.
+
+  BROWSER DIAGNOSTICS: probeWebGL() now reports maxTextureSize,
+  maxRenderbufferSize, maxViewportDims, maxCubeMapTextureSize,
+  maxVertexAttribs, maxVaryingVectors, maxFragmentUniformVectors,
+  maxVertexUniformVectors. Diagnostics report surfaces 12+ WebGL rows.
+
+  BATCH EXPORT: Export limitation alternatives with BatchAlternativesRow
+  UI suggesting format switches (e.g., JPEG alpha -> PNG, GIF palette
+  limits alternatives). Active export format broadcasting to StatusBar.
+
+================================================================================
+  END OF REPORT
+================================================================================

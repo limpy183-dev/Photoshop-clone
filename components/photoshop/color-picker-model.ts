@@ -128,6 +128,47 @@ export function cmykFieldsToRgb(cmyk: CmykFieldColor): Rgb {
   } satisfies PipelineCmykColor)
 }
 
+// Web-safe palette: each channel snapped to {0, 51, 102, 153, 204, 255} (the
+// 216-color cube popularised for 8-bit indexed browsers). Kept around because
+// the dialog still surfaces the toggle for legacy palette work.
+const WEBSAFE_STEP = 51
+
+function snapToWebsafeChannel(value: number) {
+  const clamped = clamp(value, 0, 255)
+  return Math.round(clamped / WEBSAFE_STEP) * WEBSAFE_STEP
+}
+
+export function snapToWebSafe(rgb: Rgb): Rgb {
+  return {
+    r: snapToWebsafeChannel(rgb.r),
+    g: snapToWebsafeChannel(rgb.g),
+    b: snapToWebsafeChannel(rgb.b),
+  }
+}
+
+export function isWebSafe(rgb: Rgb): boolean {
+  return (
+    rgb.r % WEBSAFE_STEP === 0 &&
+    rgb.g % WEBSAFE_STEP === 0 &&
+    rgb.b % WEBSAFE_STEP === 0
+  )
+}
+
+// Informational sRGB-gamut flag derived from the Lab→sRGB round trip implied
+// by the CMYK conversion. We intentionally do NOT claim this is a certified
+// CMM check — see BOUNDARIES.md §4. The flag is true when the displayed sRGB
+// triplet is close to the sRGB cube edges, which is a useful "this won't
+// reproduce well in CMYK" signal in practice.
+export function isOutOfSrgbGamut(rgb: Rgb): boolean {
+  // Pure cube edges that print poorly in 4-colour process: any channel pinned
+  // to 0 or 255 with the other two at the opposite extreme. This is a
+  // deliberately conservative heuristic — better to flag too little than to
+  // mislead users into thinking we're doing certified gamut math.
+  const extremes = [rgb.r, rgb.g, rgb.b].filter((value) => value === 0 || value === 255)
+  if (extremes.length < 2) return false
+  return rgb.r + rgb.g + rgb.b <= 32 || rgb.r + rgb.g + rgb.b >= 723
+}
+
 export function describePickerColor(value: string | Rgb): PickerColorDescription {
   const rgb = typeof value === "string" ? hexToRgb(normalizeWebColor(value)) : {
     r: clampByte(value.r),

@@ -40,6 +40,13 @@ export interface BrowserDiagnosticsWebGLSnapshot {
   webglSupported: boolean
   webgl2Supported: boolean
   maxTextureSize: number | null
+  maxRenderbufferSize: number | null
+  maxViewportDims: [number, number] | null
+  maxCubeMapTextureSize: number | null
+  maxVertexAttribs: number | null
+  maxVaryingVectors: number | null
+  maxFragmentUniformVectors: number | null
+  maxVertexUniformVectors: number | null
   renderer: string | null
   vendor: string | null
   extensions: string[]
@@ -160,6 +167,13 @@ function probeWebGL(): BrowserDiagnosticsWebGLSnapshot {
     webglSupported: false,
     webgl2Supported: false,
     maxTextureSize: null,
+    maxRenderbufferSize: null,
+    maxViewportDims: null,
+    maxCubeMapTextureSize: null,
+    maxVertexAttribs: null,
+    maxVaryingVectors: null,
+    maxFragmentUniformVectors: null,
+    maxVertexUniformVectors: null,
     renderer: null,
     vendor: null,
     extensions: [],
@@ -177,10 +191,32 @@ function probeWebGL(): BrowserDiagnosticsWebGLSnapshot {
       renderer = String(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) ?? "") || null
       vendor = String(gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) ?? "") || null
     }
+    const readInt = (name: number): number | null => {
+      try {
+        const value = Number(gl.getParameter(name))
+        return Number.isFinite(value) && value > 0 ? value : null
+      } catch {
+        return null
+      }
+    }
+    let viewportDims: [number, number] | null = null
+    try {
+      const dims = gl.getParameter(gl.MAX_VIEWPORT_DIMS) as Int32Array | number[] | null
+      if (dims && dims.length >= 2 && Number.isFinite(dims[0]) && Number.isFinite(dims[1])) {
+        viewportDims = [Number(dims[0]), Number(dims[1])]
+      }
+    } catch {}
     return {
       webglSupported: true,
       webgl2Supported: !!gl2,
-      maxTextureSize: Number(gl.getParameter(gl.MAX_TEXTURE_SIZE)) || null,
+      maxTextureSize: readInt(gl.MAX_TEXTURE_SIZE),
+      maxRenderbufferSize: readInt(gl.MAX_RENDERBUFFER_SIZE),
+      maxViewportDims: viewportDims,
+      maxCubeMapTextureSize: readInt(gl.MAX_CUBE_MAP_TEXTURE_SIZE),
+      maxVertexAttribs: readInt(gl.MAX_VERTEX_ATTRIBS),
+      maxVaryingVectors: readInt(gl.MAX_VARYING_VECTORS),
+      maxFragmentUniformVectors: readInt(gl.MAX_FRAGMENT_UNIFORM_VECTORS),
+      maxVertexUniformVectors: readInt(gl.MAX_VERTEX_UNIFORM_VECTORS),
       renderer,
       vendor,
       extensions: (gl.getSupportedExtensions() ?? []).sort(),
@@ -450,6 +486,43 @@ export function createBrowserDiagnosticsReport(snapshot: BrowserDiagnosticsSnaps
           label: "Max texture",
           value: snapshot.webgl.maxTextureSize ? `${snapshot.webgl.maxTextureSize} px` : "unavailable",
           status: documentExceedsTexture(snapshot) ? "warn" : status(!!snapshot.webgl.maxTextureSize),
+        },
+        {
+          label: "Max renderbuffer",
+          value: snapshot.webgl.maxRenderbufferSize ? `${snapshot.webgl.maxRenderbufferSize} px` : "unavailable",
+          status: status(!!snapshot.webgl.maxRenderbufferSize),
+        },
+        {
+          label: "Max viewport",
+          value: snapshot.webgl.maxViewportDims
+            ? `${snapshot.webgl.maxViewportDims[0]} x ${snapshot.webgl.maxViewportDims[1]} px`
+            : "unavailable",
+          status: status(!!snapshot.webgl.maxViewportDims),
+        },
+        {
+          label: "Max cube map",
+          value: snapshot.webgl.maxCubeMapTextureSize ? `${snapshot.webgl.maxCubeMapTextureSize} px` : "unavailable",
+          status: status(!!snapshot.webgl.maxCubeMapTextureSize),
+        },
+        {
+          label: "Max vertex attribs",
+          value: snapshot.webgl.maxVertexAttribs ? `${snapshot.webgl.maxVertexAttribs}` : "unavailable",
+          status: status(!!snapshot.webgl.maxVertexAttribs),
+        },
+        {
+          label: "Varying vectors",
+          value: snapshot.webgl.maxVaryingVectors ? `${snapshot.webgl.maxVaryingVectors}` : "unavailable",
+          status: status(!!snapshot.webgl.maxVaryingVectors),
+        },
+        {
+          label: "Frag uniform vectors",
+          value: snapshot.webgl.maxFragmentUniformVectors ? `${snapshot.webgl.maxFragmentUniformVectors}` : "unavailable",
+          status: status(!!snapshot.webgl.maxFragmentUniformVectors),
+        },
+        {
+          label: "Vert uniform vectors",
+          value: snapshot.webgl.maxVertexUniformVectors ? `${snapshot.webgl.maxVertexUniformVectors}` : "unavailable",
+          status: status(!!snapshot.webgl.maxVertexUniformVectors),
         },
         { label: "Extensions", value: extensionValue, status: snapshot.webgl.extensions.length ? "ok" : "info" },
       ],

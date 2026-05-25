@@ -59,6 +59,9 @@ export interface RevealSourceResult {
   message: string
   verified: boolean
   permission?: PermissionState
+  directoryName?: string
+  directoryHandle?: SourceDirectoryHandleLike
+  verifiedAt?: number
 }
 
 export interface RevealSourceEnvironment {
@@ -179,6 +182,24 @@ export function sourceInfoForSmartObject(layer: Pick<Layer, "name" | "kind" | "s
   }
 }
 
+/**
+ * Build a best-effort path-like string the user can copy. Browsers do not
+ * expose absolute paths via the File System Access API, so we combine the
+ * directory name (if a parent directory handle was granted) with the file
+ * name, falling back to the file name alone.
+ */
+export function bestEffortPathString(
+  fileName: string | undefined,
+  directoryName?: string,
+): string {
+  const name = fileName?.trim() ?? ""
+  const dir = directoryName?.trim() ?? ""
+  if (!name && !dir) return ""
+  if (!dir) return name
+  if (!name) return `${dir}/`
+  return `${dir}/${name}`
+}
+
 async function readPermission(handle: SourceFileHandleLike): Promise<PermissionState> {
   const descriptor = { mode: "read" as const }
   let permission: PermissionState = "granted"
@@ -257,6 +278,9 @@ export async function revealSourceInBrowser(
         status: verified ? "folder-picker-verified" : "folder-picker-opened",
         verified,
         permission,
+        directoryName: directory.name,
+        directoryHandle: directory,
+        verifiedAt: verified ? Date.now() : undefined,
         message: verified
           ? `Opened and verified a folder containing ${handle.name}.`
           : `Opened a browser folder picker for ${handle.name}. The browser does not expose an absolute path.`,
@@ -286,6 +310,7 @@ export async function revealSourceInBrowser(
         status: "file-accessible",
         verified: false,
         permission,
+        verifiedAt: Date.now(),
         message: `The browser can access ${handle.name}, but cannot reveal its containing folder.`,
       }
     } catch {

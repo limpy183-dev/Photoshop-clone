@@ -1452,6 +1452,8 @@ export interface FilterAsyncOptions {
     src: ImageData,
     params: Record<string, number | string | boolean>,
   ) => Promise<ImageData>
+  signal?: AbortSignal
+  onProgress?: (event: FilterProgressEvent) => void
 }
 
 /**
@@ -1465,6 +1467,9 @@ export function applyFilterAsync(
   params: Record<string, number | string | boolean>,
   options: FilterAsyncOptions = {},
 ): Promise<ImageData> {
+  if (options.signal?.aborted) {
+    return Promise.reject(new DOMException("Filter processing cancelled", "AbortError"))
+  }
   if (isFilterWorkerSupported(filterId)) {
     if (options.workerExecutor) {
       return options.workerExecutor(filterId, src, params).catch((err) => {
@@ -1490,7 +1495,18 @@ export function applyFilterAsync(
         params,
       }
       return new Promise<ImageData>((resolve, reject) => {
-        _pending.set(id, { resolve, reject })
+        _pending.set(id, { resolve, reject, progress: options.onProgress })
+        const onAbort = () => {
+          const entry = _pending.get(id)
+          if (entry) {
+            _pending.delete(id)
+            entry.reject(new DOMException("Filter processing cancelled", "AbortError"))
+          }
+        }
+        if (options.signal) {
+          if (options.signal.aborted) { onAbort(); return }
+          options.signal.addEventListener("abort", onAbort, { once: true })
+        }
         worker.postMessage(request, [buffer])
       }).catch((err) => {
         _workerFailed = true
@@ -1508,6 +1524,7 @@ export function applyFilterAsync(
 export interface FilterBatchOptions {
   onProgress?: (event: FilterProgressEvent) => void
   fallbackOnWorkerError?: boolean
+  signal?: AbortSignal
 }
 
 export async function applyFilterBatch(
@@ -1517,6 +1534,9 @@ export async function applyFilterBatch(
 ): Promise<ImageData> {
   if (operations.length === 0) {
     return new ImageData(new Uint8ClampedArray(src.data), src.width, src.height)
+  }
+  if (options.signal?.aborted) {
+    throw new DOMException("Filter batch cancelled", "AbortError")
   }
 
   const canUseWorker = operations.every((operation) => isFilterWorkerSupported(operation.filterId))
@@ -1536,26 +1556,42 @@ export async function applyFilterBatch(
     }
     return new Promise<ImageData>((resolve, reject) => {
       _pending.set(id, { resolve, reject, progress: options.onProgress })
+      const onAbort = () => {
+        const entry = _pending.get(id)
+        if (entry) {
+          _pending.delete(id)
+          entry.reject(new DOMException("Filter batch cancelled", "AbortError"))
+        }
+      }
+      if (options.signal) {
+        if (options.signal.aborted) { onAbort(); return }
+        options.signal.addEventListener("abort", onAbort, { once: true })
+      }
       worker.postMessage(request, [buffer])
     }).catch((err) => {
+      if (err instanceof DOMException && err.name === "AbortError") throw err
       _workerFailed = true
       if (options.fallbackOnWorkerError === false) {
         throw err instanceof Error ? err : new Error(String(err))
       }
-      return runFilterBatchOnMainThread(src, operations, options.onProgress)
+      return runFilterBatchOnMainThread(src, operations, options.onProgress, options.signal)
     })
   }
 
-  return runFilterBatchOnMainThread(src, operations, options.onProgress)
+  return runFilterBatchOnMainThread(src, operations, options.onProgress, options.signal)
 }
 
 async function runFilterBatchOnMainThread(
   src: ImageData,
   operations: FilterBatchOperation[],
   onProgress?: (event: FilterProgressEvent) => void,
+  signal?: AbortSignal,
 ) {
   let current = new ImageData(new Uint8ClampedArray(src.data), src.width, src.height)
   for (let i = 0; i < operations.length; i++) {
+    if (signal?.aborted) {
+      throw new DOMException("Filter batch cancelled", "AbortError")
+    }
     const operation = operations[i]
     current = await runFilterOnMainThread(operation.filterId, current, operation.params)
     onProgress?.({ completed: i + 1, total: operations.length, filterId: operation.filterId })

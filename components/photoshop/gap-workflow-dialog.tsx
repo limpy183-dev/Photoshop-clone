@@ -427,8 +427,6 @@ export function GapWorkflowDialog({
     close()
   }
 
-  const layers = activeDoc?.layers.filter((layer) => layer.kind !== "group") ?? []
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[680px] border-[var(--ps-divider)] bg-[var(--ps-panel)] text-[var(--ps-text)]">
@@ -531,6 +529,53 @@ export function GapWorkflowDialog({
                 Invert mask
               </label>
             </div>
+            <ChannelWorkflowPreview
+              kind={workflow}
+              compute={() => {
+                try {
+                  const a = resolveSourceImageData(sourceId)
+                  if (!a) return null
+                  if (workflow === "calculations") {
+                    const b = resolveSourceImageData(sourceId2)
+                    if (!b) return null
+                    return calculateChannelImageData(a, b, {
+                      sourceChannelA: sourceChannel === "rgb" ? "gray" : sourceChannel,
+                      sourceChannelB: sourceChannel2 === "rgb" ? "gray" : sourceChannel2,
+                      blendMode: blend,
+                      opacity: opacity / 100,
+                      invertA: invertSource,
+                      invertB: invertSource2,
+                      mask: resolveMaskImageData(),
+                      maskChannel: "alpha",
+                      invertMask,
+                      maskDensity: maskDensity / 100,
+                      scale,
+                      offset,
+                    })
+                  }
+                  if (!activeLayer) return null
+                  const targetCanvas = applyDestination === "layer-mask" ? layerMaskCanvas() : activeLayer.canvas
+                  if (!targetCanvas) return null
+                  const target = canvasImageData(targetCanvas)
+                  return applyImageData(target, a, {
+                    sourceChannel,
+                    targetChannel,
+                    blendMode: blend,
+                    opacity: opacity / 100,
+                    invertSource,
+                    mask: resolveMaskImageData(),
+                    maskChannel: "alpha",
+                    invertMask,
+                    maskDensity: maskDensity / 100,
+                    scale,
+                    offset,
+                    preserveTransparency,
+                  })
+                } catch {
+                  return null
+                }
+              }}
+            />
           </div>
         ) : workflow === "split-channels" ? (
           <div className="grid gap-3 text-[11px]">
@@ -961,3 +1006,55 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 const inputClass = "h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px] text-[var(--ps-text)] outline-none"
 const selectClass = inputClass
+
+function ChannelWorkflowPreview({
+  kind,
+  compute,
+}: {
+  kind: "apply-image" | "calculations"
+  compute: () => ImageData | null
+}) {
+  const ref = React.useRef<HTMLCanvasElement>(null)
+  React.useEffect(() => {
+    const canvas = ref.current
+    if (!canvas) return
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    let image: ImageData | null = null
+    try {
+      image = compute()
+    } catch {
+      image = null
+    }
+    if (!image) {
+      ctx.fillStyle = "#111"
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.fillStyle = "#888"
+      ctx.font = "10px sans-serif"
+      ctx.textAlign = "center"
+      ctx.textBaseline = "middle"
+      ctx.fillText("Preview unavailable", canvas.width / 2, canvas.height / 2)
+      return
+    }
+    const off = document.createElement("canvas")
+    off.width = image.width
+    off.height = image.height
+    off.getContext("2d")!.putImageData(image, 0, 0)
+    const scale = Math.min(canvas.width / image.width, canvas.height / image.height)
+    const dw = image.width * scale
+    const dh = image.height * scale
+    ctx.drawImage(off, (canvas.width - dw) / 2, (canvas.height - dh) / 2, dw, dh)
+  })
+  return (
+    <div className="grid gap-1 text-[var(--ps-text-dim)]">
+      <span className="text-[11px]">{kind === "calculations" ? "Result Preview" : "Target Preview"}</span>
+      <canvas
+        ref={ref}
+        width={420}
+        height={120}
+        className="h-24 w-full rounded-sm border border-[var(--ps-divider)] bg-black"
+      />
+    </div>
+  )
+}

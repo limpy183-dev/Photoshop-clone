@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { toast } from "sonner"
-import { FileImage, ImagePlus, Trash2, WandSparkles } from "lucide-react"
+import { FileImage, FilePlus2, FolderOpen, ImagePlus, Layers, Trash2, WandSparkles } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { cn } from "@/lib/utils"
 import { makeCanvas, makeDocument, useEditor } from "./editor-context"
-import { loadRasterCanvasFromFile } from "./document-io"
+import { loadRasterCanvasFromFile, renderDocumentComposite } from "./document-io"
 import { photomergeImageStack } from "./photo-workflow-engine"
 import { contentAwareFill } from "./tool-helpers"
 import {
@@ -32,10 +32,79 @@ import type { Layer } from "./types"
 import type { PanoramaAlignmentModel, PanoramaProjection } from "./photo-workflow-engine"
 
 interface PhotomergeSource extends PhotomergePreviewSource {
-  file: File
+  file: File | null
   canvas: HTMLCanvasElement
   thumbnail: string
   warnings: string[]
+  origin: "file" | "folder" | "document"
+}
+
+type PhotomergeLayoutId =
+  | "auto"
+  | "perspective"
+  | "cylindrical"
+  | "spherical"
+  | "collage"
+  | "reposition"
+
+interface PhotomergeLayoutPreset {
+  id: PhotomergeLayoutId
+  label: string
+  description: string
+  alignment: PanoramaAlignmentModel
+  projection: PanoramaProjection
+}
+
+const LAYOUT_PRESETS: PhotomergeLayoutPreset[] = [
+  {
+    id: "auto",
+    label: "Auto",
+    description: "Analyze sources and choose a balanced layout.",
+    alignment: "similarity",
+    projection: "planar",
+  },
+  {
+    id: "perspective",
+    label: "Perspective",
+    description: "Use a homography to warp images onto a planar canvas.",
+    alignment: "homography",
+    projection: "planar",
+  },
+  {
+    id: "cylindrical",
+    label: "Cylindrical",
+    description: "Wrap onto a cylinder; best for wide horizontal pans.",
+    alignment: "similarity",
+    projection: "cylindrical",
+  },
+  {
+    id: "spherical",
+    label: "Spherical",
+    description: "Wrap onto a sphere; best for full 360 captures.",
+    alignment: "similarity",
+    projection: "spherical",
+  },
+  {
+    id: "collage",
+    label: "Collage",
+    description: "Affine alignment that keeps layered tiles editable.",
+    alignment: "affine",
+    projection: "planar",
+  },
+  {
+    id: "reposition",
+    label: "Reposition",
+    description: "Translate-only alignment without rotation or warp.",
+    alignment: "translation",
+    projection: "planar",
+  },
+]
+
+function layoutPresetForSettings(settings: PhotomergeWorkspaceSettings): PhotomergeLayoutId {
+  const match = LAYOUT_PRESETS.find(
+    (preset) => preset.alignment === settings.alignmentModel && preset.projection === settings.projection,
+  )
+  return match ? match.id : "auto"
 }
 
 const DEFAULT_SETTINGS: PhotomergeWorkspaceSettings = {
@@ -97,13 +166,16 @@ export function PhotomergeDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const { createDocument } = useEditor()
+  const { createDocument, documents, activeDocId } = useEditor()
   const [sources, setSources] = React.useState<PhotomergeSource[]>([])
   const [settings, setSettings] = React.useState<PhotomergeWorkspaceSettings>(DEFAULT_SETTINGS)
   const [busy, setBusy] = React.useState(false)
   const [dragActive, setDragActive] = React.useState(false)
+  const [selectedSourceIds, setSelectedSourceIds] = React.useState<string[]>([])
   const fileInputRef = React.useRef<HTMLInputElement | null>(null)
+  const folderInputRef = React.useRef<HTMLInputElement | null>(null)
   const previewRef = React.useRef<HTMLCanvasElement | null>(null)
+  const activeLayoutPreset = layoutPresetForSettings(settings)
 
   const updateSetting = React.useCallback(<K extends keyof PhotomergeWorkspaceSettings>(
     key: K,
@@ -112,7 +184,10 @@ export function PhotomergeDialog({
     setSettings((current) => ({ ...current, [key]: value }))
   }, [])
 
-  const importFiles = React.useCallback(async (files: FileList | File[]) => {
+  const importFiles = React.useCallback(async (
+    files: FileList | File[],
+    origin: PhotomergeSource["origin"] = "file",
+  ) => {
     const imageFiles = Array.from(files).filter((file) => file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name))
     if (!imageFiles.length) {
       toast.error("Choose one or more image files")
@@ -135,6 +210,7 @@ export function PhotomergeDialog({
           canvas: raster.canvas,
           thumbnail: thumbnailForCanvas(raster.canvas),
           warnings: raster.warnings ?? [],
+          origin,
         })
       }
       setSources((current) => [...current, ...imported])
@@ -144,8 +220,96 @@ export function PhotomergeDialog({
     } finally {
       setBusy(false)
       if (fileInputRef.current) fileInputRef.current.value = ""
+      if (folderInputRef.current) folderInputRef.current.value = ""
     }
   }, [])
+
+  const addOpenFiles = React.useCallback(() => {
+    if (!documents.length) {
+      toast.error("No open documents to add")
+      return
+    }
+    setBusy(true)
+    try {
+      const stamp = Date.now()
+      const imported: PhotomergeSource[] = []
+      let skipped = 0
+      documents.forEach((doc, index) => {
+        try {
+          const composite = renderDocumentComposite(doc, { matte: doc.background ?? "#ffffff" })
+          imported.push({
+            id: `doc-${doc.id}-${stamp}-${index}`,
+            file: null,
+            name: doc.name || `Document ${index + 1}`,
+            width: composite.width,
+            height: composite.height,
+            canvas: composite,
+            thumbnail: thumbnailForCanvas(composite),
+            warnings: [],
+            origin: "document",
+          })
+        } catch {
+          skipped++
+        }
+      })
+      if (!imported.length) {
+        toast.error("Could not read open documents")
+        return
+      }
+      setSources((current) => {
+        const known = new Set(current.map((source) => source.name + ":" + source.width + "x" + source.height))
+        const additions = imported.filter((source) => !known.has(source.name + ":" + source.width + "x" + source.height))
+        if (!additions.length) {
+          toast.info("All open documents are already in the source list")
+          return current
+        }
+        return [...current, ...additions]
+      })
+      const added = imported.length - skipped
+      if (added > 0) toast.success(`Added ${added} open document${added === 1 ? "" : "s"}`)
+      if (skipped > 0) toast.warning(`Skipped ${skipped} document${skipped === 1 ? "" : "s"} that could not be composed`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not add open documents")
+    } finally {
+      setBusy(false)
+    }
+  }, [documents])
+
+  const applyLayoutPreset = React.useCallback((presetId: PhotomergeLayoutId) => {
+    const preset = LAYOUT_PRESETS.find((candidate) => candidate.id === presetId)
+    if (!preset) return
+    setSettings((current) => ({
+      ...current,
+      alignmentModel: preset.alignment,
+      projection: preset.projection,
+    }))
+  }, [])
+
+  const toggleSourceSelection = React.useCallback((id: string, additive: boolean) => {
+    setSelectedSourceIds((current) => {
+      if (additive) {
+        return current.includes(id) ? current.filter((value) => value !== id) : [...current, id]
+      }
+      return current.length === 1 && current[0] === id ? [] : [id]
+    })
+  }, [])
+
+  React.useEffect(() => {
+    setSelectedSourceIds((current) => current.filter((id) => sources.some((source) => source.id === id)))
+  }, [sources])
+
+  React.useEffect(() => {
+    if (!open) {
+      setSelectedSourceIds([])
+    }
+  }, [open])
+
+  // activeDocId is read only to keep Add Open Files responsive when the
+  // editor switches documents; the effect intentionally re-evaluates the
+  // memoized handler when the active doc id changes.
+  React.useEffect(() => {
+    void activeDocId
+  }, [activeDocId])
 
   React.useEffect(() => {
     drawPreview(previewRef.current, sources, settings.projection)
@@ -153,9 +317,23 @@ export function PhotomergeDialog({
 
   const removeSource = (id: string) => {
     setSources((current) => current.filter((source) => source.id !== id))
+    setSelectedSourceIds((current) => current.filter((value) => value !== id))
   }
 
-  const clearSources = () => setSources([])
+  const removeSelectedSources = () => {
+    if (!selectedSourceIds.length) {
+      toast.error("Select at least one source to remove")
+      return
+    }
+    const ids = new Set(selectedSourceIds)
+    setSources((current) => current.filter((source) => !ids.has(source.id)))
+    setSelectedSourceIds([])
+  }
+
+  const clearSources = () => {
+    setSources([])
+    setSelectedSourceIds([])
+  }
 
   const createPanorama = async () => {
     if (!sources.length) return
@@ -244,6 +422,52 @@ export function PhotomergeDialog({
                 {sources.length} source file{sources.length === 1 ? "" : "s"}
               </span>
             </div>
+            <div className="grid grid-cols-2 gap-1.5">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px]"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={busy}
+                data-testid="photomerge-add-files"
+              >
+                <FilePlus2 className="mr-1 h-3.5 w-3.5" /> Add Files
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px]"
+                onClick={addOpenFiles}
+                disabled={busy || documents.length === 0}
+                data-testid="photomerge-add-open-files"
+              >
+                <Layers className="mr-1 h-3.5 w-3.5" /> Add Open Files
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px]"
+                onClick={() => folderInputRef.current?.click()}
+                disabled={busy}
+                data-testid="photomerge-browse-folder"
+              >
+                <FolderOpen className="mr-1 h-3.5 w-3.5" /> Browse Folder
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px]"
+                onClick={removeSelectedSources}
+                disabled={busy || selectedSourceIds.length === 0}
+                data-testid="photomerge-remove-selected"
+              >
+                <Trash2 className="mr-1 h-3.5 w-3.5" /> Remove
+              </Button>
+            </div>
             <label
               onDragEnter={(event) => {
                 event.preventDefault()
@@ -256,7 +480,7 @@ export function PhotomergeDialog({
               onDragLeave={() => setDragActive(false)}
               onDrop={handleDrop}
               className={cn(
-                "flex h-24 cursor-pointer flex-col items-center justify-center rounded-sm border border-dashed bg-[var(--ps-panel-2)] text-[11px] text-[var(--ps-text-dim)] transition-colors",
+                "flex h-20 cursor-pointer flex-col items-center justify-center rounded-sm border border-dashed bg-[var(--ps-panel-2)] text-[11px] text-[var(--ps-text-dim)] transition-colors",
                 dragActive ? "border-[var(--ps-accent)] bg-[var(--ps-tool-active)] text-[var(--ps-text)]" : "border-[var(--ps-divider)] hover:bg-[var(--ps-tool-hover)]",
               )}
             >
@@ -271,44 +495,77 @@ export function PhotomergeDialog({
                 accept="image/*"
                 className="hidden"
                 onChange={(event) => {
-                  if (event.target.files) void importFiles(event.target.files)
+                  if (event.target.files) void importFiles(event.target.files, "file")
+                }}
+              />
+              <input
+                ref={folderInputRef}
+                data-testid="photomerge-folder-input"
+                type="file"
+                multiple
+                accept="image/*"
+                // webkitdirectory is non-standard but widely supported in
+                // Chromium/WebKit browsers; ignored in browsers that lack it,
+                // which is the safe fallback for a browser-local editor.
+                {...{ webkitdirectory: "", directory: "" }}
+                className="hidden"
+                onChange={(event) => {
+                  if (event.target.files) void importFiles(event.target.files, "folder")
                 }}
               />
             </label>
 
-            <div className="min-h-0 flex-1 overflow-y-auto rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)]">
+            <div
+              data-testid="photomerge-source-list"
+              className="min-h-0 flex-1 overflow-y-auto rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)]"
+            >
               {sources.length ? (
                 <div className="divide-y divide-[var(--ps-divider)]">
-                  {sources.map((source, index) => (
-                    <div key={source.id} className="grid grid-cols-[52px_1fr_28px] items-center gap-2 p-2">
-                      <div className="flex h-10 w-12 items-center justify-center overflow-hidden rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-chrome)]">
-                        {source.thumbnail ? (
-                          <img src={source.thumbnail} alt="" className="max-h-full max-w-full" />
-                        ) : (
-                          <FileImage className="h-4 w-4 text-[var(--ps-text-dim)]" />
+                  {sources.map((source, index) => {
+                    const selected = selectedSourceIds.includes(source.id)
+                    return (
+                      <div
+                        key={source.id}
+                        role="option"
+                        aria-selected={selected}
+                        onClick={(event) => toggleSourceSelection(source.id, event.metaKey || event.ctrlKey || event.shiftKey)}
+                        className={cn(
+                          "grid cursor-pointer grid-cols-[52px_1fr_28px] items-center gap-2 p-2 transition-colors",
+                          selected ? "bg-[var(--ps-tool-active)]" : "hover:bg-[var(--ps-tool-hover)]",
                         )}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="truncate text-[11px]">{source.name}</div>
-                        <div className="text-[10px] text-[var(--ps-text-dim)]">
-                          {index + 1} - {source.width} x {source.height}px
-                        </div>
-                        {source.warnings[0] ? (
-                          <div className="truncate text-[10px] text-[#eab308]">{source.warnings[0]}</div>
-                        ) : null}
-                      </div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        aria-label={`Remove ${source.name}`}
-                        onClick={() => removeSource(source.id)}
                       >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  ))}
+                        <div className="flex h-10 w-12 items-center justify-center overflow-hidden rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-chrome)]">
+                          {source.thumbnail ? (
+                            <img src={source.thumbnail} alt="" className="max-h-full max-w-full" />
+                          ) : (
+                            <FileImage className="h-4 w-4 text-[var(--ps-text-dim)]" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="truncate text-[11px]">{source.name}</div>
+                          <div className="text-[10px] text-[var(--ps-text-dim)]">
+                            {index + 1} - {source.width} x {source.height}px - {originLabel(source.origin)}
+                          </div>
+                          {source.warnings[0] ? (
+                            <div className="truncate text-[10px] text-[#eab308]">{source.warnings[0]}</div>
+                          ) : null}
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          aria-label={`Remove ${source.name}`}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            removeSource(source.id)
+                          }}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    )
+                  })}
                 </div>
               ) : (
                 <div className="grid h-full min-h-36 place-items-center p-4 text-center text-[11px] text-[var(--ps-text-dim)]">
@@ -347,6 +604,38 @@ export function PhotomergeDialog({
 
           <section className="min-h-0 overflow-y-auto pr-1">
             <div className="grid gap-3">
+              <h3 className="text-[12px] font-semibold">Layout</h3>
+              <div
+                role="radiogroup"
+                aria-label="Layout preset"
+                data-testid="photomerge-layout-presets"
+                className="grid grid-cols-2 gap-1.5"
+              >
+                {LAYOUT_PRESETS.map((preset) => {
+                  const selected = preset.id === activeLayoutPreset
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      aria-label={`Layout: ${preset.label}`}
+                      title={preset.description}
+                      data-testid={`photomerge-layout-${preset.id}`}
+                      onClick={() => applyLayoutPreset(preset.id)}
+                      className={cn(
+                        "flex flex-col items-stretch gap-1 rounded-sm border bg-[var(--ps-panel-2)] p-1.5 text-left text-[10px] transition-colors",
+                        selected
+                          ? "border-[var(--ps-accent)] ring-1 ring-[var(--ps-accent)]"
+                          : "border-[var(--ps-divider)] hover:border-[var(--ps-text-dim)]",
+                      )}
+                    >
+                      <LayoutPresetPreview presetId={preset.id} />
+                      <span className="text-[11px] font-semibold text-[var(--ps-text)]">{preset.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
               <h3 className="text-[12px] font-semibold">Merge Options</h3>
               <Field label="Layout model">
                 <select
@@ -583,4 +872,82 @@ function correctionCount(settings: PhotomergeWorkspaceSettings) {
     settings.geometricCorrection,
     settings.contentAwareFillTransparent,
   ].filter(Boolean).length
+}
+
+function originLabel(origin: PhotomergeSource["origin"]) {
+  if (origin === "document") return "Open document"
+  if (origin === "folder") return "From folder"
+  return "From disk"
+}
+
+function LayoutPresetPreview({ presetId }: { presetId: PhotomergeLayoutId }) {
+  const W = 84
+  const H = 40
+  const tiles: Array<{ x: number; y: number; w: number; h: number; rotation: number; skew: number }> = (() => {
+    switch (presetId) {
+      case "perspective":
+        return [
+          { x: 10, y: 10, w: 28, h: 22, rotation: -4, skew: -8 },
+          { x: 28, y: 8, w: 30, h: 24, rotation: 0, skew: 0 },
+          { x: 50, y: 10, w: 28, h: 22, rotation: 4, skew: 8 },
+        ]
+      case "cylindrical":
+        return [
+          { x: 6, y: 14, w: 24, h: 18, rotation: -6, skew: 0 },
+          { x: 28, y: 10, w: 28, h: 22, rotation: 0, skew: 0 },
+          { x: 54, y: 14, w: 24, h: 18, rotation: 6, skew: 0 },
+        ]
+      case "spherical":
+        return [
+          { x: 6, y: 18, w: 24, h: 16, rotation: -10, skew: 0 },
+          { x: 30, y: 8, w: 26, h: 22, rotation: 0, skew: 0 },
+          { x: 54, y: 18, w: 24, h: 16, rotation: 10, skew: 0 },
+        ]
+      case "collage":
+        return [
+          { x: 6, y: 6, w: 26, h: 18, rotation: -8, skew: 0 },
+          { x: 30, y: 14, w: 26, h: 20, rotation: 4, skew: 0 },
+          { x: 52, y: 6, w: 26, h: 22, rotation: -2, skew: 0 },
+        ]
+      case "reposition":
+        return [
+          { x: 6, y: 12, w: 24, h: 18, rotation: 0, skew: 0 },
+          { x: 30, y: 12, w: 24, h: 18, rotation: 0, skew: 0 },
+          { x: 54, y: 12, w: 24, h: 18, rotation: 0, skew: 0 },
+        ]
+      case "auto":
+      default:
+        return [
+          { x: 8, y: 12, w: 24, h: 18, rotation: -2, skew: 0 },
+          { x: 30, y: 10, w: 26, h: 22, rotation: 0, skew: 0 },
+          { x: 54, y: 12, w: 24, h: 18, rotation: 2, skew: 0 },
+        ]
+    }
+  })()
+
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      aria-hidden="true"
+      className="block h-9 w-full rounded-sm bg-[var(--ps-chrome)]"
+    >
+      {tiles.map((tile, index) => (
+        <g
+          key={index}
+          transform={`translate(${tile.x + tile.w / 2}, ${tile.y + tile.h / 2}) rotate(${tile.rotation}) skewX(${tile.skew}) translate(${-tile.w / 2}, ${-tile.h / 2})`}
+        >
+          <rect
+            x={0}
+            y={0}
+            width={tile.w}
+            height={tile.h}
+            rx={1}
+            fill="rgba(120,180,255,0.18)"
+            stroke="rgba(180,210,255,0.7)"
+            strokeWidth={0.7}
+          />
+        </g>
+      ))}
+    </svg>
+  )
 }

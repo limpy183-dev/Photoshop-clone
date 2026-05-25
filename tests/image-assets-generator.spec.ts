@@ -64,7 +64,7 @@ test("image asset generator reports invalid layer-name exports and duplicate tar
   const doc = generatorDoc([
     layer("icon", "icon.png, 200% icon@2x.png"),
     layer("duplicate", "icon.png"),
-    layer("invalid", "../escape.png, zero% nope.png, bad.svg"),
+    layer("invalid", "../escape.png, zero% nope.png, bad.xyz"),
     layer("plain", "Regular Layer Name"),
   ])
 
@@ -79,7 +79,18 @@ test("image asset generator reports invalid layer-name exports and duplicate tar
     "conflict:icon.png",
     "invalid:../escape.png",
     "invalid:nope.png",
-    "invalid:bad.svg",
+    "invalid:bad.xyz",
+  ])
+})
+
+test("image asset generator parses explicit pixel dimensions, png subformats, jpg quality, and svg", () => {
+  const parsed = parseImageAssetLayerName("300px x 200px hero.png, icon.png24, banner.jpg6, logo.svg")
+  expect(parsed.issues).toEqual([])
+  expect(parsed.assets).toEqual([
+    { sourceText: "300px x 200px hero.png", filename: "hero.png", scale: 1, format: "png", extension: "png", width: 300, height: 200 },
+    { sourceText: "icon.png24", filename: "icon.png", scale: 1, format: "png", extension: "png", subFormat: "png-24" },
+    { sourceText: "banner.jpg6", filename: "banner.jpg", scale: 1, format: "jpeg", extension: "jpg", quality: 0.5 },
+    { sourceText: "logo.svg", filename: "logo.svg", scale: 1, format: "svg", extension: "svg" },
   ])
 })
 

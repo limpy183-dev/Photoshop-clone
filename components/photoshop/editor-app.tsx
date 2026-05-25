@@ -45,6 +45,12 @@ const CanvasSizeDialog = React.lazy(() =>
 const AutosaveRecovery = React.lazy(() =>
   import("@/components/photoshop/autosave-recovery").then((m) => ({ default: m.AutosaveRecovery })),
 )
+// The Home/Start workspace is shown when no document is open or when the
+// user explicitly toggles it from Window ▸ Home. Lazy-load so its preset/
+// recent-thumbnail rendering only ships when actually visible.
+const HomeWorkspace = React.lazy(() =>
+  import("@/components/photoshop/home-workspace").then((m) => ({ default: m.HomeWorkspace })),
+)
 
 const CanvasView = dynamic(
   () => import("@/components/photoshop/canvas-view").then((m) => m.CanvasView),
@@ -87,13 +93,17 @@ export default function Page() {
 // here: it lives in a sibling overlay so opening/positioning the menu
 // doesn't re-render the heavy MenuBar / Canvas / PanelDock tree.
 function Workspace() {
-  const { activeDocId, activeDoc, dispatch } = useEditor()
+  const { activeDocId, activeDoc, dispatch, documents } = useEditor()
   const [newOpen, setNewOpen] = React.useState(false)
   const [commandOpen, setCommandOpen] = React.useState(false)
   const [imageSizeOpen, setImageSizeOpen] = React.useState(false)
   const [canvasSizeOpen, setCanvasSizeOpen] = React.useState(false)
   const [statusBarVisible, setStatusBarVisible] = React.useState(true)
   const [colorPicker, setColorPicker] = React.useState<ColorPickerState | null>(null)
+  // Tracks whether the Home/Start workspace is explicitly open. The view is
+  // also shown automatically whenever no documents are open, so this flag
+  // only matters for "Window ▸ Home" toggling while a doc is active.
+  const [homeOpen, setHomeOpen] = React.useState(false)
   const openNew = React.useCallback(() => setNewOpen(true), [])
   const openCommandPalette = React.useCallback(() => setCommandOpen(true), [])
   useShortcuts(openNew, openCommandPalette)
@@ -171,6 +181,18 @@ function Workspace() {
 
   React.useEffect(() => {
     return addPhotoshopEventListener("ps-open-command-palette", () => setCommandOpen(true))
+  }, [])
+
+  React.useEffect(() => {
+    return addPhotoshopEventListener("ps-show-home", (detail) => {
+      // Detail can specify open:true/false to set, or be undefined to toggle.
+      // Falls back to a plain toggle so Window ▸ Home keeps behaving as a
+      // single shortcut even if newer callers stop sending the detail.
+      setHomeOpen((current) => {
+        if (detail && typeof detail.open === "boolean") return detail.open
+        return !current
+      })
+    })
   }, [])
 
   React.useEffect(() => {
@@ -392,10 +414,27 @@ function ContextMenuLayer({
     modified: boolean
     moved: boolean
   } | null>(null)
+  // Hold the latest `onHudColorPicker` in a ref so the window-level
+  // contextmenu listener doesn't have to re-bind on every render.
+  const onHudColorPickerRef = React.useRef(onHudColorPicker)
+  React.useEffect(() => {
+    onHudColorPickerRef.current = onHudColorPicker
+  }, [onHudColorPicker])
 
   React.useEffect(() => {
     const hasKeybindModifier = (event: MouseEvent) =>
       event.altKey || event.ctrlKey || event.metaKey || event.shiftKey
+
+    // Shift+Alt+RightClick on the canvas opens the HUD color picker at the
+    // cursor. The general "modifier on right-click cancels the menu" rule
+    // below still fires, but we capture this specific combo first so the
+    // HUD opens without showing the context menu.
+    const isHudGesture = (event: MouseEvent, target: HTMLElement | null) =>
+      target?.closest("[data-canvas-root]") &&
+      event.shiftKey &&
+      event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey
 
     const onContextMenu = (event: MouseEvent) => {
       // Allow native context menu on inputs / textareas / editable elements
@@ -404,6 +443,11 @@ function ContextMenuLayer({
       event.preventDefault()
       const gesture = rightClickGestureRef.current
       rightClickGestureRef.current = null
+      if (isHudGesture(event, target)) {
+        setMenu(null)
+        onHudColorPickerRef.current(event.clientX, event.clientY)
+        return
+      }
       if (hasKeybindModifier(event) || gesture?.modified || gesture?.moved) {
         setMenu(null)
         return

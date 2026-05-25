@@ -36,6 +36,7 @@ import {
   rasterMime,
   type BrowserRasterEncoderDiagnostic,
   type BrowserRasterExportFormat,
+  type CompatibilityManifestEntry,
   type ExportFormat,
 } from "./document-io"
 import type { RasterExportMetadata, TiffCompression } from "./raster-codecs"
@@ -52,6 +53,11 @@ import {
   type ExportPresetPayload,
 } from "./export-presets"
 import { supportedIccProfileNames } from "./color-pipeline"
+import {
+  alternativesForLimitation,
+  alternativesForWarning,
+  type ExportAlternative,
+} from "./export-alternatives"
 
 const EXPORT_FORMATS: Array<{ format: ExportFormat; label: string }> = [
   { format: "png", label: "PNG" },
@@ -317,6 +323,23 @@ export function ExportAsDialog({
     if (!open) return
     setPresetName(`${format.toUpperCase()} ${scale}%`)
   }, [format, open, scale])
+
+  // Broadcast active export-target so the status bar can surface compatibility
+  // warnings (e.g. "JPEG cannot carry alpha", "GIF flattens 24-bit color") in
+  // real time while the user picks a format. We emit on dialog open + every
+  // format change, and clear the override on close.
+  React.useEffect(() => {
+    if (!open) return
+    window.dispatchEvent(
+      new CustomEvent("ps-active-export-format", {
+        detail: { format, source: "export-as" },
+      }),
+    )
+  }, [format, open])
+  React.useEffect(() => {
+    if (open) return
+    window.dispatchEvent(new CustomEvent("ps-active-export-format", { detail: { format: null, source: "export-as" } }))
+  }, [open])
 
   if (!activeDoc) return null
 
@@ -781,6 +804,16 @@ export function ExportAsDialog({
                         Metadata post-processing requires the browser to return a real {browserEncoderDiagnostic.requestedMime} blob.
                       </div>
                     ) : null}
+                    {!browserEncoderDiagnostic.supported ? (
+                      <AlternativesRow
+                        alternatives={[
+                          { format: "png", label: "Use PNG", reason: "PNG is universally supported by the browser canvas encoder." },
+                          { format: "jpeg", label: "Use JPEG", reason: "JPEG is universally supported by the browser canvas encoder (no alpha)." },
+                        ]}
+                        onPick={setFormat}
+                        testId="export-encoder-alt"
+                      />
+                    ) : null}
                   </div>
                 ) : null}
                 {format === "webp" ? (
@@ -925,17 +958,12 @@ export function ExportAsDialog({
                     />
                   </div>
                 ) : null}
-                <div className="mt-3 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1.5 text-[10px] text-[var(--ps-text-dim)]">
-                  <div className="mb-1 font-medium text-[var(--ps-text)]">{limitationReport.summary}</div>
-                  <div className="grid gap-1">
-                    {visibleLimitations.map((item) => (
-                      <div key={`${item.label}-${item.status}`} className="grid grid-cols-[92px_1fr] gap-2">
-                        <span className="uppercase tracking-wide text-amber-300">{item.status}</span>
-                        <span>{item.label}: {item.detail}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <LimitationsBlock
+                  summary={limitationReport.summary}
+                  items={visibleLimitations}
+                  currentFormat={format}
+                  onPickFormat={setFormat}
+                />
                 {format === "gif" ? (
                   <div className="mt-3 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1.5 text-[10px] text-[var(--ps-text-dim)]">
                     GIF exports use a 256-color indexed palette with optional 1-bit transparency.
@@ -963,17 +991,12 @@ export function ExportAsDialog({
               </Panel>
             ) : format === "metadata-json" ? (
               <Panel title="Sidecar Options">
-                <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1.5 text-[10px] text-[var(--ps-text-dim)]">
-                  <div className="mb-1 font-medium text-[var(--ps-text)]">{limitationReport.summary}</div>
-                  <div className="grid gap-1">
-                    {visibleLimitations.map((item) => (
-                      <div key={`${item.label}-${item.status}`} className="grid grid-cols-[92px_1fr] gap-2">
-                        <span className="uppercase tracking-wide text-amber-300">{item.status}</span>
-                        <span>{item.label}: {item.detail}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <LimitationsBlock
+                  summary={limitationReport.summary}
+                  items={visibleLimitations}
+                  currentFormat={format}
+                  onPickFormat={setFormat}
+                />
               </Panel>
             ) : (
               <Panel title="SVG Options">
@@ -981,17 +1004,12 @@ export function ExportAsDialog({
                   <CheckRow label="Transparent Viewport" checked={transparent} onCheckedChange={setTransparent} />
                   <CheckRow label="Include Metadata" checked={includeMetadata} onCheckedChange={setIncludeMetadata} />
                 </div>
-                <div className="mt-3 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1.5 text-[10px] text-[var(--ps-text-dim)]">
-                  <div className="mb-1 font-medium text-[var(--ps-text)]">{limitationReport.summary}</div>
-                  <div className="grid gap-1">
-                    {visibleLimitations.map((item) => (
-                      <div key={`${item.label}-${item.status}`} className="grid grid-cols-[92px_1fr] gap-2">
-                        <span className="uppercase tracking-wide text-amber-300">{item.status}</span>
-                        <span>{item.label}: {item.detail}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <LimitationsBlock
+                  summary={limitationReport.summary}
+                  items={visibleLimitations}
+                  currentFormat={format}
+                  onPickFormat={setFormat}
+                />
                 <div className="grid grid-cols-2 gap-3 mt-3">
                   <div className="grid gap-1.5">
                     <Label className="text-[11px]">Coordinate precision</Label>
@@ -1041,23 +1059,47 @@ export function ExportAsDialog({
                   <ManifestCount label="Preserved" value={compatibilityManifest.totals.preserved} className="text-emerald-300" />
                 </div>
                 {compatibilityManifest.warnings.length ? (
-                  <div className="space-y-1 rounded-sm border border-amber-500/35 bg-amber-500/10 px-2 py-1.5 text-amber-100">
-                    {compatibilityManifest.warnings.slice(0, 4).map((warning) => (
-                      <div key={warning} className="flex gap-1.5">
-                        <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-                        <span>{warning}</span>
-                      </div>
-                    ))}
+                  <div className="space-y-1.5 rounded-sm border border-amber-500/35 bg-amber-500/10 px-2 py-1.5 text-amber-100" data-testid="export-warnings">
+                    {compatibilityManifest.warnings.slice(0, 4).map((warning) => {
+                      const alts = alternativesForWarning(format, warning)
+                      return (
+                        <div key={warning} className="flex flex-col gap-1">
+                          <div className="flex gap-1.5">
+                            <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                            <span>{warning}</span>
+                          </div>
+                          {alts.length ? (
+                            <AlternativesRow
+                              alternatives={alts}
+                              onPick={setFormat}
+                              testId={`export-warning-alt-${warning.slice(0, 32).replace(/\s+/g, "-").toLowerCase()}`}
+                            />
+                          ) : null}
+                        </div>
+                      )
+                    })}
                   </div>
                 ) : null}
                 {visibleManifestItems.length ? (
-                  <div className="grid gap-1 text-[var(--ps-text-dim)]">
-                    {visibleManifestItems.map((item) => (
-                      <div key={`${item.label}-${item.status}`} className="grid grid-cols-[84px_1fr] gap-2">
-                        <span className="uppercase tracking-wide text-[var(--ps-text)]">{item.status}</span>
-                        <span>{item.label}: {item.detail}</span>
-                      </div>
-                    ))}
+                  <div className="grid gap-1.5 text-[var(--ps-text-dim)]">
+                    {visibleManifestItems.map((item) => {
+                      const alts = alternativesForLimitation(format, item)
+                      return (
+                        <div key={`${item.label}-${item.status}`} className="grid grid-cols-[84px_1fr] gap-2">
+                          <span className="uppercase tracking-wide text-[var(--ps-text)]">{item.status}</span>
+                          <div>
+                            <div>{item.label}: {item.detail}</div>
+                            {alts.length ? (
+                              <AlternativesRow
+                                alternatives={alts}
+                                onPick={setFormat}
+                                testId={`export-manifest-alt-${item.label.replace(/\s+/g, "-").toLowerCase()}`}
+                              />
+                            ) : null}
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
                 ) : null}
               </div>
@@ -1137,5 +1179,72 @@ function CheckRow({
       />
       {label}
     </label>
+  )
+}
+
+function AlternativesRow({
+  alternatives,
+  onPick,
+  testId,
+}: {
+  alternatives: ExportAlternative[]
+  onPick: (format: ExportFormat) => void
+  testId?: string
+}) {
+  if (!alternatives.length) return null
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-1" data-testid={testId}>
+      <span className="text-[9px] uppercase tracking-wide text-[var(--ps-text-dim)]">Try:</span>
+      {alternatives.map((alt) => (
+        <button
+          key={alt.format}
+          type="button"
+          title={alt.reason}
+          onClick={() => onPick(alt.format as ExportFormat)}
+          className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] px-1.5 py-0.5 text-[10px] text-[var(--ps-text)] hover:border-amber-400/60 hover:bg-amber-400/10 hover:text-amber-100"
+        >
+          {alt.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function LimitationsBlock({
+  summary,
+  items,
+  currentFormat,
+  onPickFormat,
+}: {
+  summary: string
+  items: CompatibilityManifestEntry[]
+  currentFormat: ExportFormat
+  onPickFormat: (format: ExportFormat) => void
+}) {
+  return (
+    <div
+      className="mt-3 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1.5 text-[10px] text-[var(--ps-text-dim)]"
+      data-testid="export-limitations"
+    >
+      <div className="mb-1 font-medium text-[var(--ps-text)]">{summary}</div>
+      <div className="grid gap-1.5">
+        {items.map((item) => {
+          const alternatives = alternativesForLimitation(currentFormat, item)
+          return (
+            <div key={`${item.label}-${item.status}`} className="grid grid-cols-[92px_1fr] gap-2">
+              <span className="uppercase tracking-wide text-amber-300">{item.status}</span>
+              <div>
+                <div>{item.label}: {item.detail}</div>
+                <AlternativesRow
+                  alternatives={alternatives}
+                  onPick={onPickFormat}
+                  testId={`export-limitation-alt-${item.label.replace(/\s+/g, "-").toLowerCase()}`}
+                />
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
   )
 }

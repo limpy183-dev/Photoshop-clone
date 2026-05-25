@@ -29,6 +29,26 @@ export interface FilterContext {
   applyImageSource?: ImageData | null
   calcSourceA?: ImageData | null
   calcSourceB?: ImageData | null
+  /**
+   * Optional rasterized selection mask used by Equalize (and similar filters).
+   * 0 = outside selection, 255 = fully selected. Length must be at least
+   * width*height. Pass null when there is no active selection.
+   */
+  selectionMask?: Uint8Array | null
+  /** Optional selection mode used by Equalize ("image" by default). */
+  selectionMode?: "image" | "selection-only" | "selection-source"
+  /**
+   * Optional depth map source used by Lens Blur. When supplied, the per-pixel
+   * blur radius is modulated by the sampled depth channel value. Must match
+   * the source ImageData dimensions or it will be sampled bilinearly.
+   */
+  lensBlurDepthSource?: ImageData | null
+  /**
+   * Optional bump map source used by Lighting Effects. When supplied,
+   * the specified channel becomes the height field for surface normals.
+   * Must match the source dimensions or it will be sampled bilinearly.
+   */
+  lightingBumpSource?: ImageData | null
 }
 
 /* --------------------------- helpers ----------------------------------- */
@@ -951,66 +971,194 @@ function desaturate(src: ImageData): ImageData {
   return new ImageData(out, src.width, src.height)
 }
 
-function equalize(src: ImageData): ImageData {
+/**
+ * Equalize — histogram equalization.
+ *
+ *   mode "image"           : build histogram from the entire image, apply to all pixels.
+ *   mode "selection-only"  : build & apply only inside selectionMask > 0.
+ *   mode "selection-source": build histogram from selectionMask > 0 but apply to the
+ *                            whole image (Photoshop's "Equalize entire image based on
+ *                            selected area").
+ *
+ *   selectionMask: a Uint8Array (one byte per pixel) the same size as the image.
+ *                  Bytes > 0 are "inside" the selection.
+ */
+function equalize(
+  src: ImageData,
+  mode: "image" | "selection-only" | "selection-source" = "image",
+  selectionMask: Uint8Array | null = null,
+): ImageData {
   const out = new Uint8ClampedArray(src.data)
+  const pixelCount = src.width * src.height
   const histogram = new Array(256).fill(0)
 
-  // Build histogram
-  for (let i = 0; i < out.length; i += 4) {
-    histogram[out[i]]++
-    histogram[out[i + 1]]++
-    histogram[out[i + 2]]++
+  // Build histogram (either from selection or entire image, per mode).
+  const usingSelection = (mode === "selection-only" || mode === "selection-source") && selectionMask && selectionMask.length >= pixelCount
+  let histTotal = 0
+  for (let p = 0; p < pixelCount; p++) {
+    if (usingSelection && selectionMask![p] === 0) continue
+    const i = p * 4
+    const Y = Math.round(luma(out[i], out[i + 1], out[i + 2]))
+    histogram[Math.max(0, Math.min(255, Y))]++
+    histTotal++
+  }
+  if (histTotal === 0) {
+    // Empty selection — fall back to the whole image so we never produce an
+    // all-black result, but still honor "selection-only" by skipping apply.
+    for (let p = 0; p < pixelCount; p++) {
+      const i = p * 4
+      const Y = Math.round(luma(out[i], out[i + 1], out[i + 2]))
+      histogram[Math.max(0, Math.min(255, Y))]++
+    }
+    histTotal = pixelCount
   }
 
-  // Calculate CDF (Cumulative Distribution Function)
   const cdf = new Array(256).fill(0)
   let sum = 0
-  const totalPixels = (src.width * src.height * 3) // RGB channels
-
   for (let i = 0; i < 256; i++) {
     sum += histogram[i]
-    cdf[i] = Math.round((sum / totalPixels) * 255)
+    cdf[i] = Math.round((sum / histTotal) * 255)
   }
 
-  // Apply equalization
-  for (let i = 0; i < out.length; i += 4) {
-    out[i] = cdf[out[i]]
-    out[i + 1] = cdf[out[i + 1]]
-    out[i + 2] = cdf[out[i + 2]]
+  // Apply — preserves chroma by scaling RGB uniformly by newY/Y.
+  for (let p = 0; p < pixelCount; p++) {
+    if (mode === "selection-only" && usingSelection && selectionMask![p] === 0) continue
+    const i = p * 4
+    const Y = Math.round(luma(out[i], out[i + 1], out[i + 2]))
+    const newY = cdf[Math.max(0, Math.min(255, Y))]
+    if (Y === 0) {
+      out[i] = newY
+      out[i + 1] = newY
+      out[i + 2] = newY
+    } else {
+      const k = newY / Y
+      out[i] = clamp8(out[i] * k)
+      out[i + 1] = clamp8(out[i + 1] * k)
+      out[i + 2] = clamp8(out[i + 2] * k)
+    }
   }
 
   return new ImageData(out, src.width, src.height)
 }
 
+export interface ReplaceColorSample {
+  r: number
+  g: number
+  b: number
+}
+
+/**
+ * Replace Color — Photoshop-style.
+ *   - includeSamples / excludeSamples: lists of RGB colors. The selection
+ *     mask is the union of color similarity around each include sample minus
+ *     the union of similarity around each exclude sample.
+ *   - fuzziness: 0..200, distance in RGB space (~ sqrt(3*255²) = 442 max).
+ *   - localizedClusters: when true, fuzziness is weighted by RGB Euclidean
+ *     distance not hue alone, so samples form tight clusters and a far-away
+ *     pixel with the same hue but very different brightness isn't grabbed.
+ *   - replacementHue/Sat/Light: full HSL transform on the matched pixels.
+ *   - resultColor: optional explicit replacement RGB — when present, the
+ *     output of the matched zone is interpolated toward this color (the
+ *     Photoshop "Result" swatch behavior).
+ */
 function replaceColor(
   src: ImageData,
-  sourceHue: number,
+  includeSamples: ReplaceColorSample[],
+  excludeSamples: ReplaceColorSample[],
   fuzziness: number,
+  localizedClusters: boolean,
   replacementHue: number,
   replacementSaturation: number,
   replacementLightness: number,
+  resultColor: ReplaceColorSample | null,
 ): ImageData {
   const out = new Uint8ClampedArray(src.data)
-  const targetHue = (((sourceHue % 360) + 360) % 360) / 360
-  const replacement = (((replacementHue % 360) + 360) % 360) / 360
-  const range = Math.max(0.001, Math.min(180, fuzziness)) / 360
+  const fuzz = Math.max(0, Math.min(200, fuzziness))
+  // Larger fuzziness => bigger search radius. We normalize so that 50 ~ a hue
+  // distance of 1/6 (one color band) or an RGB distance of ~80.
+  const hueRange = Math.max(0.001, fuzz / 360)
+  const rgbRange = Math.max(1, fuzz * 2.2)
   const satShift = replacementSaturation / 100
   const lightShift = replacementLightness / 100
+  const replHue = (((replacementHue % 360) + 360) % 360) / 360
+  const hasInclude = includeSamples.length > 0
+  if (!hasInclude && !resultColor) return new ImageData(out, src.width, src.height)
+
+  // Precompute sample HSL.
+  const includeHsl = includeSamples.map((s) => ({ ...rgbToHsl(s.r, s.g, s.b), rgb: s }))
+  const excludeHsl = excludeSamples.map((s) => ({ ...rgbToHsl(s.r, s.g, s.b), rgb: s }))
 
   for (let i = 0; i < out.length; i += 4) {
-    const { h, s, l } = rgbToHsl(out[i], out[i + 1], out[i + 2])
-    const d = hueDistance(h, targetHue)
-    if (d > range) continue
-    const mask = clamp01(1 - d / range)
+    const r = out[i], g = out[i + 1], b = out[i + 2]
+    const { h, s, l } = rgbToHsl(r, g, b)
+
+    let inMask = 0
+    for (const sample of includeHsl) {
+      if (localizedClusters) {
+        const dr = r - sample.rgb.r
+        const dg = g - sample.rgb.g
+        const db = b - sample.rgb.b
+        const d = Math.sqrt(dr * dr + dg * dg + db * db)
+        const mask = clamp01(1 - d / rgbRange)
+        if (mask > inMask) inMask = mask
+      } else {
+        const d = hueDistance(h, sample.h)
+        const mask = clamp01(1 - d / hueRange)
+        if (mask > inMask) inMask = mask
+      }
+    }
+    if (inMask <= 0) continue
+
+    let outMask = 0
+    for (const sample of excludeHsl) {
+      if (localizedClusters) {
+        const dr = r - sample.rgb.r
+        const dg = g - sample.rgb.g
+        const db = b - sample.rgb.b
+        const d = Math.sqrt(dr * dr + dg * dg + db * db)
+        outMask = Math.max(outMask, clamp01(1 - d / rgbRange))
+      } else {
+        const d = hueDistance(h, sample.h)
+        outMask = Math.max(outMask, clamp01(1 - d / hueRange))
+      }
+    }
+    const mask = clamp01(inMask - outMask)
+    if (mask <= 0) continue
+
+    if (resultColor) {
+      // Interpolate toward the explicit result color in RGB.
+      out[i] = clamp8(r + (resultColor.r - r) * mask)
+      out[i + 1] = clamp8(g + (resultColor.g - g) * mask)
+      out[i + 2] = clamp8(b + (resultColor.b - b) * mask)
+      continue
+    }
+
     const nextS = clamp01(s + satShift * mask)
     const nextL = clamp01(l + lightShift * mask)
-    const { r, g, b } = hslToRgb(h + (replacement - h) * mask, nextS, nextL)
-    out[i] = r
-    out[i + 1] = g
-    out[i + 2] = b
+    const targetHue = h + ((replHue - h) % 1) * mask
+    const { r: rr, g: gg, b: bb } = hslToRgb(targetHue, nextS, nextL)
+    out[i] = clamp8(rr)
+    out[i + 1] = clamp8(gg)
+    out[i + 2] = clamp8(bb)
   }
-
   return new ImageData(out, src.width, src.height)
+}
+
+/** Parse a "r,g,b;r,g,b" sample list. */
+export function parseReplaceColorSamples(value: string): ReplaceColorSample[] {
+  if (!value) return []
+  const out: ReplaceColorSample[] = []
+  for (const entry of value.split(";")) {
+    const parts = entry.split(",").map((n) => Number(n))
+    if (parts.length === 3 && parts.every((n) => Number.isFinite(n) && n >= 0 && n <= 255)) {
+      out.push({ r: parts[0], g: parts[1], b: parts[2] })
+    }
+  }
+  return out
+}
+
+export function formatReplaceColorSamples(samples: ReplaceColorSample[]): string {
+  return samples.map((s) => `${Math.round(s.r)},${Math.round(s.g)},${Math.round(s.b)}`).join(";")
 }
 
 function _matchColor(src: ImageData): ImageData {
@@ -1091,57 +1239,655 @@ function selectiveColorMask(range: string, h: number, s: number, l: number) {
   return clamp01(1 - hueDistance(h, center) / (1 / 9)) * clamp01(s * 1.6)
 }
 
-function shadowsHighlights(src: ImageData, shadows: number, highlights: number, tonalWidth: number, radius: number, colorCorrection: number): ImageData {
+/**
+ * Shadows/Highlights — local-contrast preserving lightening of shadow regions
+ * and darkening of highlight regions, with full Photoshop-style controls.
+ *
+ *   shadowsAmount   0..100   how much to lighten dark areas
+ *   shadowsTonalWidth 0..100 how far up the tonal scale the shadow mask reaches
+ *   shadowsRadius   0..250   blur radius used to build the *local* tonal mask
+ *                            (preserves local contrast — the lift is gated by
+ *                             the blurred luminance, not the per-pixel value)
+ *   highlightsAmount    0..100  how much to recover bright areas
+ *   highlightsTonalWidth 0..100 how far down the tonal scale highlight mask reaches
+ *   highlightsRadius     0..250 blur radius used to build the highlight mask
+ *   colorCorrection -100..100  saturate (positive) or desaturate (negative)
+ *                              the regions that got lifted/recovered
+ *   midtoneContrast -100..100  S-curve in the midtones to keep crunch
+ *   blackClip   0..50 %    re-clip the darkest blackClip% to true black
+ *   whiteClip   0..50 %    re-clip the lightest whiteClip% to pure white
+ */
+function shadowsHighlights(
+  src: ImageData,
+  shadowsAmount: number,
+  shadowsTonalWidth: number,
+  shadowsRadius: number,
+  highlightsAmount: number,
+  highlightsTonalWidth: number,
+  highlightsRadius: number,
+  colorCorrection: number,
+  midtoneContrast: number,
+  blackClip: number,
+  whiteClip: number,
+): ImageData {
   const out = new Uint8ClampedArray(src.data)
-  const width = Math.max(0.05, Math.min(1, tonalWidth / 100))
-  const blurred = radius > 0 ? gaussianBlur(src, Math.min(24, radius)) : src
+  const w = src.width
+  const h = src.height
 
-  for (let i = 0; i < out.length; i += 4) {
-    const localLum = luma(blurred.data[i], blurred.data[i + 1], blurred.data[i + 2]) / 255
-    const shadowMask = clamp01((width - localLum) / width)
-    const highlightMask = clamp01((localLum - (1 - width)) / width)
-    const lift = shadows / 100 * shadowMask
-    const recover = highlights / 100 * highlightMask
-    const colorK = colorCorrection / 100
-    for (let c = 0; c < 3; c++) {
-      const v = out[i + c] / 255
-      const shadowed = v + (1 - v) * lift * 0.65
-      const recovered = shadowed * (1 - recover * 0.48)
-      const neutral = luma(out[i], out[i + 1], out[i + 2]) / 255
-      out[i + c] = clamp8((recovered + (recovered - neutral) * colorK * 0.18) * 255)
+  const shAmt = Math.max(0, Math.min(100, shadowsAmount)) / 100
+  const shWidth = Math.max(0.01, Math.min(1, shadowsTonalWidth / 100))
+  const hiAmt = Math.max(0, Math.min(100, highlightsAmount)) / 100
+  const hiWidth = Math.max(0.01, Math.min(1, highlightsTonalWidth / 100))
+  const colorK = Math.max(-100, Math.min(100, colorCorrection)) / 100
+  const midK = Math.max(-100, Math.min(100, midtoneContrast)) / 100
+
+  const shRadius = Math.max(0, Math.min(250, shadowsRadius))
+  const hiRadius = Math.max(0, Math.min(250, highlightsRadius))
+  // Build (optionally two) blurred copies for the tonal masks. The blur radius
+  // is what gives "local contrast preserving" behavior: a small dark feature
+  // sitting inside a bright neighborhood will be left alone because the
+  // *local* mean is bright, so the shadow mask there is zero.
+  const shadowsBlur =
+    shRadius > 0 ? gaussianBlur(src, Math.min(64, shRadius)) : src
+  const highlightsBlur =
+    hiRadius > 0 && hiRadius !== shRadius ? gaussianBlur(src, Math.min(64, hiRadius)) : shadowsBlur
+
+  // Optional clipping thresholds (Photoshop's Black/White Clip act on the
+  // result histogram). We just do a soft remap after the tonal correction.
+  const blackClipT = clamp01(Math.max(0, Math.min(50, blackClip)) / 100)
+  const whiteClipT = 1 - clamp01(Math.max(0, Math.min(50, whiteClip)) / 100)
+  const clipRange = Math.max(0.001, whiteClipT - blackClipT)
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4
+      const r = out[i]
+      const g = out[i + 1]
+      const b = out[i + 2]
+      // Local luminance from the blurred copy — preserves local contrast.
+      const shLumLocal = luma(
+        shadowsBlur.data[i],
+        shadowsBlur.data[i + 1],
+        shadowsBlur.data[i + 2],
+      ) / 255
+      const hiLumLocal = luma(
+        highlightsBlur.data[i],
+        highlightsBlur.data[i + 1],
+        highlightsBlur.data[i + 2],
+      ) / 255
+
+      // Smoothstep tonal masks: 1 deep in the shadow band, fading to 0 at the
+      // edge of the tonal-width window.
+      const shadowMask = smoothstep(shWidth, 0, shLumLocal)
+      const highlightMask = smoothstep(1 - hiWidth, 1, hiLumLocal)
+
+      const pixelLum = luma(r, g, b) / 255
+      // Shadow lift: lift = amount * mask, applied so that midtones near the
+      // mask edge get a smaller push (this is the bit that makes the result
+      // look natural instead of like a brightness slap).
+      // The lift is anchored to (1 - pixelLum) so blacks don't clip.
+      const lift = shAmt * shadowMask
+      // Highlight recover: a downward pull anchored at pixelLum so whites
+      // don't push past 1.
+      const recover = hiAmt * highlightMask
+
+      // Apply lift / recover per channel. Using (1-v) keeps shadow lift from
+      // burning highlights and using v keeps highlight recover from killing
+      // shadows.
+      let nr = (r / 255) + (1 - r / 255) * lift * 0.85 - (r / 255) * recover * 0.55
+      let ng = (g / 255) + (1 - g / 255) * lift * 0.85 - (g / 255) * recover * 0.55
+      let nb = (b / 255) + (1 - b / 255) * lift * 0.85 - (b / 255) * recover * 0.55
+
+      // Midtone contrast (S-curve centered at 0.5). Strength scales with
+      // distance from the affected zones so we don't double-process them.
+      if (midK !== 0) {
+        const midMask = 1 - Math.max(shadowMask, highlightMask) * 0.7
+        const t = midK * 0.6 * midMask
+        nr = applyMidContrast(nr, t)
+        ng = applyMidContrast(ng, t)
+        nb = applyMidContrast(nb, t)
+      }
+
+      // Color Correction: pull saturation in the regions that got moved.
+      // Positive => boost saturation, negative => desaturate. This is what
+      // Photoshop calls "Color" / "Color Correction" — it stops shadow lift
+      // from looking gray.
+      if (colorK !== 0) {
+        const correctMask = Math.max(shadowMask, highlightMask)
+        const grayN = nr * 0.299 + ng * 0.587 + nb * 0.114
+        const sat = 1 + colorK * 0.45 * correctMask
+        nr = grayN + (nr - grayN) * sat
+        ng = grayN + (ng - grayN) * sat
+        nb = grayN + (nb - grayN) * sat
+      }
+
+      // Clipping pass: stretch [blackClipT .. whiteClipT] back to [0..1].
+      if (blackClipT > 0 || whiteClipT < 1) {
+        nr = (nr - blackClipT) / clipRange
+        ng = (ng - blackClipT) / clipRange
+        nb = (nb - blackClipT) / clipRange
+      }
+
+      // pixelLum is read above to keep the algorithm easy to extend; suppress
+      // the unused-var lint without changing observed behavior.
+      void pixelLum
+
+      out[i] = clamp8(nr * 255)
+      out[i + 1] = clamp8(ng * 255)
+      out[i + 2] = clamp8(nb * 255)
     }
   }
 
+  return new ImageData(out, w, h)
+}
+
+function smoothstep(edge0: number, edge1: number, x: number) {
+  if (edge0 === edge1) return x < edge0 ? 1 : 0
+  const t = clamp01((x - edge0) / (edge1 - edge0))
+  return t * t * (3 - 2 * t)
+}
+
+function applyMidContrast(v: number, k: number) {
+  // S-curve around 0.5. k in [-0.6 .. 0.6] gives a gentle Photoshop-like push.
+  const c = v - 0.5
+  return clamp01(0.5 + c + k * Math.sin(c * Math.PI))
+}
+
+/**
+ * HDR Toning — four methods, matching Photoshop's UI:
+ *
+ *   "exposure-gamma": global Exposure (stops) + Gamma curve. Useful when an
+ *                     image already fits the display range.
+ *   "highlight-compression": pull highlights down without touching the rest
+ *                            of the curve, like a soft clip.
+ *   "equalize-histogram":   spread the histogram, similar to Image > Adjustments
+ *                           > Equalize but for the full local-adaptation result.
+ *   "local-adaptation":     the full HDR Toning behavior — Radius / Strength /
+ *                           Edge Glow + Tone & Detail (Gamma, Exposure, Detail)
+ *                           + Advanced (Shadow, Highlight, Vibrance, Saturation)
+ *                           + optional Toning Curve.
+ *
+ * All four methods read the same param record so a preset can switch between
+ * them without losing the user's other tweaks.
+ */
+function hdrToning(
+  src: ImageData,
+  method: string,
+  radius: number,
+  strength: number,
+  edgeGlow: number,
+  gamma: number,
+  exposureEv: number,
+  detail: number,
+  shadow: number,
+  highlight: number,
+  vibrance: number,
+  saturation: number,
+  toningCurve: [number, number][] | null,
+): ImageData {
+  const w = src.width
+  const h = src.height
+  const out = new Uint8ClampedArray(src.data)
+
+  if (method === "exposure-gamma") {
+    const factor = Math.pow(2, exposureEv)
+    const g = Math.max(0.05, gamma)
+    for (let i = 0; i < out.length; i += 4) {
+      for (let c = 0; c < 3; c++) {
+        const v = clamp01((out[i + c] / 255) * factor)
+        out[i + c] = clamp8(Math.pow(v, 1 / g) * 255)
+      }
+    }
+    return new ImageData(out, w, h)
+  }
+
+  if (method === "highlight-compression") {
+    // Soft knee compressing the top of the range. Keeps midtones intact.
+    for (let i = 0; i < out.length; i += 4) {
+      for (let c = 0; c < 3; c++) {
+        const v = out[i + c] / 255
+        // Reinhard-style compression with knee = 0.6
+        const compressed = v < 0.6 ? v : 0.6 + (v - 0.6) / (1 + (v - 0.6) * 2)
+        out[i + c] = clamp8(compressed * 255)
+      }
+    }
+    return new ImageData(out, w, h)
+  }
+
+  if (method === "equalize-histogram") {
+    // Per-channel equalization using a CDF derived from luminance, so we
+    // don't desaturate the image the way per-channel equalize does.
+    const histogram = new Array(256).fill(0)
+    for (let i = 0; i < out.length; i += 4) {
+      histogram[Math.round(luma(out[i], out[i + 1], out[i + 2]))]++
+    }
+    const cdf = new Array(256).fill(0)
+    let sum = 0
+    const total = w * h
+    for (let i = 0; i < 256; i++) {
+      sum += histogram[i]
+      cdf[i] = sum / total
+    }
+    for (let i = 0; i < out.length; i += 4) {
+      const Y = luma(out[i], out[i + 1], out[i + 2])
+      const newY = clamp01(cdf[Math.round(Y)]) * 255
+      const k = (newY + 0.001) / (Y + 0.001)
+      out[i] = clamp8(out[i] * k)
+      out[i + 1] = clamp8(out[i + 1] * k)
+      out[i + 2] = clamp8(out[i + 2] * k)
+    }
+    return new ImageData(out, w, h)
+  }
+
+  // ---- Local Adaptation ----
+  const r = Math.max(0, Math.min(250, radius))
+  const big = r > 0 ? gaussianBlur(src, Math.min(64, r)) : src
+  // "Edge Glow" widens the radius slightly for a halo control. Bigger glow
+  // => more visible halo near edges.
+  const glow = Math.max(0, Math.min(100, edgeGlow)) / 100
+  const haloR = Math.min(64, r * (1 + glow * 0.6))
+  const halo = haloR > 0 && haloR !== r ? gaussianBlur(src, haloR) : big
+
+  const sAmt = Math.max(0, Math.min(200, strength)) / 100
+  const dAmt = Math.max(-100, Math.min(100, detail)) / 100
+  const gPow = 1 / Math.max(0.05, gamma)
+  const expFactor = Math.pow(2, exposureEv)
+  const shadowAmt = Math.max(-100, Math.min(100, shadow)) / 100
+  const highlightAmt = Math.max(-100, Math.min(100, highlight)) / 100
+  const vibAmt = Math.max(-100, Math.min(100, vibrance)) / 100
+  const satAmt = Math.max(-100, Math.min(100, saturation)) / 100
+  const lut = toningCurve && toningCurve.length >= 2 ? monotoneCurveLut(toningCurve) : null
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4
+      const r0 = out[i]
+      const g0 = out[i + 1]
+      const b0 = out[i + 2]
+
+      // Local mean & highpass detail.
+      const br = big.data[i], bg = big.data[i + 1], bb = big.data[i + 2]
+      const hr = halo.data[i], hg = halo.data[i + 1], hb = halo.data[i + 2]
+      const halor = hr, halog = hg, halob = hb
+
+      let nr = (r0 - br) * sAmt + br
+      let ng = (g0 - bg) * sAmt + bg
+      let nb = (b0 - bb) * sAmt + bb
+
+      // Detail (high-frequency boost using big - halo difference).
+      if (dAmt !== 0) {
+        nr += (br - halor) * dAmt
+        ng += (bg - halog) * dAmt
+        nb += (bb - halob) * dAmt
+      }
+
+      // Exposure + gamma on the result.
+      nr = Math.pow(clamp01((nr * expFactor) / 255), gPow) * 255
+      ng = Math.pow(clamp01((ng * expFactor) / 255), gPow) * 255
+      nb = Math.pow(clamp01((nb * expFactor) / 255), gPow) * 255
+
+      // Shadow / Highlight per-region pushes, using local luminance.
+      const localL = luma(br, bg, bb) / 255
+      const shMask = clamp01(0.5 - localL) * 2 // 1 at black, 0 at midgray
+      const hiMask = clamp01(localL - 0.5) * 2 // 1 at white, 0 at midgray
+      const shPush = shadowAmt * shMask
+      const hiPush = highlightAmt * hiMask
+      nr += shPush * (255 - nr) * 0.55 - hiPush * nr * 0.55
+      ng += shPush * (255 - ng) * 0.55 - hiPush * ng * 0.55
+      nb += shPush * (255 - nb) * 0.55 - hiPush * nb * 0.55
+
+      // Saturation + Vibrance (vibrance is saturation weighted by 1 - current
+      // saturation so skin tones don't over-saturate).
+      if (satAmt !== 0 || vibAmt !== 0) {
+        const gray = nr * 0.299 + ng * 0.587 + nb * 0.114
+        const maxC = Math.max(nr, ng, nb)
+        const minC = Math.min(nr, ng, nb)
+        const currentSat = maxC > 0 ? (maxC - minC) / maxC : 0
+        const vibK = vibAmt * (1 - currentSat)
+        const k = 1 + satAmt + vibK
+        nr = gray + (nr - gray) * k
+        ng = gray + (ng - gray) * k
+        nb = gray + (nb - gray) * k
+      }
+
+      // Optional toning curve on luminance.
+      if (lut) {
+        const Y = clamp8(luma(nr, ng, nb))
+        const newY = lut[Math.round(Y)]
+        const kk = (newY + 0.001) / (Y + 0.001)
+        nr *= kk
+        ng *= kk
+        nb *= kk
+      }
+
+      out[i] = clamp8(nr)
+      out[i + 1] = clamp8(ng)
+      out[i + 2] = clamp8(nb)
+    }
+  }
+  return new ImageData(out, w, h)
+}
+
+export interface HdrToningPreset {
+  method: string
+  radius: number
+  strength: number
+  edgeGlow: number
+  gamma: number
+  exposureEv: number
+  detail: number
+  shadow: number
+  highlight: number
+  vibrance: number
+  saturation: number
+  toningCurve: string
+}
+
+/** Photoshop-style HDR Toning presets. */
+export const HDR_TONING_PRESETS: Record<string, HdrToningPreset> = {
+  default: {
+    method: "local-adaptation",
+    radius: 60,
+    strength: 100,
+    edgeGlow: 30,
+    gamma: 1.0,
+    exposureEv: 0,
+    detail: 0,
+    shadow: 0,
+    highlight: 0,
+    vibrance: 0,
+    saturation: 0,
+    toningCurve: "0,0;255,255",
+  },
+  monochromatic: {
+    method: "local-adaptation",
+    radius: 60,
+    strength: 80,
+    edgeGlow: 50,
+    gamma: 1.0,
+    exposureEv: 0,
+    detail: 20,
+    shadow: 10,
+    highlight: -10,
+    vibrance: 0,
+    saturation: -100,
+    toningCurve: "0,0;128,140;255,250",
+  },
+  "more-saturated": {
+    method: "local-adaptation",
+    radius: 80,
+    strength: 100,
+    edgeGlow: 40,
+    gamma: 1.0,
+    exposureEv: 0.1,
+    detail: 30,
+    shadow: 0,
+    highlight: 0,
+    vibrance: 60,
+    saturation: 40,
+    toningCurve: "0,0;255,255",
+  },
+  photorealistic: {
+    method: "local-adaptation",
+    radius: 100,
+    strength: 90,
+    edgeGlow: 20,
+    gamma: 1.05,
+    exposureEv: 0,
+    detail: 10,
+    shadow: 15,
+    highlight: -10,
+    vibrance: 25,
+    saturation: 0,
+    toningCurve: "0,4;64,60;128,128;192,200;255,250",
+  },
+  surrealistic: {
+    method: "local-adaptation",
+    radius: 30,
+    strength: 180,
+    edgeGlow: 80,
+    gamma: 0.85,
+    exposureEv: 0.4,
+    detail: 60,
+    shadow: 40,
+    highlight: -40,
+    vibrance: 80,
+    saturation: 30,
+    toningCurve: "0,10;64,90;128,160;192,220;255,255",
+  },
+  "highlight-compression": {
+    method: "highlight-compression",
+    radius: 0,
+    strength: 100,
+    edgeGlow: 0,
+    gamma: 1.0,
+    exposureEv: 0,
+    detail: 0,
+    shadow: 0,
+    highlight: 0,
+    vibrance: 0,
+    saturation: 0,
+    toningCurve: "0,0;255,255",
+  },
+  "equalize-histogram": {
+    method: "equalize-histogram",
+    radius: 0,
+    strength: 100,
+    edgeGlow: 0,
+    gamma: 1.0,
+    exposureEv: 0,
+    detail: 0,
+    shadow: 0,
+    highlight: 0,
+    vibrance: 0,
+    saturation: 0,
+    toningCurve: "0,0;255,255",
+  },
+}
+
+/* ============================================================
+ *  Auto Tone / Auto Contrast / Auto Color
+ *  Photoshop's "Options" dialog covers four algorithms × a few clipping knobs.
+ *  Implementations here are deterministic and avoid any heuristic that can't
+ *  be reproduced by a downstream test.
+ * ============================================================ */
+
+export type AutoAlgorithm =
+  | "monochromatic-contrast"  // Auto Contrast — stretch luminance, RGB locked
+  | "per-channel-contrast"    // Auto Tone — stretch each channel independently
+  | "dark-light-colors"       // Auto Color — find darkest/lightest pixels, map them
+  | "brightness-contrast"     // Auto Brightness & Contrast — gentle stretch + S-curve
+
+export interface AutoOptions {
+  algorithm: AutoAlgorithm
+  shadowsClipPct: number            // 0..50 — % of pixels to clip to black
+  highlightsClipPct: number         // 0..50 — % of pixels to clip to white
+  midtoneTargetRgb: { r: number; g: number; b: number }   // target color for midtones (gray balance)
+  shadowsTargetRgb: { r: number; g: number; b: number }
+  highlightsTargetRgb: { r: number; g: number; b: number }
+  snapNeutralMidtones: boolean      // remove a color cast detected at the midtone
+}
+
+export const AUTO_DEFAULTS: AutoOptions = {
+  algorithm: "per-channel-contrast",
+  shadowsClipPct: 0.1,
+  highlightsClipPct: 0.1,
+  shadowsTargetRgb: { r: 0, g: 0, b: 0 },
+  midtoneTargetRgb: { r: 128, g: 128, b: 128 },
+  highlightsTargetRgb: { r: 255, g: 255, b: 255 },
+  snapNeutralMidtones: true,
+}
+
+interface ChannelHist {
+  black: number
+  white: number
+  median: number
+}
+
+function channelHistogram(src: ImageData, channel: 0 | 1 | 2, lowClipPct: number, highClipPct: number): ChannelHist {
+  const hist = new Array(256).fill(0)
+  let total = 0
+  for (let i = 0; i < src.data.length; i += 4) {
+    if (src.data[i + 3] === 0) continue
+    hist[src.data[i + channel]]++
+    total++
+  }
+  const lowClip = total * (lowClipPct / 100)
+  const highClip = total * (highClipPct / 100)
+  let acc = 0
+  let black = 0
+  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= lowClip) { black = v; break } }
+  acc = 0
+  let white = 255
+  for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc >= highClip) { white = v; break } }
+  acc = 0
+  let median = 128
+  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= total / 2) { median = v; break } }
+  return { black, white: Math.max(black + 1, white), median }
+}
+
+function luminanceHistogram(src: ImageData, lowClipPct: number, highClipPct: number): ChannelHist {
+  const hist = new Array(256).fill(0)
+  let total = 0
+  for (let i = 0; i < src.data.length; i += 4) {
+    if (src.data[i + 3] === 0) continue
+    hist[Math.max(0, Math.min(255, Math.round(luma(src.data[i], src.data[i + 1], src.data[i + 2]))))]++
+    total++
+  }
+  const lowClip = total * (lowClipPct / 100)
+  const highClip = total * (highClipPct / 100)
+  let acc = 0
+  let black = 0
+  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= lowClip) { black = v; break } }
+  acc = 0
+  let white = 255
+  for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc >= highClip) { white = v; break } }
+  acc = 0
+  let median = 128
+  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= total / 2) { median = v; break } }
+  return { black, white: Math.max(black + 1, white), median }
+}
+
+/** Apply the selected Auto algorithm and return a new ImageData. Pure / deterministic. */
+export function applyAutoAdjustment(src: ImageData, opts: AutoOptions): ImageData {
+  const out = new Uint8ClampedArray(src.data)
+  const o = { ...AUTO_DEFAULTS, ...opts }
+  switch (o.algorithm) {
+    case "monochromatic-contrast": {
+      const stats = luminanceHistogram(src, o.shadowsClipPct, o.highlightsClipPct)
+      const range = Math.max(1, stats.white - stats.black)
+      const sLow = o.shadowsTargetRgb
+      const sHi = o.highlightsTargetRgb
+      for (let i = 0; i < out.length; i += 4) {
+        for (let c = 0; c < 3; c++) {
+          const target = c === 0 ? sLow.r : c === 1 ? sLow.g : sLow.b
+          const targetHi = c === 0 ? sHi.r : c === 1 ? sHi.g : sHi.b
+          const v = out[i + c]
+          const t = clamp01((v - stats.black) / range)
+          out[i + c] = clamp8(target + (targetHi - target) * t)
+        }
+      }
+      break
+    }
+    case "per-channel-contrast": {
+      const stats: ChannelHist[] = [0, 1, 2].map((c) => channelHistogram(src, c as 0 | 1 | 2, o.shadowsClipPct, o.highlightsClipPct))
+      const sLow = [o.shadowsTargetRgb.r, o.shadowsTargetRgb.g, o.shadowsTargetRgb.b]
+      const sHi = [o.highlightsTargetRgb.r, o.highlightsTargetRgb.g, o.highlightsTargetRgb.b]
+      for (let i = 0; i < out.length; i += 4) {
+        for (let c = 0; c < 3; c++) {
+          const s = stats[c]
+          const range = Math.max(1, s.white - s.black)
+          const t = clamp01((out[i + c] - s.black) / range)
+          out[i + c] = clamp8(sLow[c] + (sHi[c] - sLow[c]) * t)
+        }
+      }
+      if (o.snapNeutralMidtones) snapMidtonesInPlace(out, src.width, src.height, o.midtoneTargetRgb)
+      break
+    }
+    case "dark-light-colors": {
+      // Find the darkest and brightest *colors* (not channels), map each to
+      // the corresponding target. This is the algorithm Photoshop documents
+      // as "Find Dark & Light Colors".
+      let darkest = { r: 255, g: 255, b: 255, l: 1 }
+      let lightest = { r: 0, g: 0, b: 0, l: 0 }
+      for (let i = 0; i < src.data.length; i += 4) {
+        if (src.data[i + 3] === 0) continue
+        const r = src.data[i], g = src.data[i + 1], b = src.data[i + 2]
+        const L = luma(r, g, b) / 255
+        if (L < darkest.l) darkest = { r, g, b, l: L }
+        if (L > lightest.l) lightest = { r, g, b, l: L }
+      }
+      const sLow = o.shadowsTargetRgb
+      const sHi = o.highlightsTargetRgb
+      const gainsLow = [
+        (sLow.r - darkest.r) || 0,
+        (sLow.g - darkest.g) || 0,
+        (sLow.b - darkest.b) || 0,
+      ]
+      const gainsHi = [
+        (sHi.r - lightest.r) || 0,
+        (sHi.g - lightest.g) || 0,
+        (sHi.b - lightest.b) || 0,
+      ]
+      for (let i = 0; i < out.length; i += 4) {
+        const L = luma(out[i], out[i + 1], out[i + 2]) / 255
+        for (let c = 0; c < 3; c++) {
+          out[i + c] = clamp8(out[i + c] + gainsLow[c] * (1 - L) + gainsHi[c] * L)
+        }
+      }
+      if (o.snapNeutralMidtones) snapMidtonesInPlace(out, src.width, src.height, o.midtoneTargetRgb)
+      break
+    }
+    case "brightness-contrast": {
+      const stats = luminanceHistogram(src, o.shadowsClipPct, o.highlightsClipPct)
+      const range = Math.max(1, stats.white - stats.black)
+      const targetMid = (o.midtoneTargetRgb.r + o.midtoneTargetRgb.g + o.midtoneTargetRgb.b) / 3
+      // Place the histogram median at the target midtone.
+      const gamma = Math.log(targetMid / 255) / Math.log(Math.max(0.001, (stats.median - stats.black) / range))
+      const safeGamma = Math.max(0.1, Math.min(9.99, Number.isFinite(gamma) ? gamma : 1))
+      for (let i = 0; i < out.length; i += 4) {
+        for (let c = 0; c < 3; c++) {
+          const t = clamp01((out[i + c] - stats.black) / range)
+          out[i + c] = clamp8(Math.pow(t, safeGamma) * 255)
+        }
+      }
+      break
+    }
+  }
   return new ImageData(out, src.width, src.height)
 }
 
-function hdrTonning(src: ImageData, radius: number, strength: number): ImageData {
-  // Simplified HDR toning using local contrast enhancement
-  const out = new Uint8ClampedArray(src.data)
-  // Create a blurred version for local average
-  const blurred = gaussianBlur(src, radius)
-
-  for (let i = 0; i < out.length; i += 4) {
-    const r = out[i]
-    const g = out[i + 1]
-    const b = out[i + 2]
-
-    const br = blurred.data[i]
-    const bg = blurred.data[i + 1]
-    const bb = blurred.data[i + 2]
-
-    // Calculate local contrast
-    const contrastR = ((r - br) * strength) / 100
-    const contrastG = ((g - bg) * strength) / 100
-    const contrastB = ((b - bb) * strength) / 100
-
-    // Apply local contrast
-    out[i] = clamp8(r + contrastR)
-    out[i + 1] = clamp8(g + contrastG)
-    out[i + 2] = clamp8(b + contrastB)
+function snapMidtonesInPlace(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  target: { r: number; g: number; b: number },
+) {
+  // Walk the (now-corrected) buffer, average the midtone band, and apply a
+  // multiplicative correction so the midtone average lands on `target`.
+  let sumR = 0, sumG = 0, sumB = 0, count = 0
+  const pixels = width * height
+  for (let p = 0; p < pixels; p++) {
+    const i = p * 4
+    if (data[i + 3] === 0) continue
+    const L = luma(data[i], data[i + 1], data[i + 2])
+    if (L < 64 || L > 192) continue
+    sumR += data[i]; sumG += data[i + 1]; sumB += data[i + 2]; count++
   }
-
-  return new ImageData(out, src.width, src.height)
+  if (count === 0) return
+  const avgR = sumR / count
+  const avgG = sumG / count
+  const avgB = sumB / count
+  const kR = target.r / Math.max(1, avgR)
+  const kG = target.g / Math.max(1, avgG)
+  const kB = target.b / Math.max(1, avgB)
+  for (let p = 0; p < pixels; p++) {
+    const i = p * 4
+    if (data[i + 3] === 0) continue
+    data[i] = clamp8(data[i] * kR)
+    data[i + 1] = clamp8(data[i + 1] * kG)
+    data[i + 2] = clamp8(data[i + 2] * kB)
+  }
 }
 
 interface CubeLut {
@@ -1833,28 +2579,115 @@ function distortPolar(src: ImageData, mode: string): ImageData {
   return new ImageData(out, w, h)
 }
 
-function adaptiveWideAngle(src: ImageData, correction: number, fisheye: number, rotateDeg: number, scalePct: number): ImageData {
+interface AdaptiveWideAngleConstraint {
+  type: "vertical" | "horizontal" | "full"
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+}
+
+interface AdaptiveWideAngleExtras {
+  focalLength?: number      // mm
+  cropFactor?: number       // x
+  constraints?: AdaptiveWideAngleConstraint[]
+}
+
+function parseAdaptiveConstraints(raw: string): AdaptiveWideAngleConstraint[] {
+  if (!raw || typeof raw !== "string") return []
+  const trimmed = raw.trim()
+  if (!trimmed) return []
+  try {
+    const value = JSON.parse(trimmed)
+    if (!Array.isArray(value)) return []
+    return value
+      .filter((entry) => entry && typeof entry === "object")
+      .map((entry) => {
+        const e = entry as Record<string, unknown>
+        const type = e.type === "vertical" || e.type === "horizontal" || e.type === "full" ? e.type : "vertical"
+        return {
+          type: type as AdaptiveWideAngleConstraint["type"],
+          x1: Number(e.x1 ?? 0),
+          y1: Number(e.y1 ?? 0),
+          x2: Number(e.x2 ?? 1),
+          y2: Number(e.y2 ?? 1),
+        }
+      })
+  } catch {
+    return []
+  }
+}
+
+function adaptiveWideAngle(
+  src: ImageData,
+  correction: number,
+  fisheye: number,
+  rotateDeg: number,
+  scalePct: number,
+  extras: AdaptiveWideAngleExtras = {},
+): ImageData {
   const w = src.width
   const h = src.height
   const out = new Uint8ClampedArray(src.data.length)
   const cx = w / 2
   const cy = h / 2
   const maxR = Math.hypot(cx, cy)
-  const strength = (fisheye - correction) / 100
+  // Focal length / crop factor automatically blend into the "correction" baseline:
+  // smaller focal-equivalent => more inherent barrel; larger crop factor => less.
+  const focal = Math.max(1, extras.focalLength ?? 0)
+  const crop = Math.max(0.1, extras.cropFactor ?? 0)
+  let focalBias = 0
+  if (focal > 1 && crop > 0.1) {
+    const equiv = focal * crop
+    // Wider lenses (smaller equivalent) push barrel positive; longer lenses pull negative
+    focalBias = (35 - equiv) / 90   // ~+0.39 @ 0mm equiv; ~-2.94 @ 300mm equiv
+  }
+  const strength = (fisheye - correction) / 100 + focalBias
   const rot = (-rotateDeg * Math.PI) / 180
   const cos = Math.cos(rot)
   const sin = Math.sin(rot)
   const scale = Math.max(0.1, scalePct / 100)
+
+  // Constraint lines: each line provides a local correction direction.
+  // A "vertical" constraint applies extra de-rotation to a band that contains
+  // the line so it ends up straight; "horizontal" likewise. "full" tries both
+  // directions.
+  const constraints = extras.constraints ?? []
+  type PrepConstraint = { type: AdaptiveWideAngleConstraint["type"]; ax: number; ay: number; bx: number; by: number; angle: number }
+  const prep: PrepConstraint[] = constraints.map((c) => {
+    const ax = c.x1 * w, ay = c.y1 * h, bx = c.x2 * w, by = c.y2 * h
+    const angle = Math.atan2(by - ay, bx - ax)
+    return { type: c.type, ax, ay, bx, by, angle }
+  })
+
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const nx = (x - cx) / scale
       const ny = (y - cy) / scale
-      const rx = cos * nx - sin * ny
-      const ry = sin * nx + cos * ny
+      let rx = cos * nx - sin * ny
+      let ry = sin * nx + cos * ny
       const r = Math.hypot(rx, ry) / maxR
       const barrel = 1 + strength * r * r * 0.85
-      const sx = cx + rx * barrel
-      const sy = cy + ry * barrel
+      let sx = cx + rx * barrel
+      let sy = cy + ry * barrel
+      // Apply local rotation around the constraint mid-point so the constraint
+      // segment becomes axis-aligned within its influence band.
+      for (const c of prep) {
+        const mx = (c.ax + c.bx) / 2
+        const my = (c.ay + c.by) / 2
+        const dist = distanceToSegment({ x: sx, y: sy }, { x: c.ax, y: c.ay }, { x: c.bx, y: c.by })
+        const band = Math.max(16, Math.hypot(c.bx - c.ax, c.by - c.ay) * 0.35)
+        const influence = 1 - clamp01(dist / band)
+        if (influence <= 0) continue
+        const target = c.type === "horizontal" ? 0 : c.type === "vertical" ? Math.PI / 2 : c.angle
+        const delta = (target - c.angle) * influence
+        const ca = Math.cos(delta)
+        const sa = Math.sin(delta)
+        const dx = sx - mx
+        const dy = sy - my
+        sx = mx + ca * dx - sa * dy
+        sy = my + sa * dx + ca * dy
+      }
       const i = (y * w + x) * 4
       if (sx >= 0 && sx < w - 1 && sy >= 0 && sy < h - 1) {
         const [rr, gg, bb, aa] = bilinearSample(src.data, w, h, sx, sy)
@@ -2261,15 +3094,36 @@ function smartSharpen(src: ImageData, amount: number, radius: number, threshold:
 
 /* --------- LENS BLUR --------- */
 
-function lensBlur(src: ImageData, radius: number, bladeCount: number, rotation: number, specBright: number, specThreshold: number, noiseAmt: number, noiseMono: boolean): ImageData {
-  if (radius < 1) return new ImageData(new Uint8ClampedArray(src.data), src.width, src.height)
-  const w = src.width, h = src.height
-  const r = Math.max(1, Math.min(40, Math.round(radius)))
-  const blades = Math.max(3, Math.min(8, Math.round(bladeCount)))
+interface LensBlurExtras {
+  depthSource?: ImageData | null
+  depthChannel?: "luminance" | "red" | "green" | "blue" | "alpha"
+  depthFocus?: number   // 0..255 — pixel depth values matching this stay sharp
+  depthBlurScale?: number // 0..100 — how strongly off-focus depths get blurred
+  depthInvert?: boolean
+  shape?: "hexagon" | "pentagon" | "octagon" | "circle" | "triangle" | "square"
+}
 
-  // Build polygon (iris) aperture kernel. Each kernel entry is (offset, weight).
-  // Using gamma-2.0 (linear-light) accumulation so specular highlights produce
-  // the bright "ringed" bokeh that Photoshop's Lens Blur is famous for.
+function extractDepthValue(depth: ImageData, x: number, y: number, channel: string, invert: boolean): number {
+  const sx = (x / Math.max(1, x)) // satisfy lint when called with single coords
+  void sx
+  const dw = depth.width, dh = depth.height
+  // For now nearest-neighbor index since callers pass integer coords matched to src size already.
+  const ix = Math.max(0, Math.min(dw - 1, Math.round(x)))
+  const iy = Math.max(0, Math.min(dh - 1, Math.round(y)))
+  const idx = (iy * dw + ix) * 4
+  const r = depth.data[idx], g = depth.data[idx + 1], b = depth.data[idx + 2], a = depth.data[idx + 3]
+  let v: number
+  switch (channel) {
+    case "red":   v = r; break
+    case "green": v = g; break
+    case "blue":  v = b; break
+    case "alpha": v = a; break
+    default:      v = 0.299 * r + 0.587 * g + 0.114 * b
+  }
+  return invert ? 255 - v : v
+}
+
+function buildIrisOffsets(r: number, blades: number, rotation: number, shape: string): number[] {
   const offsets: number[] = []
   const rotRad = rotation * Math.PI / 180
   const halfSeg = Math.PI / blades
@@ -2277,15 +3131,73 @@ function lensBlur(src: ImageData, radius: number, bladeCount: number, rotation: 
     for (let kx = -r; kx <= r; kx++) {
       const dist = Math.hypot(kx, ky)
       if (dist > r) continue
+      if (shape === "circle") {
+        offsets.push(kx, ky)
+        continue
+      }
+      if (shape === "square") {
+        if (Math.abs(kx) <= r && Math.abs(ky) <= r) offsets.push(kx, ky)
+        continue
+      }
+      // Polygon shape — number of sides derived from the requested shape, with
+      // bladeCount acting as a secondary modifier (e.g., hexagon = 6 sides).
+      let sides = blades
+      if (shape === "triangle") sides = 3
+      else if (shape === "pentagon") sides = 5
+      else if (shape === "hexagon") sides = 6
+      else if (shape === "octagon") sides = 8
       const angle = Math.atan2(ky, kx) - rotRad
-      const segment = 2 * Math.PI / blades
-      const localAngle = ((angle % segment) + segment) % segment - halfSeg
-      const polyRadius = r * Math.cos(halfSeg) / Math.max(0.001, Math.cos(localAngle))
+      const segment = 2 * Math.PI / sides
+      const localAngle = ((angle % segment) + segment) % segment - segment / 2
+      const polyRadius = r * Math.cos(segment / 2) / Math.max(0.001, Math.cos(localAngle))
       if (dist <= polyRadius) offsets.push(kx, ky)
+      void halfSeg
     }
   }
-  if (!offsets.length) return new ImageData(new Uint8ClampedArray(src.data), w, h)
-  const kCount = offsets.length / 2
+  return offsets
+}
+
+function lensBlur(src: ImageData, radius: number, bladeCount: number, rotation: number, specBright: number, specThreshold: number, noiseAmt: number, noiseMono: boolean, extras: LensBlurExtras = {}): ImageData {
+  if (radius < 1 && !(extras.depthSource && (extras.depthBlurScale ?? 0) > 0)) return new ImageData(new Uint8ClampedArray(src.data), src.width, src.height)
+  const w = src.width, h = src.height
+  const baseR = Math.max(1, Math.min(40, Math.round(Math.max(1, radius))))
+  const blades = Math.max(3, Math.min(8, Math.round(bladeCount)))
+  const shape = extras.shape ?? "hexagon"
+
+  const depthSrc = extras.depthSource ?? null
+  const depthChannel = extras.depthChannel ?? "luminance"
+  const depthFocus = Math.max(0, Math.min(255, extras.depthFocus ?? 128))
+  const depthScale = Math.max(0, Math.min(100, extras.depthBlurScale ?? 0)) / 100
+  const depthInvert = Boolean(extras.depthInvert)
+
+  // Precompute per-pixel radius when a depth map is supplied. The pixel's
+  // distance from the focus value scales the blur radius — pixels at the focus
+  // value stay sharp, pixels at max distance receive the full configured radius.
+  let depthRadius: Uint8Array | null = null
+  let maxR = baseR
+  if (depthSrc && depthScale > 0) {
+    depthRadius = new Uint8Array(w * h)
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        // Sample depth map. If depth dims differ, scale linearly.
+        const dx = depthSrc.width === w ? x : Math.round((x / Math.max(1, w - 1)) * (depthSrc.width - 1))
+        const dy = depthSrc.height === h ? y : Math.round((y / Math.max(1, h - 1)) * (depthSrc.height - 1))
+        const v = extractDepthValue(depthSrc, dx, dy, depthChannel, depthInvert)
+        const dist = Math.abs(v - depthFocus) / 255
+        const pr = Math.max(0, Math.min(baseR, Math.round(baseR * dist * depthScale * 2)))
+        depthRadius[y * w + x] = pr
+        if (pr > maxR) maxR = pr
+      }
+    }
+  }
+
+  // Build a stack of iris kernels for each radius we may need. Without depth,
+  // we only need a single kernel at baseR. With depth, we lazily build a
+  // dictionary keyed by radius and reuse it across pixels.
+  const kernelCache = new Map<number, number[]>()
+  const baseOffsets = buildIrisOffsets(baseR, blades, rotation, shape)
+  kernelCache.set(baseR, baseOffsets)
+  if (!baseOffsets.length) return new ImageData(new Uint8ClampedArray(src.data), w, h)
 
   // Pre-convert source to linear-light squared values for gamma-correct averaging.
   const linR = new Float32Array(w * h)
@@ -2311,9 +3223,29 @@ function lensBlur(src: ImageData, radius: number, bladeCount: number, rotation: 
     }
   }
 
+  function getKernel(rr: number): number[] {
+    const cached = kernelCache.get(rr)
+    if (cached) return cached
+    const built = buildIrisOffsets(rr, blades, rotation, shape)
+    kernelCache.set(rr, built)
+    return built
+  }
+
   const out = new Uint8ClampedArray(src.data.length)
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
+      const localR = depthRadius ? depthRadius[y * w + x] : baseR
+      if (localR < 1) {
+        // No blur for this pixel — copy source directly.
+        const idx = (y * w + x) * 4
+        out[idx]     = src.data[idx]
+        out[idx + 1] = src.data[idx + 1]
+        out[idx + 2] = src.data[idx + 2]
+        out[idx + 3] = src.data[idx + 3]
+        continue
+      }
+      const offsets = getKernel(localR)
+      const kCount = offsets.length / 2
       let rSum = 0, gSum = 0, bSum = 0, aSum = 0, wSum = 0
       for (let k = 0; k < kCount; k++) {
         const ox = offsets[k * 2], oy = offsets[k * 2 + 1]
@@ -2335,6 +3267,7 @@ function lensBlur(src: ImageData, radius: number, bladeCount: number, rotation: 
       out[idx + 3] = clamp8(aSum / wSum)
     }
   }
+  void maxR
 
   if (noiseAmt > 0) {
     const amp = noiseAmt * 2.55
@@ -2710,6 +3643,16 @@ const LENS_PROFILE_PRESETS: Record<string, LensProfilePreset> = {
   "architecture-shift": { k1: 0.08, k2: 0.02, k3: 0, p1: -0.01, p2: 0.01, vignette: 0.14, chromatic: 0.06, defringe: 0.14, description: "Shift lens / architecture" },
 }
 
+interface LensCorrectionExtras {
+  perspectiveV?: number
+  perspectiveH?: number
+  vignetteMidpoint?: number
+  fringeR?: number
+  fringeG?: number
+  fringeB?: number
+  scalePct?: number
+}
+
 function lensCorrection(
   src: ImageData,
   distortion: number,
@@ -2724,6 +3667,7 @@ function lensCorrection(
   edgeMode: string = "clamp",
   profileStrength: number = 100,
   defringe: number = 0,
+  extras: LensCorrectionExtras = {},
 ): ImageData {
   const w = src.width, h = src.height, out = new Uint8ClampedArray(src.data.length)
   const cx = (w - 1) / 2, cy = (h - 1) / 2
@@ -2738,10 +3682,17 @@ function lensCorrection(
   const ca = (chromatic + preset.chromatic * 100 * strength) / 100
   const vig = (vignette + preset.vignette * 100 * strength) / 100
   const fringeClean = Math.max(0, Math.min(100, defringe + preset.defringe * 100 * strength)) / 100
+  const fringeR = (extras.fringeR ?? 0) / 100
+  const fringeG = (extras.fringeG ?? 0) / 100
+  const fringeB = (extras.fringeB ?? 0) / 100
+  const perspV = (extras.perspectiveV ?? 0) / 200
+  const perspH = (extras.perspectiveH ?? 0) / 200
+  const vigMid = Math.max(0, Math.min(100, extras.vignetteMidpoint ?? 50)) / 100
+  const extraScale = Math.max(0.05, (extras.scalePct ?? 100) / 100)
   // Compute an auto-scale factor so the corrected image fills the frame
   // without exposing the resampled edge — sample the 4 image corners and
   // scale by the smallest displacement factor.
-  let outScale = 1
+  let outScale = 1 / extraScale
   if (autoScale) {
     const corners: Array<[number, number]> = [
       [0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1],
@@ -2754,7 +3705,7 @@ function lensCorrection(
       const f = 1 + k1 * r2c + k2 * r2c * r2c + k3 * r2c * r2c * r2c
       if (f > 0 && f < minFactor) minFactor = f
     }
-    if (isFinite(minFactor) && minFactor > 0) outScale = minFactor
+    if (isFinite(minFactor) && minFactor > 0) outScale = minFactor / extraScale
   }
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -2766,14 +3717,20 @@ function lensCorrection(
       // Brown-Conrady tangential distortion (off-axis lens tilt)
       const tx = 2 * p1 * nx * ny + p2 * (r2 + 2 * nx * nx)
       const ty = p1 * (r2 + 2 * ny * ny) + 2 * p2 * nx * ny
-      const sx = cx + dx * factor + tx * maxR
-      const sy = cy + dy * factor + ty * maxR
+      // Vertical / horizontal perspective: keystone correction
+      const ny01 = (y / Math.max(1, h - 1)) - 0.5
+      const nx01 = (x / Math.max(1, w - 1)) - 0.5
+      const perspXScale = 1 + perspV * (2 * ny01)
+      const perspYScale = 1 + perspH * (2 * nx01)
+      const sx = cx + dx * factor * perspXScale + tx * maxR
+      const sy = cy + dy * factor * perspYScale + ty * maxR
       const chromaShift = ca * (0.3 + r2) * 1.35
-      const red = bilinearSample(src.data, w, h, sx + nx * chromaShift, sy + ny * chromaShift)
-      const mid = bilinearSample(src.data, w, h, sx, sy)
-      const blue = bilinearSample(src.data, w, h, sx - nx * chromaShift, sy - ny * chromaShift)
+      const red = bilinearSample(src.data, w, h, sx + nx * (chromaShift + fringeR * 8), sy + ny * (chromaShift + fringeR * 8))
+      const mid = bilinearSample(src.data, w, h, sx + nx * fringeG * 4, sy + ny * fringeG * 4)
+      const blue = bilinearSample(src.data, w, h, sx - nx * (chromaShift + fringeB * 8), sy - ny * (chromaShift + fringeB * 8))
       const radial = Math.pow(clamp01(Math.sqrt(r2)), 1.7)
-      const shade = vig >= 0 ? clamp01(1 - vig * radial * 0.85) : 1 + Math.abs(vig) * radial * 0.55
+      const radialShaped = Math.pow(radial, 0.3 + (1 - vigMid) * 2.2)
+      const shade = vig >= 0 ? clamp01(1 - vig * radialShaped * 0.85) : 1 + Math.abs(vig) * radialShaped * 0.55
       const i = (y * w + x) * 4
       const outOfBounds = sx < 0 || sx > w - 1 || sy < 0 || sy > h - 1
       if (outOfBounds && edgeMode === "transparent") {
@@ -2910,6 +3867,8 @@ function lightingEffects(
   height: number,
   lightsRaw?: unknown,
   materialRaw?: unknown,
+  bumpSource?: ImageData | null,
+  bumpChannel?: "luminance" | "red" | "green" | "blue" | "alpha",
 ): ImageData {
   const w = src.width, h = src.height, out = new Uint8ClampedArray(src.data.length)
   const amb = Math.max(0, ambient) / 100
@@ -2929,6 +3888,28 @@ function lightingEffects(
   const ambColor = material.ambientColor ?? [255, 255, 255]
   const specExp = 4 + gloss * 96
 
+  // Compute a per-pixel scalar height value from the source or the supplied
+  // bump-source image (using the requested channel). The normals are derived
+  // from finite differences over the height field.
+  const bw = bumpSource?.width ?? w
+  const bh = bumpSource?.height ?? h
+  const bumpData = bumpSource?.data ?? src.data
+  const channel = bumpChannel ?? "luminance"
+  const sampleHeight = (px: number, py: number): number => {
+    // Scale source-space coords into bump-source space.
+    const sx = bumpSource ? Math.min(bw - 1, Math.max(0, Math.round((px / Math.max(1, w - 1)) * (bw - 1)))) : px
+    const sy = bumpSource ? Math.min(bh - 1, Math.max(0, Math.round((py / Math.max(1, h - 1)) * (bh - 1)))) : py
+    const i = (sy * bw + sx) * 4
+    const r = bumpData[i], g = bumpData[i + 1], b = bumpData[i + 2], a = bumpData[i + 3]
+    switch (channel) {
+      case "red":   return r
+      case "green": return g
+      case "blue":  return b
+      case "alpha": return a
+      default:      return luma(r, g, b)
+    }
+  }
+
   const nxBuf = new Float32Array(w * h)
   const nyBuf = new Float32Array(w * h)
   const nzBuf = new Float32Array(w * h)
@@ -2938,12 +3919,8 @@ function lightingEffects(
       const xr = x < w - 1 ? x + 1 : x
       const yu = y > 0 ? y - 1 : y
       const yd = y < h - 1 ? y + 1 : y
-      const right = (y * w + xr) * 4
-      const left = (y * w + xl) * 4
-      const down = (yd * w + x) * 4
-      const up = (yu * w + x) * 4
-      const lx = (luma(src.data[right], src.data[right + 1], src.data[right + 2]) - luma(src.data[left], src.data[left + 1], src.data[left + 2])) / 255
-      const ly = (luma(src.data[down], src.data[down + 1], src.data[down + 2]) - luma(src.data[up], src.data[up + 1], src.data[up + 2])) / 255
+      const lx = (sampleHeight(xr, y) - sampleHeight(xl, y)) / 255
+      const ly = (sampleHeight(x, yd) - sampleHeight(x, yu)) / 255
       const vx = -lx * heightScale * 3
       const vy = -ly * heightScale * 3
       const vz = 1
@@ -3408,7 +4385,7 @@ function ntscColors(src: ImageData): ImageData {
   return new ImageData(out, src.width, src.height)
 }
 
-function deInterlace(src: ImageData, field: string): ImageData {
+function _deInterlace(src: ImageData, field: string): ImageData {
   const out = new Uint8ClampedArray(src.data)
   const even = field !== "odd"
   for (let y = even ? 1 : 0; y < src.height; y += 2) {
@@ -3972,6 +4949,280 @@ const PROMOTED_GALLERY_FILTERS: Record<string, FilterDef> = {
   "mosaic-tiles": promotedGalleryDef("mosaic-tiles", "Mosaic Tiles", "Texture", mosaicTilesFilter),
 }
 
+/* ----------- new stylize / pixelate / distort filters ----------- */
+
+function fragment(src: ImageData): ImageData {
+  const w = src.width, h = src.height
+  const out = new Float32Array(w * h * 4)
+  const offsets: Array<[number, number]> = [
+    [-4, 0], [4, 0], [0, -4], [0, 4],
+  ]
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const di = (y * w + x) * 4
+      let r = 0, g = 0, b = 0, a = 0
+      for (const [dx, dy] of offsets) {
+        const sx = Math.max(0, Math.min(w - 1, x + dx))
+        const sy = Math.max(0, Math.min(h - 1, y + dy))
+        const si = (sy * w + sx) * 4
+        r += src.data[si]; g += src.data[si + 1]; b += src.data[si + 2]; a += src.data[si + 3]
+      }
+      out[di] = r / 4
+      out[di + 1] = g / 4
+      out[di + 2] = b / 4
+      out[di + 3] = a / 4
+    }
+  }
+  const data = new Uint8ClampedArray(w * h * 4)
+  for (let i = 0; i < data.length; i++) data[i] = clamp8(out[i])
+  return new ImageData(data, w, h)
+}
+
+function facet(src: ImageData, threshold = 22): ImageData {
+  const w = src.width, h = src.height
+  const out = new Uint8ClampedArray(src.data.length)
+  const used = new Uint8Array(w * h)
+  const queue: number[] = []
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = y * w + x
+      if (used[idx]) continue
+      const si = idx * 4
+      const seedR = src.data[si], seedG = src.data[si + 1], seedB = src.data[si + 2]
+      let sumR = 0, sumG = 0, sumB = 0, sumA = 0, count = 0
+      const region: number[] = []
+      queue.length = 0
+      queue.push(idx)
+      used[idx] = 1
+      while (queue.length > 0) {
+        const ci = queue.pop()!
+        const cx = ci % w
+        const cy = (ci - cx) / w
+        const pi = ci * 4
+        const r = src.data[pi], g = src.data[pi + 1], b = src.data[pi + 2], a = src.data[pi + 3]
+        sumR += r; sumG += g; sumB += b; sumA += a; count++
+        region.push(ci)
+        if (count > 4096) continue
+        const neighbors = [
+          [cx + 1, cy], [cx - 1, cy], [cx, cy + 1], [cx, cy - 1],
+        ]
+        for (const [nx, ny] of neighbors) {
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+          const ni = ny * w + nx
+          if (used[ni]) continue
+          const npi = ni * 4
+          const dr = src.data[npi] - seedR
+          const dg = src.data[npi + 1] - seedG
+          const db = src.data[npi + 2] - seedB
+          if (Math.sqrt(dr * dr + dg * dg + db * db) > threshold) continue
+          used[ni] = 1
+          queue.push(ni)
+        }
+      }
+      const avgR = sumR / count, avgG = sumG / count, avgB = sumB / count, avgA = sumA / count
+      for (const ci of region) {
+        const pi = ci * 4
+        out[pi] = clamp8(avgR)
+        out[pi + 1] = clamp8(avgG)
+        out[pi + 2] = clamp8(avgB)
+        out[pi + 3] = clamp8(avgA)
+      }
+    }
+  }
+  return new ImageData(out, w, h)
+}
+
+function pointillize(src: ImageData, cellSize: number, background = "#ffffff"): ImageData {
+  const w = src.width, h = src.height
+  const out = new Uint8ClampedArray(w * h * 4)
+  const bg = parseHexColor(background)
+  for (let i = 0; i < out.length; i += 4) {
+    out[i] = bg.r
+    out[i + 1] = bg.g
+    out[i + 2] = bg.b
+    out[i + 3] = 255
+  }
+  const size = Math.max(2, Math.min(96, Math.round(cellSize)))
+  for (let cy = 0; cy < h; cy += size) {
+    for (let cx = 0; cx < w; cx += size) {
+      const r1 = hashNoise(cx, cy, 1)
+      const r2 = hashNoise(cx + 3, cy + 7, 17)
+      const r3 = hashNoise(cx + 11, cy + 5, 99)
+      const jitterX = cx + r1 * size
+      const jitterY = cy + r2 * size
+      const radius = (0.45 + r3 * 0.4) * size * 0.5
+      const sx = Math.max(0, Math.min(w - 1, Math.round(jitterX)))
+      const sy = Math.max(0, Math.min(h - 1, Math.round(jitterY)))
+      const si = (sy * w + sx) * 4
+      const r = src.data[si], g = src.data[si + 1], b = src.data[si + 2]
+      const x0 = Math.max(0, Math.floor(jitterX - radius))
+      const x1 = Math.min(w - 1, Math.ceil(jitterX + radius))
+      const y0 = Math.max(0, Math.floor(jitterY - radius))
+      const y1 = Math.min(h - 1, Math.ceil(jitterY + radius))
+      const r2sq = radius * radius
+      for (let py = y0; py <= y1; py++) {
+        for (let px = x0; px <= x1; px++) {
+          const dx = px - jitterX
+          const dy = py - jitterY
+          if (dx * dx + dy * dy > r2sq) continue
+          const di = (py * w + px) * 4
+          out[di] = r
+          out[di + 1] = g
+          out[di + 2] = b
+          out[di + 3] = 255
+        }
+      }
+    }
+  }
+  return new ImageData(out, w, h)
+}
+
+function shear(src: ImageData, amount: number, edgeMode: string): ImageData {
+  const w = src.width, h = src.height
+  const out = new Uint8ClampedArray(w * h * 4)
+  const amp = (amount / 100) * w * 0.5
+  for (let y = 0; y < h; y++) {
+    const t = (y / Math.max(1, h - 1)) * Math.PI
+    const shift = Math.sin(t) * amp
+    for (let x = 0; x < w; x++) {
+      let sx = x - shift
+      let useTransparent = false
+      if (sx < 0 || sx > w - 1) {
+        if (edgeMode === "wrap") {
+          sx = ((sx % w) + w) % w
+        } else if (edgeMode === "transparent") {
+          useTransparent = true
+        } else {
+          sx = Math.max(0, Math.min(w - 1, sx))
+        }
+      }
+      const di = (y * w + x) * 4
+      if (useTransparent) {
+        out[di] = 0; out[di + 1] = 0; out[di + 2] = 0; out[di + 3] = 0
+        continue
+      }
+      const sample = bilinearSample(src.data, w, h, sx, y)
+      out[di] = sample[0]
+      out[di + 1] = sample[1]
+      out[di + 2] = sample[2]
+      out[di + 3] = sample[3]
+    }
+  }
+  return new ImageData(out, w, h)
+}
+
+function tilesFilter(src: ImageData, numberOfTiles: number, maxOffset: number, fill: string): ImageData {
+  const w = src.width, h = src.height
+  const out = new Uint8ClampedArray(w * h * 4)
+  const fillColor = parseHexColor(fill === "background" ? "#ffffff" : fill === "foreground" ? "#111827" : fill)
+  const tileCount = Math.max(2, Math.min(99, Math.round(numberOfTiles)))
+  const tileW = Math.max(1, Math.floor(w / tileCount))
+  const tileH = Math.max(1, Math.floor(h / tileCount))
+  const maxShift = Math.max(0, Math.min(99, maxOffset)) / 100
+  // Init with fill color (transparent edges)
+  const transparent = fill === "transparent"
+  for (let i = 0; i < out.length; i += 4) {
+    if (transparent) { out[i] = 0; out[i + 1] = 0; out[i + 2] = 0; out[i + 3] = 0 }
+    else { out[i] = fillColor.r; out[i + 1] = fillColor.g; out[i + 2] = fillColor.b; out[i + 3] = 255 }
+  }
+  for (let ty = 0; ty * tileH < h; ty++) {
+    for (let tx = 0; tx * tileW < w; tx++) {
+      const noiseX = (hashNoise(tx, ty, 7) * 2 - 1) * tileW * maxShift
+      const noiseY = (hashNoise(tx + 13, ty + 5, 19) * 2 - 1) * tileH * maxShift
+      const offX = Math.round(noiseX)
+      const offY = Math.round(noiseY)
+      const srcX0 = tx * tileW
+      const srcY0 = ty * tileH
+      for (let py = 0; py < tileH; py++) {
+        for (let px = 0; px < tileW; px++) {
+          const sx = srcX0 + px
+          const sy = srcY0 + py
+          if (sx >= w || sy >= h) continue
+          const dx = sx + offX
+          const dy = sy + offY
+          if (dx < 0 || dy < 0 || dx >= w || dy >= h) continue
+          const si = (sy * w + sx) * 4
+          const di = (dy * w + dx) * 4
+          out[di] = src.data[si]
+          out[di + 1] = src.data[si + 1]
+          out[di + 2] = src.data[si + 2]
+          out[di + 3] = src.data[si + 3]
+        }
+      }
+    }
+  }
+  return new ImageData(out, w, h)
+}
+
+function diffuse(src: ImageData, mode: string, amount: number): ImageData {
+  const w = src.width, h = src.height
+  const out = new Uint8ClampedArray(src.data)
+  const radius = Math.max(1, Math.min(8, Math.round(amount / 12)))
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const di = (y * w + x) * 4
+      const rx = Math.floor((hashNoise(x, y, 3) * 2 - 1) * radius)
+      const ry = Math.floor((hashNoise(x + 7, y + 1, 11) * 2 - 1) * radius)
+      const sx = Math.max(0, Math.min(w - 1, x + rx))
+      const sy = Math.max(0, Math.min(h - 1, y + ry))
+      const si = (sy * w + sx) * 4
+      if (mode === "lighten") {
+        out[di] = Math.max(src.data[di], src.data[si])
+        out[di + 1] = Math.max(src.data[di + 1], src.data[si + 1])
+        out[di + 2] = Math.max(src.data[di + 2], src.data[si + 2])
+      } else if (mode === "darken") {
+        out[di] = Math.min(src.data[di], src.data[si])
+        out[di + 1] = Math.min(src.data[di + 1], src.data[si + 1])
+        out[di + 2] = Math.min(src.data[di + 2], src.data[si + 2])
+      } else if (mode === "anisotropic") {
+        const cur = luma(src.data[di], src.data[di + 1], src.data[di + 2])
+        const cand = luma(src.data[si], src.data[si + 1], src.data[si + 2])
+        const w1 = Math.abs(cur - cand) < 30 ? 0.8 : 0.2
+        out[di] = clamp8(src.data[di] * (1 - w1) + src.data[si] * w1)
+        out[di + 1] = clamp8(src.data[di + 1] * (1 - w1) + src.data[si + 1] * w1)
+        out[di + 2] = clamp8(src.data[di + 2] * (1 - w1) + src.data[si + 2] * w1)
+      } else {
+        out[di] = src.data[si]
+        out[di + 1] = src.data[si + 1]
+        out[di + 2] = src.data[si + 2]
+      }
+      out[di + 3] = src.data[di + 3]
+    }
+  }
+  return new ImageData(out, w, h)
+}
+
+/** De-interlace with choice of replacement method. */
+function deInterlaceAdvanced(src: ImageData, field: string, method: string): ImageData {
+  const w = src.width, h = src.height
+  const out = new Uint8ClampedArray(src.data)
+  const odd = field === "odd"
+  // Replace odd/even rows
+  for (let y = odd ? 1 : 0; y < h; y += 2) {
+    const above = Math.max(0, y - 1)
+    const below = Math.min(h - 1, y + 1)
+    for (let x = 0; x < w; x++) {
+      const di = (y * w + x) * 4
+      const ai = (above * w + x) * 4
+      const bi = (below * w + x) * 4
+      if (method === "duplication") {
+        // Duplicate the nearest kept row above
+        out[di] = src.data[ai]
+        out[di + 1] = src.data[ai + 1]
+        out[di + 2] = src.data[ai + 2]
+        out[di + 3] = src.data[ai + 3]
+      } else {
+        // interpolation: average neighbour rows
+        out[di] = (src.data[ai] + src.data[bi]) >> 1
+        out[di + 1] = (src.data[ai + 1] + src.data[bi + 1]) >> 1
+        out[di + 2] = (src.data[ai + 2] + src.data[bi + 2]) >> 1
+        out[di + 3] = src.data[di + 3]
+      }
+    }
+  }
+  return new ImageData(out, w, h)
+}
+
 const LEGACY_GAP_FILTERS: Record<string, FilterDef> = {
   ...legacyGalleryDefs([
     { id: "colored-pencil", name: "Colored Pencil", category: "Artistic" },
@@ -4052,12 +5303,16 @@ const LEGACY_GAP_FILTERS: Record<string, FilterDef> = {
     name: "De-Interlace",
     category: "Video",
     params: [
-      { type: "select", key: "field", label: "Field", options: [
-        { value: "even", label: "Even" },
-        { value: "odd", label: "Odd" },
+      { type: "select", key: "field", label: "Eliminate", options: [
+        { value: "even", label: "Even Fields" },
+        { value: "odd", label: "Odd Fields" },
       ], default: "even" },
+      { type: "select", key: "method", label: "Create New Fields by", options: [
+        { value: "duplication", label: "Duplication" },
+        { value: "interpolation", label: "Interpolation" },
+      ], default: "interpolation" },
     ],
-    apply: (src, p) => deInterlace(src, String(p.field)),
+    apply: (src, p) => deInterlaceAdvanced(src, String(p.field ?? "even"), String(p.method ?? "interpolation")),
   },
   "glowing-edges": {
     id: "glowing-edges",
@@ -4185,6 +5440,80 @@ const LEGACY_GAP_FILTERS: Record<string, FilterDef> = {
       { type: "slider", key: "magnitude", label: "Magnitude", min: 0, max: 50, step: 1, default: 12 },
     ],
     apply: (src, p) => oceanRipple(src, Number(p.size), Number(p.magnitude)),
+  },
+  fragment: {
+    id: "fragment",
+    name: "Fragment",
+    category: "Pixelate",
+    params: [],
+    apply: (src) => fragment(src),
+  },
+  facet: {
+    id: "facet",
+    name: "Facet",
+    category: "Pixelate",
+    params: [
+      { type: "slider", key: "threshold", label: "Threshold", min: 4, max: 80, step: 1, default: 22 },
+    ],
+    apply: (src, p) => facet(src, Number(p.threshold ?? 22)),
+  },
+  pointillize: {
+    id: "pointillize",
+    name: "Pointillize",
+    category: "Pixelate",
+    params: [
+      { type: "slider", key: "cellSize", label: "Cell Size", min: 3, max: 96, step: 1, default: 8, suffix: "px" },
+      { type: "select", key: "background", label: "Background", options: [
+        { value: "#ffffff", label: "White" },
+        { value: "#000000", label: "Black" },
+        { value: "#7f7f7f", label: "Gray" },
+      ], default: "#ffffff" },
+    ],
+    apply: (src, p) => pointillize(src, Number(p.cellSize ?? 8), String(p.background ?? "#ffffff")),
+  },
+  shear: {
+    id: "shear",
+    name: "Shear",
+    category: "Distort",
+    params: [
+      { type: "slider", key: "amount", label: "Amount", min: -100, max: 100, step: 1, default: 30 },
+      { type: "select", key: "edgeMode", label: "Undefined Areas", options: [
+        { value: "repeat", label: "Repeat Edge Pixels" },
+        { value: "wrap", label: "Wrap Around" },
+        { value: "transparent", label: "Set to Transparent" },
+      ], default: "repeat" },
+    ],
+    apply: (src, p) => shear(src, Number(p.amount ?? 30), String(p.edgeMode ?? "repeat")),
+  },
+  tiles: {
+    id: "tiles",
+    name: "Tiles",
+    category: "Stylize",
+    params: [
+      { type: "slider", key: "tiles", label: "Number of Tiles", min: 2, max: 99, step: 1, default: 10 },
+      { type: "slider", key: "maxOffset", label: "Maximum Offset", min: 1, max: 99, step: 1, default: 10, suffix: "%" },
+      { type: "select", key: "fill", label: "Fill Empty Area With", options: [
+        { value: "background", label: "Background" },
+        { value: "foreground", label: "Foreground" },
+        { value: "transparent", label: "Transparent" },
+      ], default: "background" },
+    ],
+    apply: (src, p) => tilesFilter(src, Number(p.tiles ?? 10), Number(p.maxOffset ?? 10), String(p.fill ?? "background")),
+  },
+  diffuse: {
+    id: "diffuse",
+    name: "Diffuse",
+    category: "Stylize",
+    params: [
+      { type: "select", key: "mode", label: "Mode", options: [
+        { value: "normal", label: "Normal" },
+        { value: "darken", label: "Darken Only" },
+        { value: "lighten", label: "Lighten Only" },
+        { value: "anisotropic", label: "Anisotropic" },
+      ], default: "normal" },
+      { type: "slider", key: "amount", label: "Strength", min: 1, max: 100, step: 1, default: 30 },
+    ],
+    apply: (src, p) => diffuse(src, String(p.mode ?? "normal"), Number(p.amount ?? 30)),
   },
 }
 
@@ -4642,34 +5971,74 @@ export const FILTERS: Record<string, FilterDef> = {
     id: "equalize",
     name: "Equalize",
     category: "Adjustments",
-    params: [],
-    apply: (src) => equalize(src),
+    params: [
+      { type: "select", key: "mode", label: "Mode", options: [
+        { value: "image", label: "Equalize entire image" },
+        { value: "selection-only", label: "Equalize selected area only" },
+        { value: "selection-source", label: "Equalize entire image based on selected area" },
+      ], default: "image" },
+    ],
+    apply: (src, p, context) => {
+      const rawMode = String(p.mode ?? "image")
+      const mode = (rawMode === "selection-only" || rawMode === "selection-source" ? rawMode : "image") as "image" | "selection-only" | "selection-source"
+      return equalize(src, mode, context?.selectionMask ?? null)
+    },
   },
   "replace-color": {
     id: "replace-color",
     name: "Replace Color",
     category: "Adjustments",
     params: [
-      { type: "slider", key: "sourceHue", label: "Source Hue", min: 0, max: 360, step: 1, default: 0, suffix: "deg" },
-      { type: "slider", key: "fuzziness", label: "Fuzziness", min: 1, max: 180, step: 1, default: 30, suffix: "deg" },
+      // Sample lists are stored as ";"-separated "r,g,b" so they round-trip through
+      // the adjustments panel and the destructive filter dialog without bespoke types.
+      { type: "text", key: "includeSamples", label: "Include samples (r,g,b;...)", default: "", placeholder: "255,0,0;0,128,255" },
+      { type: "text", key: "excludeSamples", label: "Exclude samples (r,g,b;...)", default: "", placeholder: "" },
+      { type: "slider", key: "sourceHue", label: "Legacy Source Hue", min: 0, max: 360, step: 1, default: 0, suffix: "deg" },
+      { type: "slider", key: "fuzziness", label: "Fuzziness", min: 0, max: 200, step: 1, default: 40 },
+      { type: "checkbox", key: "localizedClusters", label: "Localized Color Clusters", default: false },
       { type: "slider", key: "replacementHue", label: "Replacement Hue", min: 0, max: 360, step: 1, default: 0, suffix: "deg" },
       { type: "slider", key: "replacementSaturation", label: "Replacement Saturation", min: -100, max: 100, step: 1, default: 0 },
       { type: "slider", key: "replacementLightness", label: "Replacement Lightness", min: -100, max: 100, step: 1, default: 0 },
+      { type: "text", key: "resultColor", label: "Result color (r,g,b)", default: "", placeholder: "leave blank to use HSL shift" },
     ],
-    apply: (src, p) => replaceColor(
-      src,
-      Number(p.sourceHue ?? p.hue ?? 0),
-      Number(p.fuzziness ?? p.tolerance ?? 30),
-      Number(p.replacementHue ?? p.hue ?? 0),
-      Number(p.replacementSaturation ?? 0),
-      Number(p.replacementLightness ?? p.lightness ?? 0),
-    ),
+    apply: (src, p) => {
+      // Build include list. Prefer explicit samples list; fall back to the
+      // legacy single sourceHue param for back-compat with old documents.
+      const include = parseReplaceColorSamples(String(p.includeSamples ?? ""))
+      if (include.length === 0) {
+        const hueDeg = Number(p.sourceHue ?? p.hue ?? -1)
+        if (Number.isFinite(hueDeg) && hueDeg >= 0) {
+          const { r, g, b } = hslToRgb(((hueDeg % 360) + 360) % 360 / 360, 1, 0.5)
+          include.push({ r, g, b })
+        }
+      }
+      const exclude = parseReplaceColorSamples(String(p.excludeSamples ?? ""))
+      const resultParsed = parseReplaceColorSamples(String(p.resultColor ?? ""))
+      const result = resultParsed.length > 0 ? resultParsed[0] : null
+      return replaceColor(
+        src,
+        include,
+        exclude,
+        Number(p.fuzziness ?? p.tolerance ?? 40),
+        parseBool(p.localizedClusters),
+        Number(p.replacementHue ?? p.hue ?? 0),
+        Number(p.replacementSaturation ?? 0),
+        Number(p.replacementLightness ?? p.lightness ?? 0),
+        result,
+      )
+    },
   },
   "match-color": {
     id: "match-color",
-    name: "Match Color (average match)",
+    name: "Match Color",
     category: "Adjustments",
     params: [
+      // Source identifier — read by the dialog/menu to resolve the source
+      // ImageData and pass it via FilterContext.matchColorSource at apply time.
+      // Format: "doc:<docId>" or "layer:<docId>:<layerId>". Empty = no source
+      // (the source becomes the active document itself, so Match Color
+      // degenerates into a Neutralize/Fade pass).
+      { type: "text", key: "matchSource", label: "Source (doc:id or layer:docId:layerId)", default: "", placeholder: "layer:<docId>:<layerId> or doc:<docId>" },
       { type: "slider", key: "luminance", label: "Luminance", min: 0, max: 200, step: 1, default: 100 },
       { type: "slider", key: "colorIntensity", label: "Color Intensity", min: 0, max: 200, step: 1, default: 100 },
       { type: "slider", key: "fade", label: "Fade", min: 0, max: 100, step: 1, default: 0 },
@@ -4836,23 +6205,78 @@ export const FILTERS: Record<string, FilterDef> = {
     name: "Shadows/Highlights",
     category: "Adjustments",
     params: [
-      { type: "slider", key: "shadows", label: "Shadows", min: 0, max: 100, step: 1, default: 0 },
-      { type: "slider", key: "highlights", label: "Highlights", min: 0, max: 100, step: 1, default: 0 },
-      { type: "slider", key: "tonalWidth", label: "Tonal Width", min: 1, max: 100, step: 1, default: 50, suffix: "%" },
-      { type: "slider", key: "radius", label: "Radius", min: 0, max: 40, step: 1, default: 4, suffix: "px" },
-      { type: "slider", key: "colorCorrection", label: "Color Correction", min: -100, max: 100, step: 1, default: 0 },
+      // Shadows group.
+      { type: "slider", key: "shadowsAmount", label: "Shadows: Amount", min: 0, max: 100, step: 1, default: 35, suffix: "%" },
+      { type: "slider", key: "shadowsTonalWidth", label: "Shadows: Tonal Width", min: 1, max: 100, step: 1, default: 50, suffix: "%" },
+      { type: "slider", key: "shadowsRadius", label: "Shadows: Radius", min: 0, max: 250, step: 1, default: 30, suffix: "px" },
+      // Highlights group.
+      { type: "slider", key: "highlightsAmount", label: "Highlights: Amount", min: 0, max: 100, step: 1, default: 0, suffix: "%" },
+      { type: "slider", key: "highlightsTonalWidth", label: "Highlights: Tonal Width", min: 1, max: 100, step: 1, default: 50, suffix: "%" },
+      { type: "slider", key: "highlightsRadius", label: "Highlights: Radius", min: 0, max: 250, step: 1, default: 30, suffix: "px" },
+      // Adjustments group.
+      { type: "slider", key: "colorCorrection", label: "Color Correction", min: -100, max: 100, step: 1, default: 20 },
+      { type: "slider", key: "midtoneContrast", label: "Midtone Contrast", min: -100, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "blackClip", label: "Black Clip", min: 0, max: 50, step: 0.01, default: 0.01, suffix: "%" },
+      { type: "slider", key: "whiteClip", label: "White Clip", min: 0, max: 50, step: 0.01, default: 0.01, suffix: "%" },
     ],
-    apply: (src, p) => shadowsHighlights(src, Number(p.shadows), Number(p.highlights), Number(p.tonalWidth ?? p.midpoint ?? 50), Number(p.radius ?? 4), Number(p.colorCorrection ?? 0)),
+    apply: (src, p) => shadowsHighlights(
+      src,
+      // Legacy "shadows"/"highlights"/"tonalWidth"/"radius" keys are accepted as
+      // fallbacks so existing documents do not lose their settings.
+      Number(p.shadowsAmount ?? p.shadows ?? 0),
+      Number(p.shadowsTonalWidth ?? p.tonalWidth ?? 50),
+      Number(p.shadowsRadius ?? p.radius ?? 30),
+      Number(p.highlightsAmount ?? p.highlights ?? 0),
+      Number(p.highlightsTonalWidth ?? p.tonalWidth ?? 50),
+      Number(p.highlightsRadius ?? p.radius ?? 30),
+      Number(p.colorCorrection ?? 0),
+      Number(p.midtoneContrast ?? 0),
+      Number(p.blackClip ?? 0.01),
+      Number(p.whiteClip ?? 0.01),
+    ),
   },
   "hdr-toning": {
     id: "hdr-toning",
-    name: "HDR Toning (local contrast)",
+    name: "HDR Toning",
     category: "Adjustments",
     params: [
-      { type: "slider", key: "radius", label: "Radius", min: 1, max: 50, step: 1, default: 5 },
-      { type: "slider", key: "strength", label: "Strength", min: 0, max: 100, step: 1, default: 50 },
+      { type: "select", key: "method", label: "Method", options: [
+        { value: "local-adaptation", label: "Local Adaptation" },
+        { value: "exposure-gamma", label: "Exposure and Gamma" },
+        { value: "highlight-compression", label: "Highlight Compression" },
+        { value: "equalize-histogram", label: "Equalize Histogram" },
+      ], default: "local-adaptation" },
+      // "Edge Glow" group
+      { type: "slider", key: "radius", label: "Radius", min: 1, max: 250, step: 1, default: 60, suffix: "px" },
+      { type: "slider", key: "strength", label: "Strength", min: 0, max: 200, step: 1, default: 100, suffix: "%" },
+      { type: "slider", key: "edgeGlow", label: "Edge Glow", min: 0, max: 100, step: 1, default: 30 },
+      // "Tone and Detail" group
+      { type: "slider", key: "gamma", label: "Gamma", min: 0.3, max: 3, step: 0.01, default: 1 },
+      { type: "slider", key: "exposureEv", label: "Exposure", min: -4, max: 4, step: 0.01, default: 0, suffix: "EV" },
+      { type: "slider", key: "detail", label: "Detail", min: -100, max: 100, step: 1, default: 0 },
+      // "Advanced" group
+      { type: "slider", key: "shadow", label: "Shadow", min: -100, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "highlight", label: "Highlight", min: -100, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "vibrance", label: "Vibrance", min: -100, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "saturation", label: "Saturation", min: -100, max: 100, step: 1, default: 0 },
+      // "Toning Curve" group — stored as "x,y;x,y;..."
+      { type: "text", key: "toningCurve", label: "Toning Curve points", default: "0,0;255,255", placeholder: "0,0;128,128;255,255" },
     ],
-    apply: (src, p) => hdrTonning(src, Number(p.radius), Number(p.strength)),
+    apply: (src, p) => hdrToning(
+      src,
+      String(p.method ?? "local-adaptation"),
+      Number(p.radius ?? 60),
+      Number(p.strength ?? 100),
+      Number(p.edgeGlow ?? 30),
+      Number(p.gamma ?? 1),
+      Number(p.exposureEv ?? 0),
+      Number(p.detail ?? 0),
+      Number(p.shadow ?? 0),
+      Number(p.highlight ?? 0),
+      Number(p.vibrance ?? 0),
+      Number(p.saturation ?? 0),
+      parseCurvePoints(p.toningCurve ?? "0,0;255,255"),
+    ),
   },
   "color-lookup": {
     id: "color-lookup",
@@ -4918,8 +6342,22 @@ export const FILTERS: Record<string, FilterDef> = {
       { type: "slider", key: "fisheye", label: "Fisheye", min: -100, max: 100, step: 1, default: 0 },
       { type: "slider", key: "rotate", label: "Rotate", min: -45, max: 45, step: 0.5, default: 0, suffix: "deg" },
       { type: "slider", key: "scale", label: "Scale", min: 60, max: 160, step: 1, default: 108, suffix: "%" },
+      { type: "slider", key: "focalLength", label: "Focal Length", min: 0, max: 300, step: 1, default: 0, suffix: "mm" },
+      { type: "slider", key: "cropFactor", label: "Crop Factor", min: 0, max: 6, step: 0.1, default: 0, suffix: "x" },
+      { type: "text", key: "constraints", label: "Constraints (JSON)", default: "", multiline: true, placeholder: '[{"type":"vertical","x1":0.3,"y1":0.1,"x2":0.3,"y2":0.9}]' },
     ],
-    apply: (src, p) => adaptiveWideAngle(src, Number(p.correction), Number(p.fisheye), Number(p.rotate), Number(p.scale)),
+    apply: (src, p) => adaptiveWideAngle(
+      src,
+      Number(p.correction),
+      Number(p.fisheye),
+      Number(p.rotate),
+      Number(p.scale),
+      {
+        focalLength: Number(p.focalLength ?? 0),
+        cropFactor: Number(p.cropFactor ?? 0),
+        constraints: parseAdaptiveConstraints(String(p.constraints ?? "")),
+      },
+    ),
   },
   "vanishing-point": {
     id: "vanishing-point",
@@ -5178,14 +6616,49 @@ export const FILTERS: Record<string, FilterDef> = {
     category: "Blur",
     params: [
       { type: "slider", key: "radius", label: "Radius", min: 0, max: 40, step: 1, default: 10, suffix: "px" },
+      { type: "select", key: "shape", label: "Iris Shape", options: [
+        { value: "hexagon", label: "Hexagon" },
+        { value: "pentagon", label: "Pentagon" },
+        { value: "octagon", label: "Octagon" },
+        { value: "triangle", label: "Triangle" },
+        { value: "square", label: "Square" },
+        { value: "circle", label: "Circle" },
+      ], default: "hexagon" },
       { type: "slider", key: "bladeCount", label: "Blade Curvature", min: 3, max: 8, step: 1, default: 6 },
-      { type: "slider", key: "rotation", label: "Rotation", min: 0, max: 360, step: 1, default: 0, suffix: "Â°" },
+      { type: "slider", key: "rotation", label: "Rotation", min: 0, max: 360, step: 1, default: 0, suffix: "deg" },
       { type: "slider", key: "brightness", label: "Specular Brightness", min: 0, max: 100, step: 1, default: 0 },
       { type: "slider", key: "threshold", label: "Specular Threshold", min: 0, max: 255, step: 1, default: 255 },
       { type: "slider", key: "noiseAmount", label: "Noise Amount", min: 0, max: 25, step: 1, default: 0 },
       { type: "checkbox", key: "noiseMono", label: "Monochromatic Noise", default: true },
+      { type: "select", key: "depthChannel", label: "Depth Source Channel", options: [
+        { value: "luminance", label: "Luminance" },
+        { value: "red", label: "Red" },
+        { value: "green", label: "Green" },
+        { value: "blue", label: "Blue" },
+        { value: "alpha", label: "Alpha" },
+      ], default: "luminance" },
+      { type: "slider", key: "depthFocus", label: "Depth Focus", min: 0, max: 255, step: 1, default: 128 },
+      { type: "slider", key: "depthBlurScale", label: "Depth Blur Strength", min: 0, max: 100, step: 1, default: 0, suffix: "%" },
+      { type: "checkbox", key: "depthInvert", label: "Invert Depth", default: false },
     ],
-    apply: (src, p) => lensBlur(src, Number(p.radius), Number(p.bladeCount), Number(p.rotation), Number(p.brightness), Number(p.threshold), Number(p.noiseAmount), Boolean(p.noiseMono)),
+    apply: (src, p, ctx) => lensBlur(
+      src,
+      Number(p.radius),
+      Number(p.bladeCount),
+      Number(p.rotation),
+      Number(p.brightness),
+      Number(p.threshold),
+      Number(p.noiseAmount),
+      Boolean(p.noiseMono),
+      {
+        shape: String(p.shape ?? "hexagon") as LensBlurExtras["shape"],
+        depthSource: ctx?.lensBlurDepthSource ?? null,
+        depthChannel: String(p.depthChannel ?? "luminance") as LensBlurExtras["depthChannel"],
+        depthFocus: Number(p.depthFocus ?? 128),
+        depthBlurScale: Number(p.depthBlurScale ?? 0),
+        depthInvert: Boolean(p.depthInvert),
+      },
+    ),
   },
 
   "surface-blur": {
@@ -5273,9 +6746,16 @@ export const FILTERS: Record<string, FilterDef> = {
       { type: "slider", key: "k3", label: "Extreme Distortion (k3)", min: -100, max: 100, step: 1, default: 0 },
       { type: "slider", key: "tangentialX", label: "Tangential X (p1)", min: -100, max: 100, step: 1, default: 0 },
       { type: "slider", key: "tangentialY", label: "Tangential Y (p2)", min: -100, max: 100, step: 1, default: 0 },
-      { type: "slider", key: "vignette", label: "Vignette", min: -100, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "vignette", label: "Vignette Amount", min: -100, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "vignetteMidpoint", label: "Vignette Midpoint", min: 0, max: 100, step: 1, default: 50 },
       { type: "slider", key: "chromatic", label: "Chromatic Aberration", min: -100, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "fringeR", label: "Red Fringe", min: -100, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "fringeG", label: "Green Fringe", min: -100, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "fringeB", label: "Blue Fringe", min: -100, max: 100, step: 1, default: 0 },
       { type: "slider", key: "defringe", label: "Defringe", min: 0, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "perspectiveV", label: "Vertical Perspective", min: -100, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "perspectiveH", label: "Horizontal Perspective", min: -100, max: 100, step: 1, default: 0 },
+      { type: "slider", key: "scalePct", label: "Scale", min: 50, max: 200, step: 1, default: 100, suffix: "%" },
       { type: "checkbox", key: "autoScale", label: "Auto-Scale to Fit", default: false },
       { type: "select", key: "edgeMode", label: "Edge Handling", default: "clamp", options: [
         { value: "clamp", label: "Clamp Edges" },
@@ -5298,6 +6778,15 @@ export const FILTERS: Record<string, FilterDef> = {
       String(p.edgeMode ?? "clamp"),
       Number(p.profileStrength ?? 100),
       Number(p.defringe ?? 0),
+      {
+        fringeR: Number(p.fringeR ?? 0),
+        fringeG: Number(p.fringeG ?? 0),
+        fringeB: Number(p.fringeB ?? 0),
+        perspectiveV: Number(p.perspectiveV ?? 0),
+        perspectiveH: Number(p.perspectiveH ?? 0),
+        vignetteMidpoint: Number(p.vignetteMidpoint ?? 50),
+        scalePct: Number(p.scalePct ?? 100),
+      },
     ),
   },
 
@@ -5345,14 +6834,23 @@ export const FILTERS: Record<string, FilterDef> = {
       { type: "slider", key: "gloss", label: "Gloss", min: 0, max: 100, step: 1, default: 50, suffix: "%" },
       { type: "slider", key: "shine", label: "Shine", min: 0, max: 100, step: 1, default: 60, suffix: "%" },
       { type: "slider", key: "exposure", label: "Exposure", min: -200, max: 200, step: 1, default: 0, suffix: "/100 EV" },
+      { type: "select", key: "bumpChannel", label: "Bump Source Channel", options: [
+        { value: "luminance", label: "Luminance (default)" },
+        { value: "red", label: "Red" },
+        { value: "green", label: "Green" },
+        { value: "blue", label: "Blue" },
+        { value: "alpha", label: "Alpha" },
+      ], default: "luminance" },
       { type: "text", key: "lights", label: "Lights JSON", default: "", multiline: true, placeholder: '[{"type":"spot","x":0.5,"y":0.4,"z":0.6,"intensity":1,"color":[255,240,210],"radius":0.6,"focus":0.4}]' },
     ],
-    apply: (src, p) => {
+    apply: (src, p, ctx) => {
       const material: MaterialConfig = {
         gloss: Number(p.gloss ?? 50) / 100,
         shine: Number(p.shine ?? 60) / 100,
         exposure: Number(p.exposure ?? 0) / 100,
       }
+      const bumpChannel = String(p.bumpChannel ?? "luminance") as
+        "luminance" | "red" | "green" | "blue" | "alpha"
       return lightingEffects(
         src,
         String(p.style ?? "spot"),
@@ -5361,6 +6859,8 @@ export const FILTERS: Record<string, FilterDef> = {
         Number(p.height),
         p.lights ? String(p.lights) : undefined,
         material,
+        ctx?.lightingBumpSource ?? null,
+        bumpChannel,
       )
     },
   },

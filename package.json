@@ -9,7 +9,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test:smoke": "playwright test",
-    "verify": "npm run typecheck && npm run build && npm run test:smoke"
+    "check:capabilities": "node scripts/check-capabilities.mjs",
+    "verify": "npm run typecheck && npm run check:capabilities && npm run build && npm run test:smoke"
   },
   "dependencies": {
     "@abasb75/jpeg2000-decoder": "^2.5.4-f",

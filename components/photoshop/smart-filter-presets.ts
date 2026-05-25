@@ -171,3 +171,69 @@ export function saveSmartFilterStackPresets(
   if (!storage) return
   storage.setItem(SMART_FILTER_PRESET_STORAGE_KEY, JSON.stringify(normalizeSmartFilterStackPresets(presets)))
 }
+
+export const SMART_FILTER_PRESET_EXPORT_VERSION = 1
+export const SMART_FILTER_PRESET_EXPORT_FORMAT = "ps-smart-filter-stack-presets"
+
+export interface SmartFilterStackPresetExport {
+  format: typeof SMART_FILTER_PRESET_EXPORT_FORMAT
+  version: number
+  exportedAt: number
+  presets: SmartFilterStackPreset[]
+}
+
+/**
+ * Serialize a list of presets into a portable JSON envelope. The envelope
+ * includes a format string and version so imports from older app builds can
+ * be detected and migrated.
+ */
+export function serializeSmartFilterStackPresetsForExport(
+  presets: SmartFilterStackPreset[],
+  options: { now?: number; pretty?: boolean } = {},
+): string {
+  const payload: SmartFilterStackPresetExport = {
+    format: SMART_FILTER_PRESET_EXPORT_FORMAT,
+    version: SMART_FILTER_PRESET_EXPORT_VERSION,
+    exportedAt: Number.isFinite(options.now) ? Number(options.now) : Date.now(),
+    presets: normalizeSmartFilterStackPresets(presets),
+  }
+  return options.pretty === false ? JSON.stringify(payload) : JSON.stringify(payload, null, 2)
+}
+
+/**
+ * Parse an exported JSON envelope back into a normalized preset list. Accepts
+ * either an envelope produced by `serializeSmartFilterStackPresetsForExport`
+ * or a bare array (older exports / hand-written files).
+ */
+export function parseSmartFilterStackPresetsImport(text: string | null | undefined): SmartFilterStackPreset[] {
+  if (!text) return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return []
+  }
+  if (Array.isArray(parsed)) return normalizeSmartFilterStackPresets(parsed)
+  if (parsed && typeof parsed === "object") {
+    const record = parsed as Record<string, unknown>
+    if (Array.isArray(record.presets)) return normalizeSmartFilterStackPresets(record.presets)
+  }
+  return []
+}
+
+/**
+ * Merge an incoming list of presets with the existing list. Imports keyed by
+ * the same id overwrite the existing entry; imports keyed by a unique name
+ * append after the current presets. The resulting list is capped at the
+ * stored MAX_PRESETS via `normalizeSmartFilterStackPresets`.
+ */
+export function mergeSmartFilterStackPresets(
+  current: SmartFilterStackPreset[],
+  incoming: SmartFilterStackPreset[],
+): SmartFilterStackPreset[] {
+  if (!incoming.length) return normalizeSmartFilterStackPresets(current)
+  const byId = new Map<string, SmartFilterStackPreset>()
+  for (const preset of current) byId.set(preset.id, preset)
+  for (const preset of incoming) byId.set(preset.id, preset)
+  return normalizeSmartFilterStackPresets(Array.from(byId.values()))
+}

@@ -107,6 +107,82 @@ function adaptivePalette(source: ImageData, colors: number) {
   return ranked.slice(0, Math.max(2, Math.min(256, Math.round(colors))))
 }
 
+function exactPalette(source: ImageData) {
+  const set = new Set<string>()
+  const out: string[] = []
+  for (let i = 0; i < source.data.length; i += 4) {
+    if (source.data[i + 3] === 0) continue
+    const hex = rgbToHex(source.data[i], source.data[i + 1], source.data[i + 2])
+    if (set.has(hex)) continue
+    set.add(hex)
+    out.push(hex)
+    if (out.length >= 256) break
+  }
+  return out
+}
+
+function systemPalette() {
+  // Classic 16-color Windows-style system palette.
+  return [
+    "#000000", "#800000", "#008000", "#808000", "#000080", "#800080", "#008080", "#c0c0c0",
+    "#808080", "#ff0000", "#00ff00", "#ffff00", "#0000ff", "#ff00ff", "#00ffff", "#ffffff",
+  ]
+}
+
+function medianCutPalette(source: ImageData, colors: number) {
+  const target = Math.max(2, Math.min(256, Math.round(colors)))
+  const pixels: number[][] = []
+  for (let i = 0; i < source.data.length; i += 4) {
+    if (source.data[i + 3] === 0) continue
+    pixels.push([source.data[i], source.data[i + 1], source.data[i + 2]])
+  }
+  if (!pixels.length) return grayscalePalette(target)
+  let buckets: number[][][] = [pixels]
+  while (buckets.length < target) {
+    let bestIdx = -1
+    let bestRange = -1
+    let bestAxis = 0
+    for (let b = 0; b < buckets.length; b++) {
+      const bucket = buckets[b]
+      if (bucket.length <= 1) continue
+      let rMin = 255, rMax = 0, gMin = 255, gMax = 0, bMin = 255, bMax = 0
+      for (const px of bucket) {
+        if (px[0] < rMin) rMin = px[0]
+        if (px[0] > rMax) rMax = px[0]
+        if (px[1] < gMin) gMin = px[1]
+        if (px[1] > gMax) gMax = px[1]
+        if (px[2] < bMin) bMin = px[2]
+        if (px[2] > bMax) bMax = px[2]
+      }
+      const ranges = [rMax - rMin, gMax - gMin, bMax - bMin]
+      const axis = ranges.indexOf(Math.max(...ranges))
+      const range = ranges[axis]
+      if (range > bestRange) { bestRange = range; bestIdx = b; bestAxis = axis }
+    }
+    if (bestIdx < 0) break
+    const bucket = buckets[bestIdx]
+    bucket.sort((a, b) => a[bestAxis] - b[bestAxis])
+    const half = Math.floor(bucket.length / 2)
+    const left = bucket.slice(0, half)
+    const right = bucket.slice(half)
+    if (!left.length || !right.length) break
+    buckets = buckets.slice(0, bestIdx).concat([left, right], buckets.slice(bestIdx + 1))
+  }
+  return buckets.map((bucket) => {
+    let r = 0, g = 0, b = 0
+    for (const px of bucket) { r += px[0]; g += px[1]; b += px[2] }
+    return rgbToHex(r / bucket.length, g / bucket.length, b / bucket.length)
+  })
+}
+
+function selectivePalette(source: ImageData, colors: number) {
+  // Selective biases toward "important" Web/primary colors first, then fills with median-cut from remaining pixels.
+  const target = Math.max(2, Math.min(256, Math.round(colors)))
+  const forced = ["#000000", "#ffffff", "#ff0000", "#00ff00", "#0000ff", "#ffff00", "#00ffff", "#ff00ff"]
+  const remaining = Math.max(0, target - forced.length)
+  return uniqueColors([...forced, ...medianCutPalette(source, remaining || target)]).slice(0, target)
+}
+
 function forcedColors(kind: IndexedSettings["forced"]) {
   if (kind === "black-white") return ["#000000", "#ffffff"]
   if (kind === "primaries") return ["#000000", "#ffffff", "#ff0000", "#00ff00", "#0000ff", "#00ffff", "#ff00ff", "#ffff00"]
@@ -130,7 +206,15 @@ export function buildIndexedColorTable(
           ? webPalette(colors)
           : paletteKind === "uniform"
             ? uniformPalette(colors)
-            : adaptivePalette(source, colors)
+            : paletteKind === "system"
+              ? systemPalette()
+              : paletteKind === "exact"
+                ? exactPalette(source)
+                : paletteKind === "perceptual"
+                  ? medianCutPalette(source, colors)
+                  : paletteKind === "selective"
+                    ? selectivePalette(source, colors)
+                    : adaptivePalette(source, colors)
   const table = uniqueColors([...forced, ...base]).slice(0, colors)
   if (table.length >= colors) return table
   return uniqueColors([...table, ...uniformPalette(colors)]).slice(0, colors)
@@ -163,6 +247,14 @@ function convertIndexed(source: ImageData, indexed: Partial<IndexedSettings> = {
   const ditherMethod = indexed.dither ? (indexed.ditherMethod ?? "ordered") : "none"
   const out = new Uint8ClampedArray(source.data)
   const matte = parseColor(indexed.matte, "#ffffff")
+  const preserveExact = indexed.preserveExact === true
+  const ditherStrength = clamp01((indexed.ditherAmount ?? 75) / 100)
+  const exactSet = preserveExact
+    ? new Set(table.map((color) => {
+        const c = parseColor(color)
+        return `${c.r},${c.g},${c.b}`
+      }))
+    : null
 
   if (ditherMethod === "diffusion") {
     const work = new Float32Array(source.data.length)
@@ -182,15 +274,22 @@ function convertIndexed(source: ImageData, indexed: Partial<IndexedSettings> = {
         const r = alpha < 1 ? work[i] * alpha + matte.r * (1 - alpha) : work[i]
         const g = alpha < 1 ? work[i + 1] * alpha + matte.g * (1 - alpha) : work[i + 1]
         const b = alpha < 1 ? work[i + 2] * alpha + matte.b * (1 - alpha) : work[i + 2]
+        const origKey = `${source.data[i]},${source.data[i + 1]},${source.data[i + 2]}`
+        const isExact = exactSet ? exactSet.has(origKey) : false
         const nearest = nearestPaletteColor(r, g, b, table)
-        out[i] = nearest.r
-        out[i + 1] = nearest.g
-        out[i + 2] = nearest.b
+        out[i] = isExact ? source.data[i] : nearest.r
+        out[i + 1] = isExact ? source.data[i + 1] : nearest.g
+        out[i + 2] = isExact ? source.data[i + 2] : nearest.b
         out[i + 3] = indexed.transparency ? source.data[i + 3] : 255
-        addError(x + 1, y, r - nearest.r, g - nearest.g, b - nearest.b, 7 / 16)
-        addError(x - 1, y + 1, r - nearest.r, g - nearest.g, b - nearest.b, 3 / 16)
-        addError(x, y + 1, r - nearest.r, g - nearest.g, b - nearest.b, 5 / 16)
-        addError(x + 1, y + 1, r - nearest.r, g - nearest.g, b - nearest.b, 1 / 16)
+        if (!isExact) {
+          const er = (r - nearest.r) * ditherStrength
+          const eg = (g - nearest.g) * ditherStrength
+          const eb = (b - nearest.b) * ditherStrength
+          addError(x + 1, y, er, eg, eb, 7 / 16)
+          addError(x - 1, y + 1, er, eg, eb, 3 / 16)
+          addError(x, y + 1, er, eg, eb, 5 / 16)
+          addError(x + 1, y + 1, er, eg, eb, 1 / 16)
+        }
       }
     }
     return new ImageData(out, source.width, source.height)
@@ -204,18 +303,24 @@ function convertIndexed(source: ImageData, indexed: Partial<IndexedSettings> = {
       let r = alpha < 1 ? source.data[i] * alpha + matte.r * (1 - alpha) : source.data[i]
       let g = alpha < 1 ? source.data[i + 1] * alpha + matte.g * (1 - alpha) : source.data[i + 1]
       let b = alpha < 1 ? source.data[i + 2] * alpha + matte.b * (1 - alpha) : source.data[i + 2]
-      if (ditherMethod === "ordered") {
-        const adjustment = ((BAYER_4[(y % 4) * 4 + (x % 4)] / 15) - 0.5) * 42
-        r += adjustment
-        g += adjustment
-        b += adjustment
-      } else if (ditherMethod === "noise") {
-        const adjustment = (deterministicNoise(x, y) - 0.5) * 48
-        r += adjustment
-        g += adjustment
-        b += adjustment
+      const origKey = `${source.data[i]},${source.data[i + 1]},${source.data[i + 2]}`
+      const isExact = exactSet ? exactSet.has(origKey) : false
+      if (!isExact) {
+        if (ditherMethod === "ordered") {
+          const adjustment = ((BAYER_4[(y % 4) * 4 + (x % 4)] / 15) - 0.5) * 42 * ditherStrength
+          r += adjustment
+          g += adjustment
+          b += adjustment
+        } else if (ditherMethod === "noise") {
+          const adjustment = (deterministicNoise(x, y) - 0.5) * 48 * ditherStrength
+          r += adjustment
+          g += adjustment
+          b += adjustment
+        }
       }
-      const nearest = nearestPaletteColor(clamp(r), clamp(g), clamp(b), table)
+      const nearest = isExact
+        ? { r: source.data[i], g: source.data[i + 1], b: source.data[i + 2] }
+        : nearestPaletteColor(clamp(r), clamp(g), clamp(b), table)
       out[i] = nearest.r
       out[i + 1] = nearest.g
       out[i + 2] = nearest.b
@@ -234,24 +339,129 @@ function applyInk(base: { r: number; g: number; b: number }, ink: { r: number; g
   }
 }
 
+/** Sample a 13-point curve at input coverage 0..1, returning 0..1. */
+export function sampleDuotoneCurve(curve: number[] | undefined, t: number): number {
+  if (!curve || curve.length < 2) return t
+  const last = curve.length - 1
+  const x = clamp01(t) * last
+  const a = Math.floor(x)
+  const b = Math.min(last, a + 1)
+  const frac = x - a
+  return clamp01((curve[a] * (1 - frac) + curve[b] * frac) / 255)
+}
+
+export function defaultDuotoneCurve(): number[] {
+  return Array.from({ length: 13 }, (_, i) => Math.round((i / 12) * 255))
+}
+
 function convertDuotone(source: ImageData, duotone: Partial<DuotoneSettings> = {}) {
-  const ink1 = parseColor(duotone.ink1, "#111111")
-  const ink2 = parseColor(duotone.ink2, "#1f80ff")
-  const opacity1 = clamp01((duotone.opacity1 ?? 100) / 100)
-  const opacity2 = clamp01((duotone.opacity2 ?? 100) / 100)
+  const inkCount: 1 | 2 | 3 | 4 = (duotone.inkCount ?? 2)
+  const inks = [
+    parseColor(duotone.ink1, "#111111"),
+    parseColor(duotone.ink2, "#1f80ff"),
+    parseColor(duotone.ink3, "#d9534f"),
+    parseColor(duotone.ink4, "#f0ad4e"),
+  ]
+  const opacities = [
+    clamp01((duotone.opacity1 ?? 100) / 100),
+    clamp01((duotone.opacity2 ?? 100) / 100),
+    clamp01((duotone.opacity3 ?? 100) / 100),
+    clamp01((duotone.opacity4 ?? 100) / 100),
+  ]
   const balance = clamp01(duotone.balance ?? 1)
-  const curve = Math.max(0.1, Math.min(5, duotone.curve ?? 1))
+  const legacyCurve = Math.max(0.1, Math.min(5, duotone.curve ?? 1))
+  const perInkCurves = [
+    duotone.curves?.ink1,
+    duotone.curves?.ink2,
+    duotone.curves?.ink3,
+    duotone.curves?.ink4,
+  ]
   const out = new Uint8ClampedArray(source.data)
   for (let i = 0; i < out.length; i += 4) {
     const coverage = 1 - luminance(source.data[i], source.data[i + 1], source.data[i + 2]) / 255
     let paper = { r: 255, g: 255, b: 255 }
-    paper = applyInk(paper, ink1, coverage * opacity1)
-    paper = applyInk(paper, ink2, Math.pow(coverage, curve) * opacity2 * balance)
+    for (let k = 0; k < inkCount; k++) {
+      const curveCoverage = perInkCurves[k]
+        ? sampleDuotoneCurve(perInkCurves[k], coverage)
+        : k === 1
+          ? Math.pow(coverage, legacyCurve) * balance
+          : coverage
+      paper = applyInk(paper, inks[k], curveCoverage * opacities[k])
+    }
     out[i] = clamp8(paper.r)
     out[i + 1] = clamp8(paper.g)
     out[i + 2] = clamp8(paper.b)
   }
   return new ImageData(out, source.width, source.height)
+}
+
+/**
+ * Built-in duotone/tritone/quadtone presets. Curve points are 13-step lookups
+ * mapping the linear coverage 0..1 to ink coverage 0..1 (stored 0..255).
+ */
+export const DUOTONE_PRESETS: Record<string, NonNullable<DocumentModeSettings["duotone"]>> = {
+  "warm-gray-pms-black": {
+    inkCount: 2,
+    ink1: "#1a1a1a",
+    ink1Name: "Black",
+    ink2: "#8a6d3b",
+    ink2Name: "PMS 873 Gold",
+    curve: 1.2,
+    opacity1: 100,
+    opacity2: 70,
+    balance: 0.85,
+  },
+  "cool-gray-duo": {
+    inkCount: 2,
+    ink1: "#222831",
+    ink1Name: "Black",
+    ink2: "#0aa3d8",
+    ink2Name: "Cool Blue",
+    curve: 1.05,
+    opacity1: 100,
+    opacity2: 65,
+    balance: 0.8,
+  },
+  "sepia-quad": {
+    inkCount: 4,
+    ink1: "#3a2a1e",
+    ink1Name: "Black",
+    ink2: "#a87149",
+    ink2Name: "Brown",
+    ink3: "#e4c590",
+    ink3Name: "Cream",
+    ink4: "#1f4f8a",
+    ink4Name: "Cool Shadows",
+    curve: 1,
+    opacity1: 100,
+    opacity2: 80,
+    opacity3: 60,
+    opacity4: 35,
+    balance: 1,
+  },
+  "rich-tritone": {
+    inkCount: 3,
+    ink1: "#0e0e0e",
+    ink1Name: "Black",
+    ink2: "#9e2a2b",
+    ink2Name: "Warm Red",
+    ink3: "#003049",
+    ink3Name: "Deep Blue",
+    curve: 1.1,
+    opacity1: 100,
+    opacity2: 55,
+    opacity3: 60,
+    balance: 1,
+  },
+  "monochrome-black": {
+    inkCount: 1,
+    ink1: "#000000",
+    ink2: "#000000",
+    ink1Name: "Black",
+    curve: 1,
+    opacity1: 100,
+    opacity2: 0,
+  },
 }
 
 function bitmapValue(lum: number, x: number, y: number, bitmap: Partial<BitmapSettings>) {

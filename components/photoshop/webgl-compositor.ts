@@ -102,6 +102,14 @@ export interface WebGLLayerInput {
   clipMaskSource?: TexImageSource | null
   advancedBlending?: AdvancedBlending
   layerId?: string
+  /**
+   * Optional backdrop texture used when the layer's advanced knockout is
+   * "shallow" (the underlying layers up to the parent group) or "deep" (the
+   * full document background / transparent). When supplied, knockout in the
+   * compositor reads this backdrop where the layer's alpha covers; otherwise
+   * the legacy behavior (knock the running base alpha) is used.
+   */
+  knockoutBackdropSource?: TexImageSource | null
 }
 
 export type WebGLEffectFallback =
@@ -174,6 +182,13 @@ export interface WebGLCompositeLayerContext {
   tileRect?: WebGLRect
   clipMask: HTMLCanvasElement | null
   filterPreviewCanvas?: HTMLCanvasElement
+  /**
+   * Backdrop texture source used to resolve advanced knockout. For shallow
+   * knockout, this should be the immediate group base; for deep knockout, the
+   * full document base layer (or a transparent canvas if neither is available).
+   * When omitted, knockout falls back to the legacy alpha-reduction path.
+   */
+  knockoutBackdrop?: HTMLCanvasElement | null
 }
 
 export interface WebGLCompositeDocumentOptions {
@@ -251,6 +266,8 @@ const GPU_FILTERS = new Set([
   "box-blur",
   "motion-blur",
   "sharpen",
+  "unsharp-mask",
+  "gradient-map",
   "emboss",
   "find-edges",
   "solarize",
@@ -340,6 +357,12 @@ export interface GpuAdjustmentShader {
   fragmentSource: string
   uniforms: Record<string, number | number[] | Float32Array>
   curveTexture?: { values: Float32Array; size: number }
+  /**
+   * Optional RGB lookup table bound to texture unit 2 as `u_gradientLut`. The
+   * values array is laid out as [r,g,b, r,g,b, …] in 0..1 space; `size` is the
+   * number of LUT entries (width of the resulting 1D texture).
+   */
+  gradientLut?: { values: Float32Array; size: number }
 }
 
 const ADJUSTMENT_FRAGMENT_PREFIX = `
@@ -843,6 +866,8 @@ const GPU_LAYER_STYLE_EFFECTS = new Set([
   "gradientOverlay",
   "patternOverlay",
   "dropShadow",
+  "satin",
+  "stroke",
 ])
 
 function hasUnsupportedLayerEffects(layer: Layer) {
@@ -1276,6 +1301,7 @@ const FRAGMENT_SHADER = `
   uniform sampler2D u_mask;
   uniform sampler2D u_vectorMask;
   uniform sampler2D u_clipMask;
+  uniform sampler2D u_backdrop;
   uniform int u_hasMask;
   uniform int u_hasVectorMask;
   uniform int u_hasClipMask;
@@ -1288,6 +1314,7 @@ const FRAGMENT_SHADER = `
   uniform vec4 u_blendIfThis;
   uniform vec4 u_blendIfUnderlying;
   uniform int u_knockoutMode;
+  uniform int u_hasBackdrop;
   varying vec2 v_texcoord;
 
   float luminance(vec3 color) {
@@ -1422,8 +1449,18 @@ const FRAGMENT_SHADER = `
     }
 
     if (u_knockoutMode > 0) {
-      ba *= 1.0 - sa;
-      base = vec4(base.rgb, ba);
+      if (u_hasBackdrop == 1) {
+        // Shallow/deep knockout with an explicit backdrop: where the source covers,
+        // the layer is composited over the supplied backdrop (group base for
+        // shallow, transparent / document background for deep) instead of the
+        // running composite.
+        vec4 backdrop = texture2D(u_backdrop, v_texcoord);
+        base = mix(base, backdrop, sa);
+        ba = base.a;
+      } else {
+        ba *= 1.0 - sa;
+        base = vec4(base.rgb, ba);
+      }
     }
 
     if (u_blendMode == 2 && ba > 0.01) {
@@ -1591,6 +1628,7 @@ export class WebGL2DCompositor {
     gl.uniform1i(locations.mask, 2)
     gl.uniform1i(locations.vectorMask, 3)
     gl.uniform1i(locations.clipMask, 4)
+    gl.uniform1i(locations.backdrop, 5)
     gl.uniform2f(locations.canvasSize, width, height)
 
     let layersDrawn = 0
@@ -1606,7 +1644,8 @@ export class WebGL2DCompositor {
       const maskTexture = layer.maskSource ? track(createTextureFromSource(gl, layer.maskSource)) : whiteTexture
       const vectorMaskTexture = layer.vectorMaskSource ? track(createTextureFromSource(gl, layer.vectorMaskSource)) : whiteTexture
       const clipMaskTexture = layer.clipMaskSource ? track(createTextureFromSource(gl, layer.clipMaskSource)) : whiteTexture
-      if (!sourceTexture || !maskTexture || !vectorMaskTexture || !clipMaskTexture) {
+      const backdropTexture = layer.knockoutBackdropSource ? track(createTextureFromSource(gl, layer.knockoutBackdropSource)) : transparentTexture
+      if (!sourceTexture || !maskTexture || !vectorMaskTexture || !clipMaskTexture || !backdropTexture) {
         gl.deleteFramebuffer(framebuffer)
         for (const texture of textures) gl.deleteTexture(texture)
         return { completed: false, reason: "context-lost", layersDrawn, path: "webgl" }
@@ -1620,6 +1659,7 @@ export class WebGL2DCompositor {
       this.bindTexture(2, maskTexture)
       this.bindTexture(3, vectorMaskTexture)
       this.bindTexture(4, clipMaskTexture)
+      this.bindTexture(5, backdropTexture)
 
       const advanced = layer.advancedBlending
       const channelMask = advanced?.channels ?? { r: true, g: true, b: true }
@@ -1635,7 +1675,9 @@ export class WebGL2DCompositor {
       gl.uniform1i(locations.hasBlendIf, hasShaderAdvancedBlending(advanced) ? 1 : 0)
       gl.uniform4f(locations.blendIfThis, thisRange[0], thisRange[1], thisRange[2], thisRange[3])
       gl.uniform4f(locations.blendIfUnderlying, underlyingRange[0], underlyingRange[1], underlyingRange[2], underlyingRange[3])
-      gl.uniform1i(locations.knockoutMode, advanced?.knockout && advanced.knockout !== "none" ? 1 : 0)
+      const knockoutCode = advanced?.knockout === "deep" ? 2 : advanced?.knockout === "shallow" ? 1 : 0
+      gl.uniform1i(locations.knockoutMode, knockoutCode)
+      gl.uniform1i(locations.hasBackdrop, layer.knockoutBackdropSource ? 1 : 0)
       gl.drawArrays(gl.TRIANGLES, 0, 6)
 
       const previousBase: WebGLTexture = baseTexture
@@ -1653,6 +1695,7 @@ export class WebGL2DCompositor {
     this.bindTexture(2, whiteTexture)
     this.bindTexture(3, whiteTexture)
     this.bindTexture(4, whiteTexture)
+    this.bindTexture(5, transparentTexture)
     gl.uniform1i(locations.hasMask, 0)
     gl.uniform1i(locations.hasVectorMask, 0)
     gl.uniform1i(locations.hasClipMask, 0)
@@ -1662,6 +1705,7 @@ export class WebGL2DCompositor {
     gl.uniform3f(locations.channelMask, 1, 1, 1)
     gl.uniform1i(locations.hasBlendIf, 0)
     gl.uniform1i(locations.knockoutMode, 0)
+    gl.uniform1i(locations.hasBackdrop, 0)
     gl.drawArrays(gl.TRIANGLES, 0, 6)
 
     gl.deleteFramebuffer(framebuffer)
@@ -1697,6 +1741,8 @@ export class WebGL2DCompositor {
       blendIfThis: gl.getUniformLocation(program, "u_blendIfThis"),
       blendIfUnderlying: gl.getUniformLocation(program, "u_blendIfUnderlying"),
       knockoutMode: gl.getUniformLocation(program, "u_knockoutMode"),
+      backdrop: gl.getUniformLocation(program, "u_backdrop"),
+      hasBackdrop: gl.getUniformLocation(program, "u_hasBackdrop"),
     }
   }
 
@@ -1860,6 +1906,26 @@ function applyGpuShaderPassToCanvas(
     gl.uniform1i(hasCurveLutUniform, 0)
   }
 
+  const gradientLutUniform = gl.getUniformLocation(program, "u_gradientLut")
+  if (shader.gradientLut && gradientLutUniform) {
+    const lutTexture = gl.createTexture()
+    gl.activeTexture(gl.TEXTURE2)
+    gl.bindTexture(gl.TEXTURE_2D, lutTexture)
+    const data = new Uint8Array(shader.gradientLut.size * 4)
+    for (let i = 0; i < shader.gradientLut.size; i++) {
+      data[i * 4] = Math.max(0, Math.min(255, Math.round(shader.gradientLut.values[i * 3] * 255)))
+      data[i * 4 + 1] = Math.max(0, Math.min(255, Math.round(shader.gradientLut.values[i * 3 + 1] * 255)))
+      data[i * 4 + 2] = Math.max(0, Math.min(255, Math.round(shader.gradientLut.values[i * 3 + 2] * 255)))
+      data[i * 4 + 3] = 255
+    }
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, shader.gradientLut.size, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, data)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.uniform1i(gradientLutUniform, 2)
+  }
+
   for (const [name, value] of Object.entries(shader.uniforms)) {
     const loc = gl.getUniformLocation(program, name)
     if (!loc) continue
@@ -2020,6 +2086,175 @@ const NOISE_FILTER_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
   }
 `
 
+// Unsharp mask is implemented as a single-pass shader that samples a Gaussian
+// neighborhood (separable kernel is approximated by sampling a 2D box scaled by
+// radius), computes the blurred average, then amplifies (source - blurred) by
+// the configured amount. Threshold suppresses sharpening below low-contrast
+// edges, matching the Photoshop control.
+const UNSHARP_MASK_FILTER_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
+  uniform vec2 u_texel;
+  uniform float u_amount;
+  uniform float u_radius;
+  uniform float u_threshold;
+  void main() {
+    vec4 c = texture2D(u_source, v_texcoord);
+    float r = clamp(u_radius, 0.0, 16.0);
+    vec3 blurred = c.rgb;
+    if (r > 0.01) {
+      float sigma = max(r * 0.5, 0.5);
+      vec3 acc = vec3(0.0);
+      float total = 0.0;
+      for (int y = -8; y <= 8; y++) {
+        for (int x = -8; x <= 8; x++) {
+          vec2 offset = vec2(float(x), float(y));
+          float d = length(offset);
+          if (d <= 8.0) {
+            float w = exp(-0.5 * (d * d) / (sigma * sigma));
+            acc += texture2D(u_source, v_texcoord + offset * u_texel * (r / 8.0)).rgb * w;
+            total += w;
+          }
+        }
+      }
+      blurred = acc / max(total, 0.0001);
+    }
+    vec3 detail = c.rgb - blurred;
+    float strength = step(u_threshold / 255.0, max(max(abs(detail.r), abs(detail.g)), abs(detail.b)));
+    vec3 rgb = c.rgb + detail * u_amount * strength;
+    gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), c.a);
+  }
+`
+
+// Gradient map maps the source luminance through a 1D LUT texture built from the
+// configured gradient stops. CPU-side `buildGradientMapLut` parses the stop
+// string into a 256-entry RGB LUT, optionally reversed and HSL-interpolated.
+const GRADIENT_MAP_FILTER_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
+  uniform sampler2D u_gradientLut;
+  uniform float u_dither;
+  void main() {
+    vec4 c = texture2D(u_source, v_texcoord);
+    float lum = luminance(c.rgb);
+    if (u_dither > 0.5) {
+      float n = (fract(sin(dot(gl_FragCoord.xy + vec2(0.5), vec2(12.9898, 78.233))) * 43758.5453) - 0.5) * (1.0 / 255.0);
+      lum = clamp(lum + n, 0.0, 1.0);
+    }
+    vec3 mapped = texture2D(u_gradientLut, vec2(clamp(lum, 0.0, 1.0), 0.5)).rgb;
+    gl_FragColor = vec4(mapped, c.a);
+  }
+`
+
+function hexToRgb01(hex: string): [number, number, number] {
+  if (!hex || hex[0] !== "#") return [0, 0, 0]
+  const body = hex.slice(1)
+  const expanded = body.length === 3
+    ? body.split("").map((char) => char + char).join("")
+    : body
+  if (expanded.length !== 6) return [0, 0, 0]
+  const parsed = Number.parseInt(expanded, 16)
+  if (!Number.isFinite(parsed)) return [0, 0, 0]
+  return [((parsed >> 16) & 255) / 255, ((parsed >> 8) & 255) / 255, (parsed & 255) / 255]
+}
+
+function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  const l = (max + min) / 2
+  if (max === min) return [0, 0, l]
+  const d = max - min
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
+  let h: number
+  if (max === r) h = (g - b) / d + (g < b ? 6 : 0)
+  else if (max === g) h = (b - r) / d + 2
+  else h = (r - g) / d + 4
+  return [h / 6, s, l]
+}
+
+function hue2rgb(p: number, q: number, t: number): number {
+  if (t < 0) t += 1
+  if (t > 1) t -= 1
+  if (t < 1 / 6) return p + (q - p) * 6 * t
+  if (t < 1 / 2) return q
+  if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6
+  return p
+}
+
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  if (s === 0) return [l, l, l]
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s
+  const p = 2 * l - q
+  return [hue2rgb(p, q, h + 1 / 3), hue2rgb(p, q, h), hue2rgb(p, q, h - 1 / 3)]
+}
+
+interface GradientStop { offset: number; r: number; g: number; b: number }
+
+function parseGradientStops(raw: string): GradientStop[] {
+  const stops: GradientStop[] = []
+  for (const entry of raw.split(";")) {
+    const trimmed = entry.trim()
+    if (!trimmed) continue
+    const [offsetStr, colorStr] = trimmed.split(",").map((part) => part.trim())
+    const offset = Number(offsetStr)
+    if (!Number.isFinite(offset) || !colorStr) continue
+    const [r, g, b] = hexToRgb01(colorStr)
+    stops.push({ offset: Math.max(0, Math.min(1, offset)), r, g, b })
+  }
+  if (!stops.length) {
+    stops.push({ offset: 0, r: 0, g: 0, b: 0 })
+    stops.push({ offset: 1, r: 1, g: 1, b: 1 })
+  }
+  stops.sort((a, b) => a.offset - b.offset)
+  return stops
+}
+
+export function buildGradientMapLut(
+  raw: string,
+  options: { reverse?: boolean; interpolation?: "rgb" | "hsl"; size?: number } = {},
+): { values: Float32Array; size: number } {
+  const size = Math.max(2, Math.min(1024, options.size ?? 256))
+  const stops = parseGradientStops(raw)
+  if (options.reverse) {
+    for (const stop of stops) stop.offset = 1 - stop.offset
+    stops.sort((a, b) => a.offset - b.offset)
+  }
+  const values = new Float32Array(size * 3)
+  for (let i = 0; i < size; i++) {
+    const t = i / (size - 1)
+    let lo = stops[0]
+    let hi = stops[stops.length - 1]
+    for (let s = 0; s < stops.length - 1; s++) {
+      if (t >= stops[s].offset && t <= stops[s + 1].offset) {
+        lo = stops[s]
+        hi = stops[s + 1]
+        break
+      }
+    }
+    const range = Math.max(1e-6, hi.offset - lo.offset)
+    const f = Math.max(0, Math.min(1, (t - lo.offset) / range))
+    let r: number, g: number, b: number
+    if (options.interpolation === "hsl") {
+      const loH = rgbToHsl(lo.r, lo.g, lo.b)
+      const hiH = rgbToHsl(hi.r, hi.g, hi.b)
+      // shortest-arc hue interpolation
+      let h = loH[0]
+      const dh = hiH[0] - loH[0]
+      if (dh > 0.5) h = loH[0] + (dh - 1) * f
+      else if (dh < -0.5) h = loH[0] + (dh + 1) * f
+      else h = loH[0] + dh * f
+      h = (h + 1) % 1
+      const s = loH[1] + (hiH[1] - loH[1]) * f
+      const l = loH[2] + (hiH[2] - loH[2]) * f
+      ;[r, g, b] = hslToRgb(h, s, l)
+    } else {
+      r = lo.r + (hi.r - lo.r) * f
+      g = lo.g + (hi.g - lo.g) * f
+      b = lo.b + (hi.b - lo.b) * f
+    }
+    values[i * 3] = Math.max(0, Math.min(1, r))
+    values[i * 3 + 1] = Math.max(0, Math.min(1, g))
+    values[i * 3 + 2] = Math.max(0, Math.min(1, b))
+  }
+  return { values, size }
+}
+
 function buildGpuFilterPasses(
   filterId: string,
   params: Record<string, number | string | boolean> | undefined,
@@ -2053,6 +2288,29 @@ function buildGpuFilterPasses(
   }
   if (filterId === "sharpen") {
     return [{ fragmentSource: SHARPEN_FILTER_SHADER, uniforms: { u_texel: texel, u_amount: readNumberParam(params, "amount", 50) / 100 } }]
+  }
+  if (filterId === "unsharp-mask") {
+    return [{
+      fragmentSource: UNSHARP_MASK_FILTER_SHADER,
+      uniforms: {
+        u_texel: texel,
+        u_amount: readNumberParam(params, "amount", 100) / 100,
+        u_radius: Math.min(16, Math.max(0, readNumberParam(params, "radius", 1))),
+        u_threshold: readNumberParam(params, "threshold", 0),
+      },
+    }]
+  }
+  if (filterId === "gradient-map") {
+    const lut = buildGradientMapLut(readStringParam(params, "gradient", "0,#000000;1,#ffffff"), {
+      reverse: readBooleanParam(params, "reverse", false),
+      interpolation: readStringParam(params, "interpolation", "rgb") === "hsl" ? "hsl" : "rgb",
+      size: 256,
+    })
+    return [{
+      fragmentSource: GRADIENT_MAP_FILTER_SHADER,
+      uniforms: { u_dither: readBooleanParam(params, "dither", true) ? 1 : 0 },
+      gradientLut: lut,
+    }]
   }
   if (filterId === "emboss") {
     return [{ fragmentSource: EMBOSS_FILTER_SHADER, uniforms: { u_texel: texel, u_amount: readNumberParam(params, "amount", 100) / 100 } }]
@@ -2156,6 +2414,17 @@ const LAYER_STYLE_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
   uniform vec3 u_patternColor;
   uniform float u_patternScale;
   uniform float u_patternOpacity;
+  uniform float u_hasSatin;
+  uniform vec3 u_satinColor;
+  uniform vec2 u_satinOffset;
+  uniform float u_satinSize;
+  uniform float u_satinOpacity;
+  uniform float u_satinInvert;
+  uniform float u_hasStroke;
+  uniform vec3 u_strokeColor;
+  uniform float u_strokeSize;
+  uniform float u_strokeOpacity;
+  uniform float u_strokePosition;
   uniform vec2 u_canvasSize;
 
   vec4 over(vec4 top, vec4 bottom) {
@@ -2246,6 +2515,42 @@ const LAYER_STYLE_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
       result = over(vec4(u_patternColor, alpha * checker * u_patternOpacity), result);
     }
 
+    if (u_hasSatin > 0.5 && alpha > 0.0) {
+      // Satin: sample the layer alpha at +/- offset along a tangent direction,
+      // compute the difference (interior "ribbon"), optionally invert.
+      float aPos = texture2D(u_source, v_texcoord + u_satinOffset * u_texel).a;
+      float aNeg = texture2D(u_source, v_texcoord - u_satinOffset * u_texel).a;
+      float blurredPos = blurredAlpha(v_texcoord, u_satinOffset, u_satinSize);
+      float blurredNeg = blurredAlpha(v_texcoord, -u_satinOffset, u_satinSize);
+      float ribbon = clamp((aPos * aNeg) * (1.0 - abs(blurredPos - blurredNeg)), 0.0, 1.0);
+      if (u_satinInvert > 0.5) ribbon = clamp(alpha - ribbon, 0.0, 1.0);
+      result = over(vec4(u_satinColor, ribbon * alpha * u_satinOpacity), result);
+    }
+
+    if (u_hasStroke > 0.5) {
+      // Stroke: outside = dilation(alpha) - alpha; inside = alpha - erosion(alpha);
+      // center = (outside + inside)*0.5. Position selects: 0=outside, 1=inside, 2=center.
+      float r = max(u_strokeSize, 0.1);
+      float maxA = 0.0;
+      float minA = 1.0;
+      for (int y = -4; y <= 4; y++) {
+        for (int x = -4; x <= 4; x++) {
+          vec2 p = vec2(float(x), float(y));
+          if (length(p) <= 4.0) {
+            float sample = texture2D(u_source, v_texcoord + p * u_texel * (r / 4.0)).a;
+            maxA = max(maxA, sample);
+            minA = min(minA, sample);
+          }
+        }
+      }
+      float outside = clamp(maxA - alpha, 0.0, 1.0);
+      float inside = clamp(alpha - minA, 0.0, 1.0);
+      float strokeAlpha = u_strokePosition < 0.5
+        ? outside
+        : (u_strokePosition < 1.5 ? inside : clamp((outside + inside) * 0.5, 0.0, 1.0));
+      result = over(vec4(u_strokeColor, strokeAlpha * u_strokeOpacity), result);
+    }
+
     gl_FragColor = result;
   }
 `
@@ -2273,7 +2578,12 @@ function buildGpuLayerStyleShader(layer: Layer, fillOpacity: number): GpuAdjustm
   const colorOverlay = style.colorOverlay
   const gradientOverlay = style.gradientOverlay
   const patternOverlay = style.patternOverlay
+  const satin = style.satin
+  const stroke = style.stroke
   const gradient = gradientColorPair(layer)
+  const satinAngleRad = ((satin?.angle ?? 0) * Math.PI) / 180
+  const satinDistance = satin?.distance ?? 0
+  const strokePositionCode = stroke?.position === "inside" ? 1 : stroke?.position === "center" ? 2 : 0
   return {
     fragmentSource: LAYER_STYLE_SHADER,
     uniforms: {
@@ -2315,6 +2625,17 @@ function buildGpuLayerStyleShader(layer: Layer, fillOpacity: number): GpuAdjustm
       u_patternColor: unitColor(patternOverlay?.color, [0.5, 0.5, 0.5]),
       u_patternScale: patternOverlay?.scale ?? 16,
       u_patternOpacity: patternOverlay?.opacity ?? 0,
+      u_hasSatin: satin?.enabled ? 1 : 0,
+      u_satinColor: unitColor(satin?.color, [0, 0, 0]),
+      u_satinOffset: [Math.cos(satinAngleRad) * satinDistance, Math.sin(satinAngleRad) * satinDistance],
+      u_satinSize: satin?.size ?? 0,
+      u_satinOpacity: satin?.opacity ?? 0,
+      u_satinInvert: satin?.invert ? 1 : 0,
+      u_hasStroke: stroke?.enabled ? 1 : 0,
+      u_strokeColor: unitColor(stroke?.color, [0, 0, 0]),
+      u_strokeSize: stroke?.size ?? 0,
+      u_strokeOpacity: stroke?.opacity ?? 1,
+      u_strokePosition: strokePositionCode,
     },
   }
 }
@@ -2382,6 +2703,11 @@ export function prepareLayerInputForWebGL(
   const source = sourceOverride?.source ?? layer.canvas
   const dimensions = textureDimensions(source)
   if (dimensions.width < 1 || dimensions.height < 1) return null
+  const knockout = layer.advancedBlending?.knockout
+  const knockoutBackdropSource =
+    knockout && knockout !== "none" && context.knockoutBackdrop
+      ? cropOptionalSource(context.knockoutBackdrop, context.tileRect)
+      : null
   return {
     layerId: layer.id,
     source: cropOptionalSource(source, context.tileRect) ?? source,
@@ -2393,6 +2719,7 @@ export function prepareLayerInputForWebGL(
     vectorMaskSource: rasterizeVectorMaskForWebGL(layer, context.width, context.height, context.tileRect),
     clipMaskSource: context.clipMask ? cropOptionalSource(context.clipMask, context.tileRect) : null,
     advancedBlending: layer.advancedBlending,
+    knockoutBackdropSource,
   }
 }
 

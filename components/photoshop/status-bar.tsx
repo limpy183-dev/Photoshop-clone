@@ -3,7 +3,9 @@
 import * as React from "react"
 import { X } from "lucide-react"
 import { describeDocumentColorHonesty } from "./color-pipeline"
+import { createExportLimitationReport, type ExportFormat } from "./document-io"
 import { useEditor } from "./editor-context"
+import { planFilterPreviewExecution } from "./filter-preview"
 import { createHeapMemoryMonitor, formatMemoryUsage, getGlobalMemoryBudget } from "./memory-budget"
 import { detectOffscreenCanvasCapabilities, diagnoseOffscreenCanvasTransfer } from "./offscreen-canvas"
 import { requestCanvasZoom } from "./zoom-events"
@@ -40,6 +42,10 @@ export function StatusBar({ onHide }: { onHide?: () => void }) {
   const [memoryUsage, setMemoryUsage] = React.useState("")
   const [clientReady, setClientReady] = React.useState(false)
   const [browserDiagnostics, setBrowserDiagnostics] = React.useState<BrowserLargeDocumentDiagnostics | null>(null)
+  // Active export-target format, broadcast by the export dialogs so the
+  // status bar can surface format compatibility warnings reactively when the
+  // user changes their pick.
+  const [activeExportFormat, setActiveExportFormat] = React.useState<ExportFormat | null>(null)
   const offscreenDiagnostic = React.useMemo(() => {
     const capabilities = detectOffscreenCanvasCapabilities()
     return diagnoseOffscreenCanvasTransfer({
@@ -58,9 +64,64 @@ export function StatusBar({ onHide }: { onHide?: () => void }) {
     ? `High-bit edit path | Preview: 8-bit | Document: ${activeDoc.bitDepth}-bit`
     : "Editing at 8-bit"
 
+  // Filter-preview vs full-pass divergence. Recomputed reactively whenever the
+  // active document dimensions change — the planFilterPreviewExecution
+  // function quantises by pixel count, so when the user resizes the canvas or
+  // opens a different document the warning updates without user action.
+  const filterPreviewWarning = React.useMemo(() => {
+    if (!clientReady || !activeDoc) return null
+    const plan = planFilterPreviewExecution("gaussian-blur", activeDoc.width, activeDoc.height, {})
+    if (plan.previewScale >= 1 && plan.mode !== "tiled-worker" && plan.mode !== "tiled-main") return null
+    if (plan.mode === "tiled-worker" || plan.mode === "tiled-main") {
+      return {
+        kind: "tiled",
+        label: `Filter preview: tiled ${plan.tileSize ?? 512}px`,
+        detail: `Heavy filters render this ${activeDoc.width}x${activeDoc.height}px document in ${plan.tileSize ?? 512}px tiles; preview composites are reassembled tile-by-tile and the final pass uses the same tiling.`,
+      }
+    }
+    return {
+      kind: "downsample",
+      label: `Filter preview at ${Math.round(plan.previewScale * 100)}%`,
+      detail: `Document ${activeDoc.width}x${activeDoc.height}px exceeds the interactive preview budget. Filter previews run at ${Math.round(plan.previewScale * 100)}% scale; the final pass renders at full resolution and may show extra detail not visible in the preview.`,
+    }
+  }, [activeDoc, clientReady])
+
+  // Export-target compatibility warning: when the user has an export dialog
+  // open we listen for the active format and run the compatibility report.
+  // This surfaces "JPEG can't carry alpha" or "GIF flattens 24-bit" etc.
+  // without the user having to open the warnings tab in the dialog.
+  const exportTargetWarning = React.useMemo(() => {
+    if (!clientReady || !activeDoc || !activeExportFormat) return null
+    let report
+    try {
+      report = createExportLimitationReport(activeDoc, { format: activeExportFormat, includeMetadata: false })
+    } catch {
+      return null
+    }
+    const items = report.items.filter((item) => item.status === "unsupported" || item.status === "flattened" || item.status === "approximated")
+    if (!items.length) return null
+    return {
+      format: activeExportFormat,
+      count: items.length,
+      detail: items
+        .slice(0, 12)
+        .map((item) => `${item.label} (${item.status}): ${item.detail}`)
+        .join("\n"),
+    }
+  }, [activeDoc, activeExportFormat, clientReady])
+
   React.useEffect(() => {
     setClientReady(true)
     setBrowserDiagnostics(diagnoseBrowserLargeDocumentLimits())
+  }, [])
+
+  React.useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ format?: ExportFormat | null }>).detail ?? {}
+      setActiveExportFormat(detail.format ?? null)
+    }
+    window.addEventListener("ps-active-export-format", handler as EventListener)
+    return () => window.removeEventListener("ps-active-export-format", handler as EventListener)
   }, [])
 
   React.useEffect(() => {
@@ -152,10 +213,35 @@ export function StatusBar({ onHide }: { onHide?: () => void }) {
         <>
           <span>|</span>
           <span
+            data-testid="status-precision-warning"
             className="max-w-[320px] truncate rounded-[2px] border border-amber-400/40 bg-amber-400/10 px-1 text-amber-200"
             title={colorHonesty.items.map((item) => `${item.label}: ${item.detail}`).join("\n")}
           >
             Precision warning
+          </span>
+        </>
+      ) : null}
+      {filterPreviewWarning ? (
+        <>
+          <span>|</span>
+          <span
+            data-testid="status-filter-preview-warning"
+            className="max-w-[260px] truncate rounded-[2px] border border-amber-400/40 bg-amber-400/10 px-1 text-amber-200"
+            title={filterPreviewWarning.detail}
+          >
+            {filterPreviewWarning.label}
+          </span>
+        </>
+      ) : null}
+      {exportTargetWarning ? (
+        <>
+          <span>|</span>
+          <span
+            data-testid="status-export-target-warning"
+            className="max-w-[320px] truncate rounded-[2px] border border-amber-400/40 bg-amber-400/10 px-1 text-amber-200"
+            title={exportTargetWarning.detail}
+          >
+            {exportTargetWarning.format.toUpperCase()} export: {exportTargetWarning.count} compat issue{exportTargetWarning.count === 1 ? "" : "s"}
           </span>
         </>
       ) : null}

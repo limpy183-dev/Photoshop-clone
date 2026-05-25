@@ -29,6 +29,7 @@ import type { BrowserRasterExportFormat } from "./document-io"
 import type { Layer, PsDocument, Slice, TimelineFrame } from "./types"
 import { runBatchExportItems, type BatchExportFailure, type BatchExportProgressEvent } from "./batch-export-engine"
 import { createStoredZipBlob, type StoredZipEntry } from "./zip-packaging"
+import { batchAlternativesForLimitation, type ExportAlternative } from "./export-alternatives"
 
 type BatchScope = "document" | "visible-layers" | "selected-layers" | "timeline" | "slices" | "sprite-layers" | "sprite-slices" | "sprite-timeline"
 type RasterFormat = BrowserRasterExportFormat
@@ -234,6 +235,21 @@ export function BatchExportDialog({
     return () => {
       disposed = true
     }
+  }, [open])
+
+  // Broadcast active export target so StatusBar can surface format compat
+  // warnings reactively. Clears when the dialog closes.
+  React.useEffect(() => {
+    if (!open) return
+    window.dispatchEvent(
+      new CustomEvent("ps-active-export-format", {
+        detail: { format, source: "batch-export" },
+      }),
+    )
+  }, [format, open])
+  React.useEffect(() => {
+    if (open) return
+    window.dispatchEvent(new CustomEvent("ps-active-export-format", { detail: { format: null, source: "batch-export" } }))
   }, [open])
 
   if (!activeDoc) return null
@@ -451,6 +467,44 @@ export function BatchExportDialog({
             <div className={`rounded-sm border px-2 py-1.5 text-[10px] ${browserEncoderDiagnostic.supported ? "border-emerald-500/35 bg-emerald-500/10 text-emerald-100" : "border-red-500/35 bg-red-500/10 text-red-100"}`}>
               <div className="font-medium">{format.toUpperCase()} browser encoder</div>
               <div>{browserEncoderDiagnostic.message}</div>
+              {!browserEncoderDiagnostic.supported ? (
+                <BatchAlternativesRow
+                  alternatives={[
+                    { format: "png", label: "Use PNG", reason: "PNG is universally supported by the browser canvas encoder." },
+                    { format: "jpeg", label: "Use JPEG", reason: "JPEG is universally supported (no alpha)." },
+                  ]}
+                  onPick={setFormat}
+                  testId="batch-export-encoder-alt"
+                />
+              ) : null}
+            </div>
+          ) : null}
+          {format === "jpeg" && transparent ? (
+            <div className="rounded-sm border border-amber-500/35 bg-amber-500/10 px-2 py-1.5 text-[10px] text-amber-100">
+              <div>JPEG cannot store alpha — transparent pixels will be flattened against the matte color.</div>
+              <BatchAlternativesRow
+                alternatives={batchAlternativesForLimitation("jpeg", {
+                  label: "Alpha transparency",
+                  detail: "JPEG has no alpha channel; transparent pixels are composited against the selected matte.",
+                  status: "flattened",
+                })}
+                onPick={setFormat}
+                testId="batch-export-jpeg-alpha-alt"
+              />
+            </div>
+          ) : null}
+          {format === "gif" ? (
+            <div className="rounded-sm border border-amber-500/35 bg-amber-500/10 px-2 py-1.5 text-[10px] text-amber-100">
+              <div>GIF is limited to a 256-color indexed palette with 1-bit transparency.</div>
+              <BatchAlternativesRow
+                alternatives={batchAlternativesForLimitation("gif", {
+                  label: "GIF palette",
+                  detail: "GIF export quantizes to a 256-color indexed palette with limited transparency.",
+                  status: "approximated",
+                })}
+                onPick={setFormat}
+                testId="batch-export-gif-alt"
+              />
             </div>
           ) : null}
           {progress ? (
@@ -492,5 +546,33 @@ export function BatchExportDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function BatchAlternativesRow({
+  alternatives,
+  onPick,
+  testId,
+}: {
+  alternatives: ExportAlternative[]
+  onPick: (format: RasterFormat) => void
+  testId?: string
+}) {
+  if (!alternatives.length) return null
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-1" data-testid={testId}>
+      <span className="text-[9px] uppercase tracking-wide text-[var(--ps-text-dim)]">Try:</span>
+      {alternatives.map((alt) => (
+        <button
+          key={alt.format}
+          type="button"
+          title={alt.reason}
+          onClick={() => onPick(alt.format as RasterFormat)}
+          className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] px-1.5 py-0.5 text-[10px] text-[var(--ps-text)] hover:border-amber-400/60 hover:bg-amber-400/10 hover:text-amber-100"
+        >
+          {alt.label}
+        </button>
+      ))}
+    </div>
   )
 }

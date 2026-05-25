@@ -1,4 +1,4 @@
-import type { Layer, PathPoint, PathProps, SelectionDiagnostics, SelectionDiagnosticReason, ShapeProps } from "./types"
+import type { Layer, PathPoint, PathProps, SelectionDiagnostics, SelectionDiagnosticReason, SelectionOptions, ShapeProps } from "./types"
 import { hexToRgb } from "./color-utils"
 import { autoAlignImageStack, seamCarveImageData } from "./photo-workflow-engine"
 import {
@@ -83,7 +83,7 @@ export interface EdgeAwareQuickSelectionOptions {
   adaptive?: boolean
   includeDiagonals?: boolean
   edgeSensitivity?: number
-  sampleSize?: "point" | "3x3" | "5x5"
+  sampleSize?: SelectionOptions["sampleSize"]
   contiguous?: boolean
   diagnostics?: boolean
 }
@@ -236,9 +236,10 @@ function localColorGradient(data: Uint8ClampedArray, width: number, height: numb
 }
 
 function sampleSizeRadius(size: EdgeAwareQuickSelectionOptions["sampleSize"]) {
-  if (size === "5x5") return 2
-  if (size === "3x3") return 1
-  return 0
+  if (!size || size === "point") return 0
+  const parsed = Number(size.split("x")[0])
+  if (!Number.isFinite(parsed)) return 0
+  return Math.max(0, Math.floor(parsed / 2))
 }
 
 export function buildEdgeAwareQuickSelectionMaskData(

@@ -23,7 +23,6 @@ import {
   PREFERENCE_IMPORT_SECTIONS,
   PREFERENCE_SECTION_LABELS,
   PREFERENCES_STORAGE_KEY,
-  type TechnologyPreviewFlagState,
   type FileHandlingPreferences,
   type GpuPreferences,
   type HistoryLogPreferences,
@@ -32,7 +31,6 @@ import {
   type PhotoshopPreferences,
   type RulerGridPreferences,
   type ScratchDiskPreference,
-  type TechnologyPreviewPreferences,
   type ToolBehaviorPreferences,
   calculateScreenDpiFromCalibration,
   deriveFileHandlingPolicy,
@@ -44,9 +42,16 @@ import {
   parsePreferencesSet,
   resetPreferencesSet,
   savePreferencesToStorage,
-  summarizeTechnologyPreviewFlags,
   summarizePerformancePolicy,
 } from "./preferences-engine"
+import {
+  MAX_TECH_PREVIEW_IMPORT_BYTES,
+  exportTechPreviewFlags,
+  parseTechPreviewFlags,
+  useTechPreviewFlags,
+  type TechPreviewFlagState,
+  type TechPreviewRiskLevel,
+} from "./tech-previews"
 import { detectOffscreenCanvasCapabilities, diagnoseOffscreenCanvasTransfer } from "./offscreen-canvas"
 import { requestPrintSizeView } from "./zoom-events"
 
@@ -141,11 +146,23 @@ function ToggleRow({
   )
 }
 
+const RISK_BADGE_CLASS: Record<TechPreviewRiskLevel, string> = {
+  alpha: "bg-red-500/20 text-red-200 border-red-500/40",
+  beta: "bg-amber-500/20 text-amber-100 border-amber-500/40",
+  experimental: "bg-sky-500/20 text-sky-100 border-sky-500/40",
+}
+
+const RISK_BADGE_LABEL: Record<TechPreviewRiskLevel, string> = {
+  alpha: "Alpha",
+  beta: "Beta",
+  experimental: "Experimental",
+}
+
 function TechnologyPreviewRow({
   flag,
   onCheckedChange,
 }: {
-  flag: TechnologyPreviewFlagState
+  flag: TechPreviewFlagState
   onCheckedChange: (checked: boolean) => void
 }) {
   return (
@@ -157,9 +174,16 @@ function TechnologyPreviewRow({
         className="mt-0.5 border-[var(--ps-divider)]"
       />
       <span className="grid gap-1">
-        <span className="font-medium text-[var(--ps-text)]">{flag.label}</span>
-        <span className="text-[var(--ps-text-muted)]">Help: {flag.helpText}</span>
-        <span className="text-[var(--ps-text-muted)]">Risk: {flag.riskText}</span>
+        <span className="flex items-center gap-2">
+          <span className="font-medium text-[var(--ps-text)]">{flag.label}</span>
+          <span
+            className={`rounded-sm border px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide ${RISK_BADGE_CLASS[flag.riskLevel]}`}
+            aria-label={`Risk ${RISK_BADGE_LABEL[flag.riskLevel]}`}
+          >
+            {RISK_BADGE_LABEL[flag.riskLevel]}
+          </span>
+        </span>
+        <span className="text-[var(--ps-text-muted)]">{flag.helpText}</span>
       </span>
     </label>
   )
@@ -245,7 +269,15 @@ export function PreferencesDialog({
     () => new Set(PREFERENCE_IMPORT_SECTIONS),
   )
   const [isDraggingPreferenceFile, setIsDraggingPreferenceFile] = React.useState(false)
+  const [techPreviewError, setTechPreviewError] = React.useState("")
   const importRef = React.useRef<HTMLInputElement | null>(null)
+  const techPreviewImportRef = React.useRef<HTMLInputElement | null>(null)
+  const {
+    summary: techPreviewFlags,
+    setFlag: setTechPreviewFlag,
+    resetAll: resetTechPreviewFlagsAll,
+    replaceAll: replaceTechPreviewFlags,
+  } = useTechPreviewFlags()
 
   React.useEffect(() => {
     if (open) {
@@ -264,7 +296,6 @@ export function PreferencesDialog({
   }, [open])
 
   const performancePolicy = React.useMemo(() => summarizePerformancePolicy(prefs), [prefs])
-  const technologyPreviewFlags = React.useMemo(() => summarizeTechnologyPreviewFlags(prefs), [prefs])
   const offscreenDiagnostic = React.useMemo(() => {
     const capabilities = detectOffscreenCanvasCapabilities()
     return diagnoseOffscreenCanvasTransfer({
@@ -293,8 +324,6 @@ export function PreferencesDialog({
     setNormalized((current) => ({ ...current, toolBehavior: { ...current.toolBehavior, ...patch } }))
   const updateRulerGrid = (patch: Partial<RulerGridPreferences>) =>
     setNormalized((current) => ({ ...current, rulerGrid: { ...current.rulerGrid, ...patch } }))
-  const updateTechnologyPreviews = (patch: Partial<TechnologyPreviewPreferences>) =>
-    setNormalized((current) => ({ ...current, technologyPreviews: { ...current.technologyPreviews, ...patch } }))
 
   const updateScratchDisk = (id: string, patch: Partial<ScratchDiskPreference>) => {
     setNormalized((current) => ({
@@ -342,9 +371,15 @@ export function PreferencesDialog({
       localStorage.removeItem(PREFERENCES_STORAGE_KEY)
       window.dispatchEvent(new CustomEvent("ps-preferences-changed", { detail: defaults }))
     } catch {}
+    resetTechPreviewFlagsAll()
   }
 
   const resetSection = () => {
+    if (tab === "technology") {
+      resetTechPreviewFlagsAll()
+      setTechPreviewError("")
+      return
+    }
     const section = TAB_SECTION[tab]
     if (!section) return
     setPrefs(resetPreferencesSet(section, prefs))
@@ -862,20 +897,88 @@ export function PreferencesDialog({
               {tab === "technology" && (
                 <>
                   <Section title="Experimental Feature Flags">
+                    <p className="text-[11px] text-[var(--ps-text-muted)]">
+                      Opt in to experimental code paths. Risk badges describe how stable the feature currently is. All flags
+                      default to off and persist to the browser&apos;s local storage.
+                    </p>
                     <div className="grid gap-3">
-                      {technologyPreviewFlags.map((flag) => (
+                      {techPreviewFlags.map((flag) => (
                         <TechnologyPreviewRow
                           key={flag.id}
                           flag={flag}
-                          onCheckedChange={(checked) => updateTechnologyPreviews({ [flag.id]: checked })}
+                          onCheckedChange={(checked) => setTechPreviewFlag(flag.id, checked)}
                         />
                       ))}
                     </div>
                   </Section>
-                  <Section title="Preview Flag Handling">
+                  <Section title="Preview Flag Management">
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          const exported = exportTechPreviewFlags()
+                          downloadText(exported.json, exported.fileName, exported.mime)
+                        }}
+                      >
+                        Export preview flags
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => techPreviewImportRef.current?.click()}
+                      >
+                        Import preview flags
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          resetTechPreviewFlagsAll()
+                          setTechPreviewError("")
+                        }}
+                      >
+                        Reset all to defaults
+                      </Button>
+                    </div>
+                    <input
+                      ref={techPreviewImportRef}
+                      type="file"
+                      accept="application/json,.json"
+                      className="hidden"
+                      onChange={async (event) => {
+                        const file = event.target.files?.[0]
+                        event.target.value = ""
+                        if (!file) return
+                        try {
+                          if (!file.name.toLowerCase().endsWith(".json") && file.type !== "application/json") {
+                            throw new Error("Technology preview imports require a .json file.")
+                          }
+                          if (file.size > MAX_TECH_PREVIEW_IMPORT_BYTES) {
+                            throw new Error(
+                              `Technology preview imports are limited to ${Math.round(MAX_TECH_PREVIEW_IMPORT_BYTES / 1024)} KB.`,
+                            )
+                          }
+                          const text = await file.text()
+                          const parsed = parseTechPreviewFlags(text)
+                          replaceTechPreviewFlags(parsed)
+                          setTechPreviewError("")
+                        } catch (error) {
+                          setTechPreviewError(
+                            error instanceof Error ? error.message : "Could not import that preview flag set.",
+                          )
+                        }
+                      }}
+                    />
+                    {techPreviewError ? <p className="text-[11px] text-red-300">{techPreviewError}</p> : null}
                     <div className="grid gap-1 text-[11px] text-[var(--ps-text-muted)]">
-                      <span>Reset Section restores every technology preview flag to its default off state.</span>
-                      <span>Export Preferences includes the current preview flag values in the technologyPreviews section.</span>
+                      <span>
+                        Flags are stored separately from the rest of your preferences so they can be shared with a teammate
+                        without leaking display, scratch, or history settings.
+                      </span>
+                      <span>
+                        Toggling a flag here updates every component that subscribes via <code>useTechPreviewFlag</code>.
+                      </span>
                     </div>
                   </Section>
                 </>
@@ -926,7 +1029,7 @@ export function PreferencesDialog({
         </div>
 
         <DialogFooter className="gap-2">
-          <Button variant="outline" size="sm" onClick={resetSection} disabled={!TAB_SECTION[tab]}>
+          <Button variant="outline" size="sm" onClick={resetSection} disabled={!TAB_SECTION[tab] && tab !== "technology"}>
             Reset Section
           </Button>
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>

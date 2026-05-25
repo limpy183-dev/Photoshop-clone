@@ -1,14 +1,28 @@
 "use client"
 
 import * as React from "react"
-import { Circle, Copy, Download, Play, Plus, Square, Trash2, Upload, X } from "lucide-react"
+import { Circle, Copy, Download, Folder, GitBranch, Play, Plus, Route, Square, Trash2, Upload, X } from "lucide-react"
 import { toast } from "sonner"
-import { useEditor } from "../editor-context"
+import { makeHistoryEntry, useEditor } from "../editor-context"
 import { canvasFromDataUrl, downloadText } from "../document-io"
 import { MAX_CANVAS_DIMENSION, MAX_PROJECT_LAYERS } from "../canvas-limits"
 import { cn } from "@/lib/utils"
-import type { CanvasPatch, HistoryEntry, LayerSnapshot, MacroAction, SmartFilter } from "../types"
+import type { CanvasPatch, HistoryEntry, LayerSnapshot, MacroAction, MacroStep, SmartFilter } from "../types"
 import { uid } from "../uid"
+import {
+  ACTION_PLAYBACK_SPEED_STORAGE_KEY,
+  loadActionEnvelopes,
+  normalizePlaybackSpeed,
+  playbackSpeedToDelayMs,
+  saveActionEnvelopes,
+  setStepEnvelope,
+  type ActionEnvelope,
+  type ActionPlaybackSpeed,
+  type ConditionAttribute,
+  type StepEnvelope,
+} from "../action-conditionals"
+
+export { playbackSpeedToDelayMs }
 
 type SerializedCanvasPatch = Omit<CanvasPatch, "canvas"> & { canvasDataUrl: string | null }
 type SerializedSmartFilter = Omit<SmartFilter, "mask"> & { maskDataUrl?: string | null }
@@ -39,7 +53,7 @@ const MAX_ACTION_GENERIC_DEPTH = 12
 const MAX_ACTION_STRING_LENGTH = 100_000
 
 const ACTION_IMPORT_KEYS = new Set(["app", "format", "version", "exportedAt", "actions"])
-const ACTION_KEYS = new Set(["id", "name", "createdAt", "updatedAt", "steps"])
+const ACTION_KEYS = new Set(["id", "name", "folder", "createdAt", "updatedAt", "steps"])
 const STEP_KEYS = new Set(["id", "label", "createdAt", "entry"])
 const HISTORY_ENTRY_KEYS = new Set([
   "id",
@@ -108,6 +122,70 @@ const LAYER_KEYS = new Set([
 const CANVAS_PATCH_KEYS = new Set(["x", "y", "w", "h", "canvasDataUrl"])
 const SMART_FILTER_KEYS = new Set(["id", "filterId", "name", "enabled", "opacity", "blendMode", "params", "maskDataUrl", "maskEnabled", "maskDensity", "maskFeather", "maskLinked"])
 const FRAME_KEYS = new Set(["shape", "x", "y", "w", "h", "imageDataUrl", "imageCanvas"])
+
+const CONDITION_ATTRIBUTES: ConditionAttribute[] = [
+  "layer.exists",
+  "layer.visible",
+  "layer.locked",
+  "layer.hasMask",
+  "layer.kind",
+  "layer.opacityGte",
+  "layer.opacityLte",
+  "selection.empty",
+  "selection.hasBounds",
+  "channels.count",
+  "document.colorMode",
+  "document.bitDepth",
+]
+
+function cleanFolderName(value: unknown) {
+  const text = typeof value === "string" ? value.trim().slice(0, 80) : ""
+  return text || "Ungrouped"
+}
+
+export function actionFolderGroups(actions: readonly MacroAction[]) {
+  const byFolder = new Map<string, MacroAction[]>()
+  for (const action of actions) {
+    const folder = cleanFolderName(action.folder)
+    byFolder.set(folder, [...(byFolder.get(folder) ?? []), action])
+  }
+  return Array.from(byFolder.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, groupedActions]) => ({
+      name,
+      actions: groupedActions.slice().sort((a, b) => a.createdAt - b.createdAt || a.name.localeCompare(b.name)),
+    }))
+}
+
+export function buildInsertPathStep(entry: HistoryEntry, now = Date.now()): MacroStep {
+  return {
+    id: uid("step"),
+    label: "Insert Path",
+    createdAt: now,
+    entry: {
+      ...entry,
+      id: uid("entry"),
+      label: "Insert Path",
+    },
+  }
+}
+
+function readPlaybackSpeed(): ActionPlaybackSpeed {
+  if (typeof window === "undefined") return "normal"
+  try {
+    return normalizePlaybackSpeed(window.localStorage.getItem(ACTION_PLAYBACK_SPEED_STORAGE_KEY))
+  } catch {
+    return "normal"
+  }
+}
+
+function actionHasPath(entry: HistoryEntry) {
+  return entry.layers.some((layer) => layer.path || layer.vectorMask || layer.shape)
+}
+
+function isEmptyEnvelope(env: StepEnvelope) {
+  return !env.condition && !env.breakpoint && !env.pauseMs && !env.onError && !env.retryLimit && !env.note
+}
 const SMART_SOURCE_KEYS = new Set([
   "width",
   "height",
@@ -511,8 +589,16 @@ export function ActionsPanel() {
   } = useEditor()
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [newActionName, setNewActionName] = React.useState("")
+  const [newActionFolder, setNewActionFolder] = React.useState("Default")
+  const [folderFilter, setFolderFilter] = React.useState("All")
+  const [playbackSpeed, setPlaybackSpeed] = React.useState<ActionPlaybackSpeed>(readPlaybackSpeed)
+  const [envelopes, setEnvelopes] = React.useState<Record<string, ActionEnvelope>>(() => loadActionEnvelopes())
   const importRef = React.useRef<HTMLInputElement>(null)
   const selected = actions.find((action) => action.id === selectedId) ?? actions[0] ?? null
+  const folderGroups = actionFolderGroups(actions)
+  const visibleActions = folderFilter === "All"
+    ? actions
+    : actions.filter((action) => cleanFolderName(action.folder) === folderFilter)
 
   React.useEffect(() => {
     if (!selectedId && actions[0]) setSelectedId(actions[0].id)
@@ -520,6 +606,16 @@ export function ActionsPanel() {
       setSelectedId(actions[0]?.id ?? null)
     }
   }, [actions, selectedId])
+
+  React.useEffect(() => {
+    try {
+      window.localStorage.setItem(ACTION_PLAYBACK_SPEED_STORAGE_KEY, playbackSpeed)
+    } catch {}
+  }, [playbackSpeed])
+
+  React.useEffect(() => {
+    setEnvelopes(loadActionEnvelopes())
+  }, [actions.length])
 
   const addAction = () => {
     const createdAt = Date.now()
@@ -530,6 +626,7 @@ export function ActionsPanel() {
       action: {
         id,
         name,
+        folder: cleanFolderName(newActionFolder),
         createdAt,
         updatedAt: createdAt,
         steps: [],
@@ -537,6 +634,33 @@ export function ActionsPanel() {
     })
     setSelectedId(id)
     setNewActionName("")
+  }
+
+  const updateSelectedAction = (patch: Partial<MacroAction>) => {
+    if (!selected) return
+    dispatch({
+      type: "set-actions",
+      actions: actions.map((action) => action.id === selected.id ? { ...action, ...patch, updatedAt: Date.now() } : action),
+    })
+  }
+
+  const insertPathStep = () => {
+    if (!selected || !activeDoc) return
+    const entry = makeHistoryEntry(activeDoc, "Insert Path", undefined, "all")
+    if (!actionHasPath(entry)) {
+      toast.error("The current document does not contain an editable path or shape.")
+      return
+    }
+    dispatch({ type: "append-action-step", actionId: selected.id, step: buildInsertPathStep(entry) })
+    toast.success("Inserted current path state into the action.")
+  }
+
+  const updateEnvelope = (actionId: string, stepId: string, updater: (current: StepEnvelope) => StepEnvelope) => {
+    const current = envelopes[actionId]?.steps[stepId] ?? {}
+    const nextEnv = updater(current)
+    const next = setStepEnvelope(envelopes, actionId, stepId, isEmptyEnvelope(nextEnv) ? null : nextEnv)
+    setEnvelopes(next)
+    saveActionEnvelopes(next)
   }
 
   const exportActions = (scope: "selected" | "all") => {
@@ -618,7 +742,7 @@ export function ActionsPanel() {
           if (file) void importActions(file)
         }}
       />
-      <div className="grid grid-cols-[1fr_auto] gap-1 border-b border-[var(--ps-divider)] px-2 py-1">
+      <div className="grid grid-cols-[1fr_96px_auto] gap-1 border-b border-[var(--ps-divider)] px-2 py-1">
         <input
           aria-label="New action name"
           value={newActionName}
@@ -629,6 +753,13 @@ export function ActionsPanel() {
           placeholder={`Action ${actions.length + 1}`}
           className="h-6 min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px] outline-none focus:border-[var(--ps-accent)]"
         />
+        <input
+          aria-label="New action folder"
+          value={newActionFolder}
+          onChange={(event) => setNewActionFolder(event.target.value)}
+          placeholder="Set"
+          className="h-6 min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px] outline-none focus:border-[var(--ps-accent)]"
+        />
         <button
           className="flex h-6 w-6 items-center justify-center rounded-sm hover:bg-[var(--ps-tool-hover)]"
           title="New action"
@@ -637,6 +768,34 @@ export function ActionsPanel() {
         >
           <Plus className="h-3.5 w-3.5" />
         </button>
+      </div>
+      <div className="grid grid-cols-[1fr_1fr] gap-1 border-b border-[var(--ps-divider)] px-2 py-1">
+        <label className="grid gap-0.5 text-[10px] text-[var(--ps-text-dim)]">
+          Action Set
+          <select
+            aria-label="Action set folder filter"
+            value={folderFilter}
+            onChange={(event) => setFolderFilter(event.target.value)}
+            className="h-6 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px] text-[var(--ps-text)]"
+          >
+            <option value="All">All sets</option>
+            {folderGroups.map((group) => <option key={group.name} value={group.name}>{group.name}</option>)}
+          </select>
+        </label>
+        <label className="grid gap-0.5 text-[10px] text-[var(--ps-text-dim)]">
+          Playback
+          <select
+            aria-label="Action playback speed"
+            value={playbackSpeed}
+            onChange={(event) => setPlaybackSpeed(event.target.value as ActionPlaybackSpeed)}
+            className="h-6 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px] text-[var(--ps-text)]"
+          >
+            <option value="instant">Instant</option>
+            <option value="fast">Fast</option>
+            <option value="normal">Normal</option>
+            <option value="slow">Slow</option>
+          </select>
+        </label>
       </div>
       <div className="flex items-center gap-1 border-b border-[var(--ps-divider)] px-2 py-1">
         <button
@@ -667,6 +826,15 @@ export function ActionsPanel() {
           onClick={() => void duplicateSelectedAction()}
         >
           <Copy className="h-3.5 w-3.5" />
+        </button>
+        <button
+          className="flex h-6 w-6 items-center justify-center rounded-sm hover:bg-[var(--ps-tool-hover)] disabled:opacity-40"
+          title="Insert current path"
+          aria-label="Insert current path in action"
+          disabled={!selected || !activeDoc}
+          onClick={insertPathStep}
+        >
+          <Route className="h-3.5 w-3.5" />
         </button>
         <button
           className="flex h-6 w-6 items-center justify-center rounded-sm hover:bg-[var(--ps-tool-hover)] disabled:opacity-40"
@@ -715,8 +883,8 @@ export function ActionsPanel() {
       </div>
 
       <div className="min-h-[90px] border-b border-[var(--ps-divider)]">
-        {actions.length ? (
-          actions.map((action) => {
+        {visibleActions.length ? (
+          visibleActions.map((action) => {
             const selectedAction = action.id === selected?.id
             const recording = action.id === recordingActionId
             return (
@@ -730,37 +898,188 @@ export function ActionsPanel() {
               >
                 <span className={cn("h-2 w-2 rounded-full", recording ? "bg-red-500" : "bg-[var(--ps-text-dim)]")} />
                 <span className="min-w-0 flex-1 truncate">{action.name}</span>
+                <span className="hidden max-w-[92px] truncate rounded-sm border border-[var(--ps-divider)] px-1 text-[9px] text-[var(--ps-text-dim)] sm:inline">
+                  {cleanFolderName(action.folder)}
+                </span>
                 <span className="text-[10px] text-[var(--ps-text-dim)]">{action.steps.length}</span>
               </button>
             )
           })
         ) : (
-          <div className="px-2 py-3 text-[var(--ps-text-dim)]">No recorded actions.</div>
+          <div className="px-2 py-3 text-[var(--ps-text-dim)]">No recorded actions in this set.</div>
         )}
       </div>
 
       <div className="flex-1 overflow-y-auto">
         {selected ? (
-          selected.steps.length ? (
-            selected.steps.map((step, index) => (
-              <div
-                key={step.id}
-                className="flex items-center gap-2 border-b border-[var(--ps-divider)]/40 px-2 py-1"
-              >
-                <span className="w-5 text-right text-[10px] text-[var(--ps-text-dim)]">{index + 1}</span>
-                {step.entry.thumb ? (
-                  <img src={step.entry.thumb} alt="" className="h-5 w-5 border border-[var(--ps-divider)] object-cover" />
-                ) : (
-                  <span className="h-5 w-5 border border-[var(--ps-divider)] bg-[var(--ps-panel-2)]" />
-                )}
-                <span className="min-w-0 flex-1 truncate">{step.label}</span>
-              </div>
-            ))
-          ) : (
-            <div className="px-2 py-3 text-[var(--ps-text-dim)]">Press record and use the editor to capture steps.</div>
-          )
+          <>
+            <div className="grid grid-cols-[1fr_120px] gap-1 border-b border-[var(--ps-divider)] px-2 py-1">
+              <input
+                aria-label="Selected action name"
+                value={selected.name}
+                onChange={(event) => updateSelectedAction({ name: event.target.value })}
+                className="h-6 min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px] outline-none focus:border-[var(--ps-accent)]"
+              />
+              <label className="relative">
+                <Folder className="pointer-events-none absolute left-1.5 top-1.5 h-3 w-3 text-[var(--ps-text-dim)]" />
+                <input
+                  aria-label="Selected action folder"
+                  value={cleanFolderName(selected.folder)}
+                  onChange={(event) => updateSelectedAction({ folder: event.target.value })}
+                  className="h-6 w-full rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] pl-5 pr-1 text-[10px] outline-none focus:border-[var(--ps-accent)]"
+                />
+              </label>
+            </div>
+            {selected.steps.length ? (
+              selected.steps.map((step, index) => (
+                <ActionStepRow
+                  key={step.id}
+                  actionId={selected.id}
+                  step={step}
+                  index={index}
+                  envelope={envelopes[selected.id]?.steps[step.id]}
+                  onEnvelopeChange={updateEnvelope}
+                />
+              ))
+            ) : (
+              <div className="px-2 py-3 text-[var(--ps-text-dim)]">Press record and use the editor to capture steps.</div>
+            )}
+          </>
         ) : null}
       </div>
     </div>
   )
+}
+
+function ActionStepRow({
+  actionId,
+  step,
+  index,
+  envelope,
+  onEnvelopeChange,
+}: {
+  actionId: string
+  step: MacroStep
+  index: number
+  envelope: StepEnvelope | undefined
+  onEnvelopeChange: (actionId: string, stepId: string, updater: (current: StepEnvelope) => StepEnvelope) => void
+}) {
+  const condition = envelope?.condition
+  const update = (updater: (current: StepEnvelope) => StepEnvelope) => onEnvelopeChange(actionId, step.id, updater)
+  return (
+    <div className="border-b border-[var(--ps-divider)]/40 px-2 py-1.5">
+      <div className="flex items-center gap-2">
+        <span className="w-5 text-right text-[10px] text-[var(--ps-text-dim)]">{index + 1}</span>
+        {step.entry.thumb ? (
+          <img src={step.entry.thumb} alt="" className="h-5 w-5 border border-[var(--ps-divider)] object-cover" />
+        ) : (
+          <span className="h-5 w-5 border border-[var(--ps-divider)] bg-[var(--ps-panel-2)]" />
+        )}
+        <span className="min-w-0 flex-1 truncate">{step.label}</span>
+        {condition ? <GitBranch className="h-3.5 w-3.5 text-[var(--ps-accent)]" /> : null}
+      </div>
+      <div className="mt-1 grid grid-cols-[1fr_72px_72px] gap-1">
+        <select
+          aria-label={`Condition for ${step.label}`}
+          value={condition?.attribute ?? ""}
+          onChange={(event) => {
+            const attribute = event.target.value as ConditionAttribute | ""
+            update((current) => ({
+              ...current,
+              condition: attribute
+                ? { attribute, value: current.condition?.value, layerKey: current.condition?.layerKey, onFail: current.condition?.onFail ?? "skip" }
+                : undefined,
+            }))
+          }}
+          className="h-6 min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]"
+        >
+          <option value="">Always run</option>
+          {CONDITION_ATTRIBUTES.map((attribute) => <option key={attribute} value={attribute}>{attribute}</option>)}
+        </select>
+        <select
+          aria-label={`Condition failure action for ${step.label}`}
+          disabled={!condition}
+          value={condition?.onFail ?? "skip"}
+          onChange={(event) => update((current) => ({
+            ...current,
+            condition: current.condition ? { ...current.condition, onFail: event.target.value as "skip" | "abort" | "continue" } : undefined,
+          }))}
+          className="h-6 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px] disabled:opacity-45"
+        >
+          <option value="skip">Skip</option>
+          <option value="abort">Abort</option>
+          <option value="continue">Else run</option>
+        </select>
+        <input
+          aria-label={`Condition value for ${step.label}`}
+          disabled={!condition}
+          value={condition?.value === undefined ? "" : String(condition.value)}
+          onChange={(event) => update((current) => ({
+            ...current,
+            condition: current.condition ? { ...current.condition, value: parseConditionValue(event.target.value) } : undefined,
+          }))}
+          placeholder="Value"
+          className="h-6 min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px] disabled:opacity-45"
+        />
+      </div>
+      <div className="mt-1 grid grid-cols-[1fr_80px_80px] gap-1">
+        <input
+          aria-label={`Condition layer target for ${step.label}`}
+          disabled={!condition}
+          value={condition?.layerKey ?? ""}
+          onChange={(event) => update((current) => ({
+            ...current,
+            condition: current.condition ? { ...current.condition, layerKey: event.target.value.trim() || undefined } : undefined,
+          }))}
+          placeholder="Layer/id"
+          className="h-6 min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px] disabled:opacity-45"
+        />
+        <select
+          aria-label={`Step error policy for ${step.label}`}
+          value={envelope?.onError ?? "skip"}
+          onChange={(event) => update((current) => ({ ...current, onError: event.target.value as StepEnvelope["onError"] }))}
+          className="h-6 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]"
+        >
+          <option value="skip">Err skip</option>
+          <option value="abort">Err abort</option>
+          <option value="retry">Retry</option>
+        </select>
+        <input
+          aria-label={`Step pause for ${step.label}`}
+          type="number"
+          min={0}
+          max={60000}
+          value={envelope?.pauseMs ?? 0}
+          onChange={(event) => update((current) => ({ ...current, pauseMs: Math.max(0, Math.min(60000, Number(event.target.value) || 0)) }))}
+          className="h-6 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]"
+        />
+      </div>
+      <div className="mt-1 grid grid-cols-[auto_1fr] items-center gap-1">
+        <label className="flex items-center gap-1 text-[10px] text-[var(--ps-text-dim)]">
+          <input
+            type="checkbox"
+            checked={envelope?.breakpoint ?? false}
+            onChange={(event) => update((current) => ({ ...current, breakpoint: event.target.checked }))}
+          />
+          Break
+        </label>
+        <input
+          aria-label={`Step playback note for ${step.label}`}
+          value={envelope?.note ?? ""}
+          onChange={(event) => update((current) => ({ ...current, note: event.target.value.slice(0, 200) || undefined }))}
+          placeholder="If / then / else note"
+          className="h-6 min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]"
+        />
+      </div>
+    </div>
+  )
+}
+
+function parseConditionValue(value: string) {
+  const text = value.trim()
+  if (!text) return undefined
+  if (text === "true") return true
+  if (text === "false") return false
+  const number = Number(text)
+  return Number.isFinite(number) && text !== "" ? number : text
 }

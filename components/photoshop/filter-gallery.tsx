@@ -23,7 +23,10 @@ import {
   createSmartFilterStackPreset,
   hydrateSmartFilterStackPresetEntries,
   loadSmartFilterStackPresets,
+  mergeSmartFilterStackPresets,
+  parseSmartFilterStackPresetsImport,
   saveSmartFilterStackPresets,
+  serializeSmartFilterStackPresetsForExport,
   type SmartFilterStackPreset,
 } from "./smart-filter-presets"
 
@@ -349,6 +352,41 @@ export function FilterGalleryDialog({
     setSelectedPresetId(next[0]?.id || "")
   }
 
+  const presetImportInputRef = React.useRef<HTMLInputElement>(null)
+
+  const exportPresets = () => {
+    if (typeof window === "undefined" || !presets.length) return
+    const text = serializeSmartFilterStackPresetsForExport(presets)
+    const blob = new Blob([text], { type: "application/json" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `filter-gallery-presets-${new Date().toISOString().slice(0, 10)}.json`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 0)
+  }
+
+  const triggerImportPresets = () => {
+    presetImportInputRef.current?.click()
+  }
+
+  const importPresetsFromFile = async (file: File | null | undefined) => {
+    if (!file) return
+    try {
+      const text = await file.text()
+      const incoming = parseSmartFilterStackPresetsImport(text)
+      if (!incoming.length) return
+      const merged = mergeSmartFilterStackPresets(presets, incoming)
+      persistPresets(merged)
+      setSelectedPresetId(incoming[0]?.id || merged[0]?.id || "")
+      if (incoming[0]) setPresetName(incoming[0].name)
+    } catch {
+      // swallow malformed imports — bare arrays / unknown shapes already yield []
+    }
+  }
+
   const clearStack = () => {
     setStack([])
     setSelectedIdx(-1)
@@ -558,6 +596,39 @@ export function FilterGalleryDialog({
                     Delete
                   </button>
                 </div>
+                <div className="grid grid-cols-2 gap-1">
+                  <button
+                    type="button"
+                    aria-label="Export filter stack presets to JSON"
+                    title="Export presets to JSON"
+                    className="h-6 rounded-sm border border-[var(--ps-divider)] px-1 text-[10px] hover:bg-[var(--ps-tool-hover)] disabled:opacity-35"
+                    disabled={!presets.length}
+                    onClick={exportPresets}
+                  >
+                    Export JSON
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Import filter stack presets from JSON"
+                    title="Import presets from JSON"
+                    className="h-6 rounded-sm border border-[var(--ps-divider)] px-1 text-[10px] hover:bg-[var(--ps-tool-hover)]"
+                    onClick={triggerImportPresets}
+                  >
+                    Import JSON
+                  </button>
+                </div>
+                <input
+                  ref={presetImportInputRef}
+                  type="file"
+                  accept="application/json,.json"
+                  className="hidden"
+                  aria-label="Import filter stack presets file"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] ?? null
+                    void importPresetsFromFile(file)
+                    e.target.value = ""
+                  }}
+                />
               </div>
               <div className="max-h-[180px] overflow-y-auto">
                 {stack.length === 0 && (

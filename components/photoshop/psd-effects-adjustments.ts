@@ -2080,6 +2080,16 @@ function clampBlendIfRange(range: BlendIfRange | undefined): BlendIfRange {
  * `blendingRanges` info block. Per-channel R/G/B ranges live in the
  * `ranges` array.
  */
+const PSD_BLENDIF_CHANNEL_INDEX = { r: 0, g: 1, b: 2 } as const
+
+function blendIfRangeToTuple(range: BlendIfRange): [number, number, number, number] {
+  return [range.black, range.blackFeather, range.whiteFeather, range.white]
+}
+
+function isDefaultBlendIfTuple(range: BlendIfRange): boolean {
+  return range.black === 0 && range.blackFeather === 0 && range.whiteFeather === 255 && range.white === 255
+}
+
 export function appAdvancedBlendingToPsd(layer: Layer): Partial<PsdLayer> {
   const ab = layer.advancedBlending
   if (!ab) return {}
@@ -2089,15 +2099,35 @@ export function appAdvancedBlendingToPsd(layer: Layer): Partial<PsdLayer> {
     fillOpacity: clamp01(ab.fillOpacity, 1),
     knockout: ab.knockout !== "none",
     blendingRanges: {
-      compositeGrayBlendSource: [thisRange.black, thisRange.blackFeather, thisRange.whiteFeather, thisRange.white],
-      compositeGraphBlendDestinationRange: [
-        underlyingRange.black,
-        underlyingRange.blackFeather,
-        underlyingRange.whiteFeather,
-        underlyingRange.white,
-      ],
+      compositeGrayBlendSource: blendIfRangeToTuple(thisRange),
+      compositeGraphBlendDestinationRange: blendIfRangeToTuple(underlyingRange),
       ranges: [],
     },
+  }
+  // Per-channel blend-if ranges share the same on-disk layout. ag-psd's
+  // `ranges` array is an interleaved [sourceRange, destRange] list ordered by
+  // channel index (R, G, B). Only emit entries for channels that diverge from
+  // the default so files stay clean for layers that don't customise them.
+  const ranges = out.blendingRanges?.ranges as Array<{
+    sourceRange: [number, number, number, number]
+    destRange: [number, number, number, number]
+  }> | undefined
+  if (ranges) {
+    for (const channel of ["r", "g", "b"] as const) {
+      const src = ab.blendIfThisChannels?.[channel]
+      const dest = ab.blendIfUnderlyingChannels?.[channel]
+      if (!src && !dest) continue
+      const sourceRange = blendIfRangeToTuple(clampBlendIfRange(src))
+      const destRange = blendIfRangeToTuple(clampBlendIfRange(dest))
+      // Pad earlier channels with defaults if we skipped them
+      while (ranges.length < PSD_BLENDIF_CHANNEL_INDEX[channel]) {
+        ranges.push({
+          sourceRange: [0, 0, 255, 255],
+          destRange: [0, 0, 255, 255],
+        })
+      }
+      ranges.push({ sourceRange, destRange })
+    }
   }
   // ag-psd has no direct `channels.r/g/b` slot, but encodes channel-protection
   // via the `channelBlendingRestrictions` array (channel indices that are
@@ -2136,11 +2166,31 @@ export function psdToAppAdvancedBlending(psdLayer: PsdLayer): AdvancedBlending |
     else if (idx === 2) channels.b = false
   }
 
+  // PSD stores per-channel ranges in `blendingRanges.ranges` as an ordered
+  // array (R, G, B). Decode any that diverge from defaults.
+  const blendIfThisChannels: AdvancedBlending["blendIfThisChannels"] = {}
+  const blendIfUnderlyingChannels: AdvancedBlending["blendIfUnderlyingChannels"] = {}
+  const rangeList = Array.isArray(ranges?.ranges) ? ranges!.ranges : []
+  const channelOrder: Array<"r" | "g" | "b"> = ["r", "g", "b"]
+  for (let i = 0; i < rangeList.length && i < channelOrder.length; i++) {
+    const entry = rangeList[i] as
+      | { sourceRange?: number[]; destRange?: number[] }
+      | undefined
+    if (!entry) continue
+    const src = decode(entry.sourceRange, defaultRange)
+    const dest = decode(entry.destRange, defaultRange)
+    const channel = channelOrder[i]
+    if (!isDefaultBlendIfTuple(src)) blendIfThisChannels[channel] = src
+    if (!isDefaultBlendIfTuple(dest)) blendIfUnderlyingChannels[channel] = dest
+  }
+
   return {
     fillOpacity: clamp01(psdLayer.fillOpacity, 1),
     knockout: knockoutAny ? "shallow" : "none",
     channels,
     blendIfThis: decode(ranges?.compositeGrayBlendSource, defaultRange),
     blendIfUnderlying: decode(ranges?.compositeGraphBlendDestinationRange, defaultRange),
+    blendIfThisChannels: Object.keys(blendIfThisChannels).length ? blendIfThisChannels : undefined,
+    blendIfUnderlyingChannels: Object.keys(blendIfUnderlyingChannels).length ? blendIfUnderlyingChannels : undefined,
   }
 }

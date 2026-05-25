@@ -95,29 +95,63 @@ const BLENDS: BlendMode[] = [
 type FilterKind = "all" | string
 
 const LAYER_FILTER_TOKENS: Record<string, string> = {
+  // Kind
   raster: "kind:pixel",
   text: "kind:text",
   shape: "kind:shape",
   adjustment: "kind:adjustment",
+  "smart-object": "attr:smart",
   frame: "kind:frame",
   artboard: "kind:artboard",
   group: "kind:group",
+  threeD: "kind:3d",
+  video: "kind:video",
+  // Attribute
   locked: "attr:locked",
   hidden: "attr:hidden",
+  visible: "visible:true",
+  linked: "attr:linked",
   masked: "attr:masked",
   styled: "attr:effects",
   smart: "attr:smart",
   clipped: "attr:clipped",
-  "mode:multiply": "mode:multiply",
-  "mode:screen": "mode:screen",
-  "mode:overlay": "mode:overlay",
-  "effect:drop-shadow": "effect:drop-shadow",
-  "effect:stroke": "effect:stroke",
-  "effect:glow": "effect:glow",
   "attr:smart-filter": "attr:smart-filter",
   "attr:knockout": "attr:knockout",
   "attr:blend-if": "attr:blend-if",
+  // Mode
+  "mode:normal": "mode:normal",
+  "mode:multiply": "mode:multiply",
+  "mode:screen": "mode:screen",
+  "mode:overlay": "mode:overlay",
+  "mode:soft-light": "mode:soft-light",
+  "mode:hard-light": "mode:hard-light",
+  "mode:darken": "mode:darken",
+  "mode:lighten": "mode:lighten",
+  // Effect
+  "effect:drop-shadow": "effect:drop-shadow",
+  "effect:inner-shadow": "effect:inner-shadow",
+  "effect:outer-glow": "effect:outer-glow",
+  "effect:inner-glow": "effect:inner-glow",
+  "effect:bevel": "effect:bevel",
+  "effect:satin": "effect:satin",
+  "effect:stroke": "effect:stroke",
+  "effect:glow": "effect:glow",
+  "effect:color-overlay": "effect:color-overlay",
+  "effect:gradient-overlay": "effect:gradient-overlay",
+  "effect:pattern-overlay": "effect:pattern-overlay",
+  // Color label
+  "label:red": "color:red",
+  "label:orange": "color:orange",
+  "label:yellow": "color:yellow",
+  "label:green": "color:green",
+  "label:blue": "color:blue",
+  "label:violet": "color:violet",
+  "label:gray": "color:gray",
+  "label:none": "color:none",
+  // Channels
+  "channel:r-off": "channel:r-off",
   "channel:g-off": "channel:g-off",
+  "channel:b-off": "channel:b-off",
 }
 
 export const COLOR_LABELS: { id: NonNullable<Layer["colorLabel"]>; bg: string; label: string }[] = [
@@ -584,6 +618,7 @@ export function LayersPanel() {
             {enabled ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3 opacity-50" />}
           </button>
           <SmartFilterMaskThumb
+            layerId={layer.id}
             layerName={layer.name}
             filterName={filter.name}
             mask={filter.mask}
@@ -682,29 +717,62 @@ export function LayersPanel() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all" className="text-[11px]">All</SelectItem>
-            <SelectItem value="raster" className="text-[11px]">Pixel</SelectItem>
-            <SelectItem value="text" className="text-[11px]">Type</SelectItem>
-            <SelectItem value="shape" className="text-[11px]">Shape</SelectItem>
-            <SelectItem value="adjustment" className="text-[11px]">Adjustment</SelectItem>
-            <SelectItem value="frame" className="text-[11px]">Frame</SelectItem>
-            <SelectItem value="artboard" className="text-[11px]">Artboard</SelectItem>
-            <SelectItem value="group" className="text-[11px]">Group</SelectItem>
-            <SelectItem value="locked" className="text-[11px]">Locked</SelectItem>
-            <SelectItem value="hidden" className="text-[11px]">Hidden</SelectItem>
-            <SelectItem value="masked" className="text-[11px]">Masked</SelectItem>
-            <SelectItem value="styled" className="text-[11px]">Effects</SelectItem>
-            <SelectItem value="smart" className="text-[11px]">Smart</SelectItem>
-            <SelectItem value="clipped" className="text-[11px]">Clipped</SelectItem>
-            <SelectItem value="mode:multiply" className="text-[11px]">Mode: Multiply</SelectItem>
-            <SelectItem value="mode:screen" className="text-[11px]">Mode: Screen</SelectItem>
-            <SelectItem value="mode:overlay" className="text-[11px]">Mode: Overlay</SelectItem>
-            <SelectItem value="effect:drop-shadow" className="text-[11px]">FX: Drop Shadow</SelectItem>
-            <SelectItem value="effect:stroke" className="text-[11px]">FX: Stroke</SelectItem>
-            <SelectItem value="effect:glow" className="text-[11px]">FX: Glow</SelectItem>
+            {/* Kind */}
+            <SelectItem value="raster" className="text-[11px]">Kind: Pixel</SelectItem>
+            <SelectItem value="text" className="text-[11px]">Kind: Type</SelectItem>
+            <SelectItem value="shape" className="text-[11px]">Kind: Shape</SelectItem>
+            <SelectItem value="adjustment" className="text-[11px]">Kind: Adjustment</SelectItem>
+            <SelectItem value="smart-object" className="text-[11px]">Kind: Smart Object</SelectItem>
+            <SelectItem value="frame" className="text-[11px]">Kind: Frame</SelectItem>
+            <SelectItem value="artboard" className="text-[11px]">Kind: Artboard</SelectItem>
+            <SelectItem value="group" className="text-[11px]">Kind: Group</SelectItem>
+            <SelectItem value="video" className="text-[11px]">Kind: Video</SelectItem>
+            <SelectItem value="threeD" className="text-[11px]">Kind: 3D</SelectItem>
+            {/* Attribute */}
+            <SelectItem value="visible" className="text-[11px]">Attr: Visible</SelectItem>
+            <SelectItem value="hidden" className="text-[11px]">Attr: Hidden</SelectItem>
+            <SelectItem value="locked" className="text-[11px]">Attr: Locked</SelectItem>
+            <SelectItem value="linked" className="text-[11px]">Attr: Linked</SelectItem>
+            <SelectItem value="clipped" className="text-[11px]">Attr: Clipped</SelectItem>
+            <SelectItem value="masked" className="text-[11px]">Attr: Masked</SelectItem>
+            <SelectItem value="styled" className="text-[11px]">Attr: Has Effects</SelectItem>
+            <SelectItem value="smart" className="text-[11px]">Attr: Smart Source</SelectItem>
             <SelectItem value="attr:smart-filter" className="text-[11px]">Attr: Smart Filter</SelectItem>
             <SelectItem value="attr:knockout" className="text-[11px]">Attr: Knockout</SelectItem>
             <SelectItem value="attr:blend-if" className="text-[11px]">Attr: Blend If</SelectItem>
+            {/* Mode */}
+            <SelectItem value="mode:normal" className="text-[11px]">Mode: Normal</SelectItem>
+            <SelectItem value="mode:multiply" className="text-[11px]">Mode: Multiply</SelectItem>
+            <SelectItem value="mode:screen" className="text-[11px]">Mode: Screen</SelectItem>
+            <SelectItem value="mode:overlay" className="text-[11px]">Mode: Overlay</SelectItem>
+            <SelectItem value="mode:soft-light" className="text-[11px]">Mode: Soft Light</SelectItem>
+            <SelectItem value="mode:hard-light" className="text-[11px]">Mode: Hard Light</SelectItem>
+            <SelectItem value="mode:darken" className="text-[11px]">Mode: Darken</SelectItem>
+            <SelectItem value="mode:lighten" className="text-[11px]">Mode: Lighten</SelectItem>
+            {/* Effect */}
+            <SelectItem value="effect:drop-shadow" className="text-[11px]">FX: Drop Shadow</SelectItem>
+            <SelectItem value="effect:inner-shadow" className="text-[11px]">FX: Inner Shadow</SelectItem>
+            <SelectItem value="effect:outer-glow" className="text-[11px]">FX: Outer Glow</SelectItem>
+            <SelectItem value="effect:inner-glow" className="text-[11px]">FX: Inner Glow</SelectItem>
+            <SelectItem value="effect:bevel" className="text-[11px]">FX: Bevel & Emboss</SelectItem>
+            <SelectItem value="effect:satin" className="text-[11px]">FX: Satin</SelectItem>
+            <SelectItem value="effect:stroke" className="text-[11px]">FX: Stroke</SelectItem>
+            <SelectItem value="effect:color-overlay" className="text-[11px]">FX: Color Overlay</SelectItem>
+            <SelectItem value="effect:gradient-overlay" className="text-[11px]">FX: Gradient Overlay</SelectItem>
+            <SelectItem value="effect:pattern-overlay" className="text-[11px]">FX: Pattern Overlay</SelectItem>
+            {/* Color label */}
+            <SelectItem value="label:red" className="text-[11px]">Label: Red</SelectItem>
+            <SelectItem value="label:orange" className="text-[11px]">Label: Orange</SelectItem>
+            <SelectItem value="label:yellow" className="text-[11px]">Label: Yellow</SelectItem>
+            <SelectItem value="label:green" className="text-[11px]">Label: Green</SelectItem>
+            <SelectItem value="label:blue" className="text-[11px]">Label: Blue</SelectItem>
+            <SelectItem value="label:violet" className="text-[11px]">Label: Violet</SelectItem>
+            <SelectItem value="label:gray" className="text-[11px]">Label: Gray</SelectItem>
+            <SelectItem value="label:none" className="text-[11px]">Label: None</SelectItem>
+            {/* Channels */}
+            <SelectItem value="channel:r-off" className="text-[11px]">Channel: R Off</SelectItem>
             <SelectItem value="channel:g-off" className="text-[11px]">Channel: G Off</SelectItem>
+            <SelectItem value="channel:b-off" className="text-[11px]">Channel: B Off</SelectItem>
           </SelectContent>
         </Select>
         <div className="flex-1 flex items-center bg-[var(--ps-panel-2)] rounded-sm px-1 h-6">
@@ -1550,6 +1618,7 @@ function AdjustmentMaskThumb({ layer, maskState }: { layer: Layer; maskState: st
 }
 
 function SmartFilterMaskThumb({
+  layerId,
   layerName,
   filterName,
   mask,
@@ -1559,6 +1628,7 @@ function SmartFilterMaskThumb({
   density,
   feather,
 }: {
+  layerId: string
   layerName: string
   filterName: string
   mask?: HTMLCanvasElement | null
@@ -1570,7 +1640,7 @@ function SmartFilterMaskThumb({
 }) {
   const ref = React.useRef<HTMLCanvasElement>(null)
   const state = smartFilterMaskState(mask, enabled)
-  React.useEffect(() => {
+  const draw = React.useCallback(() => {
     const canvas = ref.current
     if (!canvas) return
     const ctx = canvas.getContext("2d")
@@ -1578,7 +1648,7 @@ function SmartFilterMaskThumb({
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.fillStyle = "#202020"
     ctx.fillRect(0, 0, canvas.width, canvas.height)
-    const sq = 3
+    const sq = 4
     ctx.fillStyle = "#2f2f2f"
     for (let y = 0; y < canvas.height; y += sq) {
       for (let x = 0; x < canvas.width; x += sq) {
@@ -1587,7 +1657,13 @@ function SmartFilterMaskThumb({
     }
     if (mask) {
       ctx.globalAlpha = enabled ? 1 : 0.35
-      ctx.drawImage(mask, 0, 0, canvas.width, canvas.height)
+      // Preserve aspect ratio so painted strokes are visible in the higher-res thumb.
+      const ratio = Math.min(canvas.width / mask.width, canvas.height / mask.height)
+      const dw = mask.width * ratio
+      const dh = mask.height * ratio
+      const dx = (canvas.width - dw) / 2
+      const dy = (canvas.height - dh) / 2
+      ctx.drawImage(mask, dx, dy, dw, dh)
       ctx.globalAlpha = 1
       const densityWidth = Math.round(canvas.width * Math.max(0, Math.min(1, density)))
       ctx.fillStyle = enabled ? "#5aa7ff" : "#777"
@@ -1604,7 +1680,7 @@ function SmartFilterMaskThumb({
     }
     ctx.fillStyle = linked ? "#9ad27b" : "#777"
     ctx.beginPath()
-    ctx.arc(canvas.width - 4, 4, 2, 0, Math.PI * 2)
+    ctx.arc(canvas.width - 5, 5, 2.5, 0, Math.PI * 2)
     ctx.fill()
     if (editing) {
       ctx.strokeStyle = "#5aa7ff"
@@ -1612,12 +1688,27 @@ function SmartFilterMaskThumb({
       ctx.strokeRect(1, 1, canvas.width - 2, canvas.height - 2)
     }
   }, [mask, enabled, editing, linked, density, feather])
+  React.useEffect(() => {
+    draw()
+  }, [draw])
+  // Smart filter masks are painted by the canvas without changing their
+  // identity, so subscribe to the render bus to redraw the thumbnail whenever
+  // the underlying mask canvas is mutated (paint strokes, fills, inverts).
+  useRenderSubscription(
+    React.useCallback(
+      (change: MergedRenderChange) => {
+        if (!mask) return
+        if (change.layerIds === "all" || change.layerIds.includes(layerId)) draw()
+      },
+      [draw, layerId, mask],
+    ),
+  )
 
   return (
     <canvas
       ref={ref}
       width={28}
-      height={20}
+      height={28}
       data-testid={`layer-smart-filter-mask-thumb-${layerName}-${filterName}`}
       data-smart-filter-mask-state={state}
       data-smart-filter-mask-linked={linked ? "true" : "false"}

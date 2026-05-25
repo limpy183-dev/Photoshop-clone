@@ -750,8 +750,22 @@ export function OptionsBar() {
                     <SelectItem value="point">Point</SelectItem>
                     <SelectItem value="3x3">3 x 3</SelectItem>
                     <SelectItem value="5x5">5 x 5</SelectItem>
+                    <SelectItem value="11x11">11 x 11</SelectItem>
+                    <SelectItem value="31x31">31 x 31</SelectItem>
+                    <SelectItem value="51x51">51 x 51</SelectItem>
+                    <SelectItem value="101x101">101 x 101</SelectItem>
                   </SelectContent>
                 </Select>
+                <label className="flex items-center gap-1.5 ml-1">
+                  <input
+                    aria-label="Auto-enhance quick selection"
+                    type="checkbox"
+                    checked={selectionOptions.autoEnhance ?? false}
+                    onChange={(e) => dispatch({ type: "set-selection-options", selectionOptions: { autoEnhance: e.target.checked } })}
+                    className="accent-[var(--ps-accent)]"
+                  />
+                  <span>Auto-Enhance</span>
+                </label>
                 <span className={labelClass}>Grow/Shrink:</span>
                 <Input
                   aria-label="Quick selection grow and shrink amount"
@@ -837,6 +851,16 @@ export function OptionsBar() {
               onChange={(event) => dispatch({ type: "set-selection-options", selectionOptions: { magneticFrequency: Math.max(0, Math.min(100, Number(event.target.value) || 0)) } })}
               className={numInputClass}
             />
+            <label className="flex items-center gap-1.5 ml-1" title="Modulate magnetic-lasso edge width by stylus pressure.">
+              <input
+                aria-label="Magnetic lasso pen pressure"
+                type="checkbox"
+                checked={selectionOptions.magneticPenPressure ?? false}
+                onChange={(event) => dispatch({ type: "set-selection-options", selectionOptions: { magneticPenPressure: event.target.checked } })}
+                className="accent-[var(--ps-accent)]"
+              />
+              <span>Pen Pressure</span>
+            </label>
           </>
         ) : null}
         {refineLike ? (

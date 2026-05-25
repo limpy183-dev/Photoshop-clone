@@ -6,7 +6,8 @@ import type { BrowserRasterExportFormat } from "./document-io"
 import type { DocumentReport, ImageAssetGeneratorSettings, Layer, PsDocument } from "./types"
 import { blobToZipEntry, createStoredZipBlob, type StoredZipEntry } from "./zip-packaging"
 
-export type ImageAssetGeneratorFormat = BrowserRasterExportFormat
+export type ImageAssetGeneratorFormat = BrowserRasterExportFormat | "svg"
+export type ImageAssetGeneratorSubFormat = "png-8" | "png-24" | "png-32"
 export type ImageAssetGeneratorTrigger = "manual" | "save" | "change"
 export type ImageAssetGeneratorIssueKind = "invalid" | "conflict" | "export-error" | "skipped"
 
@@ -16,6 +17,13 @@ export interface ParsedImageAssetName {
   scale: number
   format: ImageAssetGeneratorFormat
   extension: string
+  /** Optional explicit pixel dimensions from "300px x 200px filename.png". */
+  width?: number
+  height?: number
+  /** Optional JPEG quality 0-1 derived from "jpg6"/"jpg10"/"jpg12" prefixes. */
+  quality?: number
+  /** Optional PNG subformat ("png-8" indexed, "png-24" RGB, "png-32" RGBA). */
+  subFormat?: ImageAssetGeneratorSubFormat
 }
 
 export interface ImageAssetGeneratorIssue {
@@ -104,6 +112,14 @@ const SUPPORTED_FORMATS: Record<string, ImageAssetGeneratorFormat> = {
   webp: "webp",
   gif: "gif",
   avif: "avif",
+  svg: "svg",
+}
+
+/** Default JPEG qualities for Photoshop Generator-style "jpgN" prefixes (0-12 mapped to 0-1). */
+function jpgQualityFromLevel(level: number) {
+  if (!Number.isFinite(level)) return null
+  const clamped = Math.max(0, Math.min(12, Math.round(level)))
+  return clamped / 12
 }
 
 const RESERVED_WINDOWS_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
@@ -154,19 +170,66 @@ function parseAssetSegment(sourceText: string): ParsedImageAssetName | ImageAsse
 
   let filename = source
   let scale = 1
-  const scaleMatch = /^([0-9]+(?:\.[0-9]+)?)(%|x)\s+(.+)$/i.exec(source)
-  if (scaleMatch) {
-    const nextScale = normalizeScale(scaleMatch[1], scaleMatch[2].toLowerCase() as "%" | "x")
-    filename = scaleMatch[3].trim()
-    if (nextScale == null) {
-      return issue({ sourceText: source, filename, message: `Scale "${scaleMatch[1]}${scaleMatch[2]}" must be between 5% and 1000%.` })
+  let width: number | undefined
+  let height: number | undefined
+
+  const pixelMatch = /^([0-9]+)\s*px\s*[x×]\s*([0-9]+)\s*px\s+(.+)$/i.exec(source)
+  if (pixelMatch) {
+    const w = Number(pixelMatch[1])
+    const h = Number(pixelMatch[2])
+    filename = pixelMatch[3].trim()
+    if (!Number.isFinite(w) || !Number.isFinite(h) || w < 1 || h < 1 || w > 16384 || h > 16384) {
+      return issue({ sourceText: source, filename, message: `Pixel dimensions "${pixelMatch[1]}px x ${pixelMatch[2]}px" must each be between 1 and 16384.` })
     }
-    scale = nextScale
+    width = Math.round(w)
+    height = Math.round(h)
   } else {
-    const invalidScaleMatch = /^(\S*[x%])\s+(.+\.[A-Za-z0-9]{1,8})$/i.exec(source)
-    if (invalidScaleMatch) {
-      filename = invalidScaleMatch[2].trim()
-      return issue({ sourceText: source, filename, message: `Scale "${invalidScaleMatch[1]}" is not a valid numeric scale prefix.` })
+    const scaleMatch = /^([0-9]+(?:\.[0-9]+)?)(%|x)\s+(.+)$/i.exec(source)
+    if (scaleMatch) {
+      const nextScale = normalizeScale(scaleMatch[1], scaleMatch[2].toLowerCase() as "%" | "x")
+      filename = scaleMatch[3].trim()
+      if (nextScale == null) {
+        return issue({ sourceText: source, filename, message: `Scale "${scaleMatch[1]}${scaleMatch[2]}" must be between 5% and 1000%.` })
+      }
+      scale = nextScale
+    } else {
+      const invalidScaleMatch = /^(\S*[x%])\s+(.+\.[A-Za-z0-9]{1,8})$/i.exec(source)
+      if (invalidScaleMatch) {
+        filename = invalidScaleMatch[2].trim()
+        return issue({ sourceText: source, filename, message: `Scale "${invalidScaleMatch[1]}" is not a valid numeric scale prefix.` })
+      }
+    }
+  }
+
+  // Photoshop Generator format-quality prefixes embedded in the filename portion
+  // such as "icon.png24", "icon.jpg6", or "logo.jpg-80" are normalized off the filename
+  // and applied as a format override.
+  let subFormat: ImageAssetGeneratorSubFormat | undefined
+  let quality: number | undefined
+  const formatQualityMatch = /^(.+?\.)(png|jpg|jpeg)([-]?[0-9]{1,3})$/i.exec(filename)
+  if (formatQualityMatch) {
+    const baseFilename = formatQualityMatch[1] + formatQualityMatch[2]
+    const ext = formatQualityMatch[2].toLowerCase()
+    const numericPart = formatQualityMatch[3].replace(/^-/, "")
+    const numeric = Number(numericPart)
+    if (ext === "png") {
+      if (numericPart === "8" || numericPart === "24" || numericPart === "32") {
+        subFormat = `png-${numericPart}` as ImageAssetGeneratorSubFormat
+        filename = baseFilename
+      }
+    } else if (ext === "jpg" || ext === "jpeg") {
+      if (numericPart.length >= 1 && numericPart.length <= 3 && Number.isFinite(numeric)) {
+        if (numericPart.length <= 2 && numeric >= 0 && numeric <= 12) {
+          // Photoshop "jpg6" / "jpg10" / "jpg12" style
+          const q = jpgQualityFromLevel(numeric)
+          if (q != null) quality = q
+          filename = baseFilename
+        } else if (numeric >= 0 && numeric <= 100) {
+          // Numeric percentage like "jpg-80" / "jpg85"
+          quality = numeric / 100
+          filename = baseFilename
+        }
+      }
     }
   }
 
@@ -177,16 +240,28 @@ function parseAssetSegment(sourceText: string): ParsedImageAssetName | ImageAsse
     return issue({ sourceText: source, filename, message: `Unsupported generated asset format ".${extension}".` })
   }
 
+  if (subFormat && format !== "png") {
+    subFormat = undefined
+  }
+  if (quality != null && format !== "jpeg") {
+    quality = undefined
+  }
+
   const pathError = validateAssetPath(filename)
   if (pathError) return issue({ sourceText: source, filename, message: pathError })
 
-  return {
+  const parsed: ParsedImageAssetName = {
     sourceText: source,
     filename: filename.replace(/\\/g, "/"),
     scale,
     format,
     extension,
   }
+  if (width != null) parsed.width = width
+  if (height != null) parsed.height = height
+  if (quality != null) parsed.quality = quality
+  if (subFormat) parsed.subFormat = subFormat
+  return parsed
 }
 
 export function parseImageAssetLayerName(name: string): ImageAssetGeneratorParseResult {
@@ -336,11 +411,16 @@ export function renderImageAssetLayerCanvas(doc: PsDocument, asset: ImageAssetGe
   return cropTransparentBounds(source)
 }
 
-function scaleCanvas(source: HTMLCanvasElement, scale: number, matte?: string) {
-  const width = Math.max(1, Math.round(source.width * scale))
-  const height = Math.max(1, Math.round(source.height * scale))
-  if (scale === 1 && !matte) return source
-  const out = makeCanvas(width, height, matte)
+function scaleCanvas(
+  source: HTMLCanvasElement,
+  scale: number,
+  matte?: string,
+  explicit?: { width?: number; height?: number },
+) {
+  const targetWidth = explicit?.width ?? Math.max(1, Math.round(source.width * scale))
+  const targetHeight = explicit?.height ?? Math.max(1, Math.round(source.height * scale))
+  if (targetWidth === source.width && targetHeight === source.height && !matte) return source
+  const out = makeCanvas(targetWidth, targetHeight, matte)
   const ctx = out.getContext("2d")
   if (ctx) {
     ctx.imageSmoothingEnabled = true
@@ -348,6 +428,40 @@ function scaleCanvas(source: HTMLCanvasElement, scale: number, matte?: string) {
     ctx.drawImage(source, 0, 0, out.width, out.height)
   }
   return out
+}
+
+/** Best-effort 8-bit indexed PNG approximation by reducing to a 256-color palette via uniform quantization. */
+function quantizeCanvasToIndexed(source: HTMLCanvasElement) {
+  const ctx = source.getContext("2d")
+  if (!ctx) return source
+  const img = ctx.getImageData(0, 0, source.width, source.height)
+  const data = img.data
+  // 6 levels per channel (216 palette) + transparent passthrough — keeps to <= 256 colors.
+  const step = 51
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 8) {
+      data[i] = 0
+      data[i + 1] = 0
+      data[i + 2] = 0
+      data[i + 3] = 0
+      continue
+    }
+    data[i] = Math.round(data[i] / step) * step
+    data[i + 1] = Math.round(data[i + 1] / step) * step
+    data[i + 2] = Math.round(data[i + 2] / step) * step
+    data[i + 3] = data[i + 3] > 127 ? 255 : 0
+  }
+  const out = makeCanvas(source.width, source.height)
+  const outCtx = out.getContext("2d")
+  if (outCtx) outCtx.putImageData(img, 0, 0)
+  return out
+}
+
+/** Wrap a raster canvas in an SVG document that embeds the bitmap as a base64 PNG. */
+function canvasToSvgBlob(canvas: HTMLCanvasElement) {
+  const pngDataUrl = typeof canvas.toDataURL === "function" ? canvas.toDataURL("image/png") : ""
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${canvas.width}" height="${canvas.height}" viewBox="0 0 ${canvas.width} ${canvas.height}"><image width="${canvas.width}" height="${canvas.height}" xlink:href="${pngDataUrl}" preserveAspectRatio="none"/></svg>`
+  return new Blob([svg], { type: "image/svg+xml" })
 }
 
 function dataUrlToBlob(dataUrl: string) {
@@ -360,18 +474,25 @@ function dataUrlToBlob(dataUrl: string) {
 }
 
 async function canvasToBlob(canvas: HTMLCanvasElement, asset: ImageAssetGeneratorAsset, quality: number) {
+  if (asset.format === "svg") return canvasToSvgBlob(canvas)
   if (asset.format === "gif") return dataUrlToBlob(canvasToGifDataUrl(canvas, true))
-  if (typeof canvas.toBlob === "function") {
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, rasterMime(asset.format), quality))
+
+  let source = canvas
+  if (asset.format === "png" && asset.subFormat === "png-8") {
+    source = quantizeCanvasToIndexed(canvas)
+  }
+
+  const mime = rasterMime(asset.format)
+  if (typeof source.toBlob === "function") {
+    const blob = await new Promise<Blob | null>((resolve) => source.toBlob(resolve, mime, quality))
     if (!blob) throw new Error("Canvas encoder returned no blob.")
-    const expectedMime = rasterMime(asset.format)
-    if ((asset.format === "webp" || asset.format === "avif") && blob.type && blob.type.toLowerCase() !== expectedMime) {
-      throw new Error(`${asset.format.toUpperCase()} encoder returned ${blob.type}; this browser does not support ${expectedMime} export.`)
+    if ((asset.format === "webp" || asset.format === "avif") && blob.type && blob.type.toLowerCase() !== mime) {
+      throw new Error(`${asset.format.toUpperCase()} encoder returned ${blob.type}; this browser does not support ${mime} export.`)
     }
     return blob
   }
-  if (typeof canvas.toDataURL === "function") {
-    return dataUrlToBlob(canvas.toDataURL(rasterMime(asset.format), quality))
+  if (typeof source.toDataURL === "function") {
+    return dataUrlToBlob(source.toDataURL(mime, quality))
   }
   throw new Error("Canvas export is unavailable in this browser context.")
 }
@@ -382,10 +503,19 @@ async function renderAndEncodeAsset(
   options: Required<Pick<ImageAssetGeneratorRunOptions, "quality" | "matte">>,
 ) {
   const rendered = renderImageAssetLayerCanvas(doc, asset)
-  const scaled = scaleCanvas(rendered, asset.scale, asset.format === "jpeg" ? options.matte : undefined)
+  const explicit = asset.width != null || asset.height != null
+    ? { width: asset.width, height: asset.height }
+    : undefined
+  const scaled = scaleCanvas(
+    rendered,
+    asset.scale,
+    asset.format === "jpeg" ? options.matte : undefined,
+    explicit,
+  )
   const sizeError = canvasSizeError(scaled.width, scaled.height, "Generated asset")
   if (sizeError) throw new Error(sizeError)
-  const blob = await canvasToBlob(scaled, asset, options.quality)
+  const quality = asset.quality != null ? asset.quality : options.quality
+  const blob = await canvasToBlob(scaled, asset, quality)
   return { blob, width: scaled.width, height: scaled.height }
 }
 
@@ -460,7 +590,9 @@ export async function writeImageAssetsToDirectory(
     const dir = parts.length ? await directoryForPath(directory, parts) : directory
     const handle = await dir.getFileHandle(fileName, { create: true })
     const writable = await handle.createWritable()
-    await writable.write(new Blob([entry.data], { type: rasterMime(result.written[index]?.format ?? "png") }))
+    const writtenFormat = result.written[index]?.format ?? "png"
+    const mime = writtenFormat === "svg" ? "image/svg+xml" : rasterMime(writtenFormat)
+    await writable.write(new Blob([entry.data], { type: mime }))
     await writable.close()
   }
   return result

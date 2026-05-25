@@ -1,7 +1,8 @@
 "use client"
 
 import * as React from "react"
-import { useEditor, makeCanvas } from "../editor-context"
+import { useEditor, makeCanvas, useRenderSubscription } from "../editor-context"
+import type { MergedRenderChange } from "../render-bus"
 import { FILTERS, type FilterParam } from "../filters"
 import { Slider } from "@/components/ui/slider"
 import { Type as TypeIcon, Square, Pen, Image, Layers as LayersIcon, Paintbrush, Eraser, Move, Scissors, Wand2, Eye, EyeOff, Link2, Link2Off } from "lucide-react"
@@ -418,6 +419,7 @@ function LayerSection({
                       {enabled ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
                     </button>
                     <SmartFilterMaskThumb
+                      layerId={layer.id}
                       filterName={filter.name}
                       mask={filter.mask}
                       enabled={maskEnabled}
@@ -590,6 +592,7 @@ function LayerSection({
 }
 
 function SmartFilterMaskThumb({
+  layerId,
   filterName,
   mask,
   enabled,
@@ -598,6 +601,7 @@ function SmartFilterMaskThumb({
   density,
   feather,
 }: {
+  layerId: string
   filterName: string
   mask?: HTMLCanvasElement | null
   enabled: boolean
@@ -608,14 +612,14 @@ function SmartFilterMaskThumb({
 }) {
   const ref = React.useRef<HTMLCanvasElement>(null)
   const state = smartFilterMaskState(mask, enabled)
-  React.useEffect(() => {
+  const draw = React.useCallback(() => {
     const canvas = ref.current
     if (!canvas) return
     const ctx = canvas.getContext("2d")!
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.fillStyle = "#202020"
     ctx.fillRect(0, 0, canvas.width, canvas.height)
-    const sq = 3
+    const sq = 4
     ctx.fillStyle = "#2f2f2f"
     for (let y = 0; y < canvas.height; y += sq) {
       for (let x = 0; x < canvas.width; x += sq) {
@@ -624,7 +628,12 @@ function SmartFilterMaskThumb({
     }
     if (mask) {
       ctx.globalAlpha = enabled ? 1 : 0.35
-      ctx.drawImage(mask, 0, 0, canvas.width, canvas.height)
+      const ratio = Math.min(canvas.width / mask.width, canvas.height / mask.height)
+      const dw = mask.width * ratio
+      const dh = mask.height * ratio
+      const dx = (canvas.width - dw) / 2
+      const dy = (canvas.height - dh) / 2
+      ctx.drawImage(mask, dx, dy, dw, dh)
       ctx.globalAlpha = 1
       const densityWidth = Math.round(canvas.width * Math.max(0, Math.min(1, density)))
       ctx.fillStyle = enabled ? "#5aa7ff" : "#777"
@@ -641,7 +650,7 @@ function SmartFilterMaskThumb({
     }
     ctx.fillStyle = linked ? "#9ad27b" : "#777"
     ctx.beginPath()
-    ctx.arc(canvas.width - 4, 4, 2, 0, Math.PI * 2)
+    ctx.arc(canvas.width - 5, 5, 2.5, 0, Math.PI * 2)
     ctx.fill()
     if (editing) {
       ctx.strokeStyle = "#5aa7ff"
@@ -649,11 +658,23 @@ function SmartFilterMaskThumb({
       ctx.strokeRect(1, 1, canvas.width - 2, canvas.height - 2)
     }
   }, [mask, enabled, linked, editing, density, feather])
+  React.useEffect(() => {
+    draw()
+  }, [draw])
+  useRenderSubscription(
+    React.useCallback(
+      (change: MergedRenderChange) => {
+        if (!mask) return
+        if (change.layerIds === "all" || change.layerIds.includes(layerId)) draw()
+      },
+      [draw, layerId, mask],
+    ),
+  )
   return (
     <canvas
       ref={ref}
       width={28}
-      height={20}
+      height={28}
       data-testid={`properties-smart-filter-mask-thumb-${filterName}`}
       data-smart-filter-mask-state={state}
       data-smart-filter-mask-linked={linked ? "true" : "false"}

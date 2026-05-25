@@ -2,12 +2,34 @@
 
 import type { HighBitImage } from "./color-pipeline"
 import { PSD_COLOR_MODE, type PsdColorModeValue } from "./psd-color-modes"
-import type { PsDocument } from "./types"
+import type { BlendMode, Layer, PsDocument } from "./types"
 
 interface NativeCompositePsdOptions {
   psb?: boolean
   xmpMetadata?: string
   colorModeData?: Uint8Array
+}
+
+export interface NativeLayeredPsdLayerInput {
+  /** Layer identity preserved through the PSD layer name. */
+  name: string
+  /** Layer image at document size. Must match writer bit-depth and color mode. */
+  image: HighBitImage
+  /** Per-layer blend mode (clamped to ag-psd's known table). */
+  blendMode?: BlendMode
+  /** 0..1 opacity. */
+  opacity?: number
+  /** Hide flag (Photoshop layer visibility). */
+  hidden?: boolean
+  /** True when the layer's source image is intrinsically high-bit. */
+  hasHighBitSource: boolean
+}
+
+interface NativeLayeredPsdOptions extends NativeCompositePsdOptions {
+  /** Composite image at document size. */
+  composite: HighBitImage
+  /** Per-layer pixel data + metadata for the layered Layer&Mask section. */
+  layers: NativeLayeredPsdLayerInput[]
 }
 
 type UnitSampler = (pixelIndex: number) => number
@@ -43,8 +65,18 @@ class BinaryWriter {
     this.offset += 2
   }
 
+  i16(value: number) {
+    this.view.setInt16(this.offset, value, false)
+    this.offset += 2
+  }
+
   u32(value: number) {
     this.view.setUint32(this.offset, value >>> 0, false)
+    this.offset += 4
+  }
+
+  i32(value: number) {
+    this.view.setInt32(this.offset, value | 0, false)
     this.offset += 4
   }
 
@@ -58,6 +90,132 @@ class BinaryWriter {
   f32(value: number) {
     this.view.setFloat32(this.offset, value, false)
     this.offset += 4
+  }
+}
+
+/** Resizable big-endian byte buffer that grows automatically. */
+class GrowingWriter {
+  private buffer = new Uint8Array(64 * 1024)
+  private length = 0
+
+  private ensure(extra: number) {
+    if (this.length + extra <= this.buffer.length) return
+    let nextSize = this.buffer.length
+    while (nextSize < this.length + extra) nextSize *= 2
+    const next = new Uint8Array(nextSize)
+    next.set(this.buffer.subarray(0, this.length))
+    this.buffer = next
+  }
+
+  get position() {
+    return this.length
+  }
+
+  reserveOffset(): number {
+    this.ensure(4)
+    const offset = this.length
+    this.length += 4
+    return offset
+  }
+
+  reserveOffsetU64(): number {
+    this.ensure(8)
+    const offset = this.length
+    this.length += 8
+    return offset
+  }
+
+  writeReservedLength(offset: number, valueLengthFrom: number) {
+    const length = this.length - valueLengthFrom
+    const view = new DataView(this.buffer.buffer, this.buffer.byteOffset, this.buffer.byteLength)
+    view.setUint32(offset, length >>> 0, false)
+  }
+
+  writeReservedLengthU64(offset: number, valueLengthFrom: number) {
+    const length = this.length - valueLengthFrom
+    const view = new DataView(this.buffer.buffer, this.buffer.byteOffset, this.buffer.byteLength)
+    const high = Math.floor(length / 0x100000000)
+    const low = length >>> 0
+    view.setUint32(offset, high >>> 0, false)
+    view.setUint32(offset + 4, low >>> 0, false)
+  }
+
+  ascii(value: string) {
+    this.ensure(value.length)
+    for (let i = 0; i < value.length; i++) this.buffer[this.length++] = value.charCodeAt(i) & 0xff
+  }
+
+  pascalPadded(value: string, padTo: number) {
+    const ascii = value.slice(0, 255)
+    const len = ascii.length
+    const stored = 1 + len
+    const padded = Math.ceil(stored / padTo) * padTo
+    this.ensure(padded)
+    this.buffer[this.length++] = len
+    for (let i = 0; i < len; i++) this.buffer[this.length++] = ascii.charCodeAt(i) & 0xff
+    for (let i = stored; i < padded; i++) this.buffer[this.length++] = 0
+  }
+
+  u8(value: number) {
+    this.ensure(1)
+    this.buffer[this.length++] = value & 0xff
+  }
+
+  u16(value: number) {
+    this.ensure(2)
+    const view = new DataView(this.buffer.buffer, this.buffer.byteOffset, this.buffer.byteLength)
+    view.setUint16(this.length, value & 0xffff, false)
+    this.length += 2
+  }
+
+  i16(value: number) {
+    this.ensure(2)
+    const view = new DataView(this.buffer.buffer, this.buffer.byteOffset, this.buffer.byteLength)
+    view.setInt16(this.length, value | 0, false)
+    this.length += 2
+  }
+
+  u32(value: number) {
+    this.ensure(4)
+    const view = new DataView(this.buffer.buffer, this.buffer.byteOffset, this.buffer.byteLength)
+    view.setUint32(this.length, value >>> 0, false)
+    this.length += 4
+  }
+
+  i32(value: number) {
+    this.ensure(4)
+    const view = new DataView(this.buffer.buffer, this.buffer.byteOffset, this.buffer.byteLength)
+    view.setInt32(this.length, value | 0, false)
+    this.length += 4
+  }
+
+  u64(value: number) {
+    this.ensure(8)
+    const high = Math.floor(value / 0x100000000)
+    const low = value >>> 0
+    const view = new DataView(this.buffer.buffer, this.buffer.byteOffset, this.buffer.byteLength)
+    view.setUint32(this.length, high >>> 0, false)
+    view.setUint32(this.length + 4, low >>> 0, false)
+    this.length += 8
+  }
+
+  bytesRaw(value: Uint8Array) {
+    this.ensure(value.length)
+    this.buffer.set(value, this.length)
+    this.length += value.length
+  }
+
+  bytesAt(value: Uint8Array, at: number) {
+    this.buffer.set(value, at)
+  }
+
+  pad(count: number) {
+    this.ensure(count)
+    for (let i = 0; i < count; i++) this.buffer[this.length++] = 0
+  }
+
+  toBytes(): Uint8Array {
+    return this.buffer.subarray(0, this.length)
   }
 }
 
@@ -240,3 +398,318 @@ export function writeNativeCompositePsd(
   writeImageData(writer, image, plan.channels, bitDepth)
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + writer.position)
 }
+
+/* -------------------------------------------------------------------------- */
+/* Layered native PSD writer (high-bit Grayscale + RGB)                        */
+/* -------------------------------------------------------------------------- */
+
+// ag-psd's blendMode strings as recorded by Photoshop. Mirrored locally so we
+// can encode our app's hyphenated names without pulling in ag-psd's reader.
+const BLEND_MODE_CODES: Record<string, string> = {
+  normal: "norm",
+  dissolve: "diss",
+  darken: "dark",
+  multiply: "mul ",
+  "color-burn": "idiv",
+  "linear-burn": "lbrn",
+  "darker-color": "dkCl",
+  lighten: "lite",
+  screen: "scrn",
+  "color-dodge": "div ",
+  "linear-dodge": "lddg",
+  "lighter-color": "lgCl",
+  overlay: "over",
+  "soft-light": "sLit",
+  "hard-light": "hLit",
+  "vivid-light": "vLit",
+  "linear-light": "lLit",
+  "pin-light": "pLit",
+  "hard-mix": "hMix",
+  difference: "diff",
+  exclusion: "smud",
+  subtract: "fsub",
+  divide: "fdiv",
+  hue: "hue ",
+  saturation: "sat ",
+  color: "colr",
+  luminosity: "lum ",
+}
+
+function blendCode(mode: BlendMode | undefined): string {
+  if (!mode) return "norm"
+  return BLEND_MODE_CODES[mode] ?? "norm"
+}
+
+/** Encode a single channel plane as raw (uncompressed) data with leading u16 compression marker. */
+function writeChannelPlaneRaw(
+  out: GrowingWriter,
+  image: HighBitImage,
+  sample: UnitSampler,
+  bitDepth: 8 | 16 | 32,
+): number {
+  const start = out.position
+  out.u16(0) // compression = raw
+  const pixels = image.width * image.height
+  for (let i = 0; i < pixels; i++) {
+    const unit = sample(i)
+    if (bitDepth === 8) out.u8(Math.max(0, Math.min(255, Math.round(unit * 255))))
+    else if (bitDepth === 16) out.u16(Math.max(0, Math.min(65535, Math.round(unit * 65535))))
+    else {
+      // f32
+      const ensureView = new DataView(new ArrayBuffer(4))
+      ensureView.setFloat32(0, unit, false)
+      out.u8(ensureView.getUint8(0))
+      out.u8(ensureView.getUint8(1))
+      out.u8(ensureView.getUint8(2))
+      out.u8(ensureView.getUint8(3))
+    }
+  }
+  return out.position - start
+}
+
+interface PreparedLayer {
+  name: string
+  blendMode: BlendMode
+  opacity: number
+  hidden: boolean
+  hasHighBitSource: boolean
+  channelData: Uint8Array
+  /** [channelId, byteLength] pairs to emit in the layer record. */
+  channelInfo: Array<{ id: number; length: number }>
+}
+
+function prepareLayer(
+  layer: NativeLayeredPsdLayerInput,
+  colorMode: PsdColorModeValue,
+  bitDepth: 8 | 16 | 32,
+): PreparedLayer {
+  const out = new GrowingWriter()
+  const channelInfo: Array<{ id: number; length: number }> = []
+  const a = (i: number) => sampleUnit(layer.image, i, 3)
+  if (colorMode === PSD_COLOR_MODE.Grayscale) {
+    const gray = (i: number) =>
+      sampleUnit(layer.image, i, 0) * 0.2126 +
+      sampleUnit(layer.image, i, 1) * 0.7152 +
+      sampleUnit(layer.image, i, 2) * 0.0722
+    const grayLen = writeChannelPlaneRaw(out, layer.image, gray, bitDepth)
+    channelInfo.push({ id: 0, length: grayLen })
+    const alphaLen = writeChannelPlaneRaw(out, layer.image, a, bitDepth)
+    channelInfo.push({ id: -1, length: alphaLen })
+  } else {
+    // RGB
+    const r = (i: number) => sampleUnit(layer.image, i, 0)
+    const g = (i: number) => sampleUnit(layer.image, i, 1)
+    const b = (i: number) => sampleUnit(layer.image, i, 2)
+    const rLen = writeChannelPlaneRaw(out, layer.image, r, bitDepth)
+    channelInfo.push({ id: 0, length: rLen })
+    const gLen = writeChannelPlaneRaw(out, layer.image, g, bitDepth)
+    channelInfo.push({ id: 1, length: gLen })
+    const bLen = writeChannelPlaneRaw(out, layer.image, b, bitDepth)
+    channelInfo.push({ id: 2, length: bLen })
+    const aLen = writeChannelPlaneRaw(out, layer.image, a, bitDepth)
+    channelInfo.push({ id: -1, length: aLen })
+  }
+  return {
+    name: layer.name,
+    blendMode: layer.blendMode ?? "normal",
+    opacity: layer.opacity ?? 1,
+    hidden: !!layer.hidden,
+    hasHighBitSource: layer.hasHighBitSource,
+    channelData: out.toBytes(),
+    channelInfo,
+  }
+}
+
+/** Sequential write of all layer records with correct length fields. */
+function writeLayerInfoSection(
+  layers: PreparedLayer[],
+  width: number,
+  height: number,
+  psb: boolean,
+  globalAlpha: boolean,
+): Uint8Array {
+  const out = new GrowingWriter()
+  // Signed layer count: negative => global alpha present.
+  out.i16(globalAlpha ? -layers.length : layers.length)
+
+  for (const layer of layers) {
+    out.i32(0) // top
+    out.i32(0) // left
+    out.i32(height) // bottom
+    out.i32(width) // right
+    out.u16(layer.channelInfo.length)
+    for (const ch of layer.channelInfo) {
+      out.i16(ch.id)
+      if (psb) out.u64(ch.length)
+      else out.u32(ch.length)
+    }
+    out.ascii("8BIM")
+    out.ascii(blendCode(layer.blendMode))
+    out.u8(Math.max(0, Math.min(255, Math.round((layer.opacity ?? 1) * 255))))
+    out.u8(0) // clipping = base
+    let flags = 0x08 // photoshop 5+ flags meaningful
+    if (layer.hidden) flags |= 0x02
+    out.u8(flags)
+    out.u8(0) // filler
+    // Extra data section: length-prefixed (4 bytes), contains
+    // layer-mask data (4 zero bytes), blending ranges (4 zero bytes),
+    // pascal-padded layer name. We don't emit additional info blocks for
+    // the high-bit path — ag-psd's writer rejects 16-bit so any extras
+    // are surfaced through the XMP app preservation envelope at the
+    // composite level.
+    const extraStart = out.reserveOffset()
+    const extraBodyStart = out.position
+    // Layer mask data: length=0
+    out.u32(0)
+    // Layer blending ranges: length=0
+    out.u32(0)
+    // Layer name (Pascal, padded to 4)
+    out.pascalPadded(layer.name, 4)
+    out.writeReservedLength(extraStart, extraBodyStart)
+  }
+
+  // Channel image data, in the same order as the layer records.
+  for (const layer of layers) {
+    out.bytesRaw(layer.channelData)
+  }
+
+  // Layer Info section is the inner bytes returned here; caller wraps in length.
+  // Photoshop expects layer info length to be padded to 2-byte boundary.
+  if (out.position % 2 === 1) out.u8(0)
+  return out.toBytes()
+}
+
+/**
+ * Write a layered native PSD with per-layer 16-bit pixel data for Grayscale
+ * or RGB documents. Supports `psb`. ag-psd's writer hardcodes 8-bit, so this
+ * is the fallback path for high-bit layered exports; the resulting file is a
+ * valid PSD/PSB Photoshop can open as a layered document.
+ *
+ * Limitations vs full Photoshop fidelity:
+ *  - Layers are emitted as a flat list (groups are dissolved). Section
+ *    dividers, masks, and adjustment-info blocks are omitted from each layer
+ *    record because ag-psd's high-bit writer path is missing those entirely;
+ *    surrounding code preserves them through the XMP `AppPreservation` payload.
+ *  - Layer bounds default to full document (no per-layer crop) because the
+ *    high-bit upstream image is always at document size.
+ *  - Each channel plane is emitted with `compression=0` (raw); RLE/zip
+ *    compression isn't yet implemented in this path. File size will be larger
+ *    than ag-psd's 8-bit output but Photoshop reads raw planes natively.
+ */
+export function writeNativeLayeredPsd(
+  doc: PsDocument,
+  options: NativeLayeredPsdOptions,
+): ArrayBuffer {
+  if (doc.colorMode !== "RGB" && doc.colorMode !== "Grayscale") {
+    throw new Error("writeNativeLayeredPsd: only RGB and Grayscale documents are supported")
+  }
+  const bitDepth: 8 | 16 | 32 = doc.bitDepth === 16 ? 16 : doc.bitDepth === 32 ? 32 : 8
+  const plan = channelPlan(doc, options.composite)
+  const colorModeData = options.colorModeData ?? new Uint8Array()
+  const imageResources = buildImageResources(options.xmpMetadata)
+  const psb = !!options.psb
+
+  // Prepare per-layer channel data up-front so we know channel-byte lengths
+  // before emitting the layer records (PSD layers carry their channel byte
+  // lengths in the layer record header).
+  const prepared = options.layers.map((layer) =>
+    prepareLayer(layer, plan.colorMode, bitDepth),
+  )
+  const globalAlpha = plan.channels.length === (doc.colorMode === "Grayscale" ? 2 : 4)
+
+  const layerInfo = writeLayerInfoSection(prepared, doc.width, doc.height, psb, globalAlpha)
+
+  // Global Layer Mask Info: length=0 (no global mask).
+  const globalLayerMaskInfo = new Uint8Array(psb ? 4 : 4)
+  // u32 zero-length section. Same in psd / psb (the outer Layer & Mask
+  // section length is what varies between u32/u64).
+
+  // Now write the full PSD with all sections.
+  const final = new GrowingWriter()
+  final.ascii("8BPS")
+  final.u16(psb ? 2 : 1)
+  final.pad(6)
+  final.u16(plan.channels.length)
+  final.u32(doc.height)
+  final.u32(doc.width)
+  final.u16(bitDepth)
+  final.u16(plan.colorMode)
+
+  // Color mode data section
+  final.u32(colorModeData.length)
+  if (colorModeData.length) final.bytesRaw(colorModeData)
+
+  // Image resources section
+  final.u32(imageResources.length)
+  if (imageResources.length) final.bytesRaw(imageResources)
+
+  // Layer and Mask Info section (length is u32 for PSD, u64 for PSB)
+  if (psb) {
+    const lenOffset = final.reserveOffsetU64()
+    const bodyStart = final.position
+    // Layer Info subsection
+    if (psb) {
+      const layerInfoLenOffset = final.reserveOffsetU64()
+      const layerInfoStart = final.position
+      final.bytesRaw(layerInfo)
+      final.writeReservedLengthU64(layerInfoLenOffset, layerInfoStart)
+    } else {
+      // unreachable in psb branch
+    }
+    final.bytesRaw(globalLayerMaskInfo)
+    final.writeReservedLengthU64(lenOffset, bodyStart)
+  } else {
+    const lenOffset = final.reserveOffset()
+    const bodyStart = final.position
+    // Layer Info subsection (psd: u32 length)
+    const layerInfoLenOffset = final.reserveOffset()
+    const layerInfoStart = final.position
+    final.bytesRaw(layerInfo)
+    final.writeReservedLength(layerInfoLenOffset, layerInfoStart)
+    final.bytesRaw(globalLayerMaskInfo)
+    final.writeReservedLength(lenOffset, bodyStart)
+  }
+
+  // Composite image data
+  // Photoshop's spec requires this section even for layered PSDs. Use raw
+  // planes (compression=0). Photoshop reads raw composite planes; some apps
+  // prefer RLE here but raw is universally accepted.
+  final.u16(0) // compression = raw
+  const pixels = options.composite.width * options.composite.height
+  for (const sample of plan.channels) {
+    for (let i = 0; i < pixels; i++) {
+      const unit = sample(i)
+      if (bitDepth === 8) final.u8(Math.max(0, Math.min(255, Math.round(unit * 255))))
+      else if (bitDepth === 16) final.u16(Math.max(0, Math.min(65535, Math.round(unit * 65535))))
+      else {
+        const view = new DataView(new ArrayBuffer(4))
+        view.setFloat32(0, unit, false)
+        final.u8(view.getUint8(0))
+        final.u8(view.getUint8(1))
+        final.u8(view.getUint8(2))
+        final.u8(view.getUint8(3))
+      }
+    }
+  }
+
+  const bytes = final.toBytes()
+  const buffer = new ArrayBuffer(bytes.length)
+  new Uint8Array(buffer).set(bytes)
+  return buffer
+}
+
+/**
+ * Returns true if a layered native PSD export is supported for `doc`. We
+ * cover the common high-bit layered case (Grayscale or RGB at >=8 bits).
+ * CMYK / Lab / Multichannel layered output still falls through to the
+ * composite native path because per-layer color-mode conversion (with masks
+ * + blend modes) is non-trivial and out of scope for a browser-local writer.
+ */
+export function canWriteNativeLayeredPsd(doc: PsDocument): boolean {
+  if (doc.colorMode !== "RGB" && doc.colorMode !== "Grayscale") return false
+  // 1-bit Bitmap layered output is not common in the wild and ag-psd-native
+  // writers don't expose it; surface as composite.
+  if (doc.colorMode === "RGB" && doc.bitDepth === 8) return false // ag-psd handles this
+  return doc.bitDepth === 16 || doc.bitDepth === 32 || doc.colorMode === "Grayscale"
+}
+

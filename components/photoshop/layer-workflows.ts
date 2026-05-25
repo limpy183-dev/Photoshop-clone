@@ -1,5 +1,7 @@
 import type {
   AdvancedBlending,
+  BlendIfChannel,
+  BlendIfChannels,
   BlendIfRange,
   BlendMode,
   Guide,
@@ -159,10 +161,18 @@ function layerMatchesAttribute(layer: Layer, value: string) {
   if (value === "smart-filter" || value === "smart-filters") return !!layer.smartFilters?.length
   if (value === "smart") return !!(layer.smartObject || layer.kind === "smart-object")
   if (value === "clipped") return !!layer.clipped
+  if (value === "linked") return !!layer.linkGroupId
   if (value === "knockout") return !!layer.advancedBlending && layer.advancedBlending.knockout !== "none"
   if (value === "blend-if") {
     const advanced = normalizeAdvancedBlending(layer.advancedBlending)
-    return !isDefaultBlendIfRange(advanced.blendIfThis) || !isDefaultBlendIfRange(advanced.blendIfUnderlying)
+    if (!isDefaultBlendIfRange(advanced.blendIfThis) || !isDefaultBlendIfRange(advanced.blendIfUnderlying)) return true
+    for (const range of Object.values(advanced.blendIfThisChannels ?? {})) {
+      if (range && !isDefaultBlendIfRange(range)) return true
+    }
+    for (const range of Object.values(advanced.blendIfUnderlyingChannels ?? {})) {
+      if (range && !isDefaultBlendIfRange(range)) return true
+    }
+    return false
   }
   if (value === "empty") return isLayerEmpty(layer)
   return false
@@ -292,9 +302,87 @@ export function defaultAdvancedBlending(): AdvancedBlending {
   }
 }
 
+const BLEND_IF_CHANNELS: readonly BlendIfChannel[] = ["gray", "r", "g", "b"] as const
+
+function normalizeBlendIfChannels(
+  channels: BlendIfChannels | undefined,
+  grayFallback: BlendIfRange,
+): BlendIfChannels | undefined {
+  if (!channels) return undefined
+  const out: BlendIfChannels = {}
+  let kept = false
+  for (const channel of BLEND_IF_CHANNELS) {
+    const raw = channels[channel]
+    if (!raw) continue
+    const normalized = normalizeBlendIfRange(raw)
+    // Gray track always mirrors the canonical blendIfThis/blendIfUnderlying;
+    // drop the duplicate so PSD round-trips stay tight.
+    if (channel === "gray") {
+      if (
+        normalized.black === grayFallback.black &&
+        normalized.blackFeather === grayFallback.blackFeather &&
+        normalized.whiteFeather === grayFallback.whiteFeather &&
+        normalized.white === grayFallback.white
+      ) {
+        continue
+      }
+    } else if (isDefaultBlendIfRange(normalized)) {
+      continue
+    }
+    out[channel] = normalized
+    kept = true
+  }
+  return kept ? out : undefined
+}
+
+export function getBlendIfRangeForChannel(
+  advanced: AdvancedBlending,
+  side: "this" | "underlying",
+  channel: BlendIfChannel,
+): BlendIfRange {
+  if (channel === "gray") {
+    return side === "this" ? advanced.blendIfThis : advanced.blendIfUnderlying
+  }
+  const overrides = side === "this" ? advanced.blendIfThisChannels : advanced.blendIfUnderlyingChannels
+  const override = overrides?.[channel]
+  if (override) return normalizeBlendIfRange(override)
+  return defaultBlendIfRange()
+}
+
+export function setBlendIfRangeForChannel(
+  advanced: AdvancedBlending,
+  side: "this" | "underlying",
+  channel: BlendIfChannel,
+  range: BlendIfRange,
+): AdvancedBlending {
+  const next = normalizeAdvancedBlending(advanced)
+  const normalized = normalizeBlendIfRange(range)
+  if (channel === "gray") {
+    if (side === "this") next.blendIfThis = normalized
+    else next.blendIfUnderlying = normalized
+    return next
+  }
+  const key = side === "this" ? "blendIfThisChannels" : "blendIfUnderlyingChannels"
+  const existing: BlendIfChannels = { ...(next[key] ?? {}) }
+  if (isDefaultBlendIfRange(normalized)) {
+    delete existing[channel]
+  } else {
+    existing[channel] = normalized
+  }
+  const keys = Object.keys(existing) as BlendIfChannel[]
+  next[key] = keys.length ? existing : undefined
+  return next
+}
+
 export function normalizeAdvancedBlending(advanced?: Partial<AdvancedBlending>): AdvancedBlending {
   const defaults = defaultAdvancedBlending()
   const knockout = advanced?.knockout === "shallow" || advanced?.knockout === "deep" ? advanced.knockout : "none"
+  const blendIfThis = normalizeBlendIfRange(advanced?.blendIfThis)
+  const blendIfUnderlying = normalizeBlendIfRange(advanced?.blendIfUnderlying)
+  const activeChannelRaw = advanced?.blendIfActiveChannel
+  const blendIfActiveChannel: BlendIfChannel | undefined = activeChannelRaw && BLEND_IF_CHANNELS.includes(activeChannelRaw)
+    ? activeChannelRaw
+    : undefined
   return {
     fillOpacity: clamp01(advanced?.fillOpacity ?? defaults.fillOpacity, defaults.fillOpacity),
     knockout,
@@ -303,8 +391,11 @@ export function normalizeAdvancedBlending(advanced?: Partial<AdvancedBlending>):
       g: advanced?.channels?.g !== false,
       b: advanced?.channels?.b !== false,
     },
-    blendIfThis: normalizeBlendIfRange(advanced?.blendIfThis),
-    blendIfUnderlying: normalizeBlendIfRange(advanced?.blendIfUnderlying),
+    blendIfThis,
+    blendIfUnderlying,
+    blendIfThisChannels: normalizeBlendIfChannels(advanced?.blendIfThisChannels, blendIfThis),
+    blendIfUnderlyingChannels: normalizeBlendIfChannels(advanced?.blendIfUnderlyingChannels, blendIfUnderlying),
+    blendIfActiveChannel,
     transparencyShapesLayer: advanced?.transparencyShapesLayer !== false,
     layerMaskHidesEffects: advanced?.layerMaskHidesEffects === true,
     vectorMaskHidesEffects: advanced?.vectorMaskHidesEffects === true,

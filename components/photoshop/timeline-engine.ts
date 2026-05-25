@@ -157,6 +157,76 @@ export function renderTimelineFrameComposite(
   return renderDocumentComposite(projected, options)
 }
 
+/**
+ * Composite a frame with the per-frame transition applied at the given
+ * progress [0,1]. Used by both export sampling and live playback.
+ *
+ * For `hold` (or when there's no next frame) the current frame is returned
+ * unchanged. For `dissolve`/`cross-dissolve` we cross-fade with `next`. For
+ * `fade-black`/`fade-white` we fade the current frame toward the named
+ * colour. For `wipe-left`/`wipe-right` we wipe `next` over the current frame.
+ */
+export function renderTimelineFrameWithTransition(
+  doc: PsDocument,
+  current: TimelineFrame,
+  next: TimelineFrame | null,
+  progress: number,
+  options: { transparent?: boolean; matte?: string } = {},
+): HTMLCanvasElement {
+  const fromCanvas = renderTimelineFrameComposite(doc, current, options)
+  const transition = current.transition
+  if (!transition || transition === "hold" || progress <= 0 || !next) {
+    return fromCanvas
+  }
+  const toCanvas = renderTimelineFrameComposite(doc, next, options)
+  const out = document.createElement("canvas")
+  out.width = fromCanvas.width
+  out.height = fromCanvas.height
+  const ctx = out.getContext("2d")
+  if (!ctx) return fromCanvas
+  const t = clamp(progress, 0, 1)
+  ctx.clearRect(0, 0, out.width, out.height)
+
+  if (transition === "fade-black" || transition === "fade-white") {
+    ctx.drawImage(fromCanvas, 0, 0)
+    ctx.save()
+    ctx.globalAlpha = t
+    ctx.fillStyle = transition === "fade-white" ? "#ffffff" : "#000000"
+    ctx.fillRect(0, 0, out.width, out.height)
+    ctx.restore()
+    return out
+  }
+  if (transition === "wipe-left" || transition === "wipe-right") {
+    ctx.drawImage(fromCanvas, 0, 0)
+    const w = out.width * t
+    const x = transition === "wipe-right" ? 0 : out.width - w
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(x, 0, w, out.height)
+    ctx.clip()
+    ctx.drawImage(toCanvas, 0, 0)
+    ctx.restore()
+    return out
+  }
+
+  ctx.save()
+  ctx.globalAlpha = 1 - t
+  ctx.drawImage(fromCanvas, 0, 0)
+  ctx.restore()
+  ctx.save()
+  ctx.globalAlpha = t
+  ctx.drawImage(toCanvas, 0, 0)
+  ctx.restore()
+  if (!options.transparent) {
+    ctx.save()
+    ctx.globalCompositeOperation = "destination-over"
+    ctx.fillStyle = options.matte ?? doc.background ?? "#ffffff"
+    ctx.fillRect(0, 0, out.width, out.height)
+    ctx.restore()
+  }
+  return out
+}
+
 export function renderOnionSkinOverlay(
   doc: PsDocument,
   frames: TimelineFrame[],

@@ -21,11 +21,56 @@ interface GradientPreset {
   createdAt?: number
 }
 
+interface GradientTrackBox {
+  left: number
+  width: number
+}
+
 const STORAGE_KEY = "ps-gradients"
 const MAX_USER_GRADIENTS = 64
 const MAX_STOPS = 16
 const MAX_GRADIENT_FILE_BYTES = 256 * 1024
 const HEX_OR_RGBA = /^(#[0-9a-f]{3,8}|rgba?\([^()]{1,80}\))$/i
+
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value))
+}
+
+function pointerOffset(clientX: number, box: GradientTrackBox) {
+  return clamp01((clientX - box.left) / Math.max(1, box.width))
+}
+
+export function insertGradientStopFromPointer(stops: readonly GradientStopPreset[], clientX: number, box: GradientTrackBox, color: string): GradientStopPreset[] {
+  const pos = Math.round(pointerOffset(clientX, box) * 1000) / 1000
+  return [...stops, { pos, color }].sort((a, b) => a.pos - b.pos).slice(0, MAX_STOPS)
+}
+
+export function updateGradientStopFromDrag(stops: readonly GradientStopPreset[], index: number, clientX: number, box: GradientTrackBox): GradientStopPreset[] {
+  if (!stops[index]) return [...stops]
+  return stops
+    .map((stop, stopIndex) => stopIndex === index ? { ...stop, pos: Math.round(pointerOffset(clientX, box) * 1000) / 1000 } : stop)
+    .sort((a, b) => a.pos - b.pos)
+}
+
+function seededRandom(seed: number) {
+  let value = seed >>> 0
+  return () => {
+    value = (value * 1664525 + 1013904223) >>> 0
+    return value / 0xffffffff
+  }
+}
+
+export function createNoiseGradientPreset(name = "Noise Gradient", stopCount = 10, seed = Date.now()): GradientPreset {
+  const random = seededRandom(seed)
+  const count = Math.max(2, Math.min(MAX_STOPS, Math.round(stopCount)))
+  const stops = Array.from({ length: count }, (_, index) => {
+    const c = Math.round(random() * 255).toString(16).padStart(2, "0")
+    const m = Math.round(random() * 255).toString(16).padStart(2, "0")
+    const y = Math.round(random() * 255).toString(16).padStart(2, "0")
+    return { pos: count === 1 ? 0 : index / (count - 1), color: `#${c}${m}${y}` }
+  })
+  return { id: `noise-${seed}`, name, category: "Noise", stops, createdAt: seed }
+}
 
 function presetStops(preset: GradientPreset) {
   return gradientStopsToEditorStops(preset.stops)
@@ -143,6 +188,11 @@ export function GradientsPanel() {
   const [query, setQuery] = React.useState("")
   const [activeCategory, setActiveCategory] = React.useState("All")
   const [sort, setSort] = React.useState<"category" | "name" | "recent">("category")
+  const [editorStops, setEditorStops] = React.useState<GradientStopPreset[]>(() => [
+    { pos: 0, color: foreground },
+    { pos: 1, color: background },
+  ])
+  const [selectedStopIndex, setSelectedStopIndex] = React.useState(0)
   const importRef = React.useRef<HTMLInputElement>(null)
 
   const saveUserGradients = React.useCallback((next: GradientPreset[]) => {
@@ -226,6 +276,22 @@ export function GradientsPanel() {
     }
     saveUserGradients([...userGradients, preset])
     toast.success("Gradient preset saved")
+  }
+
+  const applyEditorStops = (stops: GradientStopPreset[]) => {
+    const normalized = stops.filter(isValidStop).sort((a, b) => a.pos - b.pos).slice(0, MAX_STOPS)
+    if (normalized.length < 2) return
+    setEditorStops(normalized)
+    setSelectedStopIndex((index) => Math.min(index, normalized.length - 1))
+    dispatch({ type: "set-gradient-stops", stops: presetStops({ id: "editor", name: "Editor", stops: normalized }) })
+  }
+
+  const saveNoiseGradient = () => {
+    const preset = createNoiseGradientPreset(`Noise ${userGradients.length + 1}`, 10, Date.now())
+    saveUserGradients([...userGradients, preset])
+    applyEditorStops(preset.stops)
+    setSelected(preset.id)
+    toast.success("Noise gradient generated")
   }
 
   const deleteUserGradient = (id: string) => {
@@ -334,6 +400,8 @@ export function GradientsPanel() {
                 onSelect={() => {
                   setSelected(preset.id)
                   dispatch({ type: "set-gradient-stops", stops: presetStops(preset) })
+                  setEditorStops(preset.stops)
+                  setSelectedStopIndex(0)
                 }}
                 onDelete={preset.category === "Custom" ? () => deleteUserGradient(preset.id) : undefined}
                 onRename={preset.category === "Custom" ? (name) => renameUserGradient(preset.id, name) : undefined}
@@ -346,6 +414,15 @@ export function GradientsPanel() {
       <div className="text-[10px] text-[var(--ps-text-dim)] border-t border-[var(--ps-divider)] pt-1">
         {allGradients.find((g) => g.id === selected)?.name ?? ""}
       </div>
+      <FreeformGradientEditor
+        stops={editorStops}
+        selectedIndex={selectedStopIndex}
+        dither={gradient.dither ?? false}
+        onSelect={setSelectedStopIndex}
+        onChange={applyEditorStops}
+        onDither={(dither) => dispatch({ type: "set-gradient", gradient: { dither } })}
+        addColor={foreground}
+      />
       <div className="flex items-center gap-1 border-t border-[var(--ps-divider)] pt-1.5">
         <span className="text-[10px] text-[var(--ps-text-dim)]" title="User gradients are saved in this browser">
           {userGradients.length} custom
@@ -357,6 +434,14 @@ export function GradientsPanel() {
           onClick={captureFromCurrentStops}
         >
           <Plus className="w-3.5 h-3.5" />
+        </button>
+        <button
+          className="rounded-sm border border-[var(--ps-divider)] px-1.5 py-1 text-[10px] hover:bg-[var(--ps-tool-hover)]"
+          title="Generate noise gradient"
+          aria-label="Generate noise gradient"
+          onClick={saveNoiseGradient}
+        >
+          Noise
         </button>
         <div className="flex-1" />
         <button
@@ -385,6 +470,127 @@ export function GradientsPanel() {
         >
           <RotateCcw className="w-3.5 h-3.5" />
         </button>
+      </div>
+    </div>
+  )
+}
+
+function FreeformGradientEditor({
+  stops,
+  selectedIndex,
+  dither,
+  addColor,
+  onSelect,
+  onChange,
+  onDither,
+}: {
+  stops: GradientStopPreset[]
+  selectedIndex: number
+  dither: boolean
+  addColor: string
+  onSelect: (index: number) => void
+  onChange: (stops: GradientStopPreset[]) => void
+  onDither: (dither: boolean) => void
+}) {
+  const barRef = React.useRef<HTMLDivElement>(null)
+  const [dragIndex, setDragIndex] = React.useState<number | null>(null)
+  const selected = stops[selectedIndex] ?? stops[0]
+  const css = `linear-gradient(90deg, ${stops.map((stop) => `${stop.color} ${Math.round(stop.pos * 100)}%`).join(", ")})`
+
+  const trackBox = React.useCallback((): GradientTrackBox | null => {
+    const rect = barRef.current?.getBoundingClientRect()
+    return rect ? { left: rect.left, width: rect.width } : null
+  }, [])
+
+  React.useEffect(() => {
+    if (dragIndex === null) return
+    const move = (event: PointerEvent) => {
+      const box = trackBox()
+      if (!box) return
+      const next = updateGradientStopFromDrag(stops, dragIndex, event.clientX, box)
+      const moved = next.findIndex((stop) => stop === stops[dragIndex] || (stop.color === stops[dragIndex]?.color && Math.abs(stop.pos - pointerOffset(event.clientX, box)) < 0.002))
+      onChange(next)
+      onSelect(Math.max(0, moved))
+    }
+    const up = () => setDragIndex(null)
+    window.addEventListener("pointermove", move)
+    window.addEventListener("pointerup", up, { once: true })
+    return () => {
+      window.removeEventListener("pointermove", move)
+      window.removeEventListener("pointerup", up)
+    }
+  }, [dragIndex, onChange, onSelect, stops, trackBox])
+
+  return (
+    <div className="space-y-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
+      <div
+        ref={barRef}
+        className="relative h-8 rounded-sm border border-[var(--ps-divider)]"
+        style={{ background: css }}
+        onPointerDown={(event) => {
+          const box = trackBox()
+          if (!box) return
+          const pos = pointerOffset(event.clientX, box)
+          const hit = stops.findIndex((stop) => Math.abs(stop.pos - pos) <= 0.035)
+          if (hit >= 0) {
+            onSelect(hit)
+            setDragIndex(hit)
+          } else {
+            const next = insertGradientStopFromPointer(stops, event.clientX, box, addColor)
+            const nextIndex = next.findIndex((stop) => Math.abs(stop.pos - pos) < 0.002 && stop.color === addColor)
+            onChange(next)
+            onSelect(Math.max(0, nextIndex))
+            setDragIndex(Math.max(0, nextIndex))
+          }
+        }}
+      >
+        {stops.map((stop, index) => (
+          <button
+            key={`${stop.color}-${index}`}
+            type="button"
+            aria-label={`Gradient stop ${index + 1}`}
+            className={`absolute top-1/2 h-4 w-3 -translate-x-1/2 -translate-y-1/2 rounded-[2px] border ${selectedIndex === index ? "border-white" : "border-black/70"}`}
+            style={{ left: `${stop.pos * 100}%`, backgroundColor: stop.color }}
+            onPointerDown={(event) => {
+              event.stopPropagation()
+              onSelect(index)
+              setDragIndex(index)
+            }}
+          />
+        ))}
+      </div>
+      <div className="grid grid-cols-[1fr_72px_auto] items-end gap-1">
+        <label className="grid gap-1 text-[10px] text-[var(--ps-text-dim)]">
+          Stop color
+          <input
+            type="color"
+            value={selected?.color && selected.color.startsWith("#") ? selected.color.slice(0, 7) : "#000000"}
+            onChange={(event) => {
+              if (!selected) return
+              onChange(stops.map((stop, index) => index === selectedIndex ? { ...stop, color: event.target.value } : stop))
+            }}
+            className="h-7 w-full rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] p-0.5"
+          />
+        </label>
+        <label className="grid gap-1 text-[10px] text-[var(--ps-text-dim)]">
+          Pos %
+          <input
+            type="number"
+            min={0}
+            max={100}
+            value={Math.round((selected?.pos ?? 0) * 100)}
+            onChange={(event) => {
+              if (!selected) return
+              const pos = clamp01((Number(event.target.value) || 0) / 100)
+              onChange(stops.map((stop, index) => index === selectedIndex ? { ...stop, pos } : stop).sort((a, b) => a.pos - b.pos))
+            }}
+            className="h-7 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] px-1 text-[10px]"
+          />
+        </label>
+        <label className="mb-1 flex items-center gap-1 text-[10px] text-[var(--ps-text-dim)]">
+          <input type="checkbox" checked={dither} onChange={(event) => onDither(event.target.checked)} />
+          Dither
+        </label>
       </div>
     </div>
   )

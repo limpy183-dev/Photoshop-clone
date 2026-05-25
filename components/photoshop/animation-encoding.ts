@@ -32,6 +32,44 @@ export interface AnimatedExportOptions {
   fps?: number
 }
 
+/**
+ * Cooperative cancellation + progress hooks shared by the in-browser encoders.
+ *
+ * - `signal`: optional AbortSignal. When aborted, the encoder throws a
+ *   DOMException-style error with name="AbortError" at the next yield point.
+ * - `onProgress`: invoked with `(completedFrames, totalFrames, phase)` after
+ *   each encoded frame. UI surfaces use this to render the progress bar.
+ */
+export interface EncoderProgressOptions {
+  signal?: AbortSignal
+  onProgress?: (done: number, total: number, phase: string) => void
+}
+
+function abortError(): Error {
+  if (typeof DOMException === "function") return new DOMException("Encoder aborted", "AbortError")
+  const err = new Error("Encoder aborted")
+  ;(err as Error & { name: string }).name = "AbortError"
+  return err
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw abortError()
+}
+
+/**
+ * Yield to the browser between heavy frames so the UI thread can paint the
+ * progress bar / wire up the cancel button.
+ */
+function microYield(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(() => resolve())
+    } else {
+      setTimeout(() => resolve(), 0)
+    }
+  })
+}
+
 /* -------------------------------- helpers -------------------------------- */
 
 function clamp(value: number, min: number, max: number) {
@@ -300,7 +338,7 @@ export function collectAnimationFrames(
   })
 }
 
-function drawTimelineTransitionSample(
+export function drawTimelineTransitionSample(
   from: HTMLCanvasElement,
   to: HTMLCanvasElement | null,
   transition: TimelineFrame["transition"],
@@ -559,6 +597,63 @@ export function encodeAnimatedGif(frames: AnimatedExportFrame[], options: Animat
   return concatUint8(parts)
 }
 
+/**
+ * Asynchronous GIF encoder variant that yields between frames so the UI can
+ * repaint the progress bar and the user can press Cancel. Aborts the encode
+ * if `options.signal` is aborted partway through.
+ */
+export async function encodeAnimatedGifProgress(
+  frames: AnimatedExportFrame[],
+  options: AnimatedExportOptions & EncoderProgressOptions = {},
+): Promise<Uint8Array> {
+  if (!frames.length) throw new Error("No frames to encode")
+  throwIfAborted(options.signal)
+  const transparent = options.transparent ?? true
+  const loopCount = options.loopCount ?? 0
+  const width = frames[0].canvas.width
+  const height = frames[0].canvas.height
+  const parts: Uint8Array[] = []
+  parts.push(asciiBytes("GIF89a"))
+  parts.push(u16LE(width))
+  parts.push(u16LE(height))
+  parts.push(new Uint8Array([0xf7, 0, 0]))
+  const firstImage = imageDataFromCanvas(frames[0].canvas)
+  const firstQuantized = quantize332(firstImage, transparent)
+  parts.push(firstQuantized.palette)
+  parts.push(new Uint8Array([0x21, 0xff, 11]))
+  parts.push(asciiBytes("NETSCAPE2.0"))
+  parts.push(new Uint8Array([3, 1]))
+  parts.push(u16LE(loopCount))
+  parts.push(new Uint8Array([0]))
+
+  for (let i = 0; i < frames.length; i++) {
+    throwIfAborted(options.signal)
+    const frame = frames[i]
+    const sized = ensureSize(frame.canvas, width, height)
+    const image = imageDataFromCanvas(sized)
+    const quantized = quantize332(image, transparent)
+    const delayCs = Math.max(2, Math.round(frame.durationMs / 10))
+    const transparentFlag = transparent ? 0x01 : 0x00
+    const disposal = 2
+    const packed = (disposal << 2) | transparentFlag
+    parts.push(new Uint8Array([0x21, 0xf9, 0x04, packed]))
+    parts.push(u16LE(delayCs))
+    parts.push(new Uint8Array([transparent ? quantized.transparentIndex : 0, 0]))
+    parts.push(new Uint8Array([0x2c]))
+    parts.push(u16LE(0))
+    parts.push(u16LE(0))
+    parts.push(u16LE(width))
+    parts.push(u16LE(height))
+    parts.push(new Uint8Array([0]))
+    parts.push(new Uint8Array([8]))
+    parts.push(gifSubBlocks(gifLzw(quantized.indexes)))
+    options.onProgress?.(i + 1, frames.length, "gif")
+    if (i + 1 < frames.length) await microYield()
+  }
+  parts.push(new Uint8Array([0x3b]))
+  return concatUint8(parts)
+}
+
 /* ------------------------------ APNG encoder ----------------------------- */
 
 const PNG_SIGNATURE = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
@@ -585,9 +680,10 @@ function rgbaScanlines(image: ImageData): Uint8Array {
 
 export async function encodeApngFromFrames(
   frames: AnimatedExportFrame[],
-  options: AnimatedExportOptions = {},
+  options: AnimatedExportOptions & EncoderProgressOptions = {},
 ): Promise<Uint8Array> {
   if (!frames.length) throw new Error("No frames to encode")
+  throwIfAborted(options.signal)
   const loopCount = options.loopCount ?? 0
   const width = frames[0].canvas.width
   const height = frames[0].canvas.height
@@ -612,6 +708,7 @@ export async function encodeApngFromFrames(
 
   let sequence = 0
   for (let i = 0; i < frames.length; i++) {
+    throwIfAborted(options.signal)
     const frame = frames[i]
     const sized = ensureSize(frame.canvas, width, height)
     const image = imageDataFromCanvas(sized)
@@ -635,6 +732,8 @@ export async function encodeApngFromFrames(
       const fdat = concatUint8([u32BE(sequence++), compressed])
       parts.push(pngChunk("fdAT", fdat))
     }
+    options.onProgress?.(i + 1, frames.length, "apng")
+    if (i + 1 < frames.length) await microYield()
   }
   parts.push(pngChunk("IEND", new Uint8Array(0)))
   return concatUint8(parts)
@@ -744,9 +843,10 @@ function makeChunk(fourcc: string, data: Uint8Array): Uint8Array {
 
 export async function encodeAnimatedWebP(
   frames: AnimatedExportFrame[],
-  options: AnimatedExportOptions = {},
+  options: AnimatedExportOptions & EncoderProgressOptions = {},
 ): Promise<Uint8Array> {
   if (!frames.length) throw new Error("No frames to encode")
+  throwIfAborted(options.signal)
   const quality = clamp(options.quality ?? 0.9, 0, 1)
   const loopCount = options.loopCount ?? 0
   const transparent = options.transparent ?? true
@@ -754,10 +854,14 @@ export async function encodeAnimatedWebP(
   const height = frames[0].canvas.height
 
   const parsedFrames: ParsedWebP[] = []
-  for (const frame of frames) {
+  for (let i = 0; i < frames.length; i++) {
+    throwIfAborted(options.signal)
+    const frame = frames[i]
     const sized = ensureSize(frame.canvas, width, height)
     const bytes = await canvasToWebPBytes(sized, quality)
     parsedFrames.push(parseStaticWebP(bytes))
+    options.onProgress?.(i + 1, frames.length, "webp")
+    if (i + 1 < frames.length) await microYield()
   }
   const anyAlpha = transparent && parsedFrames.some((f) => f.hasAlpha)
 
