@@ -395,12 +395,12 @@ export function AdvancedSubsystemsDialog({ open, onOpenChange, initialTab }: Adv
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[88vh] max-w-[1120px] overflow-hidden border-[var(--ps-divider)] bg-[var(--ps-panel)] p-0 text-[var(--ps-text)]">
-        <DialogHeader className="border-b border-[var(--ps-divider)] px-4 py-3">
+      <DialogContent className="grid h-[min(92vh,880px)] w-[min(96vw,1440px)] max-w-[min(96vw,1440px)] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden border-[var(--ps-divider)] bg-[var(--ps-panel)] p-0 text-[var(--ps-text)] sm:max-w-[min(96vw,1440px)]">
+        <DialogHeader className="shrink-0 border-b border-[var(--ps-divider)] px-4 py-3">
           <DialogTitle className="text-sm">Advanced Photoshop Subsystems</DialogTitle>
         </DialogHeader>
-        <div className="grid min-h-[680px] grid-cols-[160px_1fr]">
-          <div className="border-r border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
+        <div className="grid min-h-0 grid-cols-[176px_minmax(0,1fr)]">
+          <div className="overflow-y-auto border-r border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
             {TABS.map((item) => (
               <button
                 key={item.id}
@@ -412,7 +412,7 @@ export function AdvancedSubsystemsDialog({ open, onOpenChange, initialTab }: Adv
               </button>
             ))}
           </div>
-          <div className="min-h-0 overflow-y-auto p-4">
+          <div className="min-h-0 min-w-0 overflow-auto p-4">
             {tab === "3d" && <ThreeDWorkspace />}
             {tab === "video" && <VideoWorkspace />}
             {tab === "print" && <PrintWorkspace />}
