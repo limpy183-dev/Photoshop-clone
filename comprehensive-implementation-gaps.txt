@@ -183,42 +183,43 @@ and have documented limitations that are still browser-fixable:
       Effort: Medium-Large
 
   43. format.raw-dng — RAW/DNG
-      Gap: No RAW/DNG export, sidecar round-trip, camera/lens profile parity,
-      or non-destructive RAW pipeline. Missing: RAW-style export path; lens
-      profile database expansion.
-      Effort: Large
+      Implemented: DNG-style TIFF/EP export, Camera Raw sidecar round-trip,
+      source fingerprint reconciliation, snapshots/settings preservation, and
+      local lens profile matching. Remaining production caveat: proprietary
+      camera/lens profile databases and raw sensor mosaic reconstruction.
 
   44. format.openexr — OpenEXR
-      Gap: Multipart/deep/tiled EXR, arbitrary production channel semantics,
-      OCIO transforms, true HDR editing. Missing: multipart EXR, tiled EXR,
-      OCIO-style look support.
-      Effort: Large
+      Implemented: arbitrary-channel authoring, tiled/deep metadata records,
+      and multipart manifests. Remaining production caveat: certified OCIO
+      transforms and true HDR display are outside the browser canvas.
 
   45. format.pdf — PDF
-      Gap: No editable vectors, embedded font editing, transparency group
-      preservation, annotations, or prepress metadata. Missing: multi-page
-      import with page selection; vector layer extraction from PDF.
-      Effort: Medium-Large
+      Implemented: multipage authoring/import, flattened previews, editable
+      text/vector manifests, transparency group records, and annotations.
+      Remaining production caveat: PDF/X and external-editor preservation of
+      app manifests require dedicated layout/prepress tools.
 
   46. format.eps — EPS
-      Gap: No arbitrary PostScript, font resolution, separations, overprint,
-      or full editable vector import. Missing: broader EPS operator coverage.
-      Effort: Medium
+      Implemented: broader safe-subset coverage for transforms, dash patterns,
+      fill rules, text, paths, curves, and editable vector reconstruction.
+      Remaining production caveat: arbitrary PostScript execution,
+      separations, overprint, and font resolution stay out of scope.
 
   47. format.heif — HEIF/HEIC
-      Gap: No HEVC/HEIC encoder, auxiliary/depth image handling. Missing:
-      HEVC-based HEIF export encoder.
-      Effort: Large (requires WASM encoder or WebCodecs support)
+      Implemented: HEVC-backed HEIC container authoring through a configured
+      encoder callback, distinct from AVIF-backed HEIF export. Remaining
+      production caveat: auxiliary/depth images and live-photo pairing.
 
   48. format.jpeg2000 — JPEG 2000
-      Gap: No JPX/JPM authoring, advanced color-box metadata, alpha channels.
-      Missing: alpha channel support in J2K export; JPX container.
-      Effort: Medium
+      Implemented: codestream/JP2/JPX/JPM authoring, alpha channel
+      definitions, color boxes, ICC/profile metadata, and layer labels.
+      Remaining production caveat: archival conformance validation.
 
   49. format.dicom — DICOM
-      Gap: No compressed transfer syntaxes, overlays, diagnostic metadata
-      workflow, clinical validation. Missing: compressed DICOM import.
-      Effort: Medium
+      Implemented: compressed transfer-syntax metadata, overlays, richer
+      metadata workflow, and explicit non-clinical validation labels.
+      Remaining production caveat: clinical diagnostic validation and private
+      hospital workflows.
 
   50. smart-object.linked — Linked Smart Objects
       Gap: No native file watcher or external linked-document sync daemon.

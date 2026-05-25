@@ -17,6 +17,7 @@ import {
   matchCameraRawLensProfile,
   normalizeCameraRawPresetLibrary,
   parseCameraRawSidecar,
+  reconcileCameraRawSidecarRoundTrip,
   promoteCameraRawSnapshotToPreset,
   renameCameraRawSnapshot,
   serializeCameraRawSidecar,
@@ -222,4 +223,49 @@ test("Camera Raw keeps RAW-backed high-bit recipes, sidecars, camera profiles, a
   expect(adjusted.data).toBeInstanceOf(Float32Array)
   expect((adjusted.data as Float32Array)[0]).toBeGreaterThan((rawSource.data as Float32Array)[0])
   expect(Array.from(rawSource.data as Float32Array)).not.toEqual(Array.from(adjusted.data as Float32Array))
+})
+
+test("Camera Raw sidecars round-trip source metadata, settings, snapshots, and source fingerprints", () => {
+  const rawSource: HighBitImage = {
+    width: 2,
+    height: 1,
+    channels: 4,
+    bitDepth: 16,
+    colorMode: "RGB",
+    profile: "Camera Linear",
+    storage: "uint16",
+    data: new Uint16Array([
+      0x1000, 0x2000, 0x3000, 0xffff,
+      0x8000, 0x7000, 0x6000, 0xffff,
+    ]),
+    warnings: ["Imported from test DNG"],
+  }
+  const snapshot = createCameraRawSnapshot("Warm proof", {
+    ...CAMERA_RAW_PRESETS.landscape.settings,
+    temperature: 12,
+    exposure: 0.25,
+    optics: { profileId: "standard-prime", profileStrength: 60 },
+  })
+  const recipe = createCameraRawDevelopRecipe(rawSource, snapshot.settings, {
+    fileName: "fixture.dng",
+    cameraMake: "Fixture Camera Co",
+    cameraModel: "Model 1",
+    lensModel: "Standard Prime",
+    focalLengthMm: 50,
+    aperture: 2.8,
+    iso: 400,
+  }, { snapshots: [snapshot] })
+
+  const sidecar = serializeCameraRawSidecar(recipe)
+  const parsed = parseCameraRawSidecar(sidecar)
+  const reconciled = reconcileCameraRawSidecarRoundTrip(rawSource, parsed)
+
+  expect(sidecar).toContain("crs:RawFileName")
+  expect(sidecar).toContain("psweb:SourceFingerprint")
+  expect(sidecar).toContain("psweb:CameraRawSnapshots")
+  expect(parsed.metadata.iso).toBe(400)
+  expect(parsed.snapshots).toHaveLength(1)
+  expect(parsed.snapshots?.[0].name).toBe("Warm proof")
+  expect(parsed.sourceFingerprint).toBe(reconciled.sourceFingerprint)
+  expect(reconciled.sourceMatches).toBe(true)
 })

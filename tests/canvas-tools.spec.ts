@@ -129,6 +129,23 @@ test("advanced tool options expose polygon, magnetic, quick selection, and slice
   await expect(page.getByText("Filename")).toBeVisible()
   await expect(page.getByText("Quality")).toBeVisible()
   await expect(page.getByText("Compression")).toBeVisible()
+
+  await openCommand(page, "Mixer Brush Tool")
+  await expect(page.getByText("Wet:")).toBeVisible()
+  await expect(page.getByText("Load:")).toBeVisible()
+  await expect(page.getByText("Mix:")).toBeVisible()
+  await expect(page.getByText("All Layers")).toBeVisible()
+
+  await openCommand(page, "Color Replacement Tool")
+  await expect(page.getByText("Sampling:")).toBeVisible()
+  await expect(page.getByText("Limits:")).toBeVisible()
+  await expect(page.getByText("Mode:")).toBeVisible()
+  await expect(page.getByText("Tol:")).toBeVisible()
+
+  await openCommand(page, "Art History Brush Tool")
+  await expect(page.getByText("Style:")).toBeVisible()
+  await expect(page.getByText("Area:")).toBeVisible()
+  await expect(page.getByText("Fidelity:")).toBeVisible()
 })
 
 test("lock image pixels blocks gradient strokes on the active layer", async ({ page }) => {

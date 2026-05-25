@@ -13,6 +13,7 @@ import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop, 
 import { dispatchPhotoshopEvent } from "./events"
 import { canPluginUsePermission } from "./plugin-system"
 import type { PluginCommandDescriptor, PluginDescriptor, PluginPermission } from "./types"
+import { PURGE_COMMANDS, formatPurgeStatus, type PurgeTarget } from "./purge-commands"
 import {
   loadCommandPaletteUsage,
   rankCommandPaletteItems,
@@ -85,6 +86,7 @@ const TOOL_COMMANDS: { tool: ToolId; title: string; hint: string }[] = [
 
 const PANEL_COMMAND_TITLES: Record<string, string> = {
   assets: "Asset Library Panel",
+  "preset-manager": "Preset Manager Panel",
   "selection-studio": "Selection Studio Panel",
   scripting: "Scripting Console",
   slices: "Slice Manager Panel",
@@ -135,7 +137,7 @@ function runPluginCommandFromPalette(plugin: PluginDescriptor, command: PluginCo
 }
 
 export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPaletteProps) {
-  const { activeDoc, activeLayer, closedDocuments, dispatch, newLayer, newGroup, duplicateDocument, closeOtherDocuments, reopenClosedDocument, commit, requestRender } = useEditor()
+  const { activeDoc, activeLayer, closedDocuments, dispatch, newLayer, newGroup, duplicateDocument, closeOtherDocuments, reopenClosedDocument, commit, requestRender, purgeCaches } = useEditor()
   const [query, setQuery] = React.useState("")
   const [activeIndex, setActiveIndex] = React.useState(0)
   const [recent, setRecent] = React.useState<string[]>(() => loadRecentCommands())
@@ -158,6 +160,11 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
     const needsSelection = activeDoc?.selection.bounds ? undefined : "Create a selection first"
     const needsClosedDocument = closedDocuments.length ? undefined : "No closed documents"
     const needsOtherDocument = activeDoc ? undefined : "Open a document first"
+    const runPurge = (target: PurgeTarget) => {
+      const result = purgeCaches(target)
+      toast.info(formatPurgeStatus(target, result.freedBytes))
+      close()
+    }
     const items: CommandItem[] = [
       {
         id: "file-new",
@@ -259,7 +266,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "File",
         title: "Photomerge",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-gap-workflow", { detail: "photomerge" }))
+          window.dispatchEvent(new CustomEvent("ps-open-photomerge"))
           close()
         },
       },
@@ -383,6 +390,18 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         },
       },
       {
+        id: "file-reveal-source",
+        group: "File",
+        title: "Reveal Source in Folder",
+        hint: "local file",
+        disabled: !!needsDocument,
+        disabledReason: needsDocument,
+        run: () => {
+          window.dispatchEvent(new CustomEvent("ps-reveal-source"))
+          close()
+        },
+      },
+      {
         id: "advanced-3d-workspace",
         group: "3D",
         title: "3D Workspace",
@@ -469,6 +488,51 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         title: "Shift Channels, Apply Image, Calculations, and Gradient Map",
         run: () => {
           window.dispatchEvent(new CustomEvent("ps-open-algorithmic-operations"))
+          close()
+        },
+      },
+      {
+        id: "apply-image",
+        group: "Image",
+        title: "Apply Image",
+        run: () => {
+          window.dispatchEvent(new CustomEvent("ps-open-gap-workflow", { detail: "apply-image" }))
+          close()
+        },
+      },
+      {
+        id: "calculations",
+        group: "Image",
+        title: "Calculations",
+        run: () => {
+          window.dispatchEvent(new CustomEvent("ps-open-gap-workflow", { detail: "calculations" }))
+          close()
+        },
+      },
+      {
+        id: "split-channels",
+        group: "Image",
+        title: "Split Channels",
+        run: () => {
+          window.dispatchEvent(new CustomEvent("ps-open-gap-workflow", { detail: "split-channels" }))
+          close()
+        },
+      },
+      {
+        id: "merge-channels",
+        group: "Image",
+        title: "Merge Channels",
+        run: () => {
+          window.dispatchEvent(new CustomEvent("ps-open-gap-workflow", { detail: "merge-channels" }))
+          close()
+        },
+      },
+      {
+        id: "color-table",
+        group: "Image",
+        title: "Color Table",
+        run: () => {
+          window.dispatchEvent(new CustomEvent("ps-open-color-mode", { detail: "ColorTable" }))
           close()
         },
       },
@@ -562,6 +626,13 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
           close()
         },
       },
+      ...PURGE_COMMANDS.map((command): CommandItem => ({
+        id: `edit-${command.target}`,
+        group: command.group,
+        title: command.label,
+        searchText: command.searchText,
+        run: () => runPurge(command.target),
+      })),
       {
         id: "select-all",
         group: "Select",
@@ -791,7 +862,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
     }
 
     return items
-  }, [activeDoc, activeLayer, close, closedDocuments, dispatch, duplicateDocument, closeOtherDocuments, reopenClosedDocument, newGroup, newLayer, onOpenNew, commit, requestRender])
+  }, [activeDoc, activeLayer, close, closedDocuments, dispatch, duplicateDocument, closeOtherDocuments, reopenClosedDocument, newGroup, newLayer, onOpenNew, commit, requestRender, purgeCaches])
 
   const filtered = React.useMemo(() => {
     const q = query.trim()

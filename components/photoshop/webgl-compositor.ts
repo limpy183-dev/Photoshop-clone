@@ -234,6 +234,28 @@ const GPU_FILTERS = new Set([
   "vibrance",
   "posterize",
   "threshold",
+  "levels",
+  "curves",
+  "channel-mixer",
+  "black-white",
+  "desaturate",
+  "grayscale",
+  "color-balance",
+  "photo-filter",
+  "color-lookup",
+  "selective-color",
+  "shadows-highlights",
+  "hdr-toning",
+  "replace-color",
+  "gaussian-blur",
+  "box-blur",
+  "motion-blur",
+  "sharpen",
+  "emboss",
+  "find-edges",
+  "solarize",
+  "pixelate",
+  "noise",
 ])
 
 export const GPU_ADJUSTMENT_TYPES = new Set([
@@ -249,6 +271,14 @@ export const GPU_ADJUSTMENT_TYPES = new Set([
   "channel-mixer",
   "black-white",
   "desaturate",
+  "grayscale",
+  "color-balance",
+  "photo-filter",
+  "color-lookup",
+  "selective-color",
+  "shadows-highlights",
+  "hdr-toning",
+  "replace-color",
 ])
 
 function readNumberParam(params: Record<string, number | string | boolean> | undefined, key: string, fallback: number) {
@@ -260,6 +290,50 @@ function readNumberParam(params: Record<string, number | string | boolean> | und
     if (Number.isFinite(parsed)) return parsed
   }
   return fallback
+}
+
+function readStringParam(params: Record<string, number | string | boolean> | undefined, key: string, fallback: string) {
+  const v = params?.[key]
+  return typeof v === "string" && v.trim() ? v : fallback
+}
+
+function readBooleanParam(params: Record<string, number | string | boolean> | undefined, key: string, fallback: boolean) {
+  const v = params?.[key]
+  return typeof v === "boolean" ? v : fallback
+}
+
+function photoFilterColor(value: string): [number, number, number] {
+  switch (value) {
+    case "blue":
+      return [0.65, 0.78, 1]
+    case "green":
+      return [0.68, 1, 0.72]
+    case "magenta":
+      return [1, 0.72, 0.95]
+    case "cyan":
+      return [0.65, 1, 1]
+    case "yellow":
+      return [1, 0.92, 0.52]
+    case "warm":
+    default:
+      return [1, 0.78, 0.48]
+  }
+}
+
+function lookupPresetCode(value: string): number {
+  switch (value) {
+    case "warm":
+      return 1
+    case "cool":
+      return 2
+    case "bleach":
+      return 3
+    case "cross-process":
+      return 4
+    case "filmic":
+    default:
+      return 0
+  }
 }
 
 export interface GpuAdjustmentShader {
@@ -450,6 +524,121 @@ const ADJUSTMENT_SHADERS: Record<string, string> = {
       gl_FragColor = vec4(vec3(gray), c.a);
     }
   `,
+  "grayscale": `
+    void main() {
+      vec4 c = texture2D(u_source, v_texcoord);
+      float gray = luminance(c.rgb);
+      gl_FragColor = vec4(vec3(gray), c.a);
+    }
+  `,
+  "color-balance": `
+    uniform vec3 u_balance;
+    uniform float u_tone;
+    uniform float u_preserveLuminosity;
+    void main() {
+      vec4 c = texture2D(u_source, v_texcoord);
+      float l = luminance(c.rgb);
+      float rangeWeight;
+      if (u_tone < 0.5) rangeWeight = 1.0 - smoothstep(0.0, 0.72, l);
+      else if (u_tone > 1.5) rangeWeight = smoothstep(0.28, 1.0, l);
+      else rangeWeight = 1.0 - clamp(abs(l - 0.5) * 2.0, 0.0, 1.0);
+      vec3 rgb = clamp(c.rgb + u_balance * rangeWeight, 0.0, 1.0);
+      if (u_preserveLuminosity > 0.5) {
+        rgb = clamp(rgb + vec3(l - luminance(rgb)), 0.0, 1.0);
+      }
+      gl_FragColor = vec4(rgb, c.a);
+    }
+  `,
+  "photo-filter": `
+    uniform vec3 u_filterColor;
+    uniform float u_density;
+    void main() {
+      vec4 c = texture2D(u_source, v_texcoord);
+      float l = luminance(c.rgb);
+      vec3 filtered = c.rgb * mix(vec3(1.0), u_filterColor * 1.2, clamp(u_density, 0.0, 1.0));
+      filtered = clamp(filtered + vec3(l - luminance(filtered)) * 0.55, 0.0, 1.0);
+      gl_FragColor = vec4(mix(c.rgb, filtered, clamp(u_density, 0.0, 1.0)), c.a);
+    }
+  `,
+  "color-lookup": `
+    uniform float u_strength;
+    uniform float u_preset;
+    vec3 filmic(vec3 rgb) {
+      return clamp((rgb * (2.51 * rgb + 0.03)) / (rgb * (2.43 * rgb + 0.59) + 0.14), 0.0, 1.0);
+    }
+    void main() {
+      vec4 c = texture2D(u_source, v_texcoord);
+      vec3 mapped = filmic(c.rgb);
+      if (u_preset > 0.5 && u_preset < 1.5) mapped = clamp(c.rgb * vec3(1.08, 0.98, 0.86), 0.0, 1.0);
+      else if (u_preset > 1.5 && u_preset < 2.5) mapped = clamp(c.rgb * vec3(0.88, 0.98, 1.12), 0.0, 1.0);
+      else if (u_preset > 2.5 && u_preset < 3.5) {
+        float gray = luminance(c.rgb);
+        mapped = mix(vec3(gray), c.rgb, 0.42) + vec3(0.08);
+      } else if (u_preset > 3.5) {
+        mapped = vec3(c.r * 0.92 + c.g * 0.08, c.g * 0.88 + c.b * 0.16, c.b * 0.9 + c.r * 0.12);
+      }
+      float amount = clamp((u_strength + 100.0) / 200.0, 0.0, 1.0);
+      gl_FragColor = vec4(clamp(mix(c.rgb, mapped, amount), 0.0, 1.0), c.a);
+    }
+  `,
+  "selective-color": `
+    uniform vec4 u_cmykAdjust;
+    void main() {
+      vec4 c = texture2D(u_source, v_texcoord);
+      vec3 rgb = c.rgb;
+      vec3 cmy = vec3(1.0) - rgb;
+      cmy += u_cmykAdjust.rgb;
+      cmy += vec3(u_cmykAdjust.a);
+      gl_FragColor = vec4(clamp(vec3(1.0) - cmy, 0.0, 1.0), c.a);
+    }
+  `,
+  "shadows-highlights": `
+    uniform float u_shadows;
+    uniform float u_highlights;
+    uniform float u_colorCorrection;
+    void main() {
+      vec4 c = texture2D(u_source, v_texcoord);
+      float l = luminance(c.rgb);
+      float shadowMask = 1.0 - smoothstep(0.0, 0.65, l);
+      float highlightMask = smoothstep(0.35, 1.0, l);
+      vec3 rgb = c.rgb;
+      rgb += shadowMask * u_shadows * (1.0 - rgb);
+      rgb -= highlightMask * u_highlights * rgb;
+      float gray = luminance(rgb);
+      rgb = mix(vec3(gray), rgb, clamp(1.0 + u_colorCorrection, 0.0, 2.0));
+      gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), c.a);
+    }
+  `,
+  "hdr-toning": `
+    uniform float u_strength;
+    void main() {
+      vec4 c = texture2D(u_source, v_texcoord);
+      vec3 rgb = clamp((c.rgb - vec3(0.5)) * (1.0 + u_strength * 1.4) + vec3(0.5), 0.0, 1.0);
+      rgb = mix(rgb, rgb / (rgb + vec3(0.35)), u_strength * 0.35);
+      gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), c.a);
+    }
+  `,
+  "replace-color": `
+    uniform float u_sourceHue;
+    uniform float u_fuzziness;
+    uniform float u_replacementHue;
+    uniform float u_replacementSaturation;
+    uniform float u_replacementLightness;
+    float hueDistance(float a, float b) {
+      float d = abs(a - b);
+      return min(d, 1.0 - d);
+    }
+    void main() {
+      vec4 c = texture2D(u_source, v_texcoord);
+      vec3 hsl = rgb2hsl(c.rgb);
+      float mask = 1.0 - smoothstep(0.0, max(u_fuzziness, 0.001), hueDistance(hsl.x, u_sourceHue));
+      vec3 repl = hsl;
+      repl.x = u_replacementHue;
+      repl.y = clamp(repl.y + u_replacementSaturation, 0.0, 1.0);
+      repl.z = clamp(repl.z + u_replacementLightness, 0.0, 1.0);
+      gl_FragColor = vec4(mix(c.rgb, hsl2rgb(repl), mask), c.a);
+    }
+  `,
 }
 
 export function buildGpuAdjustmentShader(type: string, params: Record<string, number | string | boolean> | undefined): GpuAdjustmentShader | null {
@@ -469,7 +658,7 @@ export function buildGpuAdjustmentShader(type: string, params: Record<string, nu
       return {
         fragmentSource,
         uniforms: {
-          u_exposure: readNumberParam(params, "exposure", 0),
+          u_exposure: readNumberParam(params, "exposure", readNumberParam(params, "ev", 0)),
           u_offset: readNumberParam(params, "offset", 0),
           u_gammaCorrection: readNumberParam(params, "gamma", 1),
         },
@@ -489,23 +678,23 @@ export function buildGpuAdjustmentShader(type: string, params: Record<string, nu
       return {
         fragmentSource,
         uniforms: {
-          u_vibrance: readNumberParam(params, "vibrance", 0),
+          u_vibrance: readNumberParam(params, "vibrance", readNumberParam(params, "amount", 0)),
           u_saturationParam: readNumberParam(params, "saturation", 0),
         },
       }
     case "posterize":
       return { fragmentSource, uniforms: { u_levels: readNumberParam(params, "levels", 4) } }
     case "threshold":
-      return { fragmentSource, uniforms: { u_threshold: readNumberParam(params, "threshold", 128) / 255 } }
+      return { fragmentSource, uniforms: { u_threshold: readNumberParam(params, "threshold", readNumberParam(params, "level", 128)) / 255 } }
     case "levels":
       return {
         fragmentSource,
         uniforms: {
-          u_blackInput: readNumberParam(params, "blackInput", 0),
-          u_whiteInput: readNumberParam(params, "whiteInput", 255),
+          u_blackInput: readNumberParam(params, "blackInput", readNumberParam(params, "inputBlack", 0)),
+          u_whiteInput: readNumberParam(params, "whiteInput", readNumberParam(params, "inputWhite", 255)),
           u_gamma: readNumberParam(params, "gamma", 1),
-          u_blackOutput: readNumberParam(params, "blackOutput", 0),
-          u_whiteOutput: readNumberParam(params, "whiteOutput", 255),
+          u_blackOutput: readNumberParam(params, "blackOutput", readNumberParam(params, "outputBlack", 0)),
+          u_whiteOutput: readNumberParam(params, "whiteOutput", readNumberParam(params, "outputWhite", 255)),
         },
       }
     case "curves": {
@@ -519,18 +708,18 @@ export function buildGpuAdjustmentShader(type: string, params: Record<string, nu
       }
     }
     case "channel-mixer": {
-      const redToRed = readNumberParam(params, "redToRed", 100) / 100
-      const greenToRed = readNumberParam(params, "greenToRed", 0) / 100
-      const blueToRed = readNumberParam(params, "blueToRed", 0) / 100
-      const redToGreen = readNumberParam(params, "redToGreen", 0) / 100
-      const greenToGreen = readNumberParam(params, "greenToGreen", 100) / 100
-      const blueToGreen = readNumberParam(params, "blueToGreen", 0) / 100
-      const redToBlue = readNumberParam(params, "redToBlue", 0) / 100
-      const greenToBlue = readNumberParam(params, "greenToBlue", 0) / 100
-      const blueToBlue = readNumberParam(params, "blueToBlue", 100) / 100
-      const constR = readNumberParam(params, "constantRed", 0) / 100
-      const constG = readNumberParam(params, "constantGreen", 0) / 100
-      const constB = readNumberParam(params, "constantBlue", 0) / 100
+      const redToRed = readNumberParam(params, "redToRed", readNumberParam(params, "rR", 100)) / 100
+      const greenToRed = readNumberParam(params, "greenToRed", readNumberParam(params, "rG", 0)) / 100
+      const blueToRed = readNumberParam(params, "blueToRed", readNumberParam(params, "rB", 0)) / 100
+      const redToGreen = readNumberParam(params, "redToGreen", readNumberParam(params, "gR", 0)) / 100
+      const greenToGreen = readNumberParam(params, "greenToGreen", readNumberParam(params, "gG", 100)) / 100
+      const blueToGreen = readNumberParam(params, "blueToGreen", readNumberParam(params, "gB", 0)) / 100
+      const redToBlue = readNumberParam(params, "redToBlue", readNumberParam(params, "bR", 0)) / 100
+      const greenToBlue = readNumberParam(params, "greenToBlue", readNumberParam(params, "bG", 0)) / 100
+      const blueToBlue = readNumberParam(params, "blueToBlue", readNumberParam(params, "bB", 100)) / 100
+      const constR = readNumberParam(params, "constantRed", readNumberParam(params, "constantR", 0)) / 100
+      const constG = readNumberParam(params, "constantGreen", readNumberParam(params, "constantG", 0)) / 100
+      const constB = readNumberParam(params, "constantBlue", readNumberParam(params, "constantB", 0)) / 100
       return {
         fragmentSource,
         uniforms: {
@@ -558,6 +747,73 @@ export function buildGpuAdjustmentShader(type: string, params: Record<string, nu
     }
     case "desaturate":
       return { fragmentSource, uniforms: {} }
+    case "grayscale":
+      return { fragmentSource, uniforms: {} }
+    case "color-balance": {
+      const tone = readStringParam(params, "tone", "midtones")
+      return {
+        fragmentSource,
+        uniforms: {
+          u_balance: [
+            readNumberParam(params, "cyanRed", 0) / 255,
+            readNumberParam(params, "magentaGreen", 0) / 255,
+            readNumberParam(params, "yellowBlue", 0) / 255,
+          ],
+          u_tone: tone === "shadows" ? 0 : tone === "highlights" ? 2 : 1,
+          u_preserveLuminosity: readBooleanParam(params, "preserveLuminosity", true) ? 1 : 0,
+        },
+      }
+    }
+    case "photo-filter":
+      return {
+        fragmentSource,
+        uniforms: {
+          u_filterColor: photoFilterColor(readStringParam(params, "color", "warm")),
+          u_density: readNumberParam(params, "density", 25) / 100,
+        },
+      }
+    case "color-lookup":
+      return {
+        fragmentSource,
+        uniforms: {
+          u_strength: readNumberParam(params, "strength", 0),
+          u_preset: lookupPresetCode(readStringParam(params, "preset", "filmic")),
+        },
+      }
+    case "selective-color":
+      return {
+        fragmentSource,
+        uniforms: {
+          u_cmykAdjust: [
+            readNumberParam(params, "cyan", 0) / 100,
+            readNumberParam(params, "magenta", 0) / 100,
+            readNumberParam(params, "yellow", 0) / 100,
+            readNumberParam(params, "black", 0) / 100,
+          ],
+        },
+      }
+    case "shadows-highlights":
+      return {
+        fragmentSource,
+        uniforms: {
+          u_shadows: readNumberParam(params, "shadows", 0) / 100,
+          u_highlights: readNumberParam(params, "highlights", 0) / 100,
+          u_colorCorrection: readNumberParam(params, "colorCorrection", 0) / 100,
+        },
+      }
+    case "hdr-toning":
+      return { fragmentSource, uniforms: { u_strength: readNumberParam(params, "strength", 50) / 100 } }
+    case "replace-color":
+      return {
+        fragmentSource,
+        uniforms: {
+          u_sourceHue: readNumberParam(params, "sourceHue", 0) / 360,
+          u_fuzziness: readNumberParam(params, "fuzziness", 30) / 360,
+          u_replacementHue: readNumberParam(params, "replacementHue", 0) / 360,
+          u_replacementSaturation: readNumberParam(params, "replacementSaturation", 0) / 100,
+          u_replacementLightness: readNumberParam(params, "replacementLightness", 0) / 100,
+        },
+      }
     default:
       return null
   }
@@ -572,18 +828,44 @@ function clamp01(value: number) {
   return Math.max(0, Math.min(1, value))
 }
 
-function hasEnabledSmartFilters(layer: Layer) {
-  return (layer.smartFilters ?? []).some((filter) => filter.enabled)
-}
-
 function hasLayerEffects(layer: Layer) {
   const style = layer.style
   if (!style) return false
   return Object.values(style).some((effect) => effect && typeof effect === "object" && "enabled" in effect && effect.enabled === true)
 }
 
+const GPU_LAYER_STYLE_EFFECTS = new Set([
+  "outerGlow",
+  "innerGlow",
+  "innerShadow",
+  "bevel",
+  "colorOverlay",
+  "gradientOverlay",
+  "patternOverlay",
+  "dropShadow",
+])
+
+function hasUnsupportedLayerEffects(layer: Layer) {
+  if (!hasLayerEffects(layer)) return false
+  const style = layer.style as Record<string, unknown> | undefined
+  if (!style) return false
+  return Object.entries(style).some(([key, effect]) =>
+    !GPU_LAYER_STYLE_EFFECTS.has(key) && !!effect && typeof effect === "object" && "enabled" in effect && effect.enabled === true,
+  )
+}
+
+function hasUnsupportedSmartFilters(layer: Layer) {
+  return (layer.smartFilters ?? [])
+    .filter((filter) => filter.enabled)
+    .some((filter) => !isGpuSmartFilterCompatible(filter))
+}
+
 function hasAdvancedKnockout(layer: Layer) {
   return !!layer.advancedBlending && layer.advancedBlending.knockout !== "none"
+}
+
+function hasUnsupportedAdvancedKnockout(_layer: Layer) {
+  return false
 }
 
 export function isWebGLBlendModeCompatible(mode: BlendMode | undefined): boolean {
@@ -882,17 +1164,15 @@ export function getWebGLLayerCapability(
   if (isGroup) unsupportedReasons.push("group-layer")
   if (!isWebGLBlendModeCompatible(layer.blendMode)) unsupportedReasons.push("unsupported-blend-mode")
 
-  if (hasLayerEffects(layer)) effectFallbacks.push("layer-effects")
-  if (hasEnabledSmartFilters(layer)) effectFallbacks.push("smart-filters")
-  if (options.hasFilterPreview) effectFallbacks.push("filter-preview")
+  if (hasUnsupportedLayerEffects(layer)) effectFallbacks.push("layer-effects")
+  if (hasUnsupportedSmartFilters(layer)) effectFallbacks.push("smart-filters")
   if (isAdjustment && !isGpuAdjustment) effectFallbacks.push("adjustment-layer")
-  if (hasAdvancedKnockout(layer)) effectFallbacks.push("advanced-blending")
+  if (hasAdvancedKnockout(layer) && hasUnsupportedAdvancedKnockout(layer)) effectFallbacks.push("advanced-blending")
 
   const needsCpuLayerFallback =
-    hasLayerEffects(layer) ||
-    hasEnabledSmartFilters(layer) ||
-    options.hasFilterPreview ||
-    hasAdvancedKnockout(layer)
+    hasUnsupportedLayerEffects(layer) ||
+    hasUnsupportedSmartFilters(layer) ||
+    (hasAdvancedKnockout(layer) && hasUnsupportedAdvancedKnockout(layer))
 
   if (!isAdjustment && needsCpuLayerFallback && !options.cpuLayerFallbackAvailable) {
     unsupportedReasons.push("cpu-layer-fallback-unavailable")
@@ -900,7 +1180,7 @@ export function getWebGLLayerCapability(
   if (isAdjustment && !isGpuAdjustment && !options.cpuAdjustmentFallbackAvailable) {
     unsupportedReasons.push("cpu-adjustment-fallback-unavailable")
   }
-  if (hasAdvancedKnockout(layer) && !options.cpuLayerFallbackAvailable) {
+  if (hasAdvancedKnockout(layer) && hasUnsupportedAdvancedKnockout(layer) && !options.cpuLayerFallbackAvailable) {
     unsupportedReasons.push("advanced-knockout")
   }
 
@@ -913,7 +1193,7 @@ export function getWebGLLayerCapability(
     gpuMasks: !!layer.mask && layer.maskEnabled !== false,
     gpuVectorMasks: !!layer.vectorMask,
     gpuClipping: layer.clipped === true,
-    requiresCpuCheckpoint: (isAdjustment && !isGpuAdjustment) || hasAdvancedKnockout(layer),
+    requiresCpuCheckpoint: (isAdjustment && !isGpuAdjustment) || (hasAdvancedKnockout(layer) && hasUnsupportedAdvancedKnockout(layer)),
     effectFallbacks,
     unsupportedReasons,
   }
@@ -956,8 +1236,12 @@ export function planWebGLLayerStack(input: WebGLLayerStackPlanInput): WebGLLayer
 
 function detectWebGL(canvas: HTMLCanvasElement): WebGLRenderingContext | WebGL2RenderingContext | null {
   try {
-    return canvas.getContext("webgl2", { premultipliedAlpha: false, preserveDrawingBuffer: true }) ??
+    const context =
+      canvas.getContext("webgl2", { premultipliedAlpha: false, preserveDrawingBuffer: true }) ??
       canvas.getContext("webgl", { premultipliedAlpha: false, preserveDrawingBuffer: true })
+    return context && typeof (context as WebGLRenderingContext).createShader === "function"
+      ? context
+      : null
   } catch {
     return null
   }
@@ -1003,6 +1287,7 @@ const FRAGMENT_SHADER = `
   uniform int u_hasBlendIf;
   uniform vec4 u_blendIfThis;
   uniform vec4 u_blendIfUnderlying;
+  uniform int u_knockoutMode;
   varying vec2 v_texcoord;
 
   float luminance(vec3 color) {
@@ -1134,6 +1419,11 @@ const FRAGMENT_SHADER = `
     if (u_blendMode == 1 && stableNoise(gl_FragCoord.xy) > sa) {
       gl_FragColor = base;
       return;
+    }
+
+    if (u_knockoutMode > 0) {
+      ba *= 1.0 - sa;
+      base = vec4(base.rgb, ba);
     }
 
     if (u_blendMode == 2 && ba > 0.01) {
@@ -1345,6 +1635,7 @@ export class WebGL2DCompositor {
       gl.uniform1i(locations.hasBlendIf, hasShaderAdvancedBlending(advanced) ? 1 : 0)
       gl.uniform4f(locations.blendIfThis, thisRange[0], thisRange[1], thisRange[2], thisRange[3])
       gl.uniform4f(locations.blendIfUnderlying, underlyingRange[0], underlyingRange[1], underlyingRange[2], underlyingRange[3])
+      gl.uniform1i(locations.knockoutMode, advanced?.knockout && advanced.knockout !== "none" ? 1 : 0)
       gl.drawArrays(gl.TRIANGLES, 0, 6)
 
       const previousBase: WebGLTexture = baseTexture
@@ -1370,6 +1661,7 @@ export class WebGL2DCompositor {
     gl.uniform1f(locations.fillOpacity, 1)
     gl.uniform3f(locations.channelMask, 1, 1, 1)
     gl.uniform1i(locations.hasBlendIf, 0)
+    gl.uniform1i(locations.knockoutMode, 0)
     gl.drawArrays(gl.TRIANGLES, 0, 6)
 
     gl.deleteFramebuffer(framebuffer)
@@ -1404,6 +1696,7 @@ export class WebGL2DCompositor {
       hasBlendIf: gl.getUniformLocation(program, "u_hasBlendIf"),
       blendIfThis: gl.getUniformLocation(program, "u_blendIfThis"),
       blendIfUnderlying: gl.getUniformLocation(program, "u_blendIfUnderlying"),
+      knockoutMode: gl.getUniformLocation(program, "u_knockoutMode"),
     }
   }
 
@@ -1485,13 +1778,12 @@ const ADJUSTMENT_VERTEX_SHADER = `
   }
 `
 
-function applyGpuAdjustmentToCanvas(targetCtx: CanvasRenderingContext2D, layer: Layer, width: number, height: number): boolean {
-  const adjustment = layer.adjustment
-  if (!adjustment) return false
-  if (!GPU_ADJUSTMENT_TYPES.has(adjustment.type)) return false
-  const shader = buildGpuAdjustmentShader(adjustment.type, adjustment.params)
-  if (!shader) return false
-
+function applyGpuShaderPassToCanvas(
+  targetCtx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  shader: GpuAdjustmentShader,
+): boolean {
   const sourceCanvas = document.createElement("canvas")
   sourceCanvas.width = width
   sourceCanvas.height = height
@@ -1534,6 +1826,7 @@ function applyGpuAdjustmentToCanvas(targetCtx: CanvasRenderingContext2D, layer: 
   gl.vertexAttribPointer(texcoordLoc, 2, gl.FLOAT, false, 0, 0)
 
   const sourceTexture = gl.createTexture()
+  if (!sourceTexture) return false
   gl.activeTexture(gl.TEXTURE0)
   gl.bindTexture(gl.TEXTURE_2D, sourceTexture)
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
@@ -1588,6 +1881,496 @@ function applyGpuAdjustmentToCanvas(targetCtx: CanvasRenderingContext2D, layer: 
   targetCtx.clearRect(0, 0, width, height)
   targetCtx.drawImage(gpuCanvas, 0, 0)
   return true
+}
+
+function applyGpuAdjustmentToCanvas(targetCtx: CanvasRenderingContext2D, layer: Layer, width: number, height: number): boolean {
+  const adjustment = layer.adjustment
+  if (!adjustment) return false
+  if (!GPU_ADJUSTMENT_TYPES.has(adjustment.type)) return false
+  const shader = buildGpuAdjustmentShader(adjustment.type, adjustment.params)
+  if (!shader) return false
+  return applyGpuShaderPassToCanvas(targetCtx, width, height, shader)
+}
+
+const BLUR_FILTER_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
+  uniform vec2 u_texel;
+  uniform vec2 u_direction;
+  uniform float u_radius;
+  uniform float u_gaussian;
+  void main() {
+    vec4 c = texture2D(u_source, v_texcoord);
+    if (u_radius <= 0.01) {
+      gl_FragColor = c;
+      return;
+    }
+    vec4 sum = vec4(0.0);
+    float total = 0.0;
+    float sigma = max(u_radius * 0.5, 0.5);
+    for (int i = -32; i <= 32; i++) {
+      float fi = float(i);
+      if (abs(fi) <= u_radius) {
+        float w = u_gaussian > 0.5 ? exp(-0.5 * (fi * fi) / (sigma * sigma)) : 1.0;
+        sum += texture2D(u_source, v_texcoord + u_direction * u_texel * fi) * w;
+        total += w;
+      }
+    }
+    gl_FragColor = sum / max(total, 0.0001);
+  }
+`
+
+const MOTION_BLUR_FILTER_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
+  uniform vec2 u_texel;
+  uniform vec2 u_direction;
+  uniform float u_distance;
+  void main() {
+    vec4 c = texture2D(u_source, v_texcoord);
+    if (u_distance <= 0.01) {
+      gl_FragColor = c;
+      return;
+    }
+    vec4 sum = vec4(0.0);
+    float total = 0.0;
+    for (int i = -32; i <= 32; i++) {
+      float fi = float(i);
+      if (abs(fi) <= u_distance) {
+        sum += texture2D(u_source, v_texcoord + u_direction * u_texel * fi);
+        total += 1.0;
+      }
+    }
+    gl_FragColor = sum / max(total, 0.0001);
+  }
+`
+
+const SHARPEN_FILTER_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
+  uniform vec2 u_texel;
+  uniform float u_amount;
+  void main() {
+    vec4 c = texture2D(u_source, v_texcoord);
+    vec3 n = texture2D(u_source, v_texcoord + vec2(0.0, -u_texel.y)).rgb;
+    vec3 s = texture2D(u_source, v_texcoord + vec2(0.0, u_texel.y)).rgb;
+    vec3 e = texture2D(u_source, v_texcoord + vec2(u_texel.x, 0.0)).rgb;
+    vec3 w = texture2D(u_source, v_texcoord + vec2(-u_texel.x, 0.0)).rgb;
+    vec3 blur = (n + s + e + w) * 0.25;
+    gl_FragColor = vec4(clamp(c.rgb + (c.rgb - blur) * u_amount, 0.0, 1.0), c.a);
+  }
+`
+
+const EMBOSS_FILTER_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
+  uniform vec2 u_texel;
+  uniform float u_amount;
+  void main() {
+    vec4 c = texture2D(u_source, v_texcoord);
+    vec3 nw = texture2D(u_source, v_texcoord + vec2(-u_texel.x, -u_texel.y)).rgb;
+    vec3 se = texture2D(u_source, v_texcoord + vec2(u_texel.x, u_texel.y)).rgb;
+    float edge = luminance(se - nw);
+    vec3 rgb = vec3(0.5 + edge * u_amount);
+    gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), c.a);
+  }
+`
+
+const FIND_EDGES_FILTER_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
+  uniform vec2 u_texel;
+  void main() {
+    vec3 tl = texture2D(u_source, v_texcoord + vec2(-u_texel.x, -u_texel.y)).rgb;
+    vec3 tc = texture2D(u_source, v_texcoord + vec2(0.0, -u_texel.y)).rgb;
+    vec3 tr = texture2D(u_source, v_texcoord + vec2(u_texel.x, -u_texel.y)).rgb;
+    vec3 ml = texture2D(u_source, v_texcoord + vec2(-u_texel.x, 0.0)).rgb;
+    vec3 mr = texture2D(u_source, v_texcoord + vec2(u_texel.x, 0.0)).rgb;
+    vec3 bl = texture2D(u_source, v_texcoord + vec2(-u_texel.x, u_texel.y)).rgb;
+    vec3 bc = texture2D(u_source, v_texcoord + vec2(0.0, u_texel.y)).rgb;
+    vec3 br = texture2D(u_source, v_texcoord + vec2(u_texel.x, u_texel.y)).rgb;
+    vec3 gx = -tl - 2.0 * ml - bl + tr + 2.0 * mr + br;
+    vec3 gy = -tl - 2.0 * tc - tr + bl + 2.0 * bc + br;
+    float edge = clamp(length(gx) + length(gy), 0.0, 1.0);
+    vec4 c = texture2D(u_source, v_texcoord);
+    gl_FragColor = vec4(vec3(1.0 - edge), c.a);
+  }
+`
+
+const SOLARIZE_FILTER_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
+  uniform float u_threshold;
+  void main() {
+    vec4 c = texture2D(u_source, v_texcoord);
+    vec3 inverted = vec3(1.0) - c.rgb;
+    vec3 rgb = mix(c.rgb, inverted, step(u_threshold, c.rgb));
+    gl_FragColor = vec4(rgb, c.a);
+  }
+`
+
+const PIXELATE_FILTER_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
+  uniform vec2 u_canvasSize;
+  uniform float u_size;
+  void main() {
+    vec2 pixel = floor(v_texcoord * u_canvasSize / max(u_size, 1.0)) * max(u_size, 1.0) + max(u_size, 1.0) * 0.5;
+    gl_FragColor = texture2D(u_source, clamp(pixel / u_canvasSize, vec2(0.0), vec2(1.0)));
+  }
+`
+
+const NOISE_FILTER_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
+  uniform float u_amount;
+  uniform float u_mono;
+  float random(vec2 p) {
+    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+  }
+  void main() {
+    vec4 c = texture2D(u_source, v_texcoord);
+    vec3 n = vec3(random(gl_FragCoord.xy), random(gl_FragCoord.yx + 13.0), random(gl_FragCoord.xy + 29.0)) - vec3(0.5);
+    if (u_mono > 0.5) n = vec3(n.r);
+    gl_FragColor = vec4(clamp(c.rgb + n * u_amount, 0.0, 1.0), c.a);
+  }
+`
+
+function buildGpuFilterPasses(
+  filterId: string,
+  params: Record<string, number | string | boolean> | undefined,
+  width: number,
+  height: number,
+): GpuAdjustmentShader[] | null {
+  const texel = [1 / Math.max(1, width), 1 / Math.max(1, height)]
+  const adjustmentId = filterId === "grayscale" ? "grayscale" : filterId
+  const adjustmentShader = buildGpuAdjustmentShader(adjustmentId, params)
+  if (adjustmentShader) return [adjustmentShader]
+
+  if (filterId === "gaussian-blur" || filterId === "box-blur") {
+    const radius = Math.min(32, Math.max(0, readNumberParam(params, "radius", 4)))
+    const gaussian = filterId === "gaussian-blur" ? 1 : 0
+    return [
+      { fragmentSource: BLUR_FILTER_SHADER, uniforms: { u_texel: texel, u_direction: [1, 0], u_radius: radius, u_gaussian: gaussian } },
+      { fragmentSource: BLUR_FILTER_SHADER, uniforms: { u_texel: texel, u_direction: [0, 1], u_radius: radius, u_gaussian: gaussian } },
+    ]
+  }
+  if (filterId === "motion-blur") {
+    const angle = (readNumberParam(params, "angle", 0) * Math.PI) / 180
+    const distance = Math.min(32, Math.max(0, readNumberParam(params, "distance", 12)))
+    return [{
+      fragmentSource: MOTION_BLUR_FILTER_SHADER,
+      uniforms: {
+        u_texel: texel,
+        u_direction: [Math.cos(angle), Math.sin(angle)],
+        u_distance: distance,
+      },
+    }]
+  }
+  if (filterId === "sharpen") {
+    return [{ fragmentSource: SHARPEN_FILTER_SHADER, uniforms: { u_texel: texel, u_amount: readNumberParam(params, "amount", 50) / 100 } }]
+  }
+  if (filterId === "emboss") {
+    return [{ fragmentSource: EMBOSS_FILTER_SHADER, uniforms: { u_texel: texel, u_amount: readNumberParam(params, "amount", 100) / 100 } }]
+  }
+  if (filterId === "find-edges") {
+    return [{ fragmentSource: FIND_EDGES_FILTER_SHADER, uniforms: { u_texel: texel } }]
+  }
+  if (filterId === "solarize") {
+    return [{ fragmentSource: SOLARIZE_FILTER_SHADER, uniforms: { u_threshold: readNumberParam(params, "threshold", 128) / 255 } }]
+  }
+  if (filterId === "pixelate") {
+    return [{ fragmentSource: PIXELATE_FILTER_SHADER, uniforms: { u_canvasSize: [width, height], u_size: readNumberParam(params, "size", 8) } }]
+  }
+  if (filterId === "noise") {
+    return [{
+      fragmentSource: NOISE_FILTER_SHADER,
+      uniforms: {
+        u_amount: readNumberParam(params, "amount", 25) / 100,
+        u_mono: readBooleanParam(params, "mono", false) ? 1 : 0,
+      },
+    }]
+  }
+  return null
+}
+
+function applyGpuFilterToCanvas(
+  target: HTMLCanvasElement,
+  filterId: string,
+  params: Record<string, number | string | boolean> | undefined,
+): boolean {
+  if (!GPU_FILTERS.has(filterId)) return false
+  const passes = buildGpuFilterPasses(filterId, params, target.width, target.height)
+  if (!passes?.length) return false
+  const ctx = target.getContext("2d")
+  if (!ctx) return false
+  for (const pass of passes) {
+    if (!applyGpuShaderPassToCanvas(ctx, target.width, target.height, pass)) return false
+  }
+  return true
+}
+
+function cloneCanvasForWebGL(source: HTMLCanvasElement): HTMLCanvasElement {
+  const canvas = document.createElement("canvas")
+  canvas.width = source.width
+  canvas.height = source.height
+  canvas.getContext("2d")!.drawImage(source, 0, 0)
+  return canvas
+}
+
+function unitColor(value: string | undefined, fallback: [number, number, number]): [number, number, number] {
+  if (!value || !value.startsWith("#")) return fallback
+  const hex = value.slice(1)
+  const expanded = hex.length === 3
+    ? hex.split("").map((char) => char + char).join("")
+    : hex
+  if (expanded.length !== 6) return fallback
+  const parsed = Number.parseInt(expanded, 16)
+  if (!Number.isFinite(parsed)) return fallback
+  return [
+    ((parsed >> 16) & 255) / 255,
+    ((parsed >> 8) & 255) / 255,
+    (parsed & 255) / 255,
+  ]
+}
+
+const LAYER_STYLE_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
+  uniform vec2 u_texel;
+  uniform float u_fillOpacity;
+  uniform float u_hasDropShadow;
+  uniform vec3 u_dropShadowColor;
+  uniform vec2 u_dropShadowOffset;
+  uniform float u_dropShadowSize;
+  uniform float u_dropShadowOpacity;
+  uniform float u_hasOuterGlow;
+  uniform vec3 u_outerGlowColor;
+  uniform float u_outerGlowSize;
+  uniform float u_outerGlowOpacity;
+  uniform float u_hasInnerGlow;
+  uniform vec3 u_innerGlowColor;
+  uniform float u_innerGlowSize;
+  uniform float u_innerGlowOpacity;
+  uniform float u_hasInnerShadow;
+  uniform vec3 u_innerShadowColor;
+  uniform vec2 u_innerShadowOffset;
+  uniform float u_innerShadowSize;
+  uniform float u_innerShadowOpacity;
+  uniform float u_hasBevel;
+  uniform vec3 u_bevelHighlightColor;
+  uniform vec3 u_bevelShadowColor;
+  uniform float u_bevelSize;
+  uniform float u_bevelOpacity;
+  uniform float u_hasColorOverlay;
+  uniform vec3 u_colorOverlayColor;
+  uniform float u_colorOverlayOpacity;
+  uniform float u_hasGradientOverlay;
+  uniform vec3 u_gradientStartColor;
+  uniform vec3 u_gradientEndColor;
+  uniform float u_gradientAngle;
+  uniform float u_gradientOpacity;
+  uniform float u_hasPatternOverlay;
+  uniform vec3 u_patternColor;
+  uniform float u_patternScale;
+  uniform float u_patternOpacity;
+  uniform vec2 u_canvasSize;
+
+  vec4 over(vec4 top, vec4 bottom) {
+    float a = top.a + bottom.a * (1.0 - top.a);
+    vec3 rgb = a > 0.0 ? (top.rgb * top.a + bottom.rgb * bottom.a * (1.0 - top.a)) / a : vec3(0.0);
+    return vec4(clamp(rgb, 0.0, 1.0), clamp(a, 0.0, 1.0));
+  }
+
+  float blurredAlpha(vec2 uv, vec2 offsetPx, float radius) {
+    float r = clamp(radius, 0.0, 24.0);
+    if (r <= 0.01) return texture2D(u_source, uv - offsetPx * u_texel).a;
+    float total = 0.0;
+    float weight = 0.0;
+    for (int y = -6; y <= 6; y++) {
+      for (int x = -6; x <= 6; x++) {
+        vec2 p = vec2(float(x), float(y));
+        float d = length(p);
+        if (d <= 6.0) {
+          float w = max(0.0, 1.0 - d / 6.0);
+          total += texture2D(u_source, uv - offsetPx * u_texel + p * u_texel * (r / 6.0)).a * w;
+          weight += w;
+        }
+      }
+    }
+    return total / max(weight, 0.0001);
+  }
+
+  float edgeInside(float alpha, float radius) {
+    if (alpha <= 0.0) return 0.0;
+    float n = blurredAlpha(v_texcoord, vec2(0.0), max(radius, 1.0));
+    return clamp(alpha - n + 0.5, 0.0, 1.0) * alpha;
+  }
+
+  void main() {
+    vec4 src = texture2D(u_source, v_texcoord);
+    float alpha = src.a;
+    vec4 result = vec4(0.0);
+
+    if (u_hasDropShadow > 0.5) {
+      float a = blurredAlpha(v_texcoord, u_dropShadowOffset, u_dropShadowSize) * u_dropShadowOpacity;
+      result = over(vec4(u_dropShadowColor, a), result);
+    }
+
+    if (u_hasOuterGlow > 0.5) {
+      float a = max(0.0, blurredAlpha(v_texcoord, vec2(0.0), u_outerGlowSize) - alpha) * u_outerGlowOpacity;
+      result = over(vec4(u_outerGlowColor, a), result);
+    }
+
+    result = over(vec4(src.rgb, alpha * clamp(u_fillOpacity, 0.0, 1.0)), result);
+
+    if (u_hasInnerShadow > 0.5) {
+      float shifted = blurredAlpha(v_texcoord, u_innerShadowOffset, u_innerShadowSize);
+      float a = clamp((1.0 - shifted) * alpha, 0.0, 1.0) * u_innerShadowOpacity;
+      result = over(vec4(u_innerShadowColor, a), result);
+    }
+
+    if (u_hasInnerGlow > 0.5) {
+      float a = edgeInside(alpha, u_innerGlowSize) * u_innerGlowOpacity;
+      result = over(vec4(u_innerGlowColor, a), result);
+    }
+
+    if (u_hasBevel > 0.5 && alpha > 0.0) {
+      float left = texture2D(u_source, v_texcoord - vec2(u_texel.x, 0.0) * max(u_bevelSize, 1.0)).a;
+      float right = texture2D(u_source, v_texcoord + vec2(u_texel.x, 0.0) * max(u_bevelSize, 1.0)).a;
+      float top = texture2D(u_source, v_texcoord - vec2(0.0, u_texel.y) * max(u_bevelSize, 1.0)).a;
+      float bottom = texture2D(u_source, v_texcoord + vec2(0.0, u_texel.y) * max(u_bevelSize, 1.0)).a;
+      float light = clamp((left - right + top - bottom) * 0.5 + 0.5, 0.0, 1.0);
+      float edge = edgeInside(alpha, u_bevelSize);
+      result = over(vec4(u_bevelHighlightColor, max(0.0, light - 0.5) * 2.0 * edge * u_bevelOpacity), result);
+      result = over(vec4(u_bevelShadowColor, max(0.0, 0.5 - light) * 2.0 * edge * u_bevelOpacity), result);
+    }
+
+    if (u_hasColorOverlay > 0.5) {
+      result = over(vec4(u_colorOverlayColor, alpha * u_colorOverlayOpacity), result);
+    }
+
+    if (u_hasGradientOverlay > 0.5) {
+      vec2 centered = v_texcoord - vec2(0.5);
+      float angle = radians(u_gradientAngle);
+      float t = dot(centered, vec2(cos(angle), sin(angle))) + 0.5;
+      vec3 color = mix(u_gradientStartColor, u_gradientEndColor, clamp(t, 0.0, 1.0));
+      result = over(vec4(color, alpha * u_gradientOpacity), result);
+    }
+
+    if (u_hasPatternOverlay > 0.5) {
+      vec2 cell = floor(gl_FragCoord.xy / max(u_patternScale, 1.0));
+      float checker = mod(cell.x + cell.y, 2.0);
+      result = over(vec4(u_patternColor, alpha * checker * u_patternOpacity), result);
+    }
+
+    gl_FragColor = result;
+  }
+`
+
+function gradientColorPair(layer: Layer): { start: [number, number, number]; end: [number, number, number]; angle: number } {
+  const gradient = layer.style?.gradientOverlay?.gradient
+  const stops = gradient?.stops ?? []
+  const first = stops[0]
+  const last = stops[stops.length - 1]
+  return {
+    start: unitColor(first?.color, [0, 0, 0]),
+    end: unitColor(last?.color, [1, 1, 1]),
+    angle: gradient?.angle ?? 0,
+  }
+}
+
+function buildGpuLayerStyleShader(layer: Layer, fillOpacity: number): GpuAdjustmentShader | null {
+  if (!layer.style || hasUnsupportedLayerEffects(layer)) return null
+  const style = layer.style
+  const drop = style.dropShadow
+  const outerGlow = style.outerGlow
+  const innerGlow = style.innerGlow
+  const innerShadow = style.innerShadow
+  const bevel = style.bevel
+  const colorOverlay = style.colorOverlay
+  const gradientOverlay = style.gradientOverlay
+  const patternOverlay = style.patternOverlay
+  const gradient = gradientColorPair(layer)
+  return {
+    fragmentSource: LAYER_STYLE_SHADER,
+    uniforms: {
+      u_texel: [1 / Math.max(1, layer.canvas.width), 1 / Math.max(1, layer.canvas.height)],
+      u_canvasSize: [layer.canvas.width, layer.canvas.height],
+      u_fillOpacity: fillOpacity,
+      u_hasDropShadow: drop?.enabled ? 1 : 0,
+      u_dropShadowColor: unitColor(drop?.color, [0, 0, 0]),
+      u_dropShadowOffset: [drop?.offsetX ?? 0, drop?.offsetY ?? 0],
+      u_dropShadowSize: drop?.size ?? 0,
+      u_dropShadowOpacity: drop?.opacity ?? 0,
+      u_hasOuterGlow: outerGlow?.enabled ? 1 : 0,
+      u_outerGlowColor: unitColor(outerGlow?.color, [1, 1, 1]),
+      u_outerGlowSize: outerGlow?.size ?? 0,
+      u_outerGlowOpacity: outerGlow?.opacity ?? 0,
+      u_hasInnerGlow: innerGlow?.enabled ? 1 : 0,
+      u_innerGlowColor: unitColor(innerGlow?.color, [1, 1, 1]),
+      u_innerGlowSize: innerGlow?.size ?? 0,
+      u_innerGlowOpacity: innerGlow?.opacity ?? 0,
+      u_hasInnerShadow: innerShadow?.enabled ? 1 : 0,
+      u_innerShadowColor: unitColor(innerShadow?.color, [0, 0, 0]),
+      u_innerShadowOffset: [innerShadow?.offsetX ?? 0, innerShadow?.offsetY ?? 0],
+      u_innerShadowSize: innerShadow?.size ?? 0,
+      u_innerShadowOpacity: innerShadow?.opacity ?? 0,
+      u_hasBevel: bevel?.enabled ? 1 : 0,
+      u_bevelHighlightColor: unitColor(bevel?.highlight, [1, 1, 1]),
+      u_bevelShadowColor: unitColor(bevel?.shadow, [0, 0, 0]),
+      u_bevelSize: bevel?.size ?? 0,
+      u_bevelOpacity: bevel?.opacity ?? 0,
+      u_hasColorOverlay: colorOverlay?.enabled ? 1 : 0,
+      u_colorOverlayColor: unitColor(colorOverlay?.color, [1, 1, 1]),
+      u_colorOverlayOpacity: colorOverlay?.opacity ?? 0,
+      u_hasGradientOverlay: gradientOverlay?.enabled ? 1 : 0,
+      u_gradientStartColor: gradient.start,
+      u_gradientEndColor: gradient.end,
+      u_gradientAngle: gradient.angle,
+      u_gradientOpacity: gradientOverlay?.opacity ?? 0,
+      u_hasPatternOverlay: patternOverlay?.enabled ? 1 : 0,
+      u_patternColor: unitColor(patternOverlay?.color, [0.5, 0.5, 0.5]),
+      u_patternScale: patternOverlay?.scale ?? 16,
+      u_patternOpacity: patternOverlay?.opacity ?? 0,
+    },
+  }
+}
+
+export function applyGpuLayerStyleToCanvas(layer: Layer, fillOpacity = 1): HTMLCanvasElement | null {
+  if (typeof document === "undefined" || !hasLayerEffects(layer)) return null
+  const shader = buildGpuLayerStyleShader(layer, fillOpacity)
+  if (!shader) return null
+  const canvas = cloneCanvasForWebGL(layer.canvas)
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return null
+  return applyGpuShaderPassToCanvas(ctx, canvas.width, canvas.height, shader) ? canvas : null
+}
+
+function isGpuSmartFilterCompositeCompatible(filter: NonNullable<Layer["smartFilters"]>[number]) {
+  return (filter.maskFeather ?? 0) <= 0 && (filter.maskDensity ?? 1) === 1
+}
+
+function isGpuSmartFilterCompatible(filter: NonNullable<Layer["smartFilters"]>[number]) {
+  return filter.enabled !== false && GPU_FILTERS.has(filter.filterId) && isGpuSmartFilterCompositeCompatible(filter)
+}
+
+export function applyGpuSmartFiltersToCanvas(
+  source: HTMLCanvasElement,
+  smartFilters: Layer["smartFilters"],
+): HTMLCanvasElement | null {
+  const enabled = smartFilters?.filter((filter) => filter.enabled) ?? []
+  if (!enabled.length) return source
+  if (typeof document === "undefined" || !enabled.every(isGpuSmartFilterCompatible)) return null
+
+  let current = cloneCanvasForWebGL(source)
+  for (const smartFilter of enabled) {
+    const opacity = clamp01(smartFilter.opacity ?? 1)
+    const blendMode = smartFilter.blendMode ?? "normal"
+    const maskSource = smartFilter.maskEnabled === false ? null : smartFilter.mask ?? null
+    const needsComposite = opacity < 1 || blendMode !== "normal" || !!maskSource
+    const before = needsComposite ? cloneCanvasForWebGL(current) : null
+    if (!applyGpuFilterToCanvas(current, smartFilter.filterId, smartFilter.params)) return null
+    if (before) {
+      const composited = document.createElement("canvas")
+      composited.width = source.width
+      composited.height = source.height
+      const result = new WebGL2DCompositor(composited).composite([
+        {
+          layerId: smartFilter.id,
+          source: current,
+          opacity,
+          blendMode,
+          maskSource,
+        },
+      ], { initialSource: before })
+      if (!result.completed) return null
+      current = composited
+    }
+  }
+  return current
 }
 
 export function prepareLayerInputForWebGL(

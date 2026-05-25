@@ -94,6 +94,7 @@ function loadPatterns(docId?: string): PatternEntry[] {
 function persistPatterns(patterns: PatternEntry[], docId?: string) {
   try {
     localStorage.setItem(scopedStorageKey(docId), JSON.stringify(patterns))
+    window.dispatchEvent(new CustomEvent("ps-patterns-changed", { detail: { docId, patterns } }))
   } catch {
     toast.error("Pattern library is too large to save locally.")
   }
@@ -121,6 +122,16 @@ export function PatternsPanel() {
     setPatterns(loadPatterns(activeDoc?.id))
     setEditingId(null)
     setGroupFilter("All")
+  }, [activeDoc?.id])
+
+  React.useEffect(() => {
+    const syncPatterns = (event: Event) => {
+      const detail = (event as CustomEvent<{ docId?: string; patterns?: unknown }>).detail
+      if (detail?.docId && detail.docId !== activeDoc?.id) return
+      setPatterns(normalizePatterns(detail?.patterns ?? loadPatterns(activeDoc?.id)))
+    }
+    window.addEventListener("ps-patterns-changed", syncPatterns)
+    return () => window.removeEventListener("ps-patterns-changed", syncPatterns)
   }, [activeDoc?.id])
 
   const save = React.useCallback((value: PatternEntry[]) => {

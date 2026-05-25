@@ -37,10 +37,13 @@ import {
   Triangle,
   RotateCw,
   Crosshair,
+  BookOpen,
 } from "lucide-react"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { useEditor } from "./editor-context"
 import type { ToolId } from "./types"
+import { dispatchPhotoshopEvent } from "./events"
+import { getToolHelp, type ToolPreviewKind } from "./tool-help"
 import { cn } from "@/lib/utils"
 
 interface ToolDef {
@@ -195,6 +198,8 @@ const TOOL_GROUPS: ToolGroup[] = [
   { primary: { id: "transform", name: "Transform Tool", shortcut: "F", icon: MousePointer2 } },
 ]
 
+const LEARNING_QUERY_KEY = "ps-learning-index-query"
+
 export function ToolPalette() {
   const { tool, dispatch, foreground, background, activeDoc, toggleQuickMask } = useEditor()
   const [openGroup, setOpenGroup] = React.useState<string | null>(null)
@@ -274,9 +279,16 @@ export function ToolPalette() {
                     ) : null}
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="right" className="text-xs">
-                  {activeName}{" "}
-                  <span className="text-[var(--ps-text-dim)] ml-1">{activeShortcut}</span>
+                <TooltipContent
+                  side="right"
+                  align="start"
+                  sideOffset={8}
+                  className="w-[308px] max-w-[calc(100vw-76px)] rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] p-0 text-[11px] text-[var(--ps-text)] shadow-2xl"
+                >
+                  <RichToolTooltip
+                    tool={{ id: group.others?.find((o) => o.id === tool)?.id ?? group.primary.id, name: activeName, shortcut: activeShortcut }}
+                    hasRelatedTools={!!group.others?.length}
+                  />
                 </TooltipContent>
               </Tooltip>
 
@@ -319,20 +331,8 @@ export function ToolPalette() {
           background={background}
           onSwap={() => dispatch({ type: "swap-colors" })}
           onReset={() => dispatch({ type: "reset-colors" })}
-          onClickFg={() => {
-            const i = document.createElement("input")
-            i.type = "color"
-            i.value = foreground
-            i.oninput = () => dispatch({ type: "set-foreground", color: i.value })
-            i.click()
-          }}
-          onClickBg={() => {
-            const i = document.createElement("input")
-            i.type = "color"
-            i.value = background
-            i.oninput = () => dispatch({ type: "set-background", color: i.value })
-            i.click()
-          }}
+          onClickFg={() => dispatchPhotoshopEvent("ps-open-color-picker", { target: "foreground", surface: "dialog" })}
+          onClickBg={() => dispatchPhotoshopEvent("ps-open-color-picker", { target: "background", surface: "dialog" })}
         />
 
         <div className="my-1 w-7 h-px bg-[var(--ps-divider)]" />
@@ -353,11 +353,347 @@ export function ToolPalette() {
               <Palette className="w-4 h-4" />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="right">Edit in Quick Mask (Q)</TooltipContent>
+          <TooltipContent
+            side="right"
+            align="start"
+            sideOffset={8}
+            className="w-[308px] max-w-[calc(100vw-76px)] rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] p-0 text-[11px] text-[var(--ps-text)] shadow-2xl"
+          >
+            <QuickMaskTooltip />
+          </TooltipContent>
         </Tooltip>
       </div>
     </TooltipProvider>
   )
+}
+
+function RichToolTooltip({
+  tool,
+  hasRelatedTools,
+}: {
+  tool: Pick<ToolDef, "id" | "name" | "shortcut">
+  hasRelatedTools: boolean
+}) {
+  const help = getToolHelp(tool.id, tool.name, tool.shortcut, hasRelatedTools)
+  return (
+    <div className="overflow-hidden rounded-sm">
+      <div className="grid grid-cols-[72px_1fr] gap-3 border-b border-[var(--ps-divider)] bg-[var(--ps-chrome)] p-3">
+        <ToolUsagePreview kind={help.preview} />
+        <div className="min-w-0">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="truncate text-[12px] font-medium text-[var(--ps-text)]">{tool.name}</div>
+              <div className="mt-0.5 text-[9px] uppercase tracking-wide text-[var(--ps-text-dim)]">
+                {help.learningCategory}
+              </div>
+            </div>
+            <kbd className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1.5 py-0.5 text-[10px] text-[var(--ps-text)]">
+              {tool.shortcut}
+            </kbd>
+          </div>
+          <p className="mt-2 leading-4 text-[var(--ps-text-dim)]">{help.description}</p>
+        </div>
+      </div>
+      <div className="space-y-1.5 p-3">
+        {help.steps.map((step, index) => (
+          <div key={step} className="grid grid-cols-[18px_1fr] gap-2 text-[10.5px] leading-4">
+            <span className="flex h-[18px] w-[18px] items-center justify-center rounded-sm bg-[var(--ps-panel-2)] text-[9px] text-[var(--ps-accent-2)]">
+              {index + 1}
+            </span>
+            <span className="text-[var(--ps-text)]">{step}</span>
+          </div>
+        ))}
+      </div>
+      <div className="border-t border-[var(--ps-divider)] bg-[var(--ps-chrome)] p-2">
+        <button
+          type="button"
+          aria-label={`Learn ${tool.name} in Discover`}
+          onClick={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            openLearningQuery(help.learningQuery)
+          }}
+          className="flex h-7 w-full items-center justify-between gap-2 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-left text-[10px] text-[var(--ps-text)] hover:border-[var(--ps-accent)] hover:bg-[var(--ps-tool-hover)]"
+        >
+          <span className="flex min-w-0 items-center gap-2">
+            <BookOpen className="h-3.5 w-3.5 shrink-0 text-[var(--ps-accent-2)]" />
+            <span className="truncate">Learn in Discover</span>
+          </span>
+          <span className="truncate text-[var(--ps-text-dim)]">{help.learningQuery}</span>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function QuickMaskTooltip() {
+  const help = {
+    description:
+      "Paint a temporary red mask overlay that converts brush strokes into selection edits when Quick Mask is toggled off.",
+    steps: [
+      "Toggle Quick Mask, then paint black to protect or white to reveal selected regions.",
+      "Use Brush, Eraser, and selection tools while the overlay previews mask density.",
+      "Open Discover for selection mask workflows and refinement panels.",
+    ],
+  }
+  return (
+    <div className="overflow-hidden rounded-sm">
+      <div className="grid grid-cols-[72px_1fr] gap-3 border-b border-[var(--ps-divider)] bg-[var(--ps-chrome)] p-3">
+        <ToolUsagePreview kind="quick-mask" />
+        <div className="min-w-0">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <div className="text-[12px] font-medium text-[var(--ps-text)]">Quick Mask Mode</div>
+              <div className="mt-0.5 text-[9px] uppercase tracking-wide text-[var(--ps-text-dim)]">Selection</div>
+            </div>
+            <kbd className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1.5 py-0.5 text-[10px] text-[var(--ps-text)]">
+              Q
+            </kbd>
+          </div>
+          <p className="mt-2 leading-4 text-[var(--ps-text-dim)]">{help.description}</p>
+        </div>
+      </div>
+      <div className="space-y-1.5 p-3">
+        {help.steps.map((step, index) => (
+          <div key={step} className="grid grid-cols-[18px_1fr] gap-2 text-[10.5px] leading-4">
+            <span className="flex h-[18px] w-[18px] items-center justify-center rounded-sm bg-[var(--ps-panel-2)] text-[9px] text-[var(--ps-accent-2)]">
+              {index + 1}
+            </span>
+            <span className="text-[var(--ps-text)]">{step}</span>
+          </div>
+        ))}
+      </div>
+      <div className="border-t border-[var(--ps-divider)] bg-[var(--ps-chrome)] p-2">
+        <button
+          type="button"
+          aria-label="Learn Quick Mask Mode in Discover"
+          onClick={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            openLearningQuery("selection mask")
+          }}
+          className="flex h-7 w-full items-center justify-between gap-2 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-left text-[10px] text-[var(--ps-text)] hover:border-[var(--ps-accent)] hover:bg-[var(--ps-tool-hover)]"
+        >
+          <span className="flex min-w-0 items-center gap-2">
+            <BookOpen className="h-3.5 w-3.5 shrink-0 text-[var(--ps-accent-2)]" />
+            <span className="truncate">Learn in Discover</span>
+          </span>
+          <span className="truncate text-[var(--ps-text-dim)]">selection mask</span>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function ToolUsagePreview({ kind }: { kind: ToolPreviewKind }) {
+  return (
+    <div
+      data-testid={`tool-preview-${kind}`}
+      data-preview={kind}
+      className="ps-tool-preview relative h-[64px] w-[64px] overflow-hidden rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)]"
+      aria-hidden="true"
+    >
+      <div className="ps-tool-preview-grid" />
+      {kind === "brush" ? <BrushPreview /> : null}
+      {kind === "selection" ? <SelectionPreview /> : null}
+      {kind === "crop" ? <CropPreview /> : null}
+      {kind === "sample" ? <SamplePreview /> : null}
+      {kind === "retouch" ? <RetouchPreview /> : null}
+      {kind === "clone" ? <ClonePreview /> : null}
+      {kind === "history" ? <HistoryPreview /> : null}
+      {kind === "erase" ? <ErasePreview /> : null}
+      {kind === "fill" ? <FillPreview /> : null}
+      {kind === "blur" ? <BlurPreview /> : null}
+      {kind === "tonal" ? <TonalPreview /> : null}
+      {kind === "path" ? <PathPreview /> : null}
+      {kind === "type" ? <TypePreview /> : null}
+      {kind === "shape" ? <ShapePreview /> : null}
+      {kind === "view" ? <ViewPreview /> : null}
+      {kind === "transform" ? <TransformPreview /> : null}
+      {kind === "quick-mask" ? <QuickMaskPreview /> : null}
+      {kind === "move" ? <MovePreview /> : null}
+    </div>
+  )
+}
+
+function BrushPreview() {
+  return (
+    <>
+      <svg className="absolute inset-0" viewBox="0 0 64 64">
+        <path className="ps-preview-stroke" d="M10 44 C20 16 34 50 52 20" />
+      </svg>
+      <span className="ps-preview-cursor" />
+    </>
+  )
+}
+
+function SelectionPreview() {
+  return (
+    <>
+      <span className="ps-preview-selection" />
+      <span className="ps-preview-cursor" />
+    </>
+  )
+}
+
+function CropPreview() {
+  return (
+    <>
+      <span className="ps-preview-crop" />
+      <span className="ps-preview-crop-line ps-preview-crop-line-a" />
+      <span className="ps-preview-crop-line ps-preview-crop-line-b" />
+    </>
+  )
+}
+
+function SamplePreview() {
+  return (
+    <>
+      <span className="ps-preview-swatch ps-preview-swatch-a" />
+      <span className="ps-preview-swatch ps-preview-swatch-b" />
+      <span className="ps-preview-sampler" />
+    </>
+  )
+}
+
+function RetouchPreview() {
+  return (
+    <>
+      <span className="ps-preview-blemish" />
+      <span className="ps-preview-heal" />
+      <span className="ps-preview-cursor" />
+    </>
+  )
+}
+
+function ClonePreview() {
+  return (
+    <>
+      <span className="ps-preview-clone-source" />
+      <span className="ps-preview-clone-target" />
+      <span className="ps-preview-clone-line" />
+    </>
+  )
+}
+
+function HistoryPreview() {
+  return (
+    <>
+      <span className="ps-preview-history-before" />
+      <span className="ps-preview-history-after" />
+    </>
+  )
+}
+
+function ErasePreview() {
+  return (
+    <>
+      <span className="ps-preview-paint-block" />
+      <span className="ps-preview-erase-path" />
+    </>
+  )
+}
+
+function FillPreview() {
+  return (
+    <>
+      <span className="ps-preview-fill-band" />
+      <span className="ps-preview-fill-drop" />
+    </>
+  )
+}
+
+function BlurPreview() {
+  return (
+    <>
+      <span className="ps-preview-detail ps-preview-detail-a" />
+      <span className="ps-preview-detail ps-preview-detail-b" />
+      <span className="ps-preview-blur-pass" />
+    </>
+  )
+}
+
+function TonalPreview() {
+  return (
+    <>
+      <span className="ps-preview-tonal-base" />
+      <span className="ps-preview-tonal-light" />
+    </>
+  )
+}
+
+function PathPreview() {
+  return (
+    <svg className="absolute inset-0" viewBox="0 0 64 64">
+      <path className="ps-preview-path" d="M9 47 C18 12 44 10 55 38" />
+      <circle className="ps-preview-anchor" cx="9" cy="47" r="2" />
+      <circle className="ps-preview-anchor" cx="55" cy="38" r="2" />
+    </svg>
+  )
+}
+
+function TypePreview() {
+  return (
+    <>
+      <span className="ps-preview-type-glyph">T</span>
+      <span className="ps-preview-type-caret" />
+    </>
+  )
+}
+
+function ShapePreview() {
+  return (
+    <>
+      <span className="ps-preview-shape-base" />
+      <span className="ps-preview-shape-next" />
+    </>
+  )
+}
+
+function ViewPreview() {
+  return (
+    <>
+      <span className="ps-preview-view-frame" />
+      <span className="ps-preview-view-lens" />
+    </>
+  )
+}
+
+function TransformPreview() {
+  return (
+    <>
+      <span className="ps-preview-transform-box" />
+      <span className="ps-preview-transform-handle ps-preview-transform-handle-a" />
+      <span className="ps-preview-transform-handle ps-preview-transform-handle-b" />
+    </>
+  )
+}
+
+function QuickMaskPreview() {
+  return (
+    <>
+      <span className="ps-preview-mask-overlay" />
+      <span className="ps-preview-mask-brush" />
+    </>
+  )
+}
+
+function MovePreview() {
+  return (
+    <>
+      <span className="ps-preview-layer ps-preview-layer-a" />
+      <span className="ps-preview-layer ps-preview-layer-b" />
+      <span className="ps-preview-move-arrow" />
+    </>
+  )
+}
+
+function openLearningQuery(query: string) {
+  try {
+    sessionStorage.setItem(LEARNING_QUERY_KEY, query)
+  } catch {}
+  dispatchPhotoshopEvent("ps-open-panel", "discover")
+  window.setTimeout(() => dispatchPhotoshopEvent("ps-set-learning-query", query), 0)
 }
 
 function ForegroundBackgroundSwatch({

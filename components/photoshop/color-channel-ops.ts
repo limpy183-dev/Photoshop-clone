@@ -40,6 +40,13 @@ export interface ApplyImageOptions {
   blendMode?: BlendMode
   opacity?: number
   invertSource?: boolean
+  mask?: ImageData | null
+  maskChannel?: PixelChannel
+  invertMask?: boolean
+  maskDensity?: number
+  scale?: number
+  offset?: number
+  preserveTransparency?: boolean
 }
 
 export interface CalculationsOptions {
@@ -49,6 +56,12 @@ export interface CalculationsOptions {
   opacity?: number
   invertA?: boolean
   invertB?: boolean
+  mask?: ImageData | null
+  maskChannel?: PixelChannel
+  invertMask?: boolean
+  maskDensity?: number
+  scale?: number
+  offset?: number
 }
 
 export interface AlphaChannelMetadata {
@@ -103,6 +116,24 @@ export interface SeparationCoverageStats {
   totalInkAverage: number
 }
 
+export type SeparationProofViewMode = "composite" | "ink" | "mask"
+
+export interface SeparationProofViewOptions {
+  visiblePlateIds?: string[]
+  isolatedPlateId?: string
+  viewMode?: SeparationProofViewMode
+  paper?: string
+}
+
+export interface SeparationPlateStats {
+  id: string
+  name: string
+  kind: SeparationPlateKind
+  averageCoverage: number
+  maxCoverage: number
+  minCoverage: number
+}
+
 export interface ColorSeparationModel {
   width: number
   height: number
@@ -111,6 +142,26 @@ export interface ColorSeparationModel {
   processProfile?: string
   plates: SeparationPlate[]
   coverage: SeparationCoverageStats
+}
+
+export interface SplitImageDataChannelsOptions {
+  includeAlpha?: boolean
+}
+
+export interface SplitImageDataChannelsResult {
+  red: ImageData
+  green: ImageData
+  blue: ImageData
+  gray: ImageData
+  alpha?: ImageData
+}
+
+export interface MergeChannelImageDataInput {
+  red?: ImageData | null
+  green?: ImageData | null
+  blue?: ImageData | null
+  gray?: ImageData | null
+  alpha?: ImageData | null
 }
 
 const SPOT_NAME_PATTERN = /^\[spot:(#[0-9a-fA-F]{3,8})(?::([0-9]{1,3}(?:\.[0-9]+)?))?\](.*)$/
@@ -144,30 +195,56 @@ function readChannel(data: Uint8ClampedArray, index: number, channel: PixelChann
 }
 
 function blendScalar(dest: number, src: number, mode: BlendMode) {
+  const dodge = (d: number, s: number) => s >= 255 ? 255 : Math.min(255, (d * 255) / Math.max(1, 255 - s))
+  const burn = (d: number, s: number) => s <= 0 ? 0 : 255 - Math.min(255, ((255 - d) * 255) / s)
+  const overlay = (d: number, s: number) => d < 128
+    ? (2 * d * s) / 255
+    : 255 - (2 * (255 - d) * (255 - s)) / 255
+  const vivid = (d: number, s: number) => s < 128 ? burn(d, 2 * s) : dodge(d, 2 * (s - 128))
   switch (mode) {
     case "multiply":
       return (dest * src) / 255
     case "screen":
       return 255 - ((255 - dest) * (255 - src)) / 255
     case "overlay":
-      return dest < 128
-        ? (2 * dest * src) / 255
-        : 255 - (2 * (255 - dest) * (255 - src)) / 255
+      return overlay(dest, src)
+    case "hard-light":
+      return overlay(src, dest)
     case "soft-light": {
       const s = src / 255
       const d = dest / 255
       return (s < 0.5 ? d - (1 - 2 * s) * d * (1 - d) : d + (2 * s - 1) * (Math.sqrt(d) - d)) * 255
     }
+    case "color-burn":
+      return burn(dest, src)
+    case "linear-burn":
+      return dest + src - 255
+    case "color-dodge":
+      return dodge(dest, src)
+    case "vivid-light":
+      return vivid(dest, src)
+    case "linear-light":
+      return dest + 2 * src - 255
+    case "pin-light":
+      return src < 128 ? Math.min(dest, 2 * src) : Math.max(dest, 2 * (src - 128))
+    case "hard-mix":
+      return vivid(dest, src) < 128 ? 0 : 255
     case "difference":
       return Math.abs(dest - src)
+    case "exclusion":
+      return dest + src - (2 * dest * src) / 255
     case "darken":
+    case "darker-color":
       return Math.min(dest, src)
     case "lighten":
+    case "lighter-color":
       return Math.max(dest, src)
     case "linear-dodge":
       return dest + src
     case "subtract":
       return dest - src
+    case "divide":
+      return src <= 0 ? 255 : (dest / src) * 255
     default:
       return src
   }
@@ -175,6 +252,24 @@ function blendScalar(dest: number, src: number, mode: BlendMode) {
 
 function mixWithOpacity(dest: number, src: number, mode: BlendMode, opacity: number) {
   return clamp8(dest + (blendScalar(dest, src, mode) - dest) * opacity)
+}
+
+function readMaskAmount(
+  mask: ImageData | null | undefined,
+  x: number,
+  y: number,
+  channel: PixelChannel = "alpha",
+  invert = false,
+  density = 1,
+) {
+  if (!mask || x < 0 || y < 0 || x >= mask.width || y >= mask.height) return 1
+  const i = (y * mask.width + x) * 4
+  const value = readChannel(mask.data, i, channel)
+  return clamp01(((invert ? 255 - value : value) / 255) * clamp01(density))
+}
+
+function scaleOffsetValue(value: number, scale: number | undefined, offset: number | undefined) {
+  return clamp8(value * (Number.isFinite(scale) ? scale! : 1) + (Number.isFinite(offset) ? offset! : 0))
 }
 
 export function applyChannelMixerToImageData(src: ImageData, params: ChannelMixerParams): ImageData {
@@ -226,26 +321,29 @@ export function applyImageData(target: ImageData, source: ImageData, options: Ap
     for (let x = 0; x < width; x++) {
       const ti = (y * target.width + x) * 4
       const si = (y * source.width + x) * 4
+      if (options.preserveTransparency && target.data[ti + 3] === 0) continue
+      const maskAmount = readMaskAmount(options.mask, x, y, options.maskChannel, options.invertMask, options.maskDensity)
+      const effectiveOpacity = opacity * maskAmount
       const singleSource =
         sourceChannel === "rgb"
           ? null
           : options.invertSource
-            ? 255 - readChannel(source.data, si, sourceChannel)
-            : readChannel(source.data, si, sourceChannel)
+            ? scaleOffsetValue(255 - readChannel(source.data, si, sourceChannel), options.scale, options.offset)
+            : scaleOffsetValue(readChannel(source.data, si, sourceChannel), options.scale, options.offset)
 
       const sourceValue = (channelOffset: number) => {
         if (singleSource !== null) return singleSource
         const value = source.data[si + channelOffset]
-        return options.invertSource ? 255 - value : value
+        return scaleOffsetValue(options.invertSource ? 255 - value : value, options.scale, options.offset)
       }
 
       if (targetChannel === "rgb") {
-        out[ti] = mixWithOpacity(target.data[ti], sourceValue(0), blendMode, opacity)
-        out[ti + 1] = mixWithOpacity(target.data[ti + 1], sourceValue(1), blendMode, opacity)
-        out[ti + 2] = mixWithOpacity(target.data[ti + 2], sourceValue(2), blendMode, opacity)
+        out[ti] = mixWithOpacity(target.data[ti], sourceValue(0), blendMode, effectiveOpacity)
+        out[ti + 1] = mixWithOpacity(target.data[ti + 1], sourceValue(1), blendMode, effectiveOpacity)
+        out[ti + 2] = mixWithOpacity(target.data[ti + 2], sourceValue(2), blendMode, effectiveOpacity)
       } else {
         const offset = targetChannel === "red" ? 0 : targetChannel === "green" ? 1 : targetChannel === "blue" ? 2 : 3
-        out[ti + offset] = mixWithOpacity(target.data[ti + offset], singleSource ?? sourceValue(offset), blendMode, opacity)
+        out[ti + offset] = mixWithOpacity(target.data[ti + offset], singleSource ?? sourceValue(offset), blendMode, effectiveOpacity)
       }
     }
   }
@@ -268,11 +366,59 @@ export function calculateChannelImageData(sourceA: ImageData, sourceB: ImageData
       const oi = (y * width + x) * 4
       const a = options.invertA ? 255 - readChannel(sourceA.data, ai, channelA) : readChannel(sourceA.data, ai, channelA)
       const b = options.invertB ? 255 - readChannel(sourceB.data, bi, channelB) : readChannel(sourceB.data, bi, channelB)
-      const value = clamp8(a + (blendScalar(a, b, blendMode) - a) * opacity)
+      const calculated = scaleOffsetValue(a + (blendScalar(a, b, blendMode) - a) * opacity, options.scale, options.offset)
+      const amount = readMaskAmount(options.mask, x, y, options.maskChannel, options.invertMask, options.maskDensity)
+      const value = clamp8(a * (1 - amount) + calculated * amount)
       out[oi] = value
       out[oi + 1] = value
       out[oi + 2] = value
       out[oi + 3] = 255
+    }
+  }
+  return new ImageData(out, width, height)
+}
+
+export function splitImageDataChannels(source: ImageData, options: SplitImageDataChannelsOptions = {}): SplitImageDataChannelsResult {
+  const makeChannel = (channel: PixelChannel) => {
+    const data = new Uint8ClampedArray(source.width * source.height * 4)
+    for (let i = 0; i < source.data.length; i += 4) {
+      const value = readChannel(source.data, i, channel)
+      data[i] = value
+      data[i + 1] = value
+      data[i + 2] = value
+      data[i + 3] = 255
+    }
+    return new ImageData(data, source.width, source.height)
+  }
+  return {
+    red: makeChannel("red"),
+    green: makeChannel("green"),
+    blue: makeChannel("blue"),
+    gray: makeChannel("gray"),
+    alpha: options.includeAlpha ? makeChannel("alpha") : undefined,
+  }
+}
+
+export function mergeChannelImageData(channels: MergeChannelImageDataInput): ImageData {
+  const sources = [channels.red, channels.green, channels.blue, channels.gray, channels.alpha].filter(Boolean) as ImageData[]
+  const first = sources[0]
+  if (!first) return new ImageData(new Uint8ClampedArray(4), 1, 1)
+  const width = Math.min(...sources.map((source) => source.width))
+  const height = Math.min(...sources.map((source) => source.height))
+  const out = new Uint8ClampedArray(width * height * 4)
+  const sample = (source: ImageData | null | undefined, x: number, y: number, fallback: number) => {
+    if (!source) return fallback
+    const i = (y * source.width + x) * 4
+    return clamp8(readChannel(source.data, i, "gray"))
+  }
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const oi = (y * width + x) * 4
+      const gray = sample(channels.gray, x, y, 0)
+      out[oi] = sample(channels.red, x, y, gray)
+      out[oi + 1] = sample(channels.green, x, y, gray)
+      out[oi + 2] = sample(channels.blue, x, y, gray)
+      out[oi + 3] = sample(channels.alpha, x, y, 255)
     }
   }
   return new ImageData(out, width, height)
@@ -543,6 +689,110 @@ export function composeSeparationPreview(model: ColorSeparationModel, options: {
   }
 
   return new ImageData(out, model.width, model.height)
+}
+
+export function composeSeparationProofView(model: ColorSeparationModel, options: SeparationProofViewOptions = {}): ImageData {
+  const visible = new Set(options.visiblePlateIds ?? model.plates.map((plate) => plate.id))
+  const isolated = options.isolatedPlateId ? model.plates.find((plate) => plate.id === options.isolatedPlateId) : null
+  const viewMode = options.viewMode ?? (isolated ? "ink" : "composite")
+  const paper = paperColor(options.paper)
+  const out = new Uint8ClampedArray(model.width * model.height * 4)
+
+  if (isolated) {
+    const ink = hexToRgb(isolated.color ?? (isolated.name === "Black" ? "#111111" : "#808080"))
+    for (let p = 0; p < model.width * model.height; p++) {
+      const i = p * 4
+      const coverage = readPlateUnit(isolated, p, model.bitDepth) * isolated.opacity
+      if (viewMode === "mask") {
+        const value = clamp8(coverage * 255)
+        out[i] = value
+        out[i + 1] = value
+        out[i + 2] = value
+      } else {
+        out[i] = clamp8(paper.r * (1 - coverage) + ink.r * coverage)
+        out[i + 1] = clamp8(paper.g * (1 - coverage) + ink.g * coverage)
+        out[i + 2] = clamp8(paper.b * (1 - coverage) + ink.b * coverage)
+      }
+      out[i + 3] = 255
+    }
+    return new ImageData(out, model.width, model.height)
+  }
+
+  for (let p = 0; p < model.width * model.height; p++) {
+    const i = p * 4
+    out[i] = paper.r
+    out[i + 1] = paper.g
+    out[i + 2] = paper.b
+    out[i + 3] = 255
+  }
+
+  const applySubtractive = (plateName: string, channel: "c" | "m" | "y" | "k") => {
+    const plate = model.plates.find((item) => item.name === plateName)
+    if (!plate || !visible.has(plate.id)) return
+    for (let p = 0; p < model.width * model.height; p++) {
+      const i = p * 4
+      const coverage = readPlateUnit(plate, p, model.bitDepth) * plate.opacity
+      if (coverage <= 0) continue
+      if (channel === "c" || channel === "k") out[i] = clamp8(out[i] * (1 - coverage))
+      if (channel === "m" || channel === "k") out[i + 1] = clamp8(out[i + 1] * (1 - coverage))
+      if (channel === "y" || channel === "k") out[i + 2] = clamp8(out[i + 2] * (1 - coverage))
+    }
+  }
+
+  if (model.process === "CMYK") {
+    applySubtractive("Cyan", "c")
+    applySubtractive("Magenta", "m")
+    applySubtractive("Yellow", "y")
+    applySubtractive("Black", "k")
+  } else {
+    for (const plate of model.plates.filter((item) => item.kind === "process" && visible.has(item.id))) {
+      const ink = hexToRgb(plate.color ?? "#808080")
+      for (let p = 0; p < model.width * model.height; p++) {
+        const i = p * 4
+        const coverage = readPlateUnit(plate, p, model.bitDepth) * plate.opacity
+        out[i] = clamp8(out[i] * (1 - coverage) + ink.r * coverage)
+        out[i + 1] = clamp8(out[i + 1] * (1 - coverage) + ink.g * coverage)
+        out[i + 2] = clamp8(out[i + 2] * (1 - coverage) + ink.b * coverage)
+      }
+    }
+  }
+
+  for (const spot of model.plates.filter((item) => item.kind === "spot" && visible.has(item.id))) {
+    const ink = hexToRgb(spot.color ?? "#ff00ff")
+    for (let p = 0; p < model.width * model.height; p++) {
+      const i = p * 4
+      const coverage = readPlateUnit(spot, p, model.bitDepth) * spot.opacity
+      if (coverage <= 0) continue
+      out[i] = clamp8(out[i] * (1 - coverage) + ink.r * coverage)
+      out[i + 1] = clamp8(out[i + 1] * (1 - coverage) + ink.g * coverage)
+      out[i + 2] = clamp8(out[i + 2] * (1 - coverage) + ink.b * coverage)
+    }
+  }
+
+  return new ImageData(out, model.width, model.height)
+}
+
+export function summarizeSeparationPlates(model: ColorSeparationModel): SeparationPlateStats[] {
+  const pixels = Math.max(1, model.width * model.height)
+  return model.plates.map((plate) => {
+    let sum = 0
+    let min = 1
+    let max = 0
+    for (let p = 0; p < model.width * model.height; p++) {
+      const coverage = readPlateUnit(plate, p, model.bitDepth) * plate.opacity
+      sum += coverage
+      min = Math.min(min, coverage)
+      max = Math.max(max, coverage)
+    }
+    return {
+      id: plate.id,
+      name: plate.name,
+      kind: plate.kind,
+      averageCoverage: (sum / pixels) * 100,
+      maxCoverage: max * 100,
+      minCoverage: min * 100,
+    }
+  })
 }
 
 export function isApproximatelyOutOfGamut(rgb: RgbColor, settings?: ColorManagementSettings) {

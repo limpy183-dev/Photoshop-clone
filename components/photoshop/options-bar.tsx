@@ -122,7 +122,7 @@ export function OptionsBar() {
     <div className="h-9 bg-[var(--ps-panel)] border-b border-[var(--ps-divider)] flex items-center px-2 gap-2 text-[11px]">
       <ToolBadge tool={tool} />
       <Divider />
-      {tool === "brush" || tool === "pencil" || tool === "mixer-brush" || tool === "pattern-stamp" || tool === "art-history-brush" || tool === "eraser" || tool === "background-eraser" || tool === "magic-eraser" || tool === "red-eye" ? (
+      {tool === "brush" || tool === "pencil" || tool === "mixer-brush" || tool === "pattern-stamp" || tool === "art-history-brush" || tool === "eraser" || tool === "background-eraser" || tool === "magic-eraser" || tool === "red-eye" || tool === "color-replace" ? (
         renderBrushOptions()
       ) : tool === "clone-stamp" || tool === "healing-brush" ? (
         <CloneSourceOptions />
@@ -306,6 +306,7 @@ export function OptionsBar() {
             </select>
             <span className={labelClass}>Tolerance:</span>
             <Input
+              aria-label="Eraser tolerance"
               type="number"
               min={0}
               max={255}
@@ -322,6 +323,120 @@ export function OptionsBar() {
               />
               <span>Protect FG</span>
             </label>
+          </>
+        ) : null}
+        {tool === "color-replace" ? (
+          <>
+            <Divider />
+            <span className={labelClass}>Sampling:</span>
+            <select
+              value={brush.colorReplacement?.sampling ?? "continuous"}
+              onChange={(e) => dispatch({ type: "set-brush", brush: { colorReplacement: { ...(brush.colorReplacement ?? { sampling: "continuous", limits: "contiguous", mode: "color", tolerance: 32, antiAlias: true }), sampling: e.target.value as NonNullable<typeof brush.colorReplacement>["sampling"] } } })}
+              className="h-6 bg-[var(--ps-panel)] border border-[var(--ps-divider)] rounded-sm text-[11px] px-1"
+            >
+              <option value="continuous">Continuous</option>
+              <option value="once">Once</option>
+              <option value="background-swatch">Background Swatch</option>
+            </select>
+            <span className={labelClass}>Limits:</span>
+            <select
+              value={brush.colorReplacement?.limits ?? "contiguous"}
+              onChange={(e) => dispatch({ type: "set-brush", brush: { colorReplacement: { ...(brush.colorReplacement ?? { sampling: "continuous", limits: "contiguous", mode: "color", tolerance: 32, antiAlias: true }), limits: e.target.value as NonNullable<typeof brush.colorReplacement>["limits"] } } })}
+              className="h-6 bg-[var(--ps-panel)] border border-[var(--ps-divider)] rounded-sm text-[11px] px-1"
+            >
+              <option value="contiguous">Contiguous</option>
+              <option value="discontiguous">Discontiguous</option>
+              <option value="find-edges">Find Edges</option>
+            </select>
+            <span className={labelClass}>Mode:</span>
+            <select
+              value={brush.colorReplacement?.mode ?? "color"}
+              onChange={(e) => dispatch({ type: "set-brush", brush: { colorReplacement: { ...(brush.colorReplacement ?? { sampling: "continuous", limits: "contiguous", mode: "color", tolerance: 32, antiAlias: true }), mode: e.target.value as NonNullable<typeof brush.colorReplacement>["mode"] } } })}
+              className="h-6 bg-[var(--ps-panel)] border border-[var(--ps-divider)] rounded-sm text-[11px] px-1"
+            >
+              <option value="color">Color</option>
+              <option value="hue">Hue</option>
+              <option value="saturation">Saturation</option>
+              <option value="luminosity">Luminosity</option>
+            </select>
+            <span className={labelClass}>Tol:</span>
+            <Input
+              type="number"
+              min={0}
+              max={255}
+              value={brush.colorReplacement?.tolerance ?? 32}
+              onChange={(e) => dispatch({ type: "set-brush", brush: { colorReplacement: { ...(brush.colorReplacement ?? { sampling: "continuous", limits: "contiguous", mode: "color", tolerance: 32, antiAlias: true }), tolerance: clampNumber(Number(e.target.value) || 0, 0, 255) } } })}
+              className={numInputClass}
+            />
+            <label className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={brush.colorReplacement?.antiAlias ?? true}
+                onChange={(e) => dispatch({ type: "set-brush", brush: { colorReplacement: { ...(brush.colorReplacement ?? { sampling: "continuous", limits: "contiguous", mode: "color", tolerance: 32, antiAlias: true }), antiAlias: e.target.checked } } })}
+                className="accent-[var(--ps-accent)]"
+              />
+              <span>AA</span>
+            </label>
+          </>
+        ) : null}
+        {tool === "mixer-brush" ? (
+          <>
+            <Divider />
+            <span className={labelClass}>Wet:</span>
+            <PercentInput
+              value={brush.mixer?.wet ?? 55}
+              onChange={(v) => dispatch({ type: "set-brush", brush: { mixer: { ...(brush.mixer ?? { wet: 55, load: 60, mix: 50, flow: brush.flow, sampleAllLayers: false, cleanAfterStroke: false }), wet: v } } })}
+            />
+            <span className={labelClass}>Load:</span>
+            <PercentInput
+              value={brush.mixer?.load ?? 60}
+              onChange={(v) => dispatch({ type: "set-brush", brush: { mixer: { ...(brush.mixer ?? { wet: 55, load: 60, mix: 50, flow: brush.flow, sampleAllLayers: false, cleanAfterStroke: false }), load: v } } })}
+            />
+            <span className={labelClass}>Mix:</span>
+            <PercentInput
+              value={brush.mixer?.mix ?? 50}
+              onChange={(v) => dispatch({ type: "set-brush", brush: { mixer: { ...(brush.mixer ?? { wet: 55, load: 60, mix: 50, flow: brush.flow, sampleAllLayers: false, cleanAfterStroke: false }), mix: v } } })}
+            />
+            <label className="flex items-center gap-1.5">
+              <input
+                type="checkbox"
+                checked={brush.mixer?.sampleAllLayers ?? false}
+                onChange={(e) => dispatch({ type: "set-brush", brush: { mixer: { ...(brush.mixer ?? { wet: 55, load: 60, mix: 50, flow: brush.flow, sampleAllLayers: false, cleanAfterStroke: false }), sampleAllLayers: e.target.checked } } })}
+                className="accent-[var(--ps-accent)]"
+              />
+              <span>All Layers</span>
+            </label>
+          </>
+        ) : null}
+        {tool === "art-history-brush" ? (
+          <>
+            <Divider />
+            <span className={labelClass}>Style:</span>
+            <select
+              value={brush.artHistory?.style ?? "tight-medium"}
+              onChange={(e) => dispatch({ type: "set-brush", brush: { artHistory: { ...(brush.artHistory ?? { style: "tight-medium", area: 24, fidelity: 60 }), style: e.target.value as NonNullable<typeof brush.artHistory>["style"] } } })}
+              className="h-6 bg-[var(--ps-panel)] border border-[var(--ps-divider)] rounded-sm text-[11px] px-1"
+            >
+              <option value="tight-short">Tight Short</option>
+              <option value="tight-medium">Tight Medium</option>
+              <option value="loose-long">Loose Long</option>
+              <option value="dab">Dab</option>
+              <option value="curl">Curl</option>
+            </select>
+            <span className={labelClass}>Area:</span>
+            <Input
+              type="number"
+              min={4}
+              max={200}
+              value={brush.artHistory?.area ?? 24}
+              onChange={(e) => dispatch({ type: "set-brush", brush: { artHistory: { ...(brush.artHistory ?? { style: "tight-medium", area: 24, fidelity: 60 }), area: clampNumber(Number(e.target.value) || 4, 4, 200) } } })}
+              className={numInputClass}
+            />
+            <span className={labelClass}>Fidelity:</span>
+            <PercentInput
+              value={brush.artHistory?.fidelity ?? 60}
+              onChange={(v) => dispatch({ type: "set-brush", brush: { artHistory: { ...(brush.artHistory ?? { style: "tight-medium", area: 24, fidelity: 60 }), fidelity: v } } })}
+            />
           </>
         ) : null}
       </>
@@ -582,6 +697,7 @@ export function OptionsBar() {
             <Divider />
             <span className={labelClass}>Tolerance:</span>
             <Input
+              aria-label={quickLike ? "Quick selection tolerance" : "Selection tolerance"}
               type="number"
               min={0}
               max={255}
@@ -602,6 +718,7 @@ export function OptionsBar() {
             <label className="flex items-center gap-1.5 ml-1">
               <input
                 type="checkbox"
+                aria-label={quickLike ? "Contiguous quick selection" : "Contiguous selection"}
                 checked={selectionOptions.contiguous}
                 onChange={(e) => dispatch({ type: "set-selection-options", selectionOptions: { contiguous: e.target.checked } })}
                 className="accent-[var(--ps-accent)]"
@@ -611,6 +728,7 @@ export function OptionsBar() {
             <label className="flex items-center gap-1.5 ml-1">
               <input
                 type="checkbox"
+                aria-label={quickLike ? "Sample all layers for quick selection" : "Sample all layers for selection"}
                 checked={selectionOptions.sampleAllLayers ?? false}
                 onChange={(e) => dispatch({ type: "set-selection-options", selectionOptions: { sampleAllLayers: e.target.checked } })}
                 className="accent-[var(--ps-accent)]"
@@ -625,7 +743,7 @@ export function OptionsBar() {
                   value={selectionOptions.sampleSize ?? "point"}
                   onValueChange={(value) => dispatch({ type: "set-selection-options", selectionOptions: { sampleSize: value as NonNullable<typeof selectionOptions.sampleSize> } })}
                 >
-                  <SelectTrigger className="h-6 w-28 text-[11px]">
+                  <SelectTrigger aria-label="Quick selection sample size" className="h-6 w-28 text-[11px]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -634,19 +752,30 @@ export function OptionsBar() {
                     <SelectItem value="5x5">5 x 5</SelectItem>
                   </SelectContent>
                 </Select>
+                <span className={labelClass}>Grow/Shrink:</span>
+                <Input
+                  aria-label="Quick selection grow and shrink amount"
+                  type="number"
+                  min={1}
+                  max={64}
+                  value={selectionOptions.quickGrowAmount ?? 3}
+                  onChange={(event) => dispatch({ type: "set-selection-options", selectionOptions: { quickGrowAmount: clampNumber(Number(event.target.value) || 1, 1, 64) } })}
+                  className={numInputClass}
+                />
+                <span className="text-[11px]">px</span>
                 <button
                   type="button"
-                  title="Grow selection"
+                  title="Grow selection by configured amount"
                   className="h-6 w-7 border border-[var(--ps-divider)] rounded-sm hover:bg-[var(--ps-tool-hover)] inline-flex items-center justify-center"
-                  onClick={() => dispatch({ type: "grow-selection", amount: 2 })}
+                  onClick={() => dispatch({ type: "grow-selection", amount: selectionOptions.quickGrowAmount ?? 3 })}
                 >
                   <Plus className="h-3.5 w-3.5" />
                 </button>
                 <button
                   type="button"
-                  title="Shrink selection"
+                  title="Shrink selection by configured amount"
                   className="h-6 w-7 border border-[var(--ps-divider)] rounded-sm hover:bg-[var(--ps-tool-hover)] inline-flex items-center justify-center"
-                  onClick={() => dispatch({ type: "contract-selection", amount: 2 })}
+                  onClick={() => dispatch({ type: "contract-selection", amount: selectionOptions.quickGrowAmount ?? 3 })}
                 >
                   <Minus className="h-3.5 w-3.5" />
                 </button>
@@ -659,6 +788,7 @@ export function OptionsBar() {
             <Divider />
             <span className={labelClass}>Width:</span>
             <Input
+              aria-label="Magnetic lasso width"
               type="number"
               min={2}
               max={64}
@@ -668,6 +798,7 @@ export function OptionsBar() {
             />
             <span className={labelClass}>Contrast:</span>
             <Input
+              aria-label="Magnetic lasso contrast"
               type="number"
               min={0.01}
               max={512}
@@ -678,6 +809,7 @@ export function OptionsBar() {
             />
             <span className={labelClass}>Hyst:</span>
             <Input
+              aria-label="Magnetic lasso hysteresis"
               type="number"
               min={10}
               max={95}
@@ -687,11 +819,22 @@ export function OptionsBar() {
             />
             <span className={labelClass}>Fit:</span>
             <Input
+              aria-label="Magnetic lasso fit smoothing"
               type="number"
               min={0}
               max={100}
               value={selectionOptions.magneticSmoothing ?? 35}
               onChange={(event) => dispatch({ type: "set-selection-options", selectionOptions: { magneticSmoothing: Math.max(0, Math.min(100, Number(event.target.value) || 0)) } })}
+              className={numInputClass}
+            />
+            <span className={labelClass}>Frequency:</span>
+            <Input
+              aria-label="Magnetic lasso auto-anchor frequency"
+              type="number"
+              min={0}
+              max={100}
+              value={selectionOptions.magneticFrequency ?? 57}
+              onChange={(event) => dispatch({ type: "set-selection-options", selectionOptions: { magneticFrequency: Math.max(0, Math.min(100, Number(event.target.value) || 0)) } })}
               className={numInputClass}
             />
           </>
@@ -1025,6 +1168,7 @@ export function OptionsBar() {
     const [shape, setShape] = React.useState<CustomShapeId>("star5")
     React.useEffect(() => {
       ; window.__psCustomShape = shape
+      ; window.__psCustomShapePreset = undefined
     }, [shape])
     const cur = SHAPE_LIBRARY.find((s) => s.id === shape) ?? SHAPE_LIBRARY[0]
     return (

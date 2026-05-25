@@ -32,7 +32,7 @@ test("advanced capabilities label local browser-native limits instead of native 
 
   await openCommand(page, "Content Credentials")
   await expect(page.getByRole("dialog", { name: "Advanced Photoshop Subsystems" })).toBeVisible()
-  await expect(page.getByText(/Embed Metadata exports include them in app XMP\/metadata payloads/)).toBeVisible()
+  await expect(page.getByText(/Embed Metadata exports write unsigned C2PA carrier payloads/)).toBeVisible()
 })
 
 test("plugin manager installs marketplace plugins through a permission review flow", async ({ page }) => {

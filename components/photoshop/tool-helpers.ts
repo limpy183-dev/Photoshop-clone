@@ -12,6 +12,7 @@ import {
   featherMaskData as featherMaskDataPure,
   selectionMaskToPathCandidates,
   smoothMaskData as smoothMaskDataPure,
+  transformSelectionMaskData as transformSelectionMaskDataPure,
   traceMagneticLassoEdgePathData,
   type OfflineObjectAwareSelectionResult,
   type MaskContourOptions,
@@ -2521,6 +2522,24 @@ export function borderSelectionMask(mask: HTMLCanvasElement, width: number): HTM
 export function smoothSelectionMask(mask: HTMLCanvasElement, radius: number): HTMLCanvasElement {
   return alphaDataToMask(
     smoothMaskDataPure(maskToAlphaData(mask), mask.width, mask.height, radius, MASK_THRESHOLD),
+    mask.width,
+    mask.height,
+  )
+}
+
+export function transformSelectionMask(
+  mask: HTMLCanvasElement,
+  bounds: { x: number; y: number; w: number; h: number },
+  scale: number,
+  rotationDeg: number,
+  smoothing = true,
+): HTMLCanvasElement {
+  return alphaDataToMask(
+    transformSelectionMaskDataPure(maskToAlphaData(mask), mask.width, mask.height, bounds, {
+      scale,
+      rotationDeg,
+      smoothing,
+    }),
     mask.width,
     mask.height,
   )

@@ -4,7 +4,12 @@ import type { BrushSettings } from "../components/photoshop/types"
 import {
   normalizeBrushPointerSample,
   planBrushStroke,
+  planArtHistoryStroke,
+  resolveBristleTipSimulation,
   resolveBrushStamp,
+  resolveColorReplacementPixel,
+  resolveErodibleTipSimulation,
+  resolveMixerReservoirStep,
 } from "../components/photoshop/brush-engine"
 
 const baseBrush: BrushSettings = {
@@ -159,4 +164,148 @@ test("tablet pointer samples preserve pressure tilt twist and compute velocity",
   expect(mouse.pressure).toBe(1)
   expect(mouse.tiltX).toBe(0)
   expect(mouse.tiltY).toBe(0)
+})
+
+test("erodible tips wear into flatter deterministic footprints over a stroke", () => {
+  const brush: BrushSettings = {
+    ...baseBrush,
+    tipShape: "erodible",
+    erodibleTip: {
+      sharpness: 82,
+      flatness: 44,
+      erosionRate: 72,
+      softness: 18,
+      aspectRatio: 68,
+      rotation: 22,
+    },
+  }
+
+  const worn = resolveErodibleTipSimulation(
+    brush,
+    { pressure: 0.82, tiltX: 24, tiltY: -18, twist: 9, velocity: 180, fade: 140, strokeAngle: Math.PI / 5 },
+    { seed: 17 },
+  )
+  const repeated = resolveErodibleTipSimulation(
+    brush,
+    { pressure: 0.82, tiltX: 24, tiltY: -18, twist: 9, velocity: 180, fade: 140, strokeAngle: Math.PI / 5 },
+    { seed: 17 },
+  )
+
+  expect(worn.kind).toBe("erodible")
+  expect(worn.wear).toBeGreaterThan(0.35)
+  expect(worn.sizeScale).toBeLessThan(0.96)
+  expect(worn.roundnessScale).toBeLessThan(0.72)
+  expect(worn.edge.length).toBe(24)
+  expect(worn.edge.some((point) => Math.abs(point.radiusScale - worn.edge[0].radiusScale) > 0.05)).toBe(true)
+  expect(worn).toEqual(repeated)
+})
+
+test("bristle tips resolve individual bristles with pressure tilt splay and wetness", () => {
+  const brush: BrushSettings = {
+    ...baseBrush,
+    tipShape: "bristle",
+    bristleTip: {
+      length: 74,
+      density: 83,
+      thickness: 42,
+      stiffness: 28,
+      splay: 58,
+      wetness: 46,
+    },
+  }
+
+  const tip = resolveBristleTipSimulation(
+    brush,
+    { pressure: 0.7, tiltX: 30, tiltY: 12, twist: 4, velocity: 240, fade: 18, strokeAngle: Math.PI / 3 },
+    { seed: 23 },
+  )
+
+  expect(tip.kind).toBe("bristle")
+  expect(tip.bristles.length).toBeGreaterThan(40)
+  expect(tip.coverage).toBeGreaterThan(0.35)
+  expect(tip.coverage).toBeLessThan(0.95)
+  expect(tip.bristles.some((bristle) => Math.abs(bristle.bend) > 0.1)).toBe(true)
+  expect(tip.bristles.some((bristle) => bristle.alpha < 0.8)).toBe(true)
+})
+
+test("mixer reservoir picks up canvas color and deposits loaded paint", () => {
+  const first = resolveMixerReservoirStep({
+    reservoir: { r: 24, g: 72, b: 150, a: 1 },
+    sample: { r: 220, g: 160, b: 48, a: 1 },
+    settings: { wet: 78, load: 62, mix: 66, flow: 70 },
+    pressure: 0.75,
+  })
+  const second = resolveMixerReservoirStep({
+    reservoir: first.nextReservoir,
+    sample: { r: 210, g: 150, b: 54, a: 1 },
+    settings: { wet: 78, load: 62, mix: 66, flow: 70 },
+    pressure: 0.75,
+  })
+
+  expect(first.depositAlpha).toBeGreaterThan(0.25)
+  expect(first.pickupAlpha).toBeGreaterThan(0.4)
+  expect(first.paintColor.r).toBeGreaterThan(80)
+  expect(first.paintColor.b).toBeGreaterThan(80)
+  expect(second.nextReservoir.r).toBeGreaterThan(first.nextReservoir.r)
+  expect(second.nextReservoir.b).toBeLessThan(first.nextReservoir.b)
+})
+
+test("color replacement supports sampling tolerance and replace modes", () => {
+  const replaced = resolveColorReplacementPixel({
+    source: { r: 128, g: 42, b: 24, a: 255 },
+    sample: { r: 130, g: 40, b: 22, a: 255 },
+    replacement: { r: 36, g: 96, b: 224, a: 255 },
+    tolerance: 30,
+    mode: "color",
+    opacity: 0.85,
+  })
+  const rejected = resolveColorReplacementPixel({
+    source: { r: 40, g: 180, b: 40, a: 255 },
+    sample: { r: 130, g: 40, b: 22, a: 255 },
+    replacement: { r: 36, g: 96, b: 224, a: 255 },
+    tolerance: 30,
+    mode: "color",
+    opacity: 1,
+  })
+
+  expect(replaced.changed).toBe(true)
+  expect(replaced.pixel.b).toBeGreaterThan(replaced.pixel.r)
+  expect(replaced.pixel.a).toBe(255)
+  expect(rejected.changed).toBe(false)
+  expect(rejected.pixel).toEqual({ r: 40, g: 180, b: 40, a: 255 })
+})
+
+test("art history plans style dabs with bounded area and fidelity", () => {
+  const plan = planArtHistoryStroke(
+    { x: 32, y: 28 },
+    {
+      ...baseBrush,
+      size: 24,
+      artHistory: {
+        style: "loose-long",
+        area: 36,
+        fidelity: 38,
+      },
+    },
+    { seed: 31 },
+  )
+  const repeated = planArtHistoryStroke(
+    { x: 32, y: 28 },
+    {
+      ...baseBrush,
+      size: 24,
+      artHistory: {
+        style: "loose-long",
+        area: 36,
+        fidelity: 38,
+      },
+    },
+    { seed: 31 },
+  )
+
+  expect(plan.length).toBeGreaterThan(3)
+  expect(Math.max(...plan.map((dab) => Math.hypot(dab.dx, dab.dy)))).toBeLessThanOrEqual(18)
+  expect(plan.some((dab) => Math.abs(dab.rotation) > 0.2)).toBe(true)
+  expect(plan.some((dab) => dab.sourceDx !== 0 || dab.sourceDy !== 0)).toBe(true)
+  expect(plan).toEqual(repeated)
 })

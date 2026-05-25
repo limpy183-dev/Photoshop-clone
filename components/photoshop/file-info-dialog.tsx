@@ -12,6 +12,13 @@ import {
 import { Button } from "@/components/ui/button"
 import { useEditor } from "./editor-context"
 import type { ColorManagementSettings, DocumentMetadata, PrintSettings } from "./types"
+import {
+  revealSourceInBrowser,
+  sourceInfoForDocument,
+  sourceInfoForSmartObject,
+  type SourceLocationInfo,
+} from "./source-location"
+import { toast } from "sonner"
 
 const PROFILE_OPTIONS: ColorManagementSettings["assignedProfile"][] = [
   "sRGB IEC61966-2.1",
@@ -86,7 +93,7 @@ export function FileInfoDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
 }) {
-  const { activeDoc, dispatch, commit } = useEditor()
+  const { activeDoc, dispatch, commit, documentStatuses } = useEditor()
   const [tab, setTab] = React.useState<"summary" | "metadata" | "color" | "print">("summary")
   const [metadata, setMetadata] = React.useState<DocumentMetadata>(defaultMetadata("Untitled"))
   const [keywords, setKeywords] = React.useState("")
@@ -102,6 +109,31 @@ export function FileInfoDialog({
     setColor({ ...defaultColorManagement(), ...(activeDoc.colorManagement ?? {}) })
     setPrint({ ...defaultPrintSettings(), ...(activeDoc.printSettings ?? {}) })
   }, [activeDoc, open])
+
+  const documentSourceInfo = activeDoc ? sourceInfoForDocument(activeDoc, documentStatuses[activeDoc.id]) : null
+  const smartObjectSourceInfos = activeDoc
+    ? activeDoc.layers
+      .filter((layer) => layer.smartObject || layer.kind === "smart-object")
+      .map((layer) => sourceInfoForSmartObject(layer))
+    : []
+
+  const revealSource = async (info: SourceLocationInfo) => {
+    if (!info.fileHandle) {
+      toast.info(info.unavailableReason ?? "No browser file handle is attached to this source.")
+      return
+    }
+    const result = await revealSourceInBrowser(info.fileHandle)
+    if (result.status === "cancelled") return
+    if (result.status === "folder-picker-verified" || result.status === "folder-picker-opened") {
+      toast.success(result.message)
+      return
+    }
+    if (result.status === "file-accessible") {
+      toast.info(result.message)
+      return
+    }
+    toast.error(result.message)
+  }
 
   if (!activeDoc) return null
 
@@ -173,13 +205,26 @@ export function FileInfoDialog({
           </div>
           <div className="max-h-[60vh] overflow-y-auto pr-1">
             {tab === "summary" ? (
-              <div className="space-y-0.5">
-                {rows.map(([label, value]) => (
-                  <div key={label} className="grid grid-cols-[160px_1fr] gap-2 border-b border-[var(--ps-divider)] py-1">
-                    <span className="text-[var(--ps-text-dim)]">{label}</span>
-                    <span className="font-medium tabular-nums">{value}</span>
+              <div className="space-y-3">
+                <div className="space-y-0.5">
+                  {rows.map(([label, value]) => (
+                    <div key={label} className="grid grid-cols-[160px_1fr] gap-2 border-b border-[var(--ps-divider)] py-1">
+                      <span className="text-[var(--ps-text-dim)]">{label}</span>
+                      <span className="font-medium tabular-nums">{value}</span>
+                    </div>
+                  ))}
+                </div>
+                {documentSourceInfo ? (
+                  <SourceLocationPanel info={documentSourceInfo} onReveal={() => void revealSource(documentSourceInfo)} />
+                ) : null}
+                {smartObjectSourceInfos.length ? (
+                  <div className="space-y-2">
+                    <div className="text-[10px] font-semibold uppercase text-[var(--ps-text-dim)]">Smart Object Sources</div>
+                    {smartObjectSourceInfos.map((info, index) => (
+                      <SourceLocationPanel key={`${info.primaryName}-${index}`} info={info} onReveal={() => void revealSource(info)} />
+                    ))}
                   </div>
-                ))}
+                ) : null}
               </div>
             ) : null}
             {tab === "metadata" ? (
@@ -238,6 +283,30 @@ export function FileInfoDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function SourceLocationPanel({ info, onReveal }: { info: SourceLocationInfo; onReveal: () => void }) {
+  return (
+    <section className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-[11px] font-semibold">{info.title}</div>
+          <div className="truncate text-[10px] text-[var(--ps-text-dim)]">{info.primaryName}</div>
+        </div>
+        <Button variant="outline" size="sm" onClick={onReveal} disabled={!info.canReveal}>
+          Reveal Source...
+        </Button>
+      </div>
+      <div className="space-y-0.5">
+        {info.rows.map(([label, value]) => (
+          <div key={label} className="grid grid-cols-[130px_1fr] gap-2 border-t border-[var(--ps-divider)] py-1">
+            <span className="text-[var(--ps-text-dim)]">{label}</span>
+            <span className="min-w-0 truncate font-medium tabular-nums">{value}</span>
+          </div>
+        ))}
+      </div>
+    </section>
   )
 }
 

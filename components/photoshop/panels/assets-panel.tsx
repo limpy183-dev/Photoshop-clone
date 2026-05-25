@@ -3,9 +3,9 @@
 import * as React from "react"
 import { toast } from "sonner"
 import { useEditor } from "../editor-context"
-import { downloadText } from "../document-io"
-import { Archive, Brush, CircleDot, Download, Palette, Plus, Sparkles, Trash2, Upload } from "lucide-react"
-import type { AssetLibraryItem, BrushSettings, GradientSettings, LayerStyle } from "../types"
+import { downloadBlob, downloadText } from "../document-io"
+import { Archive, Brush, CircleDot, Download, FolderOpen, Palette, Plus, Sparkles, Trash2, Upload } from "lucide-react"
+import type { AssetLibraryItem, BrushSettings, GradientSettings, ImageAssetGeneratorSettings, LayerStyle } from "../types"
 import {
   collectAssetTags,
   createAssetLibraryBundle,
@@ -13,6 +13,14 @@ import {
   filterAssetLibrary,
   normalizeAssetTags,
 } from "../asset-library-bundles"
+import { normalizeCustomShapeLibrary, shapeAssetToPreset, shapePresetToAsset } from "../custom-shape-library"
+import {
+  collectImageAssetGeneratorPlan,
+  createImageAssetGeneratorReport,
+  exportImageAssetsToZip,
+  imageAssetGeneratorSettings,
+  safeImageAssetArchiveName,
+} from "../image-assets-generator"
 
 type AssetKind = AssetLibraryItem["kind"] | "all"
 
@@ -102,8 +110,22 @@ export function AssetsPanel() {
   const assets = activeDoc.assetLibrary ?? []
   const tags = collectAssetTags(assets)
   const visible = filterAssetLibrary(assets, { kind, query, tag: tag === "all" ? undefined : tag })
+  const generatorPlan = React.useMemo(() => collectImageAssetGeneratorPlan(activeDoc), [activeDoc])
+  const generatorSettings = imageAssetGeneratorSettings(activeDoc.metadata?.imageAssetGenerator)
 
   const setAssets = (next: AssetLibraryItem[]) => dispatch({ type: "set-asset-library", assets: next })
+  const setGeneratorSettings = (patch: Partial<ImageAssetGeneratorSettings>) => {
+    dispatch({
+      type: "set-document-metadata",
+      metadata: {
+        ...(activeDoc.metadata ?? {}),
+        imageAssetGenerator: {
+          ...(activeDoc.metadata?.imageAssetGenerator ?? {}),
+          ...patch,
+        },
+      },
+    })
+  }
 
   const addAsset = (asset: Omit<AssetLibraryItem, "id" | "createdAt">) => {
     const next: AssetLibraryItem = {
@@ -122,6 +144,11 @@ export function AssetsPanel() {
     if (!activeLayer?.style) return
     addAsset({ name: `${activeLayer.name} style`, kind: "style", group, payload: activeLayer.style })
   }
+  const captureShape = () => {
+    if (!activeLayer?.shape) return
+    const asset = shapePresetToAsset(activeLayer.shape, { name: `${activeLayer.name} shape`, group, tags: parseTagInput(tagInput) })
+    setAssets([asset, ...assets])
+  }
   const addExportPreset = () => addAsset({
     name: "PNG 200% transparent",
     kind: "export",
@@ -139,6 +166,11 @@ export function AssetsPanel() {
     if (asset.kind === "style" && activeLayer) {
       dispatch({ type: "set-layer-style", id: activeLayer.id, style: asset.payload as LayerStyle })
       window.setTimeout(() => commit("Apply Asset Style", [activeLayer.id]), 0)
+    }
+    if (asset.kind === "shape") {
+      window.__psCustomShapePreset = shapeAssetToPreset(asset, { x: 0, y: 0, w: 100, h: 100, fill: foreground })
+      window.__psCustomShape = undefined
+      dispatch({ type: "set-tool", tool: "custom-shape" })
     }
     if (asset.kind === "export") {
       const payload = asset.payload as { dialog?: string; scope?: string }
@@ -172,6 +204,45 @@ export function AssetsPanel() {
     input.click()
   }
 
+  const generateLayerAssets = async () => {
+    try {
+      const result = await exportImageAssetsToZip(activeDoc, { trigger: "manual" })
+      dispatch({ type: "add-document-report", report: createImageAssetGeneratorReport(activeDoc, result) })
+      if (result.entries.length) {
+        downloadBlob(result.zipBlob, safeImageAssetArchiveName(activeDoc.name))
+        toast.success(`Generated ${result.entries.length} asset${result.entries.length === 1 ? "" : "s"}`)
+      } else if (result.issues.length) {
+        toast.error("No assets generated; review the Image Assets Generator report.")
+      } else {
+        toast.info("No generator layer names found.")
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not generate image assets")
+    }
+  }
+
+  const chooseGeneratorFolder = async () => {
+    const picker = (window as typeof window & {
+      showDirectoryPicker?: () => Promise<{ name?: string }>
+    }).showDirectoryPicker
+    if (!picker) {
+      toast.error("Folder auto-export requires File System Access support.")
+      return
+    }
+    try {
+      const directoryHandle = await picker()
+      window.dispatchEvent(new CustomEvent("ps-image-assets-generator-directory", {
+        detail: { docId: activeDoc.id, directoryHandle },
+      }))
+      setGeneratorSettings({ outputFolderName: directoryHandle.name ?? "Selected folder" })
+      toast.success("Image asset folder connected")
+    } catch (err) {
+      if (!(err instanceof DOMException && err.name === "AbortError")) {
+        toast.error(err instanceof Error ? err.message : "Could not connect folder")
+      }
+    }
+  }
+
   return (
     <div className="flex h-full flex-col text-[11px] text-[var(--ps-text)]">
       <div className="space-y-2 border-b border-[var(--ps-divider)] p-2">
@@ -190,11 +261,53 @@ export function AssetsPanel() {
           className="h-6 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px] outline-none"
           placeholder="Tags for new captures, comma-separated"
         />
+        <div className="space-y-2 border-y border-[var(--ps-divider)] py-2">
+          <div className="flex items-center gap-1">
+            <label className="flex h-6 items-center gap-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[10px]">
+              <input
+                type="checkbox"
+                checked={generatorSettings.enabled}
+                onChange={(event) => setGeneratorSettings({ enabled: event.target.checked })}
+              />
+              Generator
+            </label>
+            <label className="flex h-6 items-center gap-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[10px]">
+              <input
+                type="checkbox"
+                checked={generatorSettings.autoExportOnSave}
+                onChange={(event) => setGeneratorSettings({ autoExportOnSave: event.target.checked })}
+              />
+              Save
+            </label>
+            <label className="flex h-6 items-center gap-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[10px]">
+              <input
+                type="checkbox"
+                checked={generatorSettings.autoExportOnChange}
+                onChange={(event) => setGeneratorSettings({ autoExportOnChange: event.target.checked })}
+              />
+              Change
+            </label>
+          </div>
+          <div className="grid grid-cols-2 gap-1">
+            <AssetButton icon={Download} label={`Generate ${generatorPlan.assets.length}`} disabled={!generatorPlan.assets.length} onClick={generateLayerAssets} />
+            <AssetButton icon={FolderOpen} label={activeDoc.metadata?.imageAssetGenerator?.outputFolderName ? "Folder Set" : "Folder"} onClick={chooseGeneratorFolder} />
+          </div>
+          {generatorPlan.issues.length ? (
+            <div className="space-y-1 text-[10px] text-amber-200">
+              {generatorPlan.issues.slice(0, 3).map((entry, index) => (
+                <div key={`${entry.kind}-${entry.filename ?? entry.layerId ?? index}`} className="truncate">
+                  {entry.kind}: {entry.filename ?? entry.layerName}
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
         <div className="grid grid-cols-3 gap-1">
           <AssetButton icon={Palette} label="Swatch" onClick={captureSwatch} />
           <AssetButton icon={Brush} label="Brush" onClick={captureBrush} />
           <AssetButton icon={CircleDot} label="Gradient" onClick={captureGradient} />
           <AssetButton icon={Sparkles} label="Style" disabled={!activeLayer?.style} onClick={captureStyle} />
+          <AssetButton icon={FolderOpen} label="Shape" disabled={!activeLayer?.shape} onClick={captureShape} />
           <AssetButton icon={Plus} label="Export" onClick={addExportPreset} />
           <AssetButton icon={Upload} label="Import" onClick={importAssets} />
         </div>
@@ -290,7 +403,7 @@ function AssetPreview({ asset }: { asset: AssetLibraryItem }) {
   if (asset.kind === "gradient") {
     return <span className="h-7 w-7 rounded-sm border border-[var(--ps-divider)] bg-gradient-to-br from-black via-white to-[var(--ps-accent)]" />
   }
-  const Icon = asset.kind === "brush" ? Brush : asset.kind === "style" ? Sparkles : asset.kind === "export" ? Download : Archive
+  const Icon = asset.kind === "brush" ? Brush : asset.kind === "style" ? Sparkles : asset.kind === "shape" ? FolderOpen : asset.kind === "export" ? Download : Archive
   return (
     <span className="flex h-7 w-7 items-center justify-center rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)]">
       <Icon className="h-3.5 w-3.5 text-[var(--ps-text-dim)]" />
@@ -341,7 +454,8 @@ function normalizeAssetPayload(kind: AssetLibraryItem["kind"], payload: unknown)
     case "pattern":
       return normalizePatternPayload(payload)
     case "shape":
-      return normalizeGenericRecordPayload(payload, ["type", "customId", "x", "y", "w", "h", "fill", "stroke", "radius", "sides", "booleanOperation"])
+      return normalizeCustomShapeLibrary([{ kind: "shape", payload }])[0]?.payload ??
+        normalizeGenericRecordPayload(payload, ["type", "customId", "x", "y", "w", "h", "fill", "stroke", "radius", "cornerRadii", "sides", "starPoints", "innerRadiusRatio", "vertexRoundness", "smoothCorners", "smoothIndent", "rotation", "computedPath", "components", "booleanOperation"])
     case "tool-preset":
       return normalizeGenericRecordPayload(payload, ["tool", "brush", "eraser", "cloneSource", "selectionOptions", "foreground", "background"])
     case "plugin":

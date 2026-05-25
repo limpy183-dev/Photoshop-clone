@@ -6,6 +6,7 @@ import {
 } from "../components/photoshop/tiled-backing-store"
 import {
   layerTileAddressForLayer,
+  materializeLayerContentCanvas,
   planDocumentTileRecomposition,
   planLayerTileRender,
   renderLayerContentTile,
@@ -244,8 +245,17 @@ test("layer tile renderer keys smart objects by source changes and editable laye
 
 test("smart object tile keys include filter stack changes and content tiles render filtered sources", () => {
   installFixtureDom()
-  const smartSourceCanvas = fixtureCanvas(96, 48, "#3355aa")
-  const smartCanvas = fixtureCanvas(192, 96, "#3355aa")
+  const solidCanvas = (width: number, height: number, fill: string) => {
+    const canvas = document.createElement("canvas")
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext("2d")!
+    ctx.fillStyle = fill
+    ctx.fillRect(0, 0, width, height)
+    return canvas
+  }
+  const smartSourceCanvas = solidCanvas(96, 48, "#000000")
+  const smartCanvas = solidCanvas(192, 96, "#000000")
   const smartLayer = {
     id: "smart-filtered",
     name: "Filtered Smart",
@@ -269,7 +279,7 @@ test("smart object tile keys include filter stack changes and content tiles rend
       canvas: smartSourceCanvas,
     },
     smartFilters: [
-      { id: "sf", filterId: "gaussian-blur", name: "Gaussian Blur", enabled: true, params: { radius: 2 } },
+      { id: "sf", filterId: "invert", name: "Invert", enabled: true, params: {} },
     ],
   } satisfies Layer
 
@@ -278,16 +288,18 @@ test("smart object tile keys include filter stack changes and content tiles rend
   const second = planLayerTileRender({
     ...smartLayer,
     smartFilters: [
-      { id: "sf", filterId: "gaussian-blur", name: "Gaussian Blur", enabled: true, params: { radius: 6 } },
+      { id: "sf", filterId: "invert", name: "Invert", enabled: false, params: {} },
     ],
   }, ref)
   const tile = renderLayerContentTile(smartLayer, first.rect)
+  const pixel = tile.getContext("2d")!.getImageData(2, 2, 1, 1).data
 
   expect(first.contentSource).toBe("smart-source")
   expect(first.dependencies.join("|")).toContain("smartFilters")
   expect(second.address.key).not.toBe(first.address.key)
   expect(tile.width).toBe(64)
   expect(tile.height).toBe(64)
+  expect(Array.from(pixel.slice(0, 4))).toEqual([255, 255, 255, 255])
 })
 
 test("3D layer tile previews render only the requested tile and cache by camera", () => {
@@ -365,6 +377,46 @@ test("3D layer content tiles render from scene metadata instead of full-frame ra
 
   expect(tile.width).toBe(16)
   expect(tile.height).toBe(16)
+  expect(image.data.some((value, index) => index % 4 === 3 && value > 0)).toBe(true)
+})
+
+test("3D layer materialization produces a concrete full-size preview canvas", () => {
+  installFixtureDom()
+  const scene = {
+    objects: [
+      {
+        id: "obj",
+        name: "Triangle",
+        vertices: [{ x: -1, y: -1, z: 0 }, { x: 1, y: -1, z: 0 }, { x: 0, y: 1, z: 0 }],
+        faces: [{ indices: [0, 1, 2], materialId: "mat" }],
+        materialId: "mat",
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+      },
+    ],
+    materials: [{ id: "mat", name: "Red", color: "#ff0000", roughness: 0.5, metallic: 0, opacity: 1 }],
+    lights: [],
+    camera: { position: { x: 0, y: 0, z: 4 }, target: { x: 0, y: 0, z: 0 }, fov: 42, focalLength: 50 },
+    renderMode: "solid" as const,
+  } satisfies NonNullable<Layer["threeD"]>
+  const layer = {
+    id: "three-d-materialized",
+    name: "Scene",
+    kind: "3d",
+    visible: true,
+    locked: false,
+    opacity: 1,
+    blendMode: "normal",
+    canvas: fixtureCanvas(32, 24),
+    threeD: scene,
+  } satisfies Layer
+
+  const preview = materializeLayerContentCanvas(layer, { documentSize: { width: 32, height: 24 } })
+  const image = preview.getContext("2d")!.getImageData(0, 0, 32, 24)
+
+  expect(preview.width).toBe(32)
+  expect(preview.height).toBe(24)
   expect(image.data.some((value, index) => index % 4 === 3 && value > 0)).toBe(true)
 })
 
@@ -811,14 +863,14 @@ test("WebGL compositor planner selects GPU paths for large compatible documents"
     tileSize: 8192,
   })
 
-  expect(planGpuFilterChain(["brightness-contrast", "gaussian-blur"], { webglAvailable: true })).toEqual({
-    mode: "mixed",
-    compatibleFilters: ["brightness-contrast"],
-    cpuFilters: ["gaussian-blur"],
+  expect(planGpuFilterChain(["brightness-contrast", "gaussian-blur", "box-blur", "motion-blur"], { webglAvailable: true })).toEqual({
+    mode: "webgl",
+    compatibleFilters: ["brightness-contrast", "gaussian-blur", "box-blur", "motion-blur"],
+    cpuFilters: [],
   })
 })
 
-test("WebGL layer-stack planner keeps complex Photoshop layers on hybrid GPU path", () => {
+test("WebGL layer-stack planner keeps compatible filters effects adjustments and knockout on the GPU path", () => {
   installFixtureDom()
   const allBlendModes: BlendMode[] = [
     "normal",
@@ -888,10 +940,34 @@ test("WebGL layer-stack planner keeps complex Photoshop layers on hybrid GPU pat
     clipped: true,
     style: {
       dropShadow: { enabled: true, color: "#000000", size: 6, offsetX: 2, offsetY: 3, opacity: 0.4 },
+      outerGlow: { enabled: true, color: "#66ccff", size: 8, opacity: 0.35, blendMode: "screen" },
+      innerGlow: { enabled: true, color: "#ffffff", size: 4, opacity: 0.2, blendMode: "screen" },
+      innerShadow: { enabled: true, color: "#000000", size: 3, offsetX: 1, offsetY: 2, opacity: 0.25 },
+      bevel: {
+        enabled: true,
+        style: "inner",
+        depth: 80,
+        size: 3,
+        soften: 1,
+        angle: 120,
+        altitude: 30,
+        highlight: "#ffffff",
+        shadow: "#000000",
+        opacity: 0.5,
+      },
+      colorOverlay: { enabled: true, color: "#3366ff", opacity: 0.15, blendMode: "overlay" },
     },
     smartFilters: [
       { id: "sf", filterId: "gaussian-blur", name: "Gaussian Blur", enabled: true, params: { radius: 2 } },
+      { id: "sf2", filterId: "brightness-contrast", name: "Brightness/Contrast", enabled: true, opacity: 0.8, blendMode: "normal", params: { brightness: 10, contrast: 12 } },
     ],
+    advancedBlending: {
+      fillOpacity: 0.6,
+      knockout: "shallow",
+      channels: { r: true, g: true, b: true },
+      blendIfThis: { black: 0, blackFeather: 0, whiteFeather: 255, white: 255 },
+      blendIfUnderlying: { black: 0, blackFeather: 0, whiteFeather: 255, white: 255 },
+    },
   }
   const adjustment: Layer = {
     id: "adjustment",
@@ -911,7 +987,8 @@ test("WebGL layer-stack planner keeps complex Photoshop layers on hybrid GPU pat
     gpuMasks: true,
     gpuVectorMasks: true,
     gpuClipping: true,
-    effectFallbacks: ["layer-effects", "smart-filters"],
+    requiresCpuCheckpoint: false,
+    effectFallbacks: [],
     unsupportedReasons: [],
   })
 
@@ -929,11 +1006,9 @@ test("WebGL layer-stack planner keeps complex Photoshop layers on hybrid GPU pat
   expect(plan.compatible).toBe(true)
   expect(plan.path).toBe("tiled-webgl")
   expect(plan.tileSize).toBe(8192)
-  expect(plan.gpuLayerCount).toBe(2)
-  expect(plan.cpuCheckpointLayerIds).toEqual(["adjustment"])
-  expect(plan.effectFallbacks).toEqual([
-    { layerId: "complex", effects: ["layer-effects", "smart-filters"] },
-  ])
+  expect(plan.gpuLayerCount).toBe(3)
+  expect(plan.cpuCheckpointLayerIds).toEqual([])
+  expect(plan.effectFallbacks).toEqual([])
 })
 
 test("priority RAF scheduler coalesces filter previews and skips low priority work over budget", () => {

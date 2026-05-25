@@ -23,13 +23,25 @@ import {
   type PreflightFinding,
   type PreflightStatus,
 } from "./preflight-engine"
-import type { Layer, PrintSettings, PsDocument, Slice } from "./types"
+import type { ColorManagementSettings, Layer, PrintSettings, PsDocument, Slice } from "./types"
 
 const STATUS_CLASS: Record<PreflightStatus, string> = {
   pass: "text-emerald-300",
   warn: "text-amber-300",
   fail: "text-red-300",
   info: "text-[var(--ps-text-dim)]",
+}
+
+const DEFAULT_PREFLIGHT_COLOR_MANAGEMENT: ColorManagementSettings = {
+  assignedProfile: "sRGB IEC61966-2.1",
+  workingSpace: "sRGB IEC61966-2.1",
+  renderingIntent: "relative-colorimetric",
+  blackPointCompensation: true,
+  proofProfile: "None",
+  proofColors: false,
+  gamutWarning: false,
+  proofChannels: [],
+  proofPlateView: "composite",
 }
 
 interface LegacyPreflightItem {
@@ -353,6 +365,7 @@ export function PreflightDialog({ open, onOpenChange }: { open: boolean; onOpenC
   const fixCandidates = fixes ?? getStructuredPreflightFixes(activeDoc)
   const counts = report?.counts ?? { pass: 0, warn: 0, error: 0, info: 0 }
   const printDefaultCount = items.some((item) => item.fixAction?.kind === "set-print-defaults") ? 1 : 0
+  const profileFixCount = activeDoc.colorManagement ? 0 : 1
   const categories = ["All", ...Array.from(new Set(items.map((item) => item.category))).sort()] as Array<PreflightCategory | "All">
   const filteredItems = items.filter((item) => {
     if (categoryFilter !== "All" && item.category !== categoryFilter) return false
@@ -460,6 +473,11 @@ export function PreflightDialog({ open, onOpenChange }: { open: boolean; onOpenC
     finishFix("Preflight Fix: Set Print Defaults")
   }
 
+  const assignDefaultProfile = () => {
+    dispatch({ type: "set-color-management", settings: DEFAULT_PREFLIGHT_COLOR_MANAGEMENT })
+    finishFix("Preflight Fix: Assign sRGB Profile")
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[760px] border-[var(--ps-divider)] bg-[var(--ps-panel)] text-[var(--ps-text)]">
@@ -486,13 +504,14 @@ export function PreflightDialog({ open, onOpenChange }: { open: boolean; onOpenC
         ) : null}
         <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
           <div className="mb-2 text-[10px] uppercase tracking-wide text-[var(--ps-text-dim)]">Quick fixes</div>
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-7">
             <QuickFixButton label="Show Hidden" count={fixCandidates.hiddenLayers.length} onClick={showHiddenLayers} />
             <QuickFixButton label="Name Layers" count={fixCandidates.unnamedLayers.length} onClick={nameUnnamedLayers} />
             <QuickFixButton label="Mask Adjust" count={fixCandidates.unmaskedAdjustments.length} onClick={maskAdjustmentLayers} />
             <QuickFixButton label="Remove Empty" count={Math.min(fixCandidates.emptyLayers.length, Math.max(0, activeDoc.layers.length - 1))} onClick={removeEmptyLayers} />
             <QuickFixButton label="Repair Slices" count={fixCandidates.invalidSlices.length} onClick={repairSlices} />
             <QuickFixButton label="Print Defaults" count={printDefaultCount} onClick={setPrintDefaults} />
+            <QuickFixButton label="Assign Profile" count={profileFixCount} onClick={assignDefaultProfile} />
           </div>
         </div>
         <div className="grid grid-cols-2 gap-2">

@@ -39,6 +39,8 @@ export interface LinkedSmartObjectSyncPlan {
 export interface LinkedSmartObjectSyncOptions {
   hashContents?: boolean
   readCanvas?: (file: File) => Promise<HTMLCanvasElement>
+  requestPermission?: boolean
+  now?: () => number
 }
 
 export interface LinkedSmartObjectSyncResult {
@@ -47,6 +49,22 @@ export interface LinkedSmartObjectSyncResult {
   status: NonNullable<SmartObjectSource["status"]>
   file?: File
   sourceHash?: string
+}
+
+export type LinkedSmartObjectPermission = PermissionState | "unsupported"
+
+export type ReadableSmartObjectFileHandle = FileSystemFileHandle & {
+  queryPermission?: (descriptor?: { mode?: "read" }) => Promise<PermissionState>
+  requestPermission?: (descriptor?: { mode?: "read" }) => Promise<PermissionState>
+}
+
+export interface RelinkSmartObjectOptions extends LinkedSmartObjectSyncOptions {
+  relativePath?: string
+  embedded?: boolean
+}
+
+export interface RelinkSmartObjectResult extends LinkedSmartObjectSyncResult {
+  permission: LinkedSmartObjectPermission
 }
 
 export function planLinkedSmartObjectSync(
@@ -76,6 +94,41 @@ async function hashFileFnv1a32(file: File): Promise<string> {
   return `fnv1a32:${hash.toString(16).padStart(8, "0")}`
 }
 
+export async function resolveLinkedSmartObjectPermission(
+  handle: ReadableSmartObjectFileHandle,
+  options: { requestPermission?: boolean } = {},
+): Promise<LinkedSmartObjectPermission> {
+  const descriptor = { mode: "read" as const }
+  let current: PermissionState | undefined
+  if (typeof handle.queryPermission === "function") {
+    try {
+      current = await handle.queryPermission(descriptor)
+    } catch {
+      return "unsupported"
+    }
+  }
+  if (current === "granted" || current === "denied") return current
+  if (options.requestPermission !== false && typeof handle.requestPermission === "function") {
+    try {
+      return await handle.requestPermission(descriptor)
+    } catch {
+      return current ?? "unsupported"
+    }
+  }
+  return current ?? "unsupported"
+}
+
+function markLinkedSmartObjectUnavailable(
+  layer: Layer,
+  options: Partial<SmartObjectSource>,
+): Layer {
+  return markSmartObjectLinked(layer, {
+    ...options,
+    status: "missing",
+    updatedAt: options.updatedAt ?? Date.now(),
+  })
+}
+
 export async function syncLinkedSmartObjectSource(
   layer: Layer,
   options: LinkedSmartObjectSyncOptions = {},
@@ -83,16 +136,25 @@ export async function syncLinkedSmartObjectSource(
   const source = layer.smartSource
   const handle = source?.fileHandle
   if ((!layer.smartObject && layer.kind !== "smart-object") || source?.linkType !== "linked" || !handle) {
-    const next = source ? markSmartObjectLinked(layer, { status: "missing" }) : layer
-    return { layer: next, changed: false, status: "missing" }
+    const next = source
+      ? markLinkedSmartObjectUnavailable(layer, {
+          fileHandleName: source.fileHandleName,
+          handlePermission: source.handlePermission ?? "unsupported",
+        })
+      : layer
+    return { layer: next, changed: !!source, status: "missing" }
   }
 
-  const permissionHandle = handle as FileSystemFileHandle & { queryPermission?: () => Promise<PermissionState> }
-  const permission = typeof permissionHandle.queryPermission === "function"
-    ? await permissionHandle.queryPermission()
-    : "granted"
-  if (permission === "denied") {
-    const next = markSmartObjectLinked(layer, { status: "missing", handlePermission: permission })
+  const readableHandle = handle as ReadableSmartObjectFileHandle
+  const permission = await resolveLinkedSmartObjectPermission(readableHandle, {
+    requestPermission: options.requestPermission,
+  })
+  if (permission === "denied" || permission === "prompt") {
+    const next = markLinkedSmartObjectUnavailable(layer, {
+      fileHandle: handle,
+      fileHandleName: readableHandle.name ?? source.fileHandleName,
+      handlePermission: permission,
+    })
     return { layer: next, changed: true, status: "missing" }
   }
 
@@ -118,7 +180,7 @@ export async function syncLinkedSmartObjectSource(
       sourceHash,
       status: "current",
       linkType: "linked",
-      relinkedAt: Date.now(),
+      relinkedAt: options.now?.() ?? Date.now(),
     })
     return { layer: next, changed: true, status: "current", file, sourceHash }
   }
@@ -135,6 +197,64 @@ export async function syncLinkedSmartObjectSource(
     status,
   })
   return { layer: next, changed: plan.changed, status, file, sourceHash }
+}
+
+export async function relinkSmartObjectToFile(
+  layer: Layer,
+  handle: ReadableSmartObjectFileHandle,
+  options: RelinkSmartObjectOptions,
+): Promise<RelinkSmartObjectResult> {
+  if (!layer.smartObject && layer.kind !== "smart-object") {
+    return { layer, changed: false, status: "missing", permission: "unsupported" }
+  }
+  const permission = await resolveLinkedSmartObjectPermission(handle, {
+    requestPermission: options.requestPermission,
+  })
+  if (permission === "denied" || permission === "prompt") {
+    const next = markLinkedSmartObjectUnavailable(layer, {
+      fileHandle: handle,
+      fileHandleName: handle.name,
+      handlePermission: permission,
+    })
+    return { layer: next, changed: true, status: "missing", permission }
+  }
+  const file = await handle.getFile()
+  const readCanvas = options.readCanvas
+  if (!readCanvas) {
+    const next = markSmartObjectLinked(layer, {
+      ...(layer.smartSource ?? {}),
+      fileName: file.name,
+      relativePath: options.relativePath ?? file.name,
+      fileHandle: handle,
+      fileHandleName: handle.name ?? file.name,
+      handlePermission: permission,
+      lastKnownModified: file.lastModified,
+      lastKnownSize: file.size,
+      sourceHash: options.hashContents ? await hashFileFnv1a32(file) : layer.smartSource?.sourceHash,
+      status: "current",
+    })
+    return { layer: next, changed: true, status: "current", file, sourceHash: next.smartSource?.sourceHash, permission }
+  }
+  const sourceCanvas = await readCanvas(file)
+  const sourceHash = options.hashContents ? await hashFileFnv1a32(file) : layer.smartSource?.sourceHash
+  const now = options.now?.() ?? Date.now()
+  const next = replaceSmartObjectContents(layer, sourceCanvas, {
+    ...(layer.smartSource ?? {}),
+    fileName: file.name,
+    relativePath: options.relativePath ?? file.name,
+    linkType: "linked",
+    embedded: options.embedded ?? false,
+    fileHandle: handle,
+    fileHandleName: handle.name ?? file.name,
+    handlePermission: permission,
+    lastKnownModified: file.lastModified,
+    lastKnownSize: file.size,
+    sourceHash,
+    relinkedAt: now,
+    updatedAt: now,
+    status: "current",
+  })
+  return { layer: next, changed: true, status: "current", file, sourceHash, permission }
 }
 
 export interface LinkedSmartObjectSyncTarget {

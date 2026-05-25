@@ -73,8 +73,27 @@ test("selection commands stay reachable and load selection expands even without 
   await expect(page.getByRole("menuitem", { name: "No saved channels" })).toBeVisible()
 })
 
-test("stateful layer and type commands are clickable instead of greyed out", async ({ page }) => {
+test("profile and proof controls are reachable from Image and View menus", async ({ page }) => {
   await page.goto("/")
+  await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
+
+  await openTopMenu(page, "Image")
+  await page.getByRole("menuitem", { name: "Mode" }).hover()
+  await expectCommandEnabled(page, "Assign Profile...")
+  await expectCommandEnabled(page, "Convert to Profile...")
+  await expectCommandEnabled(page, "Color Settings / Proof Setup...")
+
+  await page.keyboard.press("Escape")
+  await openTopMenu(page, "View")
+  await page.getByRole("menuitem", { name: "Proof Setup" }).hover()
+  await expectCommandEnabled(page, /Proof Colors/)
+  await expectCommandEnabled(page, /Gamut Warning/)
+  await expectCommandEnabled(page, "Proof Profile")
+  await expectCommandEnabled(page, "Plate Channels")
+})
+
+test("stateful layer and type commands are clickable instead of greyed out", async ({ page }) => {
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   await openTopMenu(page, "Edit")
@@ -98,6 +117,9 @@ test("stateful layer and type commands are clickable instead of greyed out", asy
   for (const command of ["Edit Smart Object Contents", "Update Parent Smart Object"]) {
     await expectCommandEnabled(page, command)
   }
+  await page.getByRole("menuitem", { name: "Flatten Transparency", exact: true }).hover()
+  await expectCommandEnabled(page, "Background Color")
+  await expectCommandEnabled(page, "Preserve Alpha")
 
   await topMenu(page, "Type").hover()
   for (const command of ["Text Inside Shape", "3D Text Extrusion"]) {

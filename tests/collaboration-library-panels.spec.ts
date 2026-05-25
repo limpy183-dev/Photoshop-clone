@@ -143,8 +143,9 @@ test("learning index searches commands docs panels and workflows", () => {
     ],
   })
 
-  expect(new Set(items.map((item) => item.type))).toEqual(new Set(["command", "doc", "filter", "panel", "workflow"]))
+  expect(new Set(items.map((item) => item.type))).toEqual(new Set(["command", "doc", "filter", "panel", "tool", "workflow"]))
   expect(searchLearningIndex(items, "mask selection panel")[0]).toMatchObject({ id: "panel-selection-studio", type: "panel" })
+  expect(searchLearningIndex(items, "brush dynamics")[0]).toMatchObject({ id: "tool-brush", type: "tool" })
   expect(searchLearningIndex(items, "export review report")[0]).toMatchObject({ id: "workflow-review-export", type: "workflow" })
   expect(searchLearningIndex(items, "project file docs").some((item) => item.type === "doc")).toBe(true)
 })

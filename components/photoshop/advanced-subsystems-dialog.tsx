@@ -80,7 +80,8 @@ import {
   updateThreeDMaterial,
 } from "./three-d-video-engine"
 import { applyIccTransformToImageData, describeColorPipeline, supportedIccProfileNames } from "./color-pipeline"
-import { decodeAdvancedRasterBufferAsync, decodedRasterToCanvas, encodeHeifImageData, encodeJpeg2000ImageData, encodeOpenExrHighBitImage, encodeOpenExrImageData, encodeTiffHighBitImageDataAsync, encodeTiffImageDataAsync, type TiffCompression } from "./raster-codecs"
+import { buildColorSeparationModel, summarizeSeparationPlates, type SeparationProcess } from "./color-channel-ops"
+import { decodeAdvancedRasterBufferAsync, decodedRasterToCanvas, encodeDngImageData, encodeHeifImageData, encodeJpeg2000ImageData, encodeOpenExrHighBitImage, encodeOpenExrImageData, encodeTiffHighBitImageDataAsync, encodeTiffImageDataAsync, type TiffCompression } from "./raster-codecs"
 import { getHighBitExportImage } from "./high-bit-document"
 import { createEmbeddedFontFromBuffer, parseOpenTypeFontMetadata } from "./typography-engine"
 import { getPsbTileViewMetadata, hasPsbTileViewStore, readPsbTileViewCanvas, writePsbTileViewCanvas } from "./psb-tile-view"
@@ -109,6 +110,7 @@ import type {
   AdjustmentType,
   AudioTrack,
   ContentCredential,
+  ColorManagementSettings,
   DocumentModeSettings,
   Layer,
   PluginActionDescriptor,
@@ -1355,7 +1357,7 @@ function ProvenanceWorkspace() {
     <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
       <Panel title="Local Content Credentials">
         <CapabilityNotice>
-          Local SHA-256 provenance manifests only. Embed Metadata exports include them in app XMP/metadata payloads, but they are not C2PA signed and no certificate chain is created.
+          Local SHA-256 provenance manifests only. Embed Metadata exports write unsigned C2PA carrier payloads, app XMP records, and format metadata, but no certificate chain is created.
         </CapabilityNotice>
         <Input value={actor} onChange={(event) => setActor(event.target.value)} className="h-8" />
         <Input value={assertion} onChange={(event) => setAssertion(event.target.value)} className="h-8" />
@@ -2670,6 +2672,8 @@ function ColorWorkspace() {
     proofProfile: "None" as const,
     proofColors: false,
     gamutWarning: false,
+    proofChannels: [],
+    proofPlateView: "composite" as const,
   }
   const pipeline = describeColorPipeline({
     bitDepth: activeDoc.bitDepth === 32 ? 32 : activeDoc.bitDepth === 16 ? 16 : 8,
@@ -2680,6 +2684,32 @@ function ColorWorkspace() {
     dispatch({ type: "set-color-management", settings: { ...color, ...patch } })
     requestRender()
   }
+  const proofChannels = color.proofChannels ?? []
+  const proofChannelOptions: NonNullable<ColorManagementSettings["proofChannels"]> = activeDoc.colorMode === "CMYK"
+    ? ["cyan", "magenta", "yellow", "black"]
+    : activeDoc.colorMode === "Grayscale"
+      ? ["gray"]
+      : ["red", "green", "blue"]
+  const toggleProofChannel = (channel: NonNullable<ColorManagementSettings["proofChannels"]>[number], checked: boolean) => {
+    const next = checked
+      ? Array.from(new Set([...proofChannels, channel]))
+      : proofChannels.filter((item) => item !== channel)
+    updateColor({ proofChannels: next })
+  }
+  const plateStats = (() => {
+    const layer = activeLayer?.canvas ? activeLayer : activeDoc.layers.find((item) => item.kind !== "group" && item.canvas)
+    const ctx = layer?.canvas?.getContext?.("2d")
+    if (!layer || !ctx) return []
+    const image = ctx.getImageData(0, 0, layer.canvas.width, layer.canvas.height)
+    const colorMode = String(activeDoc.colorMode)
+    const mode: SeparationProcess = colorMode === "CMYK" || colorMode === "Lab" || colorMode === "Grayscale" || colorMode === "Multichannel"
+      ? colorMode
+      : "RGB"
+    return summarizeSeparationPlates(buildColorSeparationModel(image, {
+      mode,
+      processProfile: color.proofProfile !== "None" ? color.proofProfile : color.workingSpace,
+    })).slice(0, 5)
+  })()
   const convertCanvasProfile = (canvas: HTMLCanvasElement, sourceProfile: typeof color.assignedProfile, targetProfile: typeof color.workingSpace) => {
     const ctx = canvas.getContext("2d")
     if (!ctx) return false
@@ -2742,6 +2772,30 @@ function ColorWorkspace() {
         <SelectField label="Proof Profile" value={color.proofProfile} options={["None", ...supportedIccProfileNames()]} onChange={(value) => updateColor({ proofProfile: value as typeof color.proofProfile })} />
         <CheckField label="Proof colors in canvas and exports" checked={color.proofColors} onChange={(checked) => updateColor({ proofColors: checked })} />
         <CheckField label="Gamut warning overlay" checked={color.gamutWarning} onChange={(checked) => updateColor({ gamutWarning: checked })} />
+        <SelectField label="Plate View" value={color.proofPlateView ?? "composite"} options={["composite", "ink", "mask"]} onChange={(value) => updateColor({ proofPlateView: value as NonNullable<ColorManagementSettings["proofPlateView"]> })} />
+        <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
+          <div className="mb-2 text-[10px] uppercase tracking-wide text-[var(--ps-text-dim)]">Preview plates</div>
+          <div className="grid grid-cols-2 gap-2">
+            {proofChannelOptions.map((channel) => (
+              <CheckField
+                key={channel}
+                label={channel[0].toUpperCase() + channel.slice(1)}
+                checked={proofChannels.includes(channel)}
+                onChange={(checked) => toggleProofChannel(channel, checked)}
+              />
+            ))}
+          </div>
+          {plateStats.length ? (
+            <div className="mt-2 grid gap-1 text-[10px] text-[var(--ps-text-dim)]">
+              {plateStats.map((plate) => (
+                <div key={plate.id} className="grid grid-cols-[1fr_auto] gap-2">
+                  <span>{plate.name}</span>
+                  <span>{plate.averageCoverage.toFixed(1)}% avg / {plate.maxCoverage.toFixed(1)}% max</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
         <div className="grid grid-cols-2 gap-2 pt-2">
           <Button size="sm" variant="secondary" disabled={!activeLayer || color.assignedProfile === color.workingSpace} onClick={() => convertProfile("active")}>Convert Layer</Button>
           <Button size="sm" variant="secondary" disabled={color.assignedProfile === color.workingSpace} onClick={() => convertProfile("all")}>Convert Document</Button>
@@ -2927,7 +2981,7 @@ function FormatsWorkspace() {
     const canvas = renderDocumentComposite(activeDoc, { transparent: true })
     return { canvas, imageData: canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height) }
   }
-  const exportAdvancedRaster = async (format: "tiff" | "exr" | "hdr" | "dicom" | "pdf" | "eps" | "heif" | "jpeg2000") => {
+  const exportAdvancedRaster = async (format: "tiff" | "dng" | "exr" | "hdr" | "dicom" | "pdf" | "eps" | "heif" | "jpeg2000") => {
     if (!activeDoc) return
     try {
       const composite = compositeImageData()
@@ -2942,10 +2996,17 @@ function FormatsWorkspace() {
             ? await encodeTiffHighBitImageDataAsync(highBit, { compression: tiffCompression })
             : await encodeTiffImageDataAsync(composite.imageData, { compression: tiffCompression }),
         ], { type: "image/tiff" }), `${base}.tiff`)
+      } else if (format === "dng") {
+        downloadBlob(new Blob([encodeDngImageData(composite.imageData, {
+          metadata: { title: activeDoc.name, author: activeDoc.metadata?.author, xmp: makeXmpMetadata(activeDoc.metadata ?? { title: activeDoc.name }) },
+          cameraModel: activeDoc.metadata?.source || "Photoshop Web",
+          uniqueCameraModel: `${activeDoc.name} browser DNG`,
+          sidecar: makeXmpMetadata(activeDoc.metadata ?? { title: activeDoc.name }),
+        })], { type: "image/x-adobe-dng" }), `${base}.dng`)
       } else if (format === "heif") {
         downloadBlob(new Blob([await encodeHeifImageData(composite.imageData)], { type: "image/heif" }), `${base}.heif`)
       } else if (format === "jpeg2000") {
-        downloadBlob(new Blob([await encodeJpeg2000ImageData(composite.imageData)], { type: "image/j2k" }), `${base}.j2k`)
+        downloadBlob(new Blob([await encodeJpeg2000ImageData(composite.imageData, { container: "jpx", includeAlpha: true })], { type: "image/jpx" }), `${base}.jpx`)
       } else if (format === "exr") {
         downloadBlob(new Blob([
           highBit
@@ -3039,7 +3100,7 @@ function FormatsWorkspace() {
           <FileButton accept=".psb,image/vnd.adobe.photoshop" label="PSB Tile View" onFile={(file) => importPsbLargeDocument(file, "tile-view")} />
         </div>
         <div className="mt-3 rounded-sm border border-[var(--ps-divider)] p-3 text-[11px] text-[var(--ps-text-dim)]">
-          Imports create browser 8-bit RGBA preview layers when a decoder path is available and retain high-bit side-band sources where the importer exposes them. TIFF/EXR/HEIC/JPEG 2000 use bundled decoders, RAW/DNG uses LibRaw or embedded previews, DICOM/HDR/PDF/EPS render flattened previews, and oversized PSB files can be opened as a 50% composite or tile overview when the full canvas exceeds browser limits.
+          Imports create browser 8-bit RGBA preview layers when a decoder path is available and retain high-bit side-band sources where the importer exposes them. TIFF/BigTIFF, EXR, HEIC, JPEG 2000, RAW/DNG, DICOM, HDR, PDF, and EPS use browser-local decoders or safe preview renderers; oversized PSB files can be opened as a 50% composite or tile overview when the full canvas exceeds browser limits.
         </div>
       </Panel>
       <Panel title="PSB Tile View">
@@ -3107,8 +3168,9 @@ function FormatsWorkspace() {
             <option value="deflate">TIFF Deflate</option>
           </select>
           <Button size="sm" variant="secondary" disabled={!activeDoc} onClick={() => void exportAdvancedRaster("tiff")}>Export TIFF</Button>
+          <Button size="sm" variant="secondary" disabled={!activeDoc} onClick={() => void exportAdvancedRaster("dng")}>Export DNG</Button>
           <Button size="sm" variant="secondary" disabled={!activeDoc} onClick={() => void exportAdvancedRaster("heif")}>Export HEIF</Button>
-          <Button size="sm" variant="secondary" disabled={!activeDoc} onClick={() => void exportAdvancedRaster("jpeg2000")}>Export JPEG 2000</Button>
+          <Button size="sm" variant="secondary" disabled={!activeDoc} onClick={() => void exportAdvancedRaster("jpeg2000")}>Export JPX</Button>
           <Button size="sm" variant="secondary" disabled={!activeDoc} onClick={() => void exportAdvancedRaster("exr")}>Export EXR</Button>
           <Button size="sm" variant="secondary" disabled={!activeDoc} onClick={() => void exportAdvancedRaster("hdr")}>Export HDR</Button>
           <Button size="sm" variant="secondary" disabled={!activeDoc} onClick={() => void exportAdvancedRaster("dicom")}>Export DICOM</Button>

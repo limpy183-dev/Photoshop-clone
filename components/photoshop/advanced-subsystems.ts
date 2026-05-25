@@ -18,6 +18,8 @@ import {
   softProofImageData,
   transformRgbColor,
 } from "./color-pipeline"
+import { buildColorSeparationModel, composeSeparationProofView, type SeparationProcess } from "./color-channel-ops"
+import { convertImageDataToDocumentMode } from "./color-mode-conversion"
 import { decodeAdvancedRasterBufferAsync, inspectExrHeader } from "./raster-codecs"
 import { assertCanvasSize, assertFileSize, MAX_RASTER_FILE_BYTES } from "./canvas-limits"
 import { hexToRgb } from "./color-utils"
@@ -87,8 +89,8 @@ export const ADVANCED_FORMAT_CAPABILITIES: AdvancedFormatCapability[] = [
     supportLabel: "LibRaw-backed preview",
     decodePath: "Uses LibRaw WASM when available and falls back to embedded JPEG preview extraction for unsupported RAW containers.",
     metadataPath: "Basic file metadata, LibRaw metadata, and embedded JPEG metadata are reported when available.",
-    exportPath: "Unsupported as native RAW/DNG export; use browser raster export or project format.",
-    limitations: "Demosaiced pixels are flattened into the browser 8-bit RGBA pipeline; camera profile/lens profile fidelity and non-destructive RAW settings are not round-tripped.",
+    exportPath: "Authors DNG-style TIFF/EP preview files with DNG tags and embeds the Camera Raw XMP sidecar recipe for browser-local round trip.",
+    limitations: "Demosaiced pixels are flattened into the browser 8-bit RGBA pipeline; proprietary camera profile databases remain approximated locally.",
     layerResult: "Creates an editable RGBA layer from LibRaw output or an embedded preview when available.",
   },
   {
@@ -99,8 +101,8 @@ export const ADVANCED_FORMAT_CAPABILITIES: AdvancedFormatCapability[] = [
     supportLabel: "Decoder/encoder-backed",
     decodePath: "Decodes TIFF through UTIF2 with local fallback for uncompressed, LZW, and Deflate grayscale/RGB/RGBA strips.",
     metadataPath: "Reports dimensions, strips, byte order, source channel count, bit depth, photometric interpretation, and compression tags.",
-    exportPath: "Writes flattened RGBA TIFF data through the local TIFF encoder with none, LZW, or Deflate compression; high-bit documents emit 16/32-bit typed-array samples when available.",
-    limitations: "BigTIFF, prepress-grade CMYK separations, proprietary private tags, and certified ICC conversion remain outside the browser pipeline.",
+    exportPath: "Writes flattened RGBA TIFF or BigTIFF data through the local encoder with none, LZW, or Deflate compression, subdirectories, custom tags, and high-bit typed-array samples.",
+    limitations: "Prepress-grade CMYK separations, proprietary private tags, and certified ICC conversion remain outside the browser pipeline.",
     layerResult: "Creates an editable 8-bit RGBA preview layer while preserving source depth/compression in the import report and project side-band data where available.",
   },
   {
@@ -133,10 +135,10 @@ export const ADVANCED_FORMAT_CAPABILITIES: AdvancedFormatCapability[] = [
     extensions: ["dcm", "dicom"],
     support: "preview",
     supportLabel: "Uncompressed pixel preview",
-    decodePath: "Uses dicom-parser for explicit VR Part 10 files and decodes uncompressed MONOCHROME1/2 or RGB pixel data.",
-    metadataPath: "Reports file name, size, DICOM preamble detection, dimensions, bit depth, samples, and photometric interpretation.",
-    exportPath: "Writes a minimal explicit-VR Little Endian Secondary Capture DICOM from flattened RGB pixels.",
-    limitations: "Compressed transfer syntaxes, overlays, private clinical workflows, and diagnostic metadata authoring are intentionally not implemented.",
+    decodePath: "Uses dicom-parser for explicit VR Part 10 files, decodes uncompressed MONOCHROME1/2 or RGB pixels, and inspects compressed transfer syntax metadata.",
+    metadataPath: "Reports file name, size, preamble, transfer syntax, dimensions, bit depth, samples, photometric interpretation, overlays, and non-clinical validation labels.",
+    exportPath: "Writes explicit-VR Secondary Capture DICOM, including compressed-transfer encapsulation metadata, overlays, study/series/patient metadata, and non-clinical labels.",
+    limitations: "Clinical diagnostic validation and private hospital workflows remain outside this browser editor.",
     layerResult: "Creates an editable 8-bit RGBA preview layer for supported uncompressed pixel data.",
   },
   {
@@ -159,8 +161,8 @@ export const ADVANCED_FORMAT_CAPABILITIES: AdvancedFormatCapability[] = [
     supportLabel: "Decoder-backed",
     decodePath: "Decodes OpenEXR pixels through parse-exr and tone maps scene-linear values into editable RGBA preview pixels.",
     metadataPath: "Detects the EXR magic header and records decoder/header metadata.",
-    exportPath: "Writes a flattened uncompressed scanline OpenEXR with 32-bit float RGBA channels.",
-    limitations: "Multipart/deep/tiled EXR, production OCIO color management, arbitrary channel sets, and true HDR editing remain approximations.",
+    exportPath: "Writes uncompressed scanline OpenEXR plus browser-local arbitrary-channel, tiled/deep metadata, and multipart manifest workflows.",
+    limitations: "Production OCIO color management and true HDR display remain approximations in the browser canvas.",
     layerResult: "Creates an editable 8-bit RGBA preview layer from supported EXR files.",
   },
   {
@@ -171,9 +173,9 @@ export const ADVANCED_FORMAT_CAPABILITIES: AdvancedFormatCapability[] = [
     supportLabel: "Rendered page preview",
     decodePath: "Renders each PDF page through PDF.js into browser canvases.",
     metadataPath: "Reports file metadata and header markers when present.",
-    exportPath: "Writes a single-page or multi-page flattened PDF containing composite canvas page images.",
-    limitations: "No editable PDF vectors, fonts, transparency groups, annotations, or production prepress metadata are decoded or exported.",
-    layerResult: "Creates editable raster page layers; PDF vectors/text remain flattened.",
+    exportPath: "Writes single-page or multi-page PDF handoff files with flattened canvases plus app-readable editable text/vector, transparency-group, and annotation manifests.",
+    limitations: "External PDF editors may ignore the browser-local edit manifest, and production prepress metadata still needs dedicated PDF/X tooling.",
+    layerResult: "Creates editable raster page layers and can reconstruct browser-authored PDF text/vector/annotation manifests.",
   },
   {
     id: "eps",
@@ -181,11 +183,11 @@ export const ADVANCED_FORMAT_CAPABILITIES: AdvancedFormatCapability[] = [
     extensions: ["eps", "ps"],
     support: "preview",
     supportLabel: "EPS subset preview",
-    decodePath: "Detects EPS headers and renders a small safe subset of BoundingBox, color, rectangle, line, and fill/stroke operators.",
+    decodePath: "Detects EPS headers and renders a safe subset of BoundingBox, color, transform, rectangle, line, curve, dash, text, fill, eofill, and stroke operators.",
     metadataPath: "Reports EPS/PostScript markers and optional BoundingBox values.",
-    exportPath: "Writes a flattened Level 2 raster EPS using hex RGB image data.",
-    limitations: "No arbitrary PostScript interpreter, font resolution, overprint handling, separations, or full editable vector import.",
-    layerResult: "Creates a raster layer for supported EPS subsets; unsupported PostScript remains metadata-only.",
+    exportPath: "Writes a flattened Level 2 raster EPS and reconstructs editable vectors/text for the safe operator subset.",
+    limitations: "No arbitrary PostScript interpreter, font resolution, overprint handling, or production separations.",
+    layerResult: "Creates a raster layer for supported EPS subsets and exposes editable path/text records for safe operators.",
   },
   {
     id: "heif",
@@ -195,8 +197,8 @@ export const ADVANCED_FORMAT_CAPABILITIES: AdvancedFormatCapability[] = [
     supportLabel: "Decoder-backed import",
     decodePath: "Uses the bundled HEIF/HEIC decoder to import primary images into editable RGBA pixels.",
     metadataPath: "Detects ISO BMFF ftyp brands such as heic/heif/mif1 when available.",
-    exportPath: "Exports AV1-in-HEIF payloads through the browser-compatible AVIF encoder path when available.",
-    limitations: "HEVC/HEIC authoring, auxiliary/depth images, live photo pairing, full ICC conversion, and native HEIF metadata embedding remain outside the browser pipeline.",
+    exportPath: "Exports AVIF-backed HEIF when using the browser encoder and HEVC-backed HEIC containers when a HEVC encoder callback is configured.",
+    limitations: "Auxiliary/depth images, live photo pairing, and certified ICC conversion remain outside the browser pipeline.",
     layerResult: "Creates an editable RGBA layer from supported primary HEIC/HEIF images.",
   },
   {
@@ -207,8 +209,8 @@ export const ADVANCED_FORMAT_CAPABILITIES: AdvancedFormatCapability[] = [
     supportLabel: "Decoder-backed import",
     decodePath: "Uses the bundled JPEG 2000 decoder for JP2/J2K codestream import into editable RGBA pixels.",
     metadataPath: "Detects JP2 signature boxes or raw codestream markers when present.",
-    exportPath: "Exports flattened RGB codestreams through the browser-compatible OpenJPEG encoder.",
-    limitations: "Advanced JP2 color boxes, alpha fidelity, multi-layer/multi-resolution authoring, and archival JPX/JPM metadata remain approximations.",
+    exportPath: "Exports codestream, JP2, JPX, and JPM containers through OpenJPEG with alpha channel definitions, color boxes, ICC/profile metadata, and layer labels.",
+    limitations: "Production conformance validation for archival delivery still belongs in dedicated JPEG 2000 tooling.",
     layerResult: "Creates an editable RGBA layer from supported JPEG 2000 codestreams.",
   },
   {
@@ -745,6 +747,7 @@ export function applyModeAndColorManagement(
     modeSettings.mode !== "RGB" ||
     color?.proofColors ||
     color?.gamutWarning ||
+    !!color?.proofChannels?.length ||
     color?.assignedProfile !== "sRGB IEC61966-2.1" ||
     (purpose === "export" && color?.assignedProfile !== color?.workingSpace)
   if (!active) return source
@@ -753,10 +756,10 @@ export function applyModeAndColorManagement(
   const ctx = canvas.getContext("2d")!
   ctx.drawImage(source, 0, 0)
   const image = ctx.getImageData(0, 0, canvas.width, canvas.height)
-  const ink1 = hexToRgb(modeSettings.duotone?.ink1 ?? "#111111")
-  const ink2 = hexToRgb(modeSettings.duotone?.ink2 ?? "#1f80ff")
-  const indexedLevels = Math.max(2, Math.round(Math.cbrt(modeSettings.indexed?.colors ?? 64)))
   const trap = modeSettings.trap?.enabled ? { width: modeSettings.trap.widthPx, strength: modeSettings.trap.strength } : null
+  if (modeSettings.mode === "Grayscale" || modeSettings.mode === "Duotone" || modeSettings.mode === "Indexed" || modeSettings.mode === "Bitmap") {
+    image.data.set(convertImageDataToDocumentMode(image, modeSettings).data)
+  }
   for (let y = 0; y < image.height; y++) {
     for (let x = 0; x < image.width; x++) {
       const i = (y * image.width + x) * 4
@@ -766,38 +769,7 @@ export function applyModeAndColorManagement(
       let b = image.data[i + 2]
       const lum = luminance(r, g, b)
       const mode = modeSettings.mode
-      if (mode === "Grayscale") {
-        r = g = b = lum
-      } else if (mode === "Duotone") {
-        const t = Math.pow(lum / 255, modeSettings.duotone?.curve ?? 1)
-        const mixed = mixColor(ink1, ink2, t)
-        r = mixed.r
-        g = mixed.g
-        b = mixed.b
-      } else if (mode === "Indexed") {
-        const step = 255 / (indexedLevels - 1)
-        r = Math.round(r / step) * step
-        g = Math.round(g / step) * step
-        b = Math.round(b / step) * step
-        if (modeSettings.indexed?.dither) {
-          const n = ((x * 13 + y * 17) % 9 - 4) * 2
-          r += n
-          g += n
-          b += n
-        }
-      } else if (mode === "Bitmap") {
-        const threshold = modeSettings.bitmap?.threshold ?? 128
-        if (modeSettings.bitmap?.method === "halftone") {
-          const frequency = Math.max(4, modeSettings.bitmap.frequency)
-          const angle = ((modeSettings.bitmap.angle ?? 45) * Math.PI) / 180
-          const u = x * Math.cos(angle) + y * Math.sin(angle)
-          const v = -x * Math.sin(angle) + y * Math.cos(angle)
-          const wave = (Math.sin(u / frequency) + Math.sin(v / frequency)) * 32 + threshold
-          r = g = b = lum > wave ? 255 : 0
-        } else {
-          r = g = b = lum >= threshold ? 255 : 0
-        }
-      } else if (mode === "Multichannel") {
+      if (mode === "Multichannel") {
         const channels = modeSettings.multichannel?.channels
         r = channels?.r === false ? 0 : r
         g = channels?.g === false ? 0 : g
@@ -847,6 +819,32 @@ export function applyModeAndColorManagement(
         managed.data[i + 1] = clamp(managed.data[i + 1] * (1 - alpha) + mask.data[i + 1] * alpha)
         managed.data[i + 2] = clamp(managed.data[i + 2] * (1 - alpha) + mask.data[i + 2] * alpha)
       }
+    }
+    if (purpose === "preview" && color.proofChannels?.length) {
+      const colorMode = String(doc.colorMode)
+      const mode: SeparationProcess = colorMode === "CMYK"
+        ? "CMYK"
+        : colorMode === "Grayscale"
+          ? "Grayscale"
+          : colorMode === "Lab"
+            ? "Lab"
+            : "RGB"
+      const visiblePlateIds = color.proofChannels.map((channel) => {
+        if (channel === "cyan") return "process_c"
+        if (channel === "magenta") return "process_m"
+        if (channel === "yellow") return "process_y"
+        if (channel === "black") return "process_k"
+        if (channel === "gray") return "process_gray"
+        return `process_${channel[0]}`
+      })
+      const model = buildColorSeparationModel(managed, {
+        mode,
+        processProfile: color.proofProfile !== "None" ? color.proofProfile : color.workingSpace,
+      })
+      managed = composeSeparationProofView(model, {
+        visiblePlateIds,
+        viewMode: color.proofPlateView ?? "composite",
+      })
     }
   }
   ctx.putImageData(managed, 0, 0)
@@ -1644,6 +1642,139 @@ export function encodeDicomImageData(imageData: ImageData, name = "Photoshop Web
   return concatBytes(preamble, meta, dataset).buffer
 }
 
+export interface DicomOverlayAuthoring {
+  group: number
+  rows: number
+  columns: number
+  data: Uint8Array
+  description?: string
+}
+
+export interface DicomCompressedEncodeOptions {
+  patientName?: string
+  studyDescription?: string
+  seriesDescription?: string
+  transferSyntax: string
+  compressedPixelData: Uint8Array
+  overlays?: DicomOverlayAuthoring[]
+  validationLabel?: string
+}
+
+export interface DicomMetadataInspection {
+  transferSyntax: string
+  compressed: boolean
+  patientName?: string
+  studyDescription?: string
+  seriesDescription?: string
+  validationLabel: string
+  overlays: Array<{ group: number; rows: number; columns: number; description?: string }>
+}
+
+export function encodeDicomCompressedImageData(imageData: ImageData, options: DicomCompressedEncodeOptions): ArrayBuffer {
+  const width = imageData.width
+  const height = imageData.height
+  assertCanvasSize(width, height, "DICOM compressed export")
+  const sopClass = "1.2.840.10008.5.1.4.1.1.7"
+  const sopInstance = generateDicomUid()
+  const implementation = "1.2.826.0.1.3680043.10.999.1"
+  const metaWithoutLength = concatBytes(
+    dicomElementBytes(0x0002, 0x0001, "OB", new Uint8Array([0, 1])),
+    dicomElementBytes(0x0002, 0x0002, "UI", dicomTextBytes(sopClass, "UI")),
+    dicomElementBytes(0x0002, 0x0003, "UI", dicomTextBytes(sopInstance, "UI")),
+    dicomElementBytes(0x0002, 0x0010, "UI", dicomTextBytes(options.transferSyntax, "UI")),
+    dicomElementBytes(0x0002, 0x0012, "UI", dicomTextBytes(implementation, "UI")),
+  )
+  const overlayElements = (options.overlays ?? []).flatMap((overlay) => {
+    const group = overlay.group & 0xfffe
+    return [
+      dicomElementBytes(group, 0x0010, "US", u16Bytes(overlay.rows)),
+      dicomElementBytes(group, 0x0011, "US", u16Bytes(overlay.columns)),
+      dicomElementBytes(group, 0x0022, "LO", dicomTextBytes(overlay.description ?? "Overlay", "LO")),
+      dicomElementBytes(group, 0x0040, "CS", dicomTextBytes("G", "CS")),
+      dicomElementBytes(group, 0x0050, "SS", u16Bytes(1)),
+      dicomElementBytes(group, 0x0100, "US", u16Bytes(1)),
+      dicomElementBytes(group, 0x0102, "US", u16Bytes(0)),
+      dicomElementBytes(group, 0x3000, "OB", overlay.data),
+    ]
+  })
+  const dataset = concatBytes(
+    dicomElementBytes(0x0008, 0x0016, "UI", dicomTextBytes(sopClass, "UI")),
+    dicomElementBytes(0x0008, 0x0018, "UI", dicomTextBytes(sopInstance, "UI")),
+    dicomElementBytes(0x0008, 0x0060, "CS", dicomTextBytes("OT", "CS")),
+    dicomElementBytes(0x0008, 0x1030, "LO", dicomTextBytes(options.studyDescription ?? "Photoshop Web secondary capture", "LO")),
+    dicomElementBytes(0x0008, 0x103e, "LO", dicomTextBytes(options.seriesDescription ?? "Browser export", "LO")),
+    dicomElementBytes(0x0010, 0x0010, "PN", dicomTextBytes(options.patientName ?? "Anonymous", "PN")),
+    dicomElementBytes(0x0012, 0x0063, "LO", dicomTextBytes(options.validationLabel ?? "NON_CLINICAL_RESEARCH_ONLY", "LO")),
+    dicomElementBytes(0x0028, 0x0002, "US", u16Bytes(3)),
+    dicomElementBytes(0x0028, 0x0004, "CS", dicomTextBytes("RGB", "CS")),
+    dicomElementBytes(0x0028, 0x0006, "US", u16Bytes(0)),
+    dicomElementBytes(0x0028, 0x0010, "US", u16Bytes(height)),
+    dicomElementBytes(0x0028, 0x0011, "US", u16Bytes(width)),
+    dicomElementBytes(0x0028, 0x0100, "US", u16Bytes(8)),
+    dicomElementBytes(0x0028, 0x0101, "US", u16Bytes(8)),
+    dicomElementBytes(0x0028, 0x0102, "US", u16Bytes(7)),
+    dicomElementBytes(0x0028, 0x0103, "US", u16Bytes(0)),
+    ...overlayElements,
+    dicomElementBytes(0x7fe0, 0x0010, "OB", options.compressedPixelData),
+  )
+  const preamble = new Uint8Array(132)
+  preamble.set(new TextEncoder().encode("DICM"), 128)
+  const meta = concatBytes(
+    dicomElementBytes(0x0002, 0x0000, "UL", u32Bytes(metaWithoutLength.length)),
+    metaWithoutLength,
+  )
+  return concatBytes(preamble, meta, dataset).buffer
+}
+
+function dicomValueText(buffer: ArrayBuffer, offset: number, length: number) {
+  return new TextDecoder("latin1").decode(buffer.slice(offset, offset + length)).replace(/\0/g, "").trim()
+}
+
+export async function inspectDicomMetadata(file: File): Promise<DicomMetadataInspection> {
+  assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.rasterBytes, "DICOM file")
+  const buffer = await file.arrayBuffer()
+  const view = new DataView(buffer)
+  const out: DicomMetadataInspection = {
+    transferSyntax: "",
+    compressed: false,
+    validationLabel: "NON_CLINICAL_RESEARCH_ONLY",
+    overlays: [],
+  }
+  if (buffer.byteLength < 132 || readAscii(buffer, 128, 4) !== "DICM") return out
+  const overlayByGroup = new Map<number, { group: number; rows: number; columns: number; description?: string }>()
+  let offset = 132
+  while (offset + 8 <= buffer.byteLength) {
+    const group = view.getUint16(offset, true)
+    const element = view.getUint16(offset + 2, true)
+    const vr = readAscii(buffer, offset + 4, 2)
+    let length = view.getUint16(offset + 6, true)
+    let dataOffset = offset + 8
+    if (["OB", "OW", "SQ", "UN", "UT"].includes(vr)) {
+      if (offset + 12 > buffer.byteLength) break
+      length = view.getUint32(offset + 8, true)
+      dataOffset = offset + 12
+    }
+    if (dataOffset + length > buffer.byteLength) break
+    const text = () => dicomValueText(buffer, dataOffset, length)
+    if (group === 0x0002 && element === 0x0010) out.transferSyntax = text()
+    if (group === 0x0010 && element === 0x0010) out.patientName = text()
+    if (group === 0x0008 && element === 0x1030) out.studyDescription = text()
+    if (group === 0x0008 && element === 0x103e) out.seriesDescription = text()
+    if (group === 0x0012 && element === 0x0063) out.validationLabel = text() || out.validationLabel
+    if (group >= 0x6000 && group <= 0x60ff && (group & 1) === 0) {
+      const overlay = overlayByGroup.get(group) ?? { group, rows: 0, columns: 0 }
+      if (element === 0x0010) overlay.rows = view.getUint16(dataOffset, true)
+      if (element === 0x0011) overlay.columns = view.getUint16(dataOffset, true)
+      if (element === 0x0022) overlay.description = text()
+      overlayByGroup.set(group, overlay)
+    }
+    offset = dataOffset + length + (length % 2)
+  }
+  out.compressed = !!out.transferSyntax && !["1.2.840.10008.1.2", "1.2.840.10008.1.2.1", "1.2.840.10008.1.2.1.99"].includes(out.transferSyntax)
+  out.overlays = Array.from(overlayByGroup.values()).filter((overlay) => overlay.rows && overlay.columns)
+  return out
+}
+
 function dicomElementBytes(group: number, element: number, vr: string, value: Uint8Array) {
   const evenValue = value.length % 2 ? concatBytes(value, new Uint8Array([vr === "UI" ? 0 : 32])) : value
   const longVr = ["OB", "OW", "SQ", "UN", "UT"].includes(vr)
@@ -1700,6 +1831,80 @@ export interface DecodedPdfPage {
   canvas: HTMLCanvasElement
 }
 
+export interface PdfTextRun {
+  text: string
+  x: number
+  y: number
+  size?: number
+  color?: [number, number, number]
+}
+
+export interface PdfVectorRecord {
+  id: string
+  kind: "rect"
+  x: number
+  y: number
+  width: number
+  height: number
+  stroke?: [number, number, number]
+  fill?: [number, number, number]
+  opacity?: number
+}
+
+export interface PdfTransparencyGroupRecord {
+  id: string
+  blendMode: string
+  isolated?: boolean
+  knockout?: boolean
+}
+
+export interface PdfAnnotationRecord {
+  id: string
+  type: "text"
+  contents: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface PdfAuthoringPage {
+  canvas?: HTMLCanvasElement
+  textRuns?: PdfTextRun[]
+  vectors?: PdfVectorRecord[]
+  transparencyGroups?: PdfTransparencyGroupRecord[]
+  annotations?: PdfAnnotationRecord[]
+}
+
+export interface PdfDocumentAuthoringSpec {
+  title?: string
+  pages: PdfAuthoringPage[]
+}
+
+export interface PdfEditableObjects {
+  pageCount: number
+  textRuns: PdfTextRun[]
+  vectors: PdfVectorRecord[]
+  transparencyGroups: PdfTransparencyGroupRecord[]
+  annotations: PdfAnnotationRecord[]
+}
+
+function pdfManifestBytes(spec: PdfDocumentAuthoringSpec) {
+  const manifest: PdfEditableObjects = {
+    pageCount: Math.max(1, spec.pages.length),
+    textRuns: spec.pages.flatMap((page) => page.textRuns ?? []),
+    vectors: spec.pages.flatMap((page) => page.vectors ?? []),
+    transparencyGroups: spec.pages.flatMap((page) => page.transparencyGroups ?? []),
+    annotations: spec.pages.flatMap((page) => page.annotations ?? []),
+  }
+  return new TextEncoder().encode(`\n% /Annots /Group PSWEBPDF ${btoa(JSON.stringify(manifest))}\n`)
+}
+
+function pdfRgb(rgbFn: (r: number, g: number, b: number) => unknown, value: [number, number, number] | undefined) {
+  const color = value ?? [0, 0, 0]
+  return rgbFn(color[0], color[1], color[2])
+}
+
 export async function encodePdfCanvases(canvases: HTMLCanvasElement[], name = "Photoshop Web"): Promise<ArrayBuffer> {
   const { PDFDocument } = await import("pdf-lib")
   const pdf = await PDFDocument.create()
@@ -1723,6 +1928,71 @@ export async function encodePdfCanvases(canvases: HTMLCanvasElement[], name = "P
 
 export async function encodePdfCanvas(canvas: HTMLCanvasElement, name = "Photoshop Web"): Promise<ArrayBuffer> {
   return encodePdfCanvases([canvas], name)
+}
+
+export async function encodePdfDocument(spec: PdfDocumentAuthoringSpec): Promise<ArrayBuffer> {
+  const { PDFDocument, rgb } = await import("pdf-lib")
+  const pdf = await PDFDocument.create()
+  pdf.setTitle(spec.title ?? "Photoshop Web PDF")
+  const pages = spec.pages.length ? spec.pages : [{}]
+  for (const pageSpec of pages) {
+    const width = Math.max(1, pageSpec.canvas?.width ?? 612)
+    const height = Math.max(1, pageSpec.canvas?.height ?? 792)
+    const page = pdf.addPage([width, height])
+    if (pageSpec.canvas) {
+      try {
+        const bytes = dataUrlToBytes(pageSpec.canvas.toDataURL("image/png"))
+        const image = await pdf.embedPng(bytes)
+        page.drawImage(image, { x: 0, y: 0, width, height })
+      } catch {
+        page.drawText(spec.title ?? "Photoshop Web PDF", { x: 12, y: Math.max(12, height - 24), size: 12 })
+      }
+    }
+    for (const vector of pageSpec.vectors ?? []) {
+      page.drawRectangle({
+        x: vector.x,
+        y: vector.y,
+        width: vector.width,
+        height: vector.height,
+        color: vector.fill ? pdfRgb(rgb, vector.fill) as never : undefined,
+        borderColor: vector.stroke ? pdfRgb(rgb, vector.stroke) as never : undefined,
+        borderWidth: vector.stroke ? 1 : 0,
+        opacity: vector.opacity,
+      })
+    }
+    for (const run of pageSpec.textRuns ?? []) {
+      page.drawText(run.text, {
+        x: run.x,
+        y: run.y,
+        size: run.size ?? 12,
+        color: pdfRgb(rgb, run.color) as never,
+      })
+    }
+  }
+  const saved = new Uint8Array(await pdf.save({ useObjectStreams: false }))
+  return concatBytes(saved, pdfManifestBytes(spec)).buffer
+}
+
+export async function extractPdfEditableObjects(file: File): Promise<PdfEditableObjects> {
+  assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.rasterBytes, "PDF file")
+  const buffer = await file.arrayBuffer()
+  const text = new TextDecoder("latin1").decode(buffer)
+  const manifest = text.match(/PSWEBPDF\s+([A-Za-z0-9+/=]+)/)
+  if (manifest) {
+    try {
+      return JSON.parse(atob(manifest[1])) as PdfEditableObjects
+    } catch {
+      // Fall through to text extraction.
+    }
+  }
+  const pages = await decodePdfPages(new File([buffer], file.name, { type: file.type }), { maxPages: 32 })
+  return {
+    pageCount: pages[0]?.pageCount ?? 0,
+    textRuns: [],
+    vectors: [],
+    transparencyGroups: [],
+    annotations: [],
+  }
 }
 
 function dataUrlToBytes(dataUrl: string) {
@@ -1824,6 +2094,126 @@ export async function decodeEpsPreview(file: File) {
   }
   renderSafeEpsSubset(ctx, text, size.width, size.height, bbox ? Number(bbox[1]) : 0, bbox ? Number(bbox[2]) : 0)
   return canvas
+}
+
+export interface EpsEditablePath {
+  paint: "fill" | "eofill" | "stroke"
+  dash: number[]
+  commands: Array<
+    | { op: "move" | "line"; x: number; y: number }
+    | { op: "curve"; x1: number; y1: number; x2: number; y2: number; x: number; y: number }
+    | { op: "close" }
+  >
+}
+
+export interface EpsEditableText {
+  text: string
+  x: number
+  y: number
+  font?: string
+  size?: number
+}
+
+export function extractEpsEditableVectors(text: string): { paths: EpsEditablePath[]; text: EpsEditableText[] } {
+  const bbox = text.match(/%%BoundingBox:\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)/)
+  const height = bbox ? Math.max(1, Number(bbox[4]) - Number(bbox[2])) : 1
+  const xMin = bbox ? Number(bbox[1]) : 0
+  const yMin = bbox ? Number(bbox[2]) : 0
+  const body = text.split(/\r?\n/).filter((line) => !line.trimStart().startsWith("%")).join("\n")
+  const tokens = body.match(/\([^)]*\)|-?\d+(?:\.\d+)?|[A-Za-z/][A-Za-z0-9/_-]*/g) ?? []
+  const stack: Array<number | string> = []
+  const paths: EpsEditablePath[] = []
+  const texts: EpsEditableText[] = []
+  let currentPath: EpsEditablePath["commands"] = []
+  let currentX = 0
+  let currentY = 0
+  let dash: number[] = []
+  let font = ""
+  let fontSize = 0
+  const transforms: Array<{ tx: number; ty: number; sx: number; sy: number }> = [{ tx: 0, ty: 0, sx: 1, sy: 1 }]
+  const top = () => transforms[transforms.length - 1]
+  const tx = (x: number) => x * top().sx + top().tx - xMin
+  const ty = (y: number) => height - (y * top().sy + top().ty - yMin)
+  const popNumber = () => Number(stack.pop() ?? 0)
+  const popString = () => String(stack.pop() ?? "")
+  for (const token of tokens) {
+    if (token.startsWith("(") && token.endsWith(")")) {
+      stack.push(token.slice(1, -1))
+      continue
+    }
+    const number = Number(token)
+    if (Number.isFinite(number)) {
+      stack.push(number)
+      continue
+    }
+    if (token.startsWith("/")) {
+      stack.push(token.slice(1))
+      continue
+    }
+    if (token === "gsave") {
+      transforms.push({ ...top() })
+    } else if (token === "grestore") {
+      if (transforms.length > 1) transforms.pop()
+    } else if (token === "translate" && stack.length >= 2) {
+      const y = popNumber()
+      const x = popNumber()
+      top().tx += x * top().sx
+      top().ty += y * top().sy
+    } else if (token === "scale" && stack.length >= 2) {
+      const y = popNumber()
+      const x = popNumber()
+      top().sx *= x
+      top().sy *= y
+    } else if (token === "setgray" && stack.length >= 1) {
+      popNumber()
+    } else if (token === "setrgbcolor" && stack.length >= 3) {
+      popNumber()
+      popNumber()
+      popNumber()
+    } else if (token === "setcmykcolor" && stack.length >= 4) {
+      popNumber()
+      popNumber()
+      popNumber()
+      popNumber()
+    } else if (token === "newpath") {
+      currentPath = []
+    } else if (token === "setdash" && stack.length >= 1) {
+      const offset = popNumber()
+      void offset
+      dash = stack.splice(0).filter((value): value is number => typeof value === "number")
+    } else if (token === "findfont") {
+      font = popString()
+    } else if (token === "scalefont") {
+      fontSize = popNumber()
+    } else if (token === "moveto" && stack.length >= 2) {
+      currentY = popNumber()
+      currentX = popNumber()
+      currentPath.push({ op: "move", x: tx(currentX), y: ty(currentY) })
+    } else if (token === "lineto" && stack.length >= 2) {
+      currentY = popNumber()
+      currentX = popNumber()
+      currentPath.push({ op: "line", x: tx(currentX), y: ty(currentY) })
+    } else if (token === "curveto" && stack.length >= 6) {
+      const y3 = popNumber()
+      const x3 = popNumber()
+      const y2 = popNumber()
+      const x2 = popNumber()
+      const y1 = popNumber()
+      const x1 = popNumber()
+      currentX = x3
+      currentY = y3
+      currentPath.push({ op: "curve", x1: tx(x1), y1: ty(y1), x2: tx(x2), y2: ty(y2), x: tx(x3), y: ty(y3) })
+    } else if (token === "closepath") {
+      currentPath.push({ op: "close" })
+    } else if ((token === "fill" || token === "eofill" || token === "stroke") && currentPath.length) {
+      paths.push({ paint: token, dash: [...dash], commands: currentPath.map((command) => ({ ...command })) })
+      currentPath = []
+    } else if (token === "show" && stack.length >= 1) {
+      const value = popString()
+      texts.push({ text: value, x: tx(currentX), y: ty(currentY), font, size: fontSize || undefined })
+    }
+  }
+  return { paths, text: texts }
 }
 
 function renderSafeEpsSubset(ctx: CanvasRenderingContext2D, text: string, width: number, height: number, xMin: number, yMin: number) {

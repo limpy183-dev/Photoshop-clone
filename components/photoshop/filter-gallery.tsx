@@ -14,11 +14,18 @@ import { Slider } from "@/components/ui/slider"
 import { Checkbox } from "@/components/ui/checkbox"
 import { compositeFilterImageData, FILTERS, type FilterDef, type FilterParam } from "./filters"
 import { useEditor } from "./editor-context"
-import { Trash2, Plus, Eye, EyeOff, ChevronDown, ChevronRight, GripVertical } from "lucide-react"
+import { Trash2, Plus, Eye, EyeOff, ChevronDown, ChevronRight, ChevronUp, GripVertical, Link2, Link2Off, Copy } from "lucide-react"
 import type { BlendMode, SmartFilter } from "./types"
 import { normalizeSmartFilterMaskDensity, normalizeSmartFilterMaskFeather, smartFilterMaskToImageData } from "./smart-filter-masks"
 import { firstDirtySmartFilterPreviewIndex, smartFilterPreviewStackKeys } from "./smart-filter-preview"
 import { createBlurGalleryMeshResource, isBlurGalleryFilterId } from "./blur-gallery-controls"
+import {
+  createSmartFilterStackPreset,
+  hydrateSmartFilterStackPresetEntries,
+  loadSmartFilterStackPresets,
+  saveSmartFilterStackPresets,
+  type SmartFilterStackPreset,
+} from "./smart-filter-presets"
 
 interface FilterStackEntry {
   id: string
@@ -32,6 +39,7 @@ interface FilterStackEntry {
   maskEnabled?: boolean
   maskDensity?: number
   maskFeather?: number
+  maskLinked?: boolean
 }
 
 const BLEND_MODES: BlendMode[] = [
@@ -98,6 +106,10 @@ export function FilterGalleryDialog({
   const [selectedIdx, setSelectedIdx] = React.useState(-1)
   const [expandedCats, setExpandedCats] = React.useState<Set<string>>(new Set(["Blur", "Adjustments"]))
   const [draggedFilterIdx, setDraggedFilterIdx] = React.useState<number | null>(null)
+  const [presets, setPresets] = React.useState<SmartFilterStackPreset[]>([])
+  const [selectedPresetId, setSelectedPresetId] = React.useState("")
+  const [presetName, setPresetName] = React.useState("Custom stack")
+  const [presetLoadMode, setPresetLoadMode] = React.useState<"replace" | "append">("replace")
 
   const previewCanvasRef = React.useRef<HTMLCanvasElement>(null)
   const srcDataRef = React.useRef<ImageData | null>(null)
@@ -114,6 +126,13 @@ export function FilterGalleryDialog({
     outputs: ImageData[]
   } | null>(null)
   const previewFrameRef = React.useRef<number | null>(null)
+
+  React.useEffect(() => {
+    if (!open || typeof window === "undefined") return
+    const loaded = loadSmartFilterStackPresets(window.localStorage)
+    setPresets(loaded)
+    setSelectedPresetId((current) => current || loaded[0]?.id || "")
+  }, [open])
 
   // Load source image data when dialog opens
   React.useEffect(() => {
@@ -138,6 +157,7 @@ export function FilterGalleryDialog({
           maskEnabled: sf.maskEnabled ?? true,
           maskDensity: sf.maskDensity ?? 1,
           maskFeather: sf.maskFeather ?? 0,
+          maskLinked: sf.maskLinked ?? true,
         })) ?? []
       : []
     setStack(existing)
@@ -238,6 +258,7 @@ export function FilterGalleryDialog({
       maskEnabled: true,
       maskDensity: 1,
       maskFeather: 0,
+      maskLinked: true,
     }
     setStack((prev) => [...prev, entry])
     setSelectedIdx(stack.length)
@@ -286,6 +307,68 @@ export function FilterGalleryDialog({
     setSelectedIdx(to)
   }
 
+  const selectedEntry = selectedIdx >= 0 && selectedIdx < stack.length ? stack[selectedIdx] : null
+  const selectedFilterDef = selectedEntry ? FILTERS[selectedEntry.filterId] : null
+
+  const persistPresets = (next: SmartFilterStackPreset[]) => {
+    setPresets(next)
+    if (typeof window !== "undefined") saveSmartFilterStackPresets(next, window.localStorage)
+  }
+
+  const savePreset = () => {
+    if (!stack.length) return
+    const existing = presets.find((item) => item.id === selectedPresetId || item.name === presetName.trim())
+    const preset = createSmartFilterStackPreset(presetName, stack, existing ? { id: existing.id } : {})
+    if (existing) preset.createdAt = existing.createdAt
+    const next = [preset, ...presets.filter((item) => item.id !== preset.id)].slice(0, 80)
+    persistPresets(next)
+    setSelectedPresetId(preset.id)
+    setPresetName(preset.name)
+  }
+
+  const loadPreset = () => {
+    const preset = presets.find((item) => item.id === selectedPresetId)
+    if (!preset) return
+    const hydrated: FilterStackEntry[] = hydrateSmartFilterStackPresetEntries(preset, {
+      idFactory: (filterId, index) => `${filterId}_${Date.now()}_${index}`,
+      defaultParams: (filterId) => {
+        const def = FILTERS[filterId]
+        return def ? defaultParams(def) : {}
+      },
+    })
+    const nextSelectedIdx = presetLoadMode === "append" && hydrated.length ? stack.length : hydrated.length ? 0 : -1
+    setStack((current) => presetLoadMode === "append" ? [...current, ...hydrated] : hydrated)
+    setSelectedIdx(nextSelectedIdx)
+    setPresetName(preset.name)
+  }
+
+  const deletePreset = () => {
+    if (!selectedPresetId) return
+    const next = presets.filter((item) => item.id !== selectedPresetId)
+    persistPresets(next)
+    setSelectedPresetId(next[0]?.id || "")
+  }
+
+  const clearStack = () => {
+    setStack([])
+    setSelectedIdx(-1)
+  }
+
+  const duplicateSelected = () => {
+    if (!selectedEntry) return
+    const duplicate: FilterStackEntry = {
+      ...selectedEntry,
+      id: `${selectedEntry.filterId}_${Date.now()}`,
+      params: { ...selectedEntry.params },
+    }
+    setStack((current) => {
+      const next = [...current]
+      next.splice(selectedIdx + 1, 0, duplicate)
+      return next
+    })
+    setSelectedIdx(selectedIdx + 1)
+  }
+
   const applyToLayer = () => {
     if (!activeLayer || !activeDoc || !srcDataRef.current) return
     if (activeLayer.smartObject || activeLayer.kind === "smart-object") {
@@ -300,6 +383,7 @@ export function FilterGalleryDialog({
         maskEnabled: entry.maskEnabled ?? true,
         maskDensity: normalizeSmartFilterMaskDensity(entry.maskDensity),
         maskFeather: normalizeSmartFilterMaskFeather(entry.maskFeather),
+        maskLinked: entry.maskLinked ?? true,
         params: entry.params,
         ...(isBlurGalleryFilterId(entry.filterId) ? { blurGalleryMesh: createBlurGalleryMeshResource(entry.filterId, entry.params) } : {}),
       }))
@@ -323,9 +407,6 @@ export function FilterGalleryDialog({
     commit("Filter Gallery", [activeLayer.id])
     onOpenChange(false)
   }
-
-  const selectedEntry = selectedIdx >= 0 && selectedIdx < stack.length ? stack[selectedIdx] : null
-  const selectedFilterDef = selectedEntry ? FILTERS[selectedEntry.filterId] : null
 
   const toggleCat = (cat: string) => {
     setExpandedCats((prev) => {
@@ -393,6 +474,90 @@ export function FilterGalleryDialog({
             <div className="border-b border-[var(--ps-divider)]">
               <div className="p-1 text-[10px] uppercase text-[var(--ps-text-dim)] px-2 py-1.5 bg-[var(--ps-panel-2)] border-b border-[var(--ps-divider)] flex items-center justify-between">
                 <span>Filter Stack ({stack.length})</span>
+                <div className="flex items-center gap-0.5">
+                  <button
+                    type="button"
+                    aria-label="Duplicate selected smart filter"
+                    title="Duplicate selected smart filter"
+                    className="flex h-5 w-5 items-center justify-center rounded-sm hover:bg-[var(--ps-tool-hover)] disabled:opacity-35"
+                    disabled={!selectedEntry}
+                    onClick={duplicateSelected}
+                  >
+                    <Copy className="h-3 w-3" />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Clear filter stack"
+                    title="Clear filter stack"
+                    className="flex h-5 w-5 items-center justify-center rounded-sm hover:bg-[var(--ps-tool-hover)] disabled:opacity-35"
+                    disabled={!stack.length}
+                    onClick={clearStack}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+              </div>
+              <div className="grid gap-1 border-b border-[var(--ps-divider)] p-2">
+                <label className="grid gap-1 text-[10px]">
+                  <span className="text-[var(--ps-text-dim)]">Preset</span>
+                  <select
+                    aria-label="Filter Gallery preset"
+                    value={selectedPresetId}
+                    onChange={(e) => setSelectedPresetId(e.target.value)}
+                    className="h-6 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[11px]"
+                  >
+                    <option value="">No saved presets</option>
+                    {presets.map((preset) => (
+                      <option key={preset.id} value={preset.id}>{preset.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <div className="grid grid-cols-[1fr_72px] gap-1">
+                  <input
+                    aria-label="Filter Gallery preset name"
+                    value={presetName}
+                    onChange={(e) => setPresetName(e.target.value)}
+                    className="h-6 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[11px]"
+                  />
+                  <select
+                    aria-label="Filter Gallery preset load mode"
+                    value={presetLoadMode}
+                    onChange={(e) => setPresetLoadMode(e.target.value as "replace" | "append")}
+                    className="h-6 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[11px]"
+                  >
+                    <option value="replace">Replace</option>
+                    <option value="append">Append</option>
+                  </select>
+                </div>
+                <div className="grid grid-cols-3 gap-1">
+                  <button
+                    type="button"
+                    aria-label="Save filter stack preset"
+                    className="h-6 rounded-sm border border-[var(--ps-divider)] px-1 text-[10px] hover:bg-[var(--ps-tool-hover)] disabled:opacity-35"
+                    disabled={!stack.length}
+                    onClick={savePreset}
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Load filter stack preset"
+                    className="h-6 rounded-sm border border-[var(--ps-divider)] px-1 text-[10px] hover:bg-[var(--ps-tool-hover)] disabled:opacity-35"
+                    disabled={!selectedPresetId}
+                    onClick={loadPreset}
+                  >
+                    Load
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Delete filter stack preset"
+                    className="h-6 rounded-sm border border-[var(--ps-divider)] px-1 text-[10px] hover:bg-[var(--ps-tool-hover)] disabled:opacity-35"
+                    disabled={!selectedPresetId}
+                    onClick={deletePreset}
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
               <div className="max-h-[180px] overflow-y-auto">
                 {stack.length === 0 && (
@@ -400,7 +565,10 @@ export function FilterGalleryDialog({
                     Click a filter to add it to the stack
                   </div>
                 )}
-                {stack.map((entry, idx) => (
+                {stack.map((entry, idx) => {
+                  const visible = entry.visible !== false
+                  const maskLinked = entry.maskLinked !== false
+                  return (
                   <div
                     key={entry.id}
                     data-testid={`filter-gallery-stack-row-${entry.filterName}`}
@@ -434,34 +602,63 @@ export function FilterGalleryDialog({
                   >
                     <GripVertical className="w-3 h-3 text-[var(--ps-text-dim)] shrink-0" />
                     <button
+                      type="button"
+                      aria-label={`${visible ? "Disable" : "Enable"} ${entry.filterName} smart filter`}
+                      title={`${visible ? "Disable" : "Enable"} smart filter`}
                       onClick={(e) => { e.stopPropagation(); toggleVisibility(idx) }}
-                      className="shrink-0"
+                      className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm hover:bg-[var(--ps-tool-hover)]"
                     >
-                      {entry.visible ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3 text-[var(--ps-text-dim)]" />}
+                      {visible ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3 text-[var(--ps-text-dim)]" />}
                     </button>
-                    <span className={`flex-1 truncate ${!entry.visible ? "text-[var(--ps-text-dim)] line-through" : ""}`}>
+                    <button
+                      type="button"
+                      aria-label={`${maskLinked ? "Unlink" : "Link"} ${entry.filterName} smart filter mask`}
+                      title={`${maskLinked ? "Unlink" : "Link"} smart filter mask`}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        updateEntry(idx, { maskLinked: !maskLinked })
+                      }}
+                      className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm hover:bg-[var(--ps-tool-hover)]"
+                    >
+                      {maskLinked ? <Link2 className="w-3 h-3" /> : <Link2Off className="w-3 h-3 text-[var(--ps-text-dim)]" />}
+                    </button>
+                    <span className={`flex-1 truncate ${!visible ? "text-[var(--ps-text-dim)] line-through" : ""}`}>
                       {entry.filterName}
                     </span>
                     <div className="flex gap-0.5 shrink-0">
                       <button
+                        type="button"
+                        aria-label={`Move ${entry.filterName} smart filter up`}
+                        title="Move up"
                         onClick={(e) => { e.stopPropagation(); moveFilter(idx, "up") }}
-                        className="px-1 hover:bg-[var(--ps-tool-hover)] rounded-sm text-[9px]"
+                        className="flex h-5 w-5 items-center justify-center rounded-sm hover:bg-[var(--ps-tool-hover)] disabled:opacity-35"
                         disabled={idx === 0}
-                      >▲</button>
+                      >
+                        <ChevronUp className="w-3 h-3" />
+                      </button>
                       <button
+                        type="button"
+                        aria-label={`Move ${entry.filterName} smart filter down`}
+                        title="Move down"
                         onClick={(e) => { e.stopPropagation(); moveFilter(idx, "down") }}
-                        className="px-1 hover:bg-[var(--ps-tool-hover)] rounded-sm text-[9px]"
+                        className="flex h-5 w-5 items-center justify-center rounded-sm hover:bg-[var(--ps-tool-hover)] disabled:opacity-35"
                         disabled={idx === stack.length - 1}
-                      >▼</button>
+                      >
+                        <ChevronDown className="w-3 h-3" />
+                      </button>
                       <button
+                        type="button"
+                        aria-label={`Remove ${entry.filterName} smart filter`}
+                        title="Remove smart filter"
                         onClick={(e) => { e.stopPropagation(); removeFilter(idx) }}
-                        className="px-1 hover:bg-red-500/20 rounded-sm"
+                        className="flex h-5 w-5 items-center justify-center rounded-sm hover:bg-red-500/20"
                       >
                         <Trash2 className="w-3 h-3" />
                       </button>
                     </div>
                   </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
 

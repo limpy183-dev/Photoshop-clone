@@ -308,6 +308,7 @@ async function deserializeSmartFilter(filter: PsdSerializedSmartFilter): Promise
     maskEnabled: rest.maskEnabled,
     maskDensity: rest.maskDensity,
     maskFeather: rest.maskFeather,
+    maskLinked: rest.maskLinked,
   }
   if (maskDataUrl) restored.mask = await dataUrlToCanvas(maskDataUrl)
   return restored

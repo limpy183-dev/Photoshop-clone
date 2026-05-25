@@ -140,6 +140,16 @@ const GapWorkflowDialog = lazyDialog<{
   }> })),
   (p) => p.workflow != null,
 )
+const ColorModeDialog = lazyDialog<{
+  target: import("./color-mode-dialog").ColorModeDialogTarget | null
+  onOpenChange: (open: boolean) => void
+}>(
+  () => import("./color-mode-dialog").then((m) => ({ default: m.ColorModeDialog as unknown as React.ComponentType<{
+    target: import("./color-mode-dialog").ColorModeDialogTarget | null
+    onOpenChange: (open: boolean) => void
+  }> })),
+  (p) => p.target != null,
+)
 const PreferencesDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
   () => import("./preferences-dialog").then((m) => ({ default: m.PreferencesDialog })),
 )
@@ -177,6 +187,12 @@ const SelectionOperationDialog = lazyDialog<{
     onOpenChange: (open: boolean) => void
   }> })),
 )
+const SaveSelectionDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./management-dialogs").then((m) => ({ default: m.SaveSelectionDialog })),
+)
+const LoadSelectionDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./management-dialogs").then((m) => ({ default: m.LoadSelectionDialog })),
+)
 const WorkspaceManagerDialog = lazyDialog<{
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -192,6 +208,9 @@ const WorkspaceManagerDialog = lazyDialog<{
 )
 const ContactSheetDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
   () => import("./contact-sheet-dialog").then((m) => ({ default: m.ContactSheetDialog })),
+)
+const PhotomergeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./photomerge-dialog").then((m) => ({ default: m.PhotomergeDialog })),
 )
 const LargeDocumentRecoveryDialog = lazyDialog<{
   open: boolean
@@ -255,7 +274,7 @@ import {
   selectionToMaskCanvas,
 } from "./tool-helpers"
 import { MAX_PROJECT_FILE_BYTES, assertFileSize } from "./canvas-limits"
-import type { AdjustmentType, DocumentModeSettings, Layer, LayerStyle, PluginCommandDescriptor, PluginDescriptor, PluginPermission, TextAntiAliasMode } from "./types"
+import type { AdjustmentType, ColorManagementSettings, DocumentModeSettings, Layer, LayerStyle, PluginCommandDescriptor, PluginDescriptor, PluginPermission, TextAntiAliasMode } from "./types"
 import {
   applyTextInsideShape,
   convertTextToEditablePath,
@@ -265,10 +284,45 @@ import {
 } from "./typography-engine"
 import { requestCanvasZoom, requestPrintSizeView } from "./zoom-events"
 import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop } from "./adjustment-layers"
-import { createSmartObjectSource } from "./smart-objects"
+import { createSmartObjectSource, relinkSmartObjectToFile, syncLinkedSmartObjectSource } from "./smart-objects"
+import { PURGE_COMMANDS, formatPurgeStatus, type PurgeTarget } from "./purge-commands"
+import { supportedIccProfileNames } from "./color-pipeline"
+import {
+  revealSourceInBrowser,
+  sourceInfoForDocument,
+  sourceInfoForSmartObject,
+  type SourceFileHandleLike,
+} from "./source-location"
 
 const menuClass =
   "h-7 px-2 inline-flex items-center text-[12px] text-[var(--ps-text)] hover:bg-[var(--ps-tool-hover)] data-[state=open]:bg-[var(--ps-tool-active)] rounded-none outline-none cursor-default"
+
+const DEFAULT_COLOR_MANAGEMENT: ColorManagementSettings = {
+  assignedProfile: "sRGB IEC61966-2.1",
+  workingSpace: "sRGB IEC61966-2.1",
+  renderingIntent: "relative-colorimetric",
+  blackPointCompensation: true,
+  proofProfile: "None",
+  proofColors: false,
+  gamutWarning: false,
+  proofChannels: [],
+  proofPlateView: "composite",
+}
+
+const LINKED_SMART_OBJECT_POLL_MS = 30_000
+
+function smartLinkFingerprint(source: Layer["smartSource"]): string {
+  if (!source) return "none"
+  return [
+    source.status ?? "",
+    source.fileName ?? "",
+    source.fileHandleName ?? "",
+    source.handlePermission ?? "",
+    source.lastKnownModified ?? "",
+    source.lastKnownSize ?? "",
+    source.sourceHash ?? "",
+  ].join("|")
+}
 
 function permissionsForPluginCommand(command: PluginCommandDescriptor): PluginPermission[] {
   if (command.requiredPermissions?.length) return command.requiredPermissions
@@ -343,6 +397,7 @@ export function MenuBar({
     createDocument,
     copySelection,
     pasteAsLayer,
+    purgeCaches,
     clipboard: _clipboard,
     styleClipboard,
     closedDocuments,
@@ -382,21 +437,26 @@ export function MenuBar({
   const [newGuideOpen, setNewGuideOpen] = React.useState(false)
   const [guideLayoutOpen, setGuideLayoutOpen] = React.useState(false)
   const [contactSheetOpen, setContactSheetOpen] = React.useState(false)
+  const [photomergeOpen, setPhotomergeOpen] = React.useState(false)
   const [fileInfoOpen, setFileInfoOpen] = React.useState(false)
   const [advancedOpen, setAdvancedOpen] = React.useState(false)
   const [advancedTab, setAdvancedTab] = React.useState<AdvancedSubsystemTab>("3d")
   const [algorithmOpen, setAlgorithmOpen] = React.useState(false)
   const [gapWorkflow, setGapWorkflow] = React.useState<GapWorkflowKind | null>(null)
+  const [colorModeTarget, setColorModeTarget] = React.useState<import("./color-mode-dialog").ColorModeDialogTarget | null>(null)
   const [preferencesOpen, setPreferencesOpen] = React.useState(false)
   const [shortcutsOpen, setShortcutsOpen] = React.useState(false)
   const [aboutOpen, setAboutOpen] = React.useState(false)
   const [recentManagerOpen, setRecentManagerOpen] = React.useState(false)
   const [workspaceManagerOpen, setWorkspaceManagerOpen] = React.useState(false)
   const [selectionOperation, setSelectionOperation] = React.useState<SelectionOperation | null>(null)
+  const [saveSelectionOpen, setSaveSelectionOpen] = React.useState(false)
+  const [loadSelectionOpen, setLoadSelectionOpen] = React.useState(false)
   const [savedWorkspaces, setSavedWorkspaces] = React.useState<{ name: string; savedAt?: number }[]>([])
   const [recentDocuments, setRecentDocuments] = React.useState<RecentDocument[]>([])
   const [largeDocumentRecovery, setLargeDocumentRecovery] = React.useState<{
     file: File
+    picked?: { handle?: ReadableFileHandle; permission?: PermissionState | "unsupported" }
     plan: LargeDocumentOpenPlan
     source: "open" | "place"
     reason: string
@@ -524,10 +584,19 @@ export function MenuBar({
     const pluginsHandler = () => advancedHandler("plugins")
     const librariesHandler = () => advancedHandler("libraries")
     const colorWorkflowHandler = () => advancedHandler("color")
+    const colorModeHandler = (event: Event) => {
+      const detail = (event as CustomEvent<import("./color-mode-dialog").ColorModeDialogTarget>).detail
+      if (detail) setColorModeTarget(detail)
+    }
     const formatsHandler = () => advancedHandler("formats")
     const variablesHandler = () => advancedHandler("variables")
+    const photomergeHandler = () => setPhotomergeOpen(true)
     const gapWorkflowHandler = (event: Event) => {
       const detail = (event as CustomEvent<GapWorkflowKind>).detail
+      if (detail === "photomerge") {
+        setPhotomergeOpen(true)
+        return
+      }
       if (detail) setGapWorkflow(detail)
     }
     const selectionOperationHandler = (event: Event) => {
@@ -559,8 +628,10 @@ export function MenuBar({
     window.addEventListener("ps-open-plugin-manager", pluginsHandler)
     window.addEventListener("ps-open-cloud-libraries", librariesHandler)
     window.addEventListener("ps-open-color-management-workflow", colorWorkflowHandler)
+    window.addEventListener("ps-open-color-mode", colorModeHandler as EventListener)
     window.addEventListener("ps-open-format-metadata", formatsHandler)
     window.addEventListener("ps-open-variables", variablesHandler)
+    window.addEventListener("ps-open-photomerge", photomergeHandler)
     window.addEventListener("ps-open-gap-workflow", gapWorkflowHandler as EventListener)
     window.addEventListener("ps-open-selection-operation", selectionOperationHandler as EventListener)
     return () => {
@@ -589,8 +660,10 @@ export function MenuBar({
       window.removeEventListener("ps-open-plugin-manager", pluginsHandler)
       window.removeEventListener("ps-open-cloud-libraries", librariesHandler)
       window.removeEventListener("ps-open-color-management-workflow", colorWorkflowHandler)
+      window.removeEventListener("ps-open-color-mode", colorModeHandler as EventListener)
       window.removeEventListener("ps-open-format-metadata", formatsHandler)
       window.removeEventListener("ps-open-variables", variablesHandler)
+      window.removeEventListener("ps-open-photomerge", photomergeHandler)
       window.removeEventListener("ps-open-gap-workflow", gapWorkflowHandler as EventListener)
       window.removeEventListener("ps-open-selection-operation", selectionOperationHandler as EventListener)
     }
@@ -614,9 +687,33 @@ export function MenuBar({
   // still the old value.
   const undo = () => stepHistoryBy(-1)
   const redo = () => stepHistoryBy(1)
+  const runPurge = (target: PurgeTarget) => {
+    const result = purgeCaches(target)
+    toast.info(formatPurgeStatus(target, result.freedBytes))
+  }
   const openAdvancedTab = (tab: AdvancedSubsystemTab) => {
     setAdvancedTab(tab)
     setAdvancedOpen(true)
+  }
+  const colorSettings: ColorManagementSettings = {
+    ...DEFAULT_COLOR_MANAGEMENT,
+    ...(activeDoc?.colorManagement ?? {}),
+  }
+  const updateColorManagement = (patch: Partial<ColorManagementSettings>, label: string) => {
+    if (!activeDoc) return
+    dispatch({ type: "set-color-management", settings: { ...colorSettings, ...patch } })
+    requestRender()
+    window.setTimeout(() => commit(label, "all"), 0)
+  }
+  const openColorWorkflow = (_mode: "assign" | "convert" | "proof" = "assign") => {
+    openAdvancedTab("color")
+  }
+  const toggleProofChannel = (channel: NonNullable<ColorManagementSettings["proofChannels"]>[number]) => {
+    const channels = colorSettings.proofChannels ?? []
+    const next = channels.includes(channel)
+      ? channels.filter((item) => item !== channel)
+      : [...channels, channel]
+    updateColorManagement({ proofChannels: next }, `Proof Channels: ${next.length ? next.join(", ") : "Composite"}`)
   }
 
   const closeOtherDocumentsFromMenu = () => {
@@ -680,6 +777,61 @@ export function MenuBar({
     }
     for (const id of ids) dispatch({ type: "set-layer-style", id, style: undefined })
     setTimeout(() => commit("Clear Layer Style", ids), 0)
+  }
+
+  const flattenAllLayerEffects = () => {
+    if (!activeDoc) {
+      toast.info("Open a document before flattening layer effects.")
+      return
+    }
+    dispatch({ type: "flatten-all-layer-effects" })
+    requestRender()
+    setTimeout(() => commit("Flatten All Layer Effects", "all"), 0)
+  }
+
+  const flattenAllMasks = () => {
+    if (!activeDoc) {
+      toast.info("Open a document before flattening masks.")
+      return
+    }
+    dispatch({ type: "flatten-all-masks" })
+    requestRender()
+    setTimeout(() => commit("Flatten All Masks", "all"), 0)
+  }
+
+  const deleteAllEmptyLayers = () => {
+    if (!activeDoc) {
+      toast.info("Open a document before deleting empty layers.")
+      return
+    }
+    dispatch({ type: "delete-empty-layers" })
+    requestRender()
+    setTimeout(() => commit("Delete All Empty Layers", "all"), 0)
+  }
+
+  const rasterizeLayers = (option: "layer" | "type" | "shape" | "smart-object" | "layer-style" | "all") => {
+    if (!activeDoc) {
+      toast.info("Open a document before rasterizing layers.")
+      return
+    }
+    if (option !== "all" && !selectedLayers.length) {
+      toast.info("Select at least one layer before rasterizing.")
+      return
+    }
+    dispatch({ type: "rasterize-layers", option, ids: option === "all" ? undefined : selectedLayers.map((layer) => layer.id) })
+    requestRender()
+    const label = option === "all"
+      ? "Rasterize All Layers"
+      : option === "type"
+        ? "Rasterize Type"
+        : option === "shape"
+          ? "Rasterize Shape"
+          : option === "smart-object"
+            ? "Rasterize Smart Object"
+            : option === "layer-style"
+              ? "Rasterize Layer Style"
+              : "Rasterize Layer"
+    setTimeout(() => commit(label, option === "all" ? "all" : selectedLayers.map((layer) => layer.id)), 0)
   }
 
   const toggleLayerMaskEnabled = () => {
@@ -762,6 +914,32 @@ export function MenuBar({
     }
   }
 
+  const pickLocalFile = async (
+    accept: string,
+    types: Array<{ description: string; accept: Record<string, string[]> }>,
+  ): Promise<{ file: File; handle?: ReadableFileHandle; permission: PermissionState | "unsupported" }> => {
+    const picker = (window as OpenPickerWindow).showOpenFilePicker
+    if (picker) {
+      const [handle] = await picker({ multiple: false, types })
+      if (!handle) throw new Error("No file selected")
+      const permission = await requestReadPermission(handle)
+      return { file: await handle.getFile(), handle, permission }
+    }
+
+    return new Promise((resolve, reject) => {
+      const input = document.createElement("input")
+      input.type = "file"
+      input.accept = accept
+      input.onchange = () => {
+        const file = input.files?.[0]
+        if (file) resolve({ file, permission: "unsupported" })
+        else reject(new Error("No file selected"))
+      }
+      input.addEventListener("cancel", () => reject(new Error("No file selected")), { once: true })
+      input.click()
+    })
+  }
+
   const fileHash = async (file: File) => {
     if (!crypto?.subtle) return undefined
     try {
@@ -776,10 +954,66 @@ export function MenuBar({
     return (await loadRasterCanvasFromFile(file, { mode: "reduced-scale" })).canvas
   }
 
+  const linkedSmartObjectPollRef = React.useRef({ documents, dispatch, requestRender })
+  linkedSmartObjectPollRef.current = { documents, dispatch, requestRender }
+  const linkedSmartObjectNoticesRef = React.useRef(new Map<string, string>())
+
+  React.useEffect(() => {
+    let cancelled = false
+
+    const pollLinkedSmartObjects = async () => {
+      const current = linkedSmartObjectPollRef.current
+      for (const doc of current.documents) {
+        for (const layer of doc.layers) {
+          const source = layer.smartSource
+          if ((!layer.smartObject && layer.kind !== "smart-object") || source?.linkType !== "linked") continue
+          if (!source.fileHandle && !source.fileHandleName) continue
+          const before = smartLinkFingerprint(source)
+          const result = await syncLinkedSmartObjectSource(layer, { requestPermission: false })
+          if (cancelled) return
+          const nextSource = result.layer.smartSource
+          const after = smartLinkFingerprint(nextSource)
+          if (before === after) continue
+          current.dispatch({
+            type: "apply-linked-smart-object-sync",
+            docId: doc.id,
+            id: layer.id,
+            source: nextSource ?? { status: result.status },
+          })
+          current.requestRender({ layerIds: [layer.id], reason: "linked-smart-object-poll" })
+
+          const noticeKey = `${doc.id}:${layer.id}`
+          const noticeFingerprint = `${after}:${result.status}`
+          if (linkedSmartObjectNoticesRef.current.get(noticeKey) === noticeFingerprint) continue
+          linkedSmartObjectNoticesRef.current.set(noticeKey, noticeFingerprint)
+          if (result.status === "modified") {
+            toast.info(`${layer.name} changed on disk. Use Update Linked Smart Object to refresh it.`)
+          } else if (result.status === "missing") {
+            const permission = nextSource?.handlePermission
+            toast.warning(
+              permission === "prompt" || permission === "denied"
+                ? `${layer.name} needs file permission. Use Relink to File to reconnect it.`
+                : `${layer.name} linked file is unavailable. Use Relink to File to reconnect it.`,
+            )
+          }
+        }
+      }
+    }
+
+    const startup = window.setTimeout(() => { void pollLinkedSmartObjects() }, 1_500)
+    const timer = window.setInterval(() => { void pollLinkedSmartObjects() }, LINKED_SMART_OBJECT_POLL_MS)
+    return () => {
+      cancelled = true
+      window.clearTimeout(startup)
+      window.clearInterval(timer)
+    }
+  }, [])
+
   const buildLargeDocumentRecovery = async (
     file: File,
     source: "open" | "place",
     error: unknown,
+    picked?: { handle?: ReadableFileHandle; permission?: PermissionState | "unsupported" },
   ) => {
     const dimensions = await inspectImportFileDimensions(file).catch(() => null)
     if (!dimensions) return false
@@ -796,14 +1030,38 @@ export function MenuBar({
       tileable: dimensions.kind === "psb",
       parsedStructure: parsedPsd?.parsedStructure,
     })
-    setLargeDocumentRecovery({ file, plan, source, reason })
+    setLargeDocumentRecovery({ file, picked, plan, source, reason })
     toast.info(describeLargeDocumentRecovery(plan))
     return true
   }
 
-  const openRasterCanvasAsDocument = React.useCallback((file: File, raster: Awaited<ReturnType<typeof loadRasterCanvasFromFile>>) => {
+  const lifecycleForPickedFile = React.useCallback((
+    file: File,
+    picked: { handle?: ReadableFileHandle } | undefined,
+    fileKind: DocumentLifecycleState["fileKind"],
+  ): Partial<DocumentLifecycleState> => ({
+    storage: picked?.handle ? "file-system-access" : "opened-file",
+    fileKind,
+    fileName: picked?.handle?.name ?? file.name,
+    fileHandle: picked?.handle,
+    lastSaveNote: picked?.handle
+      ? "Opened from a reusable browser file handle. Reveal Source can browse from this handle while permission remains available."
+      : "Opened from a browser file input. The browser did not provide a reusable local file handle.",
+  }), [])
+
+  const openRasterCanvasAsDocument = React.useCallback((
+    file: File,
+    raster: Awaited<ReturnType<typeof loadRasterCanvasFromFile>>,
+    picked?: { handle?: ReadableFileHandle },
+  ) => {
     const doc = makeDocument(file.name, raster.canvas.width, raster.canvas.height)
     doc.layers[0].canvas.getContext("2d")!.drawImage(raster.canvas, 0, 0)
+    doc.metadata = {
+      ...(doc.metadata ?? {}),
+      title: file.name,
+      source: file.name,
+      createdAt: new Date().toISOString(),
+    }
     if (raster.mode === "reduced-scale") {
       doc.name = file.name.replace(/\.[^.]+$/, " (Reduced)")
       doc.metadata = {
@@ -811,14 +1069,18 @@ export function MenuBar({
         title: file.name,
         source: file.name,
         description: `Opened at ${(raster.scale * 100).toFixed(1)}% scale from ${raster.originalWidth} x ${raster.originalHeight}px.`,
-        createdAt: new Date().toISOString(),
       }
     }
-    createDocument(doc, raster.mode === "reduced-scale" ? "Open Reduced Image" : "Open")
+    createDocument(doc, raster.mode === "reduced-scale" ? "Open Reduced Image" : "Open", lifecycleForPickedFile(file, picked, "image"))
     rememberDoc(doc, "image")
-  }, [createDocument, rememberDoc])
+  }, [createDocument, lifecycleForPickedFile, rememberDoc])
 
-  const placeRasterCanvas = React.useCallback(async (file: File, sourceCanvas: HTMLCanvasElement, label = "Place Embedded") => {
+  const placeRasterCanvas = React.useCallback(async (
+    file: File,
+    sourceCanvas: HTMLCanvasElement,
+    label = "Place Embedded",
+    picked?: { handle?: ReadableFileHandle; permission?: PermissionState | "unsupported" },
+  ) => {
     if (!activeDoc) return
     const canvas = makeCanvas(activeDoc.width, activeDoc.height)
     const ctx = canvas.getContext("2d")!
@@ -846,7 +1108,11 @@ export function MenuBar({
         linkType: "embedded",
         status: "embedded",
         embedded: true,
+        fileHandle: picked?.handle,
+        fileHandleName: picked?.handle?.name,
+        handlePermission: picked?.permission,
         lastKnownModified: file.lastModified,
+        lastKnownSize: file.size,
         sourceHash: await fileHash(file),
       }),
     }
@@ -855,27 +1121,9 @@ export function MenuBar({
   }, [activeDoc, commit, dispatch])
 
   const pickSmartObjectImage = async (): Promise<{ file: File; handle?: ReadableFileHandle; permission: PermissionState | "unsupported" }> => {
-    const picker = (window as OpenPickerWindow).showOpenFilePicker
-    if (picker) {
-      const [handle] = await picker({
-        multiple: false,
-        types: [{ description: "Images", accept: { "image/*": [".png", ".jpg", ".jpeg", ".webp", ".avif", ".gif"] } }],
-      })
-      const permission = await requestReadPermission(handle)
-      return { file: await handle.getFile(), handle, permission }
-    }
-    return new Promise((resolve, reject) => {
-      const input = document.createElement("input")
-      input.type = "file"
-      input.accept = "image/*"
-      input.onchange = () => {
-        const file = input.files?.[0]
-        if (file) resolve({ file, permission: "unsupported" })
-        else reject(new Error("No file selected"))
-      }
-      input.addEventListener("cancel", () => reject(new Error("No file selected")), { once: true })
-      input.click()
-    })
+    return pickLocalFile("image/*", [
+      { description: "Images", accept: { "image/*": [".png", ".jpg", ".jpeg", ".webp", ".avif", ".gif"] } },
+    ])
   }
 
   const replaceSmartObjectFromFile = async (linkType: "embedded" | "linked") => {
@@ -886,6 +1134,36 @@ export function MenuBar({
     }
     try {
       const picked = await pickSmartObjectImage()
+      if (linkType === "linked" && picked.handle) {
+        const relinked = await relinkSmartObjectToFile(layer, picked.handle, {
+          hashContents: true,
+          readCanvas: canvasFromImageFile,
+          relativePath: picked.file.name,
+        })
+        if (relinked.status !== "current" || !relinked.layer.smartSource?.canvas) {
+          dispatch({
+            type: "set-layer-smart-link",
+            id: layer.id,
+            source: relinked.layer.smartSource ?? {
+              fileName: picked.file.name,
+              fileHandleName: picked.handle.name ?? picked.file.name,
+              handlePermission: relinked.permission,
+              status: "missing",
+            },
+          })
+          toast.warning("Smart object link needs file permission before contents can be read.")
+          return
+        }
+        dispatch({
+          type: "replace-smart-object-contents",
+          id: layer.id,
+          canvas: relinked.layer.smartSource.canvas,
+          source: relinked.layer.smartSource,
+        })
+        requestRender()
+        window.setTimeout(() => commit("Relink Smart Object", [layer.id]), 0)
+        return
+      }
       const sourceCanvas = await canvasFromImageFile(picked.file)
       dispatch({
         type: "replace-smart-object-contents",
@@ -898,10 +1176,11 @@ export function MenuBar({
           linkType,
           embedded: linkType === "embedded",
           status: linkType === "embedded" ? "embedded" : "current",
-          fileHandle: linkType === "linked" ? picked.handle : undefined,
-          fileHandleName: linkType === "linked" ? picked.handle?.name ?? picked.file.name : undefined,
-          handlePermission: linkType === "linked" ? picked.permission : undefined,
+          fileHandle: picked.handle,
+          fileHandleName: picked.handle?.name ?? picked.file.name,
+          handlePermission: picked.permission,
           lastKnownModified: picked.file.lastModified,
+          lastKnownSize: picked.file.size,
           sourceHash: await fileHash(picked.file),
           relinkedAt: linkType === "linked" ? Date.now() : layer.smartSource?.relinkedAt,
           updatedAt: Date.now(),
@@ -927,27 +1206,38 @@ export function MenuBar({
       return
     }
     try {
-      const permission = await requestReadPermission(handle)
-      const file = await handle.getFile()
-      const sourceCanvas = await canvasFromImageFile(file)
+      const result = await syncLinkedSmartObjectSource(layer, {
+        hashContents: true,
+        readCanvas: canvasFromImageFile,
+        requestPermission: true,
+      })
+      if (result.status !== "current" || !result.layer.smartSource?.canvas) {
+        dispatch({
+          type: "set-layer-smart-link",
+          id: layer.id,
+          source: result.layer.smartSource ?? {
+            fileHandleName: layer.smartSource?.fileHandleName,
+            handlePermission: layer.smartSource?.handlePermission,
+            status: "missing",
+          },
+        })
+        toast.warning("Smart object link needs file permission before it can update.")
+        return
+      }
+      if (!result.changed) {
+        dispatch({
+          type: "set-layer-smart-link",
+          id: layer.id,
+          source: result.layer.smartSource,
+        })
+        toast.info("Linked smart object is already current.")
+        return
+      }
       dispatch({
         type: "replace-smart-object-contents",
         id: layer.id,
-        canvas: sourceCanvas,
-        source: {
-          ...(layer.smartSource ?? {}),
-          fileName: file.name,
-          relativePath: layer.smartSource?.relativePath ?? file.name,
-          linkType: "linked",
-          embedded: false,
-          status: "current",
-          fileHandle: handle,
-          fileHandleName: handle.name ?? file.name,
-          handlePermission: permission,
-          lastKnownModified: file.lastModified,
-          sourceHash: await fileHash(file),
-          updatedAt: Date.now(),
-        },
+        canvas: result.layer.smartSource.canvas,
+        source: result.layer.smartSource,
       })
       requestRender()
       window.setTimeout(() => commit("Update Linked Smart Object", [layer.id]), 0)
@@ -1000,6 +1290,19 @@ export function MenuBar({
       ctx.fillRect(0, 0, activeDoc.width, activeDoc.height)
     }
     commit(`Fill ${with_}`, [activeLayer.id])
+  }
+
+  const flattenTransparency = (alphaMode: "clear" | "preserve", matte: string, label: string) => {
+    if (!activeDoc) return
+    const targetIds = selectedLayers.length
+      ? selectedLayers.map((layer) => layer.id)
+      : activeLayer
+        ? [activeLayer.id]
+        : []
+    if (!targetIds.length) return
+    dispatch({ type: "flatten-transparency", matte, alphaMode, layerIds: targetIds })
+    setTimeout(() => commit(`Flatten Transparency - ${label}`, targetIds), 0)
+    requestRender()
   }
 
   const fillContentAware = () => {
@@ -1393,6 +1696,52 @@ export function MenuBar({
 
   const safeDocName = () => safeNameFor(activeDoc?.name ?? "Untitled")
 
+  const revealSourceHandle = React.useCallback(async (handle: SourceFileHandleLike | undefined, unavailableReason?: string) => {
+    if (!handle) {
+      toast.info(unavailableReason ?? "No browser file handle is attached to this source.")
+      setFileInfoOpen(true)
+      return
+    }
+
+    const result = await revealSourceInBrowser(handle)
+    if (result.status === "cancelled") return
+    if (result.status === "folder-picker-verified" || result.status === "folder-picker-opened") {
+      toast.success(result.message)
+      return
+    }
+    if (result.status === "file-accessible") {
+      toast.info(result.message)
+      return
+    }
+    toast.error(result.message)
+  }, [])
+
+  const revealDocumentSourceFromMenu = React.useCallback(async () => {
+    if (!activeDoc) {
+      toast.info("Open a document before revealing its source.")
+      return
+    }
+    const info = sourceInfoForDocument(activeDoc, documentStatuses[activeDoc.id])
+    await revealSourceHandle(info.fileHandle, info.unavailableReason)
+  }, [activeDoc, documentStatuses, revealSourceHandle])
+
+  const revealSmartObjectSourceFromMenu = React.useCallback(async () => {
+    if (!activeLayer || (!activeLayer.smartObject && activeLayer.kind !== "smart-object")) {
+      toast.info("Select a smart object layer before revealing its source.")
+      return
+    }
+    const info = sourceInfoForSmartObject(activeLayer)
+    await revealSourceHandle(info.fileHandle, info.unavailableReason)
+  }, [activeLayer, revealSourceHandle])
+
+  React.useEffect(() => {
+    const handler = () => {
+      void revealDocumentSourceFromMenu()
+    }
+    window.addEventListener("ps-reveal-source", handler)
+    return () => window.removeEventListener("ps-reveal-source", handler)
+  }, [revealDocumentSourceFromMenu])
+
   const writeProjectHandle = async (handle: FileSystemFileHandleLike, text: string) => {
     const writable = await handle.createWritable()
     await writable.write(new Blob([text], { type: "application/json" }))
@@ -1489,30 +1838,45 @@ export function MenuBar({
   }, [saveProjectDocument])
 
   const openImageOrPsd = () => {
-    const input = document.createElement("input")
-    input.type = "file"
-    input.accept = "image/*,.psd,.psb,image/vnd.adobe.photoshop,application/octet-stream"
-    input.onchange = async () => {
-      const file = input.files?.[0]
-      if (!file) return
+    void (async () => {
+      let picked: { file: File; handle?: ReadableFileHandle; permission: PermissionState | "unsupported" }
+      try {
+        picked = await pickLocalFile("image/*,.psd,.psb,image/vnd.adobe.photoshop,application/octet-stream", [
+          {
+            description: "Images and Photoshop Documents",
+            accept: {
+              "image/*": [".png", ".jpg", ".jpeg", ".webp", ".avif", ".gif"],
+              "image/vnd.adobe.photoshop": [".psd", ".psb"],
+              "application/octet-stream": [".psd", ".psb"],
+            },
+          },
+        ])
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return
+        if (err instanceof Error && err.message === "No file selected") return
+        toast.error(err instanceof Error ? err.message : "Could not open file")
+        return
+      }
+
+      const file = picked.file
       try {
         const photoshopFamily = /\.(?:psd|psb)$/i.test(file.name) || file.type === "image/vnd.adobe.photoshop"
         if (photoshopFamily) {
           const doc = await deserializePsdFile(file)
           const kind = /\.psb$/i.test(file.name) ? "PSB" : "PSD"
-          createDocument(doc, `Open ${kind}`)
+          doc.metadata = { ...(doc.metadata ?? {}), title: doc.metadata?.title ?? file.name, source: file.name }
+          createDocument(doc, `Open ${kind}`, lifecycleForPickedFile(file, picked, "psd"))
           dispatch({ type: "add-document-report", report: createDocumentReport(doc, "PSD Import") })
           rememberDoc(doc, "psd")
           return
         }
         const raster = await loadRasterCanvasFromFile(file)
-        openRasterCanvasAsDocument(file, raster)
+        openRasterCanvasAsDocument(file, raster, picked)
       } catch (err) {
-        if (await buildLargeDocumentRecovery(file, "open", err)) return
+        if (await buildLargeDocumentRecovery(file, "open", err, picked)) return
         toast.error(err instanceof Error ? err.message : "Could not open file")
       }
-    }
-    input.click()
+    })()
   }
 
   const saveProject = () => {
@@ -1550,42 +1914,61 @@ export function MenuBar({
   }
 
   const openProject = () => {
-    const input = document.createElement("input")
-    input.type = "file"
-    input.accept = ".psprojson,application/json"
-    input.onchange = async () => {
-      const file = input.files?.[0]
-      if (!file) return
+    void (async () => {
+      let picked: { file: File; handle?: ReadableFileHandle; permission: PermissionState | "unsupported" }
+      try {
+        picked = await pickLocalFile(".psprojson,application/json", [
+          {
+            description: "Photoshop Web Project",
+            accept: { "application/json": [".psprojson", ".json"] },
+          },
+        ])
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return
+        if (err instanceof Error && err.message === "No file selected") return
+        toast.error(err instanceof Error ? err.message : "Could not open project")
+        return
+      }
+
+      const file = picked.file
       try {
         assertFileSize(file, MAX_PROJECT_FILE_BYTES, "Project file")
         const doc = await deserializeProject(await file.text())
-        createDocument(doc, "Open Project")
+        doc.metadata = { ...(doc.metadata ?? {}), title: doc.metadata?.title ?? doc.name, source: file.name }
+        createDocument(doc, "Open Project", lifecycleForPickedFile(file, picked, "project"))
         dispatch({ type: "add-document-report", report: createDocumentReport(doc, "Project Import") })
         rememberDoc(doc, "project")
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Could not open project")
       }
-    }
-    input.click()
+    })()
   }
 
   const placeEmbedded = () => {
     if (!activeDoc) return
-    const input = document.createElement("input")
-    input.type = "file"
-    input.accept = "image/*"
-    input.onchange = async () => {
-      const file = input.files?.[0]
-      if (!file || !activeDoc) return
+    void (async () => {
+      let picked: { file: File; handle?: ReadableFileHandle; permission: PermissionState | "unsupported" }
+      try {
+        picked = await pickLocalFile("image/*", [
+          { description: "Images", accept: { "image/*": [".png", ".jpg", ".jpeg", ".webp", ".avif", ".gif"] } },
+        ])
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return
+        if (err instanceof Error && err.message === "No file selected") return
+        toast.error(err instanceof Error ? err.message : "Could not place image")
+        return
+      }
+
+      const file = picked.file
+      if (!activeDoc) return
       try {
         const raster = await loadRasterCanvasFromFile(file)
-        await placeRasterCanvas(file, raster.canvas)
+        await placeRasterCanvas(file, raster.canvas, "Place Embedded", picked)
       } catch (err) {
-        if (await buildLargeDocumentRecovery(file, "place", err)) return
+        if (await buildLargeDocumentRecovery(file, "place", err, picked)) return
         toast.error(err instanceof Error ? err.message : "Could not place image")
       }
-    }
-    input.click()
+    })()
   }
 
   const closeLargeDocumentRecovery = () => {
@@ -1600,15 +1983,16 @@ export function MenuBar({
     try {
       if (recovery.source === "place") {
         const raster = await loadRasterCanvasFromFile(recovery.file, { mode: "reduced-scale" })
-        await placeRasterCanvas(recovery.file, raster.canvas, "Place Reduced Embedded")
+        await placeRasterCanvas(recovery.file, raster.canvas, "Place Reduced Embedded", recovery.picked)
       } else if (recovery.plan.kind === "psd" || recovery.plan.kind === "psb") {
         const doc = await deserializePsdFile(recovery.file, { psbLargeDocumentMode: "reduced-scale" })
-        createDocument(doc, "Open Reduced Photoshop Document")
+        doc.metadata = { ...(doc.metadata ?? {}), title: doc.metadata?.title ?? recovery.file.name, source: recovery.file.name }
+        createDocument(doc, "Open Reduced Photoshop Document", lifecycleForPickedFile(recovery.file, recovery.picked, "psd"))
         dispatch({ type: "add-document-report", report: createDocumentReport(doc, "PSD Import") })
         rememberDoc(doc, "psd")
       } else {
         const raster = await loadRasterCanvasFromFile(recovery.file, { mode: "reduced-scale" })
-        openRasterCanvasAsDocument(recovery.file, raster)
+        openRasterCanvasAsDocument(recovery.file, raster, recovery.picked)
       }
       setLargeDocumentRecovery(null)
     } catch (err) {
@@ -1628,7 +2012,8 @@ export function MenuBar({
     setLargeDocumentRecoveryBusy(true)
     try {
       const doc = await deserializePsdFile(recovery.file, { psbLargeDocumentMode: "tile-view" })
-      createDocument(doc, "Open Tile-Only PSB")
+      doc.metadata = { ...(doc.metadata ?? {}), title: doc.metadata?.title ?? recovery.file.name, source: recovery.file.name }
+      createDocument(doc, "Open Tile-Only PSB", lifecycleForPickedFile(recovery.file, recovery.picked, "psd"))
       dispatch({ type: "add-document-report", report: createDocumentReport(doc, "PSD Import") })
       rememberDoc(doc, "psd")
       setLargeDocumentRecovery(null)
@@ -1651,7 +2036,8 @@ export function MenuBar({
       warnings: recovery.plan.warnings,
       parsedStructure: recovery.plan.parsedStructure,
     })
-    createDocument(doc, "Inspect Large Document")
+    doc.metadata = { ...(doc.metadata ?? {}), title: doc.metadata?.title ?? recovery.file.name, source: recovery.file.name }
+    createDocument(doc, "Inspect Large Document", lifecycleForPickedFile(recovery.file, recovery.picked, recovery.plan.kind === "raster" ? "image" : "psd"))
     dispatch({ type: "add-document-report", report: createDocumentReport(doc, recovery.plan.kind === "psd" || recovery.plan.kind === "psb" ? "PSD Import" : "Project Import") })
     setLargeDocumentRecovery(null)
   }
@@ -1805,7 +2191,7 @@ export function MenuBar({
                 <DropdownMenuItem onSelect={() => openAdvancedTab("automation")} disabled={!activeDoc}>Conditional Actions...</DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => setGapWorkflow("load-stack")}>Load Files into Stack...</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setGapWorkflow("photomerge")}>Photomerge...</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setPhotomergeOpen(true)}>Photomerge...</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => setGapWorkflow("hdr-merge")}>Merge to HDR Pro...</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => setGapWorkflow("focus-stack")}>Focus Stack...</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => setGapWorkflow("stack-statistics")}>Statistics...</DropdownMenuItem>
@@ -1873,6 +2259,9 @@ export function MenuBar({
             </DropdownMenuSub>
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => setFileInfoOpen(true)}>File Info…</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => void revealDocumentSourceFromMenu()} disabled={!activeDoc}>
+              Reveal Source in Folder...
+            </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => openAdvancedTab("formats")}>
               Advanced Import / Metadata...
             </DropdownMenuItem>
@@ -2009,6 +2398,16 @@ export function MenuBar({
                 </DropdownMenuItem>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>Purge</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {PURGE_COMMANDS.map((command) => (
+                  <DropdownMenuItem key={command.target} onSelect={() => runPurge(command.target)}>
+                    {command.menuLabel}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
             <DropdownMenuItem onSelect={() => setPreferencesOpen(true)}>
               Preferences
             </DropdownMenuItem>
@@ -2032,22 +2431,31 @@ export function MenuBar({
                 <DropdownMenuItem onSelect={() => setColorMode("CMYK")}>
                   {activeDoc?.colorMode === "CMYK" ? "✓ " : ""}CMYK Color
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setColorMode("Duotone")}>
+                <DropdownMenuItem onSelect={() => setColorModeTarget("Duotone")}>
                   {activeDoc?.colorMode === "Duotone" ? "âœ“ " : ""}Duotone...
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setColorMode("Indexed")}>
+                <DropdownMenuItem onSelect={() => setColorModeTarget("Indexed")}>
                   {activeDoc?.colorMode === "Indexed" ? "âœ“ " : ""}Indexed Color...
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => setColorMode("Multichannel")}>
                   {activeDoc?.colorMode === "Multichannel" ? "âœ“ " : ""}Multichannel...
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setColorMode("Bitmap")}>
+                <DropdownMenuItem onSelect={() => setColorModeTarget("Bitmap")}>
                   {activeDoc?.colorMode === "Bitmap" ? "âœ“ " : ""}Bitmap / Halftone...
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setColorModeTarget("ColorTable")}>
+                  Color Table...
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem disabled>{activeDoc?.bitDepth ?? 8} Bits/Channel</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openAdvancedTab("color")} disabled={!activeDoc}>
-                  Assign / Convert Profile...
+                <DropdownMenuItem onSelect={() => openColorWorkflow("assign")} disabled={!activeDoc}>
+                  Assign Profile...
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openColorWorkflow("convert")} disabled={!activeDoc}>
+                  Convert to Profile...
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openColorWorkflow("proof")} disabled={!activeDoc}>
+                  Color Settings / Proof Setup...
                 </DropdownMenuItem>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
@@ -2056,6 +2464,12 @@ export function MenuBar({
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => setGapWorkflow("calculations")} disabled={!activeDoc}>
               Calculations...
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setGapWorkflow("split-channels")} disabled={!activeDoc}>
+              Split Channels...
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setGapWorkflow("merge-channels")} disabled={!documents.length}>
+              Merge Channels...
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => setAlgorithmOpen(true)} disabled={!activeDoc}>
               Algorithmic Operations...
@@ -2261,6 +2675,10 @@ export function MenuBar({
                 <DropdownMenuItem onSelect={clearLayerStyle}>
                   Clear Layer Style
                 </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={flattenAllLayerEffects} disabled={!activeDoc}>
+                  Flatten All Layer Effects
+                </DropdownMenuItem>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
             <DropdownMenuSub>
@@ -2320,6 +2738,34 @@ export function MenuBar({
                 >
                   Delete Mask
                 </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={flattenAllMasks} disabled={!activeDoc}>
+                  Flatten All Masks
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>Rasterize</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <DropdownMenuItem onSelect={() => rasterizeLayers("type")} disabled={!activeLayer || activeLayer.kind !== "text"}>
+                  Type
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => rasterizeLayers("shape")} disabled={!activeLayer || (activeLayer.kind !== "shape" && !activeLayer.path)}>
+                  Shape
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => rasterizeLayers("smart-object")} disabled={!activeLayer || (!activeLayer.smartObject && activeLayer.kind !== "smart-object")}>
+                  Smart Object
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => rasterizeLayers("layer-style")} disabled={!activeLayer?.style}>
+                  Layer Style
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => rasterizeLayers("layer")} disabled={!activeLayer}>
+                  Layer
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => rasterizeLayers("all")} disabled={!activeDoc}>
+                  All Layers
+                </DropdownMenuItem>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
             <DropdownMenuItem
@@ -2356,6 +2802,12 @@ export function MenuBar({
               Update Linked Smart Object
             </DropdownMenuItem>
             <DropdownMenuItem
+              onSelect={() => void revealSmartObjectSourceFromMenu()}
+              disabled={!activeLayer || (!activeLayer.smartObject && activeLayer.kind !== "smart-object")}
+            >
+              Reveal Smart Object Source...
+            </DropdownMenuItem>
+            <DropdownMenuItem
               onSelect={() => void exportSmartObjectContentsFromMenu()}
               disabled={!activeLayer || (!activeLayer.smartObject && activeLayer.kind !== "smart-object")}
             >
@@ -2389,6 +2841,9 @@ export function MenuBar({
             >
               Delete Layer
             </DropdownMenuItem>
+            <DropdownMenuItem onSelect={deleteAllEmptyLayers} disabled={!activeDoc}>
+              Delete All Empty Layers
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onSelect={() => dispatch({ type: "link-selected" })}
@@ -2412,6 +2867,21 @@ export function MenuBar({
             >
               Merge Selected
             </DropdownMenuItem>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger disabled={!activeLayer}>Flatten Transparency</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <DropdownMenuItem onSelect={() => flattenTransparency("clear", background, "Background Color")}>
+                  Background Color
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => flattenTransparency("clear", foreground, "Foreground Color")}>
+                  Foreground Color
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => flattenTransparency("preserve", background, "Preserve Alpha")}>
+                  Preserve Alpha
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
             <DropdownMenuItem
               onSelect={() => {
                 dispatch({ type: "flatten" })
@@ -2706,9 +3176,19 @@ export function MenuBar({
               Contract...
             </DropdownMenuItem>
             <DropdownMenuItem
+              onSelect={() => openSelectionOperation("grow")}
+            >
+              Grow...
+            </DropdownMenuItem>
+            <DropdownMenuItem
               onSelect={() => openSelectionOperation("similar")}
             >
               Similar…
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={() => openSelectionOperation("transform")}
+            >
+              Transform Selection...
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuSub>
@@ -2734,12 +3214,11 @@ export function MenuBar({
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onSelect={() => {
-                if (!activeDoc?.selection.bounds) return
-                const id = `ch_${Math.random().toString(36).slice(2, 9)}`
-                const c = selectionToMaskCanvas(activeDoc.width, activeDoc.height, activeDoc.selection)
-                if (!c) return
-                dispatch({ type: "save-selection", channel: { id, name: `Alpha ${(activeDoc.channels?.length ?? 0) + 1}`, canvas: c } })
-                commit("Save Selection", [])
+                if (!activeDoc?.selection.bounds) {
+                  toast.info("Create a selection before saving it.")
+                  return
+                }
+                setSaveSelectionOpen(true)
               }}
             >
               Save Selection…
@@ -2775,6 +3254,12 @@ export function MenuBar({
                 )}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
+            <DropdownMenuItem
+              onSelect={() => setLoadSelectionOpen(true)}
+              disabled={!activeDoc}
+            >
+              Load Selection...
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -3023,6 +3508,64 @@ export function MenuBar({
             <DropdownMenuItem onSelect={() => openAdvancedTab("preview")} disabled={!activeDoc}>
               Device Preview...
             </DropdownMenuItem>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>Proof Setup</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <DropdownMenuItem
+                  onSelect={() => updateColorManagement({ proofColors: !colorSettings.proofColors }, colorSettings.proofColors ? "Proof Colors Off" : "Proof Colors On")}
+                  disabled={!activeDoc}
+                >
+                  {colorSettings.proofColors ? "✓ " : ""}Proof Colors
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => updateColorManagement({ gamutWarning: !colorSettings.gamutWarning }, colorSettings.gamutWarning ? "Gamut Warning Off" : "Gamut Warning On")}
+                  disabled={!activeDoc}
+                >
+                  {colorSettings.gamutWarning ? "✓ " : ""}Gamut Warning
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>Proof Profile</DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    <DropdownMenuItem onSelect={() => updateColorManagement({ proofProfile: "None", proofColors: false }, "Proof Profile: None")} disabled={!activeDoc}>
+                      {colorSettings.proofProfile === "None" ? "✓ " : ""}None
+                    </DropdownMenuItem>
+                    {supportedIccProfileNames().map((profile) => (
+                      <DropdownMenuItem
+                        key={profile}
+                        onSelect={() => updateColorManagement({ proofProfile: profile, proofColors: true }, `Proof Profile: ${profile}`)}
+                        disabled={!activeDoc}
+                      >
+                        {colorSettings.proofProfile === profile ? "✓ " : ""}{profile}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>Plate Channels</DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    <DropdownMenuItem onSelect={() => updateColorManagement({ proofChannels: [] }, "Proof Channels: Composite")} disabled={!activeDoc}>
+                      {(colorSettings.proofChannels?.length ?? 0) === 0 ? "✓ " : ""}Composite
+                    </DropdownMenuItem>
+                    {(["cyan", "magenta", "yellow", "black", "red", "green", "blue"] as const).map((channel) => (
+                      <DropdownMenuItem key={channel} onSelect={() => toggleProofChannel(channel)} disabled={!activeDoc}>
+                        {colorSettings.proofChannels?.includes(channel) ? "✓ " : ""}{channel[0].toUpperCase() + channel.slice(1)}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>Plate View Mode</DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    {(["composite", "ink", "mask"] as const).map((mode) => (
+                      <DropdownMenuItem key={mode} onSelect={() => updateColorManagement({ proofPlateView: mode }, `Proof Plate View: ${mode}`)} disabled={!activeDoc}>
+                        {(colorSettings.proofPlateView ?? "composite") === mode ? "✓ " : ""}{mode[0].toUpperCase() + mode.slice(1)}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
             <DropdownMenuItem onSelect={() => onToggleStatusBar?.()} disabled={!onToggleStatusBar}>
               {statusBarVisible ? "Hide Info Bar" : "Show Info Bar"}
             </DropdownMenuItem>
@@ -3190,6 +3733,7 @@ export function MenuBar({
             <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "guides" }))}>Guides</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "adjustments" }))}>Adjustments</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "assets" }))}>Assets</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "preset-manager" }))}>Preset Manager</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "libraries" }))}>Libraries</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "glyphs" }))}>Glyphs</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "styles" }))}>Styles</DropdownMenuItem>
@@ -3257,10 +3801,12 @@ export function MenuBar({
       <NewGuideDialog open={newGuideOpen} onOpenChange={setNewGuideOpen} />
       <GuideLayoutDialog open={guideLayoutOpen} onOpenChange={setGuideLayoutOpen} />
       <ContactSheetDialog open={contactSheetOpen} onOpenChange={setContactSheetOpen} />
+      <PhotomergeDialog open={photomergeOpen} onOpenChange={setPhotomergeOpen} />
       <FileInfoDialog open={fileInfoOpen} onOpenChange={setFileInfoOpen} />
       <AdvancedSubsystemsDialog open={advancedOpen} onOpenChange={setAdvancedOpen} initialTab={advancedTab} />
       <AlgorithmicOperationsDialog open={algorithmOpen} onOpenChange={setAlgorithmOpen} />
       <GapWorkflowDialog workflow={gapWorkflow} onOpenChange={(open) => !open && setGapWorkflow(null)} />
+      <ColorModeDialog target={colorModeTarget} onOpenChange={(open) => !open && setColorModeTarget(null)} />
       <PreferencesDialog open={preferencesOpen} onOpenChange={setPreferencesOpen} />
       <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
@@ -3302,6 +3848,8 @@ export function MenuBar({
           if (!open) setSelectionOperation(null)
         }}
       />
+      <SaveSelectionDialog open={saveSelectionOpen} onOpenChange={setSaveSelectionOpen} />
+      <LoadSelectionDialog open={loadSelectionOpen} onOpenChange={setLoadSelectionOpen} />
     </>
   )
 }

@@ -1,5 +1,8 @@
 import { unionDirtyRects, type DirtyRect } from "./dirty-rect"
+import { compositeLayer } from "./blend-modes"
+import { getFilter } from "./filters"
 import { planTileGrid } from "./performance-engine"
+import { smartFilterMaskAmountAt, smartFilterMaskToImageData } from "./smart-filter-masks"
 import { rayTraceScene } from "./three-d-video-engine"
 import type { Layer, PsDocument } from "./types"
 import {
@@ -44,6 +47,10 @@ export interface LayerTileCanvasCodec {
   documentSize?: { width: number; height: number }
   mimeType?: string
   quality?: number
+}
+
+export interface LayerContentMaterializeOptions {
+  documentSize?: { width: number; height: number }
 }
 
 export interface DocumentTileRecompositionInput {
@@ -216,11 +223,167 @@ function imageDataToCanvas(image: ImageData): HTMLCanvasElement {
   return canvas
 }
 
+function paramsWithDefaults(filter: NonNullable<ReturnType<typeof getFilter>>, params: Record<string, number | string | boolean>) {
+  const out: Record<string, number | string | boolean> = {}
+  for (const param of filter.params) {
+    const raw = params[param.key] ?? param.default
+    if (param.type === "slider") {
+      const numeric = typeof raw === "number" ? raw : Number(raw)
+      out[param.key] = Math.max(param.min, Math.min(param.max, Number.isFinite(numeric) ? numeric : param.default))
+    } else if (param.type === "checkbox") {
+      out[param.key] = raw === true
+    } else if (param.type === "select") {
+      out[param.key] = param.options.some((option) => option.value === raw) ? raw : param.default
+    } else {
+      out[param.key] = typeof raw === "string" ? raw : param.default
+    }
+  }
+  return out
+}
+
+function parseFixtureFillColor(value: unknown): [number, number, number, number] | null {
+  if (typeof value !== "string") return null
+  const hex = value.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i)
+  if (hex) {
+    const raw = hex[1]
+    const full = raw.length === 3
+      ? raw.split("").map((ch) => ch + ch).join("")
+      : raw.padEnd(8, "f")
+    return [
+      parseInt(full.slice(0, 2), 16),
+      parseInt(full.slice(2, 4), 16),
+      parseInt(full.slice(4, 6), 16),
+      parseInt(full.slice(6, 8), 16),
+    ]
+  }
+  const rgba = value.trim().match(/^rgba?\(([^)]+)\)$/i)
+  if (!rgba) return null
+  const parts = rgba[1].split(",").map((part) => Number(part.trim()))
+  if (parts.length < 3 || parts.some((part, index) => index < 3 && !Number.isFinite(part))) return null
+  return [
+    Math.max(0, Math.min(255, Math.round(parts[0]))),
+    Math.max(0, Math.min(255, Math.round(parts[1]))),
+    Math.max(0, Math.min(255, Math.round(parts[2]))),
+    Math.max(0, Math.min(255, Math.round((Number.isFinite(parts[3]) ? parts[3] : 1) * 255))),
+  ]
+}
+
+function readCanvasImageData(canvas: HTMLCanvasElement, width = canvas.width, height = canvas.height): ImageData {
+  const ctx = canvas.getContext("2d")
+  const image = ctx?.getImageData(0, 0, width, height) ?? new ImageData(width, height)
+  const hasVisiblePixels = image.data.some((value, index) => index % 4 === 3 && value > 0)
+  const fill = !hasVisiblePixels ? parseFixtureFillColor((canvas as HTMLCanvasElement & { fill?: unknown }).fill) : null
+  if (!fill) return image
+  for (let i = 0; i < image.data.length; i += 4) {
+    image.data[i] = fill[0]
+    image.data[i + 1] = fill[1]
+    image.data[i + 2] = fill[2]
+    image.data[i + 3] = fill[3]
+  }
+  return image
+}
+
+function fixtureBackedImageData(canvas: HTMLCanvasElement): ImageData | null {
+  const fixture = canvas as HTMLCanvasElement & { imageData?: ImageData | null; fill?: unknown }
+  if (!fixture.imageData && fixture.fill === undefined) return null
+  return readCanvasImageData(canvas)
+}
+
+function cropImageData(source: ImageData, rect: TileCanvasRect): ImageData {
+  const out = new ImageData(Math.max(1, rect.w), Math.max(1, rect.h))
+  for (let y = 0; y < rect.h; y++) {
+    const sy = rect.y + y
+    if (sy < 0 || sy >= source.height) continue
+    for (let x = 0; x < rect.w; x++) {
+      const sx = rect.x + x
+      if (sx < 0 || sx >= source.width) continue
+      const sourceIndex = (sy * source.width + sx) * 4
+      const targetIndex = (y * rect.w + x) * 4
+      out.data[targetIndex] = source.data[sourceIndex]
+      out.data[targetIndex + 1] = source.data[sourceIndex + 1]
+      out.data[targetIndex + 2] = source.data[sourceIndex + 2]
+      out.data[targetIndex + 3] = source.data[sourceIndex + 3]
+    }
+  }
+  return out
+}
+
+function applySmartFiltersToCanvas(source: HTMLCanvasElement, smartFilters: Layer["smartFilters"]): HTMLCanvasElement {
+  const enabled = smartFilters?.filter((filter) => filter.enabled) ?? []
+  if (!enabled.length) return source
+  const canvas = makeCanvas(source.width, source.height)
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return source
+  ctx.drawImage(source, 0, 0)
+  let current = readCanvasImageData(canvas)
+  for (const smartFilter of enabled) {
+    const filter = getFilter(smartFilter.filterId)
+    if (!filter) continue
+    const before = current
+    const after = filter.apply(before, paramsWithDefaults(filter, smartFilter.params))
+    const opacity = Math.max(0, Math.min(1, smartFilter.opacity ?? 1))
+    if (opacity <= 0) {
+      current = before
+      continue
+    }
+    const mask = smartFilter.maskEnabled === false || !smartFilter.mask
+      ? null
+      : smartFilterMaskToImageData(smartFilter.mask, canvas.width, canvas.height, smartFilter.maskFeather ?? 0)
+    if (!mask && opacity >= 1 && (smartFilter.blendMode ?? "normal") === "normal") {
+      current = after
+      continue
+    }
+    const overlay = new ImageData(new Uint8ClampedArray(after.data), canvas.width, canvas.height)
+    if (mask) {
+      for (let y = 0; y < canvas.height; y++) {
+        for (let x = 0; x < canvas.width; x++) {
+          const i = (y * canvas.width + x) * 4
+          overlay.data[i + 3] = Math.round(overlay.data[i + 3] * smartFilterMaskAmountAt(mask, x, y, smartFilter.maskDensity ?? 1))
+        }
+      }
+    }
+    const baseCanvas = imageDataToCanvas(before)
+    compositeLayer(baseCanvas.getContext("2d")!, imageDataToCanvas(overlay), smartFilter.blendMode ?? "normal", opacity)
+    current = readCanvasImageData(baseCanvas)
+  }
+  ctx.putImageData(current, 0, 0)
+  return canvas
+}
+
+export function materializeLayerContentCanvas(
+  layer: Layer,
+  options: LayerContentMaterializeOptions = {},
+): HTMLCanvasElement {
+  if (layer.kind === "3d" || layer.threeD) {
+    const width = Math.max(1, Math.round(options.documentSize?.width ?? layer.canvas.width))
+    const height = Math.max(1, Math.round(options.documentSize?.height ?? layer.canvas.height))
+    return imageDataToCanvas(renderThreeDLayerTilePreview(layer, { x: 0, y: 0, w: width, h: height }, { width, height }))
+  }
+
+  if (layer.smartObject || layer.kind === "smart-object") {
+    const source = layer.smartSource?.canvas ?? layer.canvas
+    const canvas = makeCanvas(layer.canvas.width, layer.canvas.height)
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return canvas
+    ctx.imageSmoothingEnabled = true
+    ctx.imageSmoothingQuality = "high"
+    ctx.drawImage(source, 0, 0, canvas.width, canvas.height)
+    return applySmartFiltersToCanvas(canvas, layer.smartFilters)
+  }
+
+  return applySmartFiltersToCanvas(layer.canvas, layer.smartFilters)
+}
+
 export function renderTileCanvas(source: HTMLCanvasElement, rect: TileCanvasRect): HTMLCanvasElement {
   const canvas = makeCanvas(rect.w, rect.h)
   const ctx = canvas.getContext("2d")
   if (!ctx) return canvas
   ctx.clearRect(0, 0, canvas.width, canvas.height)
+  const fixturePixels = fixtureBackedImageData(source)
+  if (fixturePixels) {
+    ctx.putImageData(cropImageData(fixturePixels, rect), 0, 0)
+    return canvas
+  }
   ctx.drawImage(source, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h)
   return canvas
 }
@@ -237,24 +400,10 @@ export function renderLayerContentTile(
     }))
   }
   if (layer.smartObject || layer.kind === "smart-object") {
-    const source = layer.smartSource?.canvas ?? layer.canvas
-    const canvas = makeCanvas(rect.w, rect.h)
-    const ctx = canvas.getContext("2d")
-    if (!ctx) return canvas
-    const scaleX = source.width / Math.max(1, layer.canvas.width)
-    const scaleY = source.height / Math.max(1, layer.canvas.height)
-    ctx.drawImage(
-      source,
-      rect.x * scaleX,
-      rect.y * scaleY,
-      rect.w * scaleX,
-      rect.h * scaleY,
-      0,
-      0,
-      rect.w,
-      rect.h,
-    )
-    return canvas
+    return renderTileCanvas(materializeLayerContentCanvas(layer, { documentSize }), rect)
+  }
+  if (layer.smartFilters?.some((filter) => filter.enabled)) {
+    return renderTileCanvas(materializeLayerContentCanvas(layer, { documentSize }), rect)
   }
   return renderTileCanvas(layer.canvas, rect)
 }

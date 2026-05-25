@@ -691,7 +691,7 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
                   <Button size="sm" onClick={() => runAutoAlign("edges")}>Auto-Align Edges</Button>
                   <Button size="sm" onClick={() => runAutoAlign("features")}>Auto-Align Features</Button>
                   <Button size="sm" onClick={runAutoBlend}>Auto-Blend Layers</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-gap-workflow", { detail: "photomerge" }))}>Stitch Panorama</Button>
+                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-photomerge"))}>Stitch Panorama</Button>
                 </ButtonGrid>
                 <ControlGrid>
                   <NumberField label="Scale %" value={scalePct} onChange={setScalePct} min={20} max={140} />
@@ -902,6 +902,8 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
                   <Button size="sm" variant="secondary" onClick={runSoftProof}>Soft Proof / Gamut</Button>
                   <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-gap-workflow", { detail: "apply-image" }))}>Apply Image</Button>
                   <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-gap-workflow", { detail: "calculations" }))}>Calculations</Button>
+                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-gap-workflow", { detail: "split-channels" }))}>Split Channels</Button>
+                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-gap-workflow", { detail: "merge-channels" }))}>Merge Channels</Button>
                 </ButtonGrid>
                 <label className="mt-3 flex items-center gap-2 text-[11px]">
                   <Checkbox checked={gamutWarning} onCheckedChange={(value) => setGamutWarning(value === true)} />
@@ -945,7 +947,7 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
                   <Button size="sm" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-workspace-manager"))}>Workspace Manager</Button>
                   <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-shortcuts"))}>Shortcut Customization</Button>
                   <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "tool-presets" }))}>Tool Presets</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "assets" }))}>Preset Manager</Button>
+                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "preset-manager" }))}>Preset Manager</Button>
                 </ButtonGrid>
               </Section>
             )}

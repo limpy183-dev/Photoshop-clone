@@ -3,6 +3,7 @@
 import * as React from "react"
 import { useEditor } from "../editor-context"
 import { hexToRgb } from "../color-utils"
+import { dispatchPhotoshopEvent } from "../events"
 function rgbToHex(r: number, g: number, b: number) {
   return (
     "#" +
@@ -178,15 +179,11 @@ export function ColorPanel() {
   const localRgb = hsvToRgb(localHsv.h, localHsv.s, localHsv.v)
   const localHex = rgbToHex(localRgb.r, localRgb.g, localRgb.b)
   const hueColor = `hsl(${localHsv.h}, 100%, 50%)`
-  const openNativePicker = (kind: "fg" | "bg") => {
-    const i = document.createElement("input")
-    i.type = "color"
-    i.value = kind === "fg" ? foreground : background
-    i.oninput = () => {
-      if (kind === "fg") dispatch({ type: "set-foreground", color: i.value })
-      else dispatch({ type: "set-background", color: i.value })
-    }
-    i.click()
+  const openPicker = (kind: "fg" | "bg", surface: "dialog" | "hud" = "dialog") => {
+    dispatchPhotoshopEvent("ps-open-color-picker", {
+      target: kind === "fg" ? "foreground" : "background",
+      surface,
+    })
   }
 
   return (
@@ -195,14 +192,14 @@ export function ColorPanel() {
       <div className="flex items-center gap-2">
         <div className="relative">
           <button
-            onClick={() => openNativePicker("bg")}
+            onClick={() => openPicker("bg")}
             className="absolute -bottom-1 -right-1 w-6 h-6 border border-[var(--ps-text)] shadow-sm rounded-sm"
             style={{ background }}
             aria-label="Background color"
             title="Background color"
           />
           <button
-            onClick={() => openNativePicker("fg")}
+            onClick={() => openPicker("fg")}
             className="relative w-8 h-8 border border-[var(--ps-text)] shadow-sm z-10 rounded-sm"
             style={{ background: localHex }}
             aria-label="Foreground color"
@@ -239,6 +236,23 @@ export function ColorPanel() {
       </div>
 
       {/* HSV picker — SV field fills available height */}
+      <div className="grid grid-cols-2 gap-1">
+        <button
+          type="button"
+          onClick={() => openPicker("fg", "dialog")}
+          className="h-7 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] text-[10px] text-[var(--ps-text)] hover:bg-[var(--ps-tool-hover)]"
+        >
+          Full picker
+        </button>
+        <button
+          type="button"
+          onClick={() => openPicker("fg", "hud")}
+          className="h-7 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] text-[10px] text-[var(--ps-text)] hover:bg-[var(--ps-tool-hover)]"
+        >
+          HUD picker
+        </button>
+      </div>
+
       <div className="flex min-h-[190px] flex-1 flex-col gap-1.5">
         <div
           ref={sbRef}

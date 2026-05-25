@@ -5,14 +5,19 @@ import {
   decodeDicomPreview,
   decodeEpsPreview,
   decodePdfPages,
+  encodeDicomCompressedImageData,
   encodeDicomImageData,
   encodeEpsCanvas,
   encodePdfCanvas,
   encodePdfCanvases,
+  encodePdfDocument,
   encodeRadianceHdrImageData,
   decodeRadianceHdrPreview,
   extractEmbeddedJpegDataUrl,
+  extractEpsEditableVectors,
+  extractPdfEditableObjects,
   extractMetadataFromFile,
+  inspectDicomMetadata,
   inspectAdvancedFormatFile,
 } from "../components/photoshop/advanced-subsystems"
 import { serializePsd } from "../components/photoshop/document-io"
@@ -23,11 +28,16 @@ import {
   decodePnmBuffer,
   decodeTgaBuffer,
   decodeTiffBuffer,
+  encodeBigTiffImageData,
+  encodeDngImageData,
   encodeHeifImageData,
+  encodeHeicImageData,
   encodeJpegImageData,
   encodeJpeg2000ImageData,
+  encodeOpenExrArbitraryChannels,
   encodeOpenExrHighBitImage,
   encodeOpenExrImageData,
+  encodeOpenExrMultipart,
   encodePngImageData,
   encodePnmImageData,
   encodePnmHighBitImage,
@@ -161,6 +171,29 @@ function jpegHasMarker(buffer: ArrayBuffer, marker: number) {
   return false
 }
 
+function jpegMarkerPayloads(buffer: ArrayBuffer, marker: number) {
+  const bytes = new Uint8Array(buffer)
+  const payloads: Uint8Array[] = []
+  let offset = 2
+  while (offset + 1 < bytes.length) {
+    if (bytes[offset] !== 0xff) {
+      offset++
+      continue
+    }
+    while (offset < bytes.length && bytes[offset] === 0xff) offset++
+    const found = bytes[offset++]
+    if (found === 0xda || found === 0xd9) break
+    if (found === 0x01 || (found >= 0xd0 && found <= 0xd7)) continue
+    if (offset + 2 > bytes.length) break
+    const length = (bytes[offset] << 8) | bytes[offset + 1]
+    const payloadStart = offset + 2
+    const payloadEnd = offset + length
+    if (found === marker && payloadEnd <= bytes.length) payloads.push(bytes.subarray(payloadStart, payloadEnd))
+    offset = payloadEnd
+  }
+  return payloads
+}
+
 function tiffCompression(buffer: ArrayBuffer) {
   const view = new DataView(buffer)
   const little = String.fromCharCode(view.getUint8(0), view.getUint8(1)) === "II"
@@ -212,6 +245,32 @@ function tiffTagBytes(buffer: ArrayBuffer, tag: number) {
   return null
 }
 
+function tiffTagBytesFromAllIfds(buffer: ArrayBuffer, tag: number) {
+  const view = new DataView(buffer)
+  const little = String.fromCharCode(view.getUint8(0), view.getUint8(1)) === "II"
+  let ifdOffset = view.getUint32(4, little)
+  const seen = new Set<number>()
+  while (ifdOffset > 0 && ifdOffset + 2 <= buffer.byteLength && !seen.has(ifdOffset)) {
+    seen.add(ifdOffset)
+    const tagCount = view.getUint16(ifdOffset, little)
+    for (let i = 0; i < tagCount; i++) {
+      const entry = ifdOffset + 2 + i * 12
+      if (entry + 12 > buffer.byteLength) return null
+      if (view.getUint16(entry, little) !== tag) continue
+      const type = view.getUint16(entry + 2, little)
+      const count = view.getUint32(entry + 4, little)
+      const unit = type === 3 ? 2 : type === 4 ? 4 : 1
+      const byteCount = unit * count
+      const offset = byteCount <= 4 ? entry + 8 : view.getUint32(entry + 8, little)
+      return new Uint8Array(buffer, offset, byteCount)
+    }
+    const nextOffset = ifdOffset + 2 + tagCount * 12
+    if (nextOffset + 4 > buffer.byteLength) return null
+    ifdOffset = view.getUint32(nextOffset, little)
+  }
+  return null
+}
+
 function tiffNestedTags(buffer: ArrayBuffer, pointerTag: number) {
   const view = new DataView(buffer)
   const little = String.fromCharCode(view.getUint8(0), view.getUint8(1)) === "II"
@@ -241,6 +300,22 @@ function fakeWebpBytes() {
   return new Uint8Array([...ascii("RIFF"), ...le32(body.length), ...body])
 }
 
+function riffChunkPayloads(buffer: ArrayBuffer | Uint8Array, type: string) {
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer)
+  const payloads: Uint8Array[] = []
+  let offset = 12
+  while (offset + 8 <= bytes.length) {
+    const chunkType = String.fromCharCode(...bytes.subarray(offset, offset + 4))
+    const size = new DataView(bytes.buffer, bytes.byteOffset + offset + 4, 4).getUint32(0, true)
+    const payloadStart = offset + 8
+    const payloadEnd = payloadStart + size
+    if (payloadEnd > bytes.length) break
+    if (chunkType === type) payloads.push(bytes.subarray(payloadStart, payloadEnd))
+    offset = payloadEnd + (size % 2)
+  }
+  return payloads
+}
+
 function mp4Box(type: string, data: Uint8Array) {
   return new Uint8Array([...be32(data.length + 8), ...ascii(type), ...data])
 }
@@ -250,6 +325,20 @@ function fakeAvifBytes() {
     ...mp4Box("ftyp", new Uint8Array([...ascii("avif"), 0, 0, 0, 0, ...ascii("avif"), ...ascii("mif1")])),
     ...mp4Box("mdat", new Uint8Array([1, 2, 3, 4])),
   ])
+}
+
+function mp4Boxes(buffer: ArrayBuffer | Uint8Array) {
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer)
+  const boxes: Array<{ type: string; offset: number; size: number; payload: Uint8Array }> = []
+  let offset = 0
+  while (offset + 8 <= bytes.length) {
+    const size = new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0, false)
+    const type = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8))
+    if (size < 8 || offset + size > bytes.length) break
+    boxes.push({ type, offset, size, payload: bytes.subarray(offset + 8, offset + size) })
+    offset += size
+  }
+  return boxes
 }
 
 function dicomElement(group: number, element: number, vr: string, data: number[]) {
@@ -570,6 +659,77 @@ test("HEIF and JPEG 2000 exporters produce browser-compatible advanced raster pa
   expect(jp2Decoded?.height).toBe(64)
 })
 
+test("HEIC export uses a HEVC-backed HEIC container instead of the AVIF fallback path", async () => {
+  installFixtureDom()
+  const source = new ImageData(new Uint8ClampedArray([
+    255, 0, 0, 255,
+    0, 255, 0, 128,
+  ]), 2, 1)
+
+  const heic = await encodeHeicImageData(source, {
+    quality: 0.9,
+    metadata: {
+      author: "Ada",
+      iccProfileName: "Display P3",
+      iccProfile: new Uint8Array([1, 2, 3, 4]),
+    },
+    encodeHevc: async (image, options) => {
+      expect(image.width).toBe(2)
+      expect(options.quality).toBe(0.9)
+      return {
+        bitstream: new Uint8Array([0, 0, 1, 0x26, 1, 2, 3, 4]),
+        decoderConfig: new Uint8Array([1, 1, 96, 0, 0, 0]),
+      }
+    },
+  })
+  const text = new TextDecoder("latin1").decode(heic)
+
+  expect(text).toContain("ftypheic")
+  expect(text).toContain("hvc1")
+  expect(text).toContain("hvcC")
+  expect(text).toContain("Photoshop Web ICC")
+  expect(text).not.toContain("ftypavif")
+})
+
+test("JPEG 2000 authoring writes JPX/JPM containers with alpha, ICC color boxes, and profile metadata", async () => {
+  installFixtureDom()
+  const source = new ImageData(new Uint8ClampedArray([
+    255, 0, 0, 255,
+    0, 255, 0, 128,
+    0, 0, 255, 64,
+    255, 255, 255, 0,
+  ]), 2, 2)
+
+  const jpx = await encodeJpeg2000ImageData(source, {
+    container: "jpx",
+    includeAlpha: true,
+    quality: 1,
+    reversible: true,
+    color: {
+      enumColorSpace: 16,
+      iccProfileName: "Fixture RGB",
+      iccProfile: new Uint8Array([9, 8, 7, 6]),
+      profileControls: { progressionOrder: "LRCP", resolutionLevels: 3 },
+    },
+  })
+  const jpm = await encodeJpeg2000ImageData(source, {
+    container: "jpm",
+    includeAlpha: true,
+    layers: [{ label: "Transparency mask", opacity: 0.5 }],
+  })
+  const jpxText = new TextDecoder("latin1").decode(jpx)
+  const jpmText = new TextDecoder("latin1").decode(jpm)
+
+  expect(Array.from(new Uint8Array(jpx).slice(4, 8))).toEqual(ascii("jP  "))
+  expect(jpxText).toContain("ftypjpx ")
+  expect(jpxText).toContain("cdef")
+  expect(jpxText).toContain("colr")
+  expect(jpxText).toContain("Fixture RGB")
+  expect(jpxText).toContain("pswp")
+  expect(jpmText).toContain("ftypjpm ")
+  expect(jpmText).toContain("Transparency mask")
+})
+
 test("TIFF encoder authors document metadata, XMP, and EXIF-style directory tags", async () => {
   installFixtureDom()
   const source = new ImageData(new Uint8ClampedArray([
@@ -652,6 +812,50 @@ test("TIFF encoder authors IPTC, populated EXIF IFD, XMP content credentials, an
   expect(icc).toEqual(new Uint8Array([0, 1, 2, 3, 4, 5]))
 })
 
+test("BigTIFF and DNG export author 64-bit directories, subdirectories, RAW sidecars, and DNG metadata", () => {
+  installFixtureDom()
+  const source = new ImageData(new Uint8ClampedArray([
+    12, 34, 56, 255,
+    200, 180, 160, 100,
+  ]), 2, 1)
+  const sidecar = "<x:xmpmeta><psweb:CameraRawRecipe>{}</psweb:CameraRawRecipe></x:xmpmeta>"
+
+  const big = encodeBigTiffImageData(source, {
+    metadata: {
+      title: "BigTIFF fixture",
+      author: "Ada",
+      xmp: "<x:xmpmeta>big fixture</x:xmpmeta>",
+    },
+    directories: [{
+      name: "Reduced preview",
+      width: 1,
+      height: 1,
+      fields: [{ tag: 65000, type: 2, data: new TextEncoder().encode("custom-directory\0") }],
+    }],
+    customFields: [{ tag: 65001, type: 2, data: new TextEncoder().encode("custom-root\0") }],
+  })
+  const dng = encodeDngImageData(source, {
+    metadata: { author: "Ada", xmp: sidecar },
+    cameraModel: "Fixture Camera",
+    uniqueCameraModel: "Fixture Camera DNG",
+    sidecar,
+  })
+  const bigView = new DataView(big)
+  const bigText = new TextDecoder("latin1").decode(big)
+  const dngText = new TextDecoder("latin1").decode(dng)
+  const dngTags = tiffTags(dng)
+
+  expect(bigView.getUint16(2, true)).toBe(43)
+  expect(bigView.getUint16(4, true)).toBe(8)
+  expect(bigText).toContain("BigTIFF fixture")
+  expect(bigText).toContain("custom-directory")
+  expect(bigText).toContain("custom-root")
+  expect(dngTags.has(50706)).toBe(true)
+  expect(dngTags.has(50708)).toBe(true)
+  expect(dngText).toContain("Fixture Camera DNG")
+  expect(dngText).toContain("psweb:CameraRawRecipe")
+})
+
 test("WebP and AVIF metadata helpers embed XMP content credentials, encoder settings, and ICC payloads", () => {
   const metadata = {
     author: "Ada",
@@ -694,6 +898,58 @@ test("WebP and AVIF metadata helpers embed XMP content credentials, encoder sett
   expect(avifText).toContain("Display P3")
 })
 
+test("raster content credentials are embedded in format-native C2PA provenance carriers", async () => {
+  installFixtureDom()
+  const source = new ImageData(new Uint8ClampedArray([
+    12, 34, 56, 255,
+    200, 180, 160, 255,
+  ]), 2, 1)
+  const metadata = {
+    title: "Provenance fixture",
+    author: "Ada",
+    description: "C2PA provenance payload",
+    creationDate: "2026-05-24T12:34:56.000Z",
+    contentCredentials: [{
+      id: "cred_native",
+      action: "local-edit",
+      actor: "Ada",
+      software: "Photoshop Web",
+      createdAt: "2026-05-24T12:34:56.000Z",
+      documentName: "provenance.psproj",
+      documentHash: "abc123",
+      layerCount: 1,
+      dimensions: { width: 2, height: 1 },
+      ingredients: [{ id: "layer_1", name: "Pixels", kind: "raster" as const, visible: true, hash: "def456" }],
+      assertion: "Edited locally",
+    }],
+  }
+
+  const png = await encodePngImageData(source, { metadata })
+  const jpeg = await encodeJpegImageData(source, { metadata })
+  const tiff = encodeTiffImageData(source, { metadata })
+  const webp = injectWebpXmpMetadata(fakeWebpBytes(), metadata)
+  const avif = injectAvifXmpMetadata(fakeAvifBytes(), metadata)
+  const pngChunksList = pngChunks(png)
+  const pngCabx = pngChunksList.find((chunk) => chunk.type === "caBX")
+  const jpegApp11 = jpegMarkerPayloads(jpeg, 0xeb)
+  const tiffC2pa = tiffTagBytesFromAllIfds(tiff, 52545)
+  const webpC2pa = riffChunkPayloads(webp, "C2PA")
+  const avifBoxes = mp4Boxes(avif)
+  const avifC2pa = avifBoxes.find((box) => box.type === "uuid" && new TextDecoder("latin1").decode(box.payload).includes("c2pa"))
+  const avifMdat = avifBoxes.find((box) => box.type === "mdat")
+
+  expect(pngCabx, "PNG should contain a caBX C2PA manifest chunk").toBeTruthy()
+  expect(pngChunksList.findIndex((chunk) => chunk.type === "caBX")).toBeLessThan(pngChunksList.findIndex((chunk) => chunk.type === "IDAT"))
+  expect(new TextDecoder("latin1").decode(pngCabx!.data)).toContain("cred_native")
+  expect(jpegApp11.length, "JPEG should contain C2PA APP11 payloads").toBeGreaterThan(0)
+  expect(new TextDecoder("latin1").decode(jpegApp11[0])).toContain("cred_native")
+  expect(new TextDecoder("latin1").decode(tiffC2pa ?? new Uint8Array())).toContain("cred_native")
+  expect(new TextDecoder("latin1").decode(webpC2pa[0] ?? new Uint8Array())).toContain("cred_native")
+  expect(avifC2pa, "AVIF should contain a C2PA UUID box").toBeTruthy()
+  expect(avifMdat?.offset).toBeGreaterThan(avifC2pa!.offset)
+  expect(new TextDecoder("latin1").decode(avifC2pa!.payload)).toContain("cred_native")
+})
+
 test("TGA extension and developer metadata round-trip document fields", () => {
   installFixtureDom()
   const source = new ImageData(new Uint8ClampedArray([
@@ -708,9 +964,24 @@ test("TGA extension and developer metadata round-trip document fields", () => {
     metadata: {
       title: "TGA fixture",
       author: "Ada",
+      copyright: "CC0",
       description: "TGA extension metadata",
       creationDate: "2026-05-24T12:34:56.000Z",
       source: "Browser raster export",
+      keywords: ["export", "tga"],
+      contentCredentials: [{
+        id: "cred_tga",
+        action: "local-edit",
+        actor: "Ada",
+        software: "Photoshop Web",
+        createdAt: "2026-05-24T12:34:56.000Z",
+        documentName: "tga.psproj",
+        documentHash: "abc123",
+        layerCount: 1,
+        dimensions: { width: 4, height: 1 },
+        ingredients: [],
+        assertion: "Edited locally",
+      }],
     },
   })
   const decoded = decodeTgaBuffer(tga)
@@ -721,6 +992,9 @@ test("TGA extension and developer metadata round-trip document fields", () => {
   expect(decoded.metadata?.description).toBe("TGA extension metadata")
   expect(decoded.metadata?.title).toBe("TGA fixture")
   expect(decoded.metadata?.source).toBe("Browser raster export")
+  expect(decoded.metadata?.copyright).toBe("CC0")
+  expect(decoded.metadata?.keywords).toEqual(["export", "tga"])
+  expect(decoded.metadata?.contentCredentials).toEqual(expect.arrayContaining([expect.objectContaining({ id: "cred_tga" })]))
   expect(text).toContain("TRUEVISION-XFILE")
   expect(text).toContain("PSWEBMETA")
 })
@@ -732,8 +1006,11 @@ test("Netpbm comments and source max value round-trip through PPM and high-bit P
     0, 255, 0, 255,
   ]), 2, 1)
   const metadata = {
+    title: "Netpbm fixture",
     author: "Ada",
     description: "Netpbm metadata",
+    copyright: "CC0",
+    source: "Browser raster export",
     netpbm: {
       comments: ["Source camera max value: 1023"],
       sourceMaxValue: 1023,
@@ -742,10 +1019,15 @@ test("Netpbm comments and source max value round-trip through PPM and high-bit P
 
   const ppm = encodePnmImageData(source, "ppm", { metadata })
   const decoded = decodePnmBuffer(ppm)
-  const headerText = new TextDecoder("latin1").decode(new Uint8Array(ppm).slice(0, 160))
+  const headerText = new TextDecoder("latin1").decode(new Uint8Array(ppm).slice(0, 260))
 
   expect(decoded.metadata?.maxValue).toBe(1023)
   expect(decoded.metadata?.sourceMaxValue).toBe(1023)
+  expect(decoded.metadata?.title).toBe("Netpbm fixture")
+  expect(decoded.metadata?.author).toBe("Ada")
+  expect(decoded.metadata?.description).toBe("Netpbm metadata")
+  expect(decoded.metadata?.copyright).toBe("CC0")
+  expect(decoded.metadata?.source).toBe("Browser raster export")
   expect(decoded.metadata?.comments).toContain("Author: Ada")
   expect(decoded.metadata?.comments).toContain("Source camera max value: 1023")
   expect(headerText).toContain("# Source-MaxValue: 1023")
@@ -821,6 +1103,36 @@ test("DICOM export writes a secondary-capture file that the preview decoder can 
   expect(canvas?.height).toBe(1)
 })
 
+test("DICOM workflow records compressed transfer syntaxes, overlays, richer metadata, and non-clinical validation labels", async () => {
+  installFixtureDom()
+  const source = new ImageData(new Uint8ClampedArray([
+    20, 40, 60, 255,
+    200, 220, 240, 255,
+  ]), 2, 1)
+  const overlay = new Uint8Array([0b10000000])
+
+  const dicom = encodeDicomCompressedImageData(source, {
+    patientName: "Research^Fixture",
+    studyDescription: "Non clinical review",
+    seriesDescription: "Browser export",
+    transferSyntax: "1.2.840.10008.1.2.4.90",
+    compressedPixelData: new Uint8Array([0xff, 0x4f, 0xff, 0x51]),
+    overlays: [{ group: 0x6000, rows: 1, columns: 2, data: overlay, description: "Selection overlay" }],
+    validationLabel: "NON_CLINICAL_RESEARCH_ONLY",
+  })
+  const metadata = await inspectDicomMetadata(new File([dicom], "compressed.dcm"))
+  const text = new TextDecoder("latin1").decode(dicom)
+
+  expect(metadata.transferSyntax).toBe("1.2.840.10008.1.2.4.90")
+  expect(metadata.compressed).toBe(true)
+  expect(metadata.overlays).toHaveLength(1)
+  expect(metadata.overlays[0]).toMatchObject({ group: 0x6000, rows: 1, columns: 2, description: "Selection overlay" })
+  expect(metadata.patientName).toBe("Research^Fixture")
+  expect(metadata.validationLabel).toBe("NON_CLINICAL_RESEARCH_ONLY")
+  expect(text).toContain("Selection overlay")
+  expect(text).toContain("NON_CLINICAL_RESEARCH_ONLY")
+})
+
 test("PDF and EPS exporters produce importable flattened/vector-subset handoff files", async () => {
   installFixtureDom()
   const canvas = document.createElement("canvas")
@@ -857,6 +1169,39 @@ test("PDF page importer exposes each page as a flattened canvas", async () => {
   expect(pages[1].pageNumber).toBe(2)
 })
 
+test("PDF authoring preserves multi-page UI intent, editable text/vector records, transparency groups, and annotations", async () => {
+  installFixtureDom()
+  const canvas = document.createElement("canvas")
+  canvas.width = 32
+  canvas.height = 24
+  canvas.getContext("2d")!.fillRect(0, 0, 32, 24)
+
+  const pdf = await encodePdfDocument({
+    title: "Editable PDF fixture",
+    pages: [{
+      canvas,
+      textRuns: [{ text: "Live heading", x: 4, y: 18, size: 10, color: [1, 0, 0] }],
+      vectors: [{ id: "rect-1", kind: "rect", x: 2, y: 3, width: 12, height: 8, stroke: [0, 0, 1], fill: [0, 1, 0], opacity: 0.45 }],
+      transparencyGroups: [{ id: "group-1", blendMode: "Multiply", isolated: true, knockout: false }],
+      annotations: [{ id: "note-1", type: "text", contents: "Review vector edge", x: 6, y: 6, width: 14, height: 10 }],
+    }, {
+      textRuns: [{ text: "Second page", x: 4, y: 12, size: 8 }],
+    }],
+  })
+  const extracted = await extractPdfEditableObjects(new File([pdf], "editable.pdf"))
+  const text = new TextDecoder("latin1").decode(pdf)
+
+  expect(extracted.pageCount).toBe(2)
+  expect(extracted.textRuns.map((run) => run.text)).toContain("Live heading")
+  expect(extracted.textRuns.map((run) => run.text)).toContain("Second page")
+  expect(extracted.vectors.some((vector) => vector.id === "rect-1")).toBe(true)
+  expect(extracted.transparencyGroups[0]).toMatchObject({ id: "group-1", blendMode: "Multiply", isolated: true })
+  expect(extracted.annotations[0]).toMatchObject({ id: "note-1", contents: "Review vector edge" })
+  expect(text).toContain("/Annots")
+  expect(text).toContain("/Group")
+  expect(text).toContain("PSWEBPDF")
+})
+
 test("EPS subset renderer handles curves, CMYK color, line width, and closed paths without executing PostScript", async () => {
   installFixtureDom()
   const eps = new TextEncoder().encode(`%!PS-Adobe-3.0 EPSF-3.0
@@ -878,6 +1223,38 @@ showpage
   expect(canvas?.height).toBe(24)
 })
 
+test("EPS subset parser reconstructs editable vectors across transforms, dash, text, and fill rules", async () => {
+  installFixtureDom()
+  const eps = new TextEncoder().encode(`%!PS-Adobe-3.0 EPSF-3.0
+%%BoundingBox: 0 0 64 48
+gsave
+8 6 translate
+2 2 scale
+0.1 0.2 0.3 setrgbcolor
+[4 2] 0 setdash
+newpath
+0 0 moveto
+16 0 lineto
+16 12 lineto
+closepath
+eofill
+grestore
+/Helvetica findfont 10 scalefont setfont
+4 40 moveto
+(Editable EPS) show
+showpage
+%%EOF`)
+  const canvas = await decodeEpsPreview(new File([eps], "editable.eps"))
+  const vectors = extractEpsEditableVectors(new TextDecoder().decode(eps))
+
+  expect(canvas?.width).toBe(64)
+  expect(vectors.paths).toHaveLength(1)
+  expect(vectors.paths[0].paint).toBe("eofill")
+  expect(vectors.paths[0].dash).toEqual([4, 2])
+  expect(vectors.paths[0].commands[0]).toMatchObject({ op: "move", x: 8, y: 42 })
+  expect(vectors.text[0]).toMatchObject({ text: "Editable EPS", x: 4, y: 8 })
+})
+
 test("OpenEXR export supports JS-decodable channel and depth variants with explicit reports", async () => {
   installFixtureDom()
   const source = new ImageData(new Uint8ClampedArray([
@@ -896,6 +1273,39 @@ test("OpenEXR export supports JS-decodable channel and depth variants with expli
   expect(grayDecoded?.metadata?.sourceChannels).toBe("Y")
   expect(rgbDecoded?.channels).toBe(3)
   expect(rgbDecoded?.metadata?.sourceChannels).toBe("R,G,B")
+})
+
+test("OpenEXR workflow authors arbitrary channels, tiled/deep metadata, and multipart manifests", () => {
+  const width = 2
+  const height = 2
+  const arbitrary = encodeOpenExrArbitraryChannels({
+    width,
+    height,
+    channels: [
+      { name: "beauty.R", data: new Float32Array([1, 0.5, 0.25, 0]) },
+      { name: "beauty.G", data: new Float32Array([0, 1, 0.5, 0.25]) },
+      { name: "Z", data: new Float32Array([0.1, 0.2, 0.3, 0.4]) },
+      { name: "crypto.asset", data: new Float32Array([11, 12, 13, 14]) },
+    ],
+    tiled: { tileWidth: 1, tileHeight: 1, levelMode: "one-level" },
+    deep: { sampleCounts: new Uint32Array([1, 2, 1, 3]) },
+    partName: "beauty",
+  })
+  const multipart = encodeOpenExrMultipart([
+    { name: "beauty", buffer: arbitrary },
+    { name: "matte", buffer: encodeOpenExrArbitraryChannels({ width: 1, height: 1, channels: [{ name: "A", data: new Float32Array([1]) }] }) },
+  ])
+  const info = inspectExrHeader(arbitrary)
+  const arbitraryText = new TextDecoder("latin1").decode(arbitrary)
+  const multipartText = new TextDecoder("latin1").decode(multipart)
+
+  expect(info.channels).toEqual(["beauty.R", "beauty.G", "Z", "crypto.asset"])
+  expect(arbitraryText).toContain("tiledimage")
+  expect(arbitraryText).toContain("deep-sample-counts")
+  expect(arbitraryText).toContain("beauty")
+  expect(multipartText).toContain("PSWEB-EXR-MULTIPART")
+  expect(multipartText).toContain("beauty")
+  expect(multipartText).toContain("matte")
 })
 
 test("PSB serialization writes Large Document Format while PSD remains version 1", async () => {
@@ -983,12 +1393,13 @@ test("advanced capability matrix models TIFF, PDF, EPS, HEIF, and JPEG 2000 with
   const jp2 = capabilityForAdvancedFormat("archive.jp2", "image/jp2") as AdvancedFormatCapabilityWithExport
 
   expect(tiff.id).toBe("baseline-tiff")
-  expect(tiff.exportPath).toContain("TIFF encoder")
-  expect(tiff.limitations).toContain("BigTIFF")
+  expect(tiff.exportPath).toContain("local encoder")
+  expect(tiff.exportPath).toContain("BigTIFF")
 
   expect(pdf.id).toBe("pdf")
   expect(pdf.support).toBe("preview")
-  expect(pdf.exportPath).toContain("multi-page flattened PDF")
+  expect(pdf.exportPath).toContain("multi-page PDF")
+  expect(pdf.exportPath).toContain("editable text/vector")
   expect(pdf.layerResult).toContain("page")
 
   expect(eps.id).toBe("eps")
@@ -998,12 +1409,13 @@ test("advanced capability matrix models TIFF, PDF, EPS, HEIF, and JPEG 2000 with
   expect(heif.id).toBe("heif")
   expect(heif.support).toBe("preview")
   expect(heif.decodePath).toContain("HEIF/HEIC decoder")
-  expect(heif.exportPath).toContain("AV1-in-HEIF")
+  expect(heif.exportPath).toContain("HEVC-backed HEIC")
 
   expect(jp2.id).toBe("jpeg2000")
   expect(jp2.support).toBe("preview")
   expect(jp2.decodePath).toContain("JPEG 2000 decoder")
-  expect(jp2.exportPath).toContain("OpenJPEG")
+  expect(jp2.exportPath).toContain("JPX")
+  expect(jp2.exportPath).toContain("JPM")
 
   expect(getCapability("format.pdf").status).toBe("approximation")
   expect(getCapability("format.eps").status).toBe("approximation")

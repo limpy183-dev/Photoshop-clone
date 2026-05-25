@@ -732,7 +732,16 @@ function drawPatternOverlay(
  * Compose a layer with its non-destructive style effects baked in.
  * Returns a new canvas (same document size) ready for compositing.
  */
-export function applyLayerStyle(layer: Layer, fillOpacity = 1): HTMLCanvasElement {
+export function applyLayerStyle(
+  layer: Layer,
+  fillOpacity = 1,
+  options: {
+    /** Alpha source used for effect geometry. Defaults to the rendered fill canvas. */
+    effectSourceCanvas?: HTMLCanvasElement
+    /** Photoshop's "Transparency Shapes Layer" checkbox. Defaults true. */
+    transparencyShapesLayer?: boolean
+  } = {},
+): HTMLCanvasElement {
   const style = layer.style
   if (!style) return layer.canvas
   const enabled =
@@ -748,7 +757,10 @@ export function applyLayerStyle(layer: Layer, fillOpacity = 1): HTMLCanvasElemen
     style.dropShadow?.enabled
   if (!enabled && fillOpacity >= 1) return layer.canvas
 
-  const geom = buildGeometry(layer.canvas)
+  const effectSource = options.transparencyShapesLayer === false
+    ? makeFullAlphaCanvas(layer.canvas.width, layer.canvas.height)
+    : options.effectSourceCanvas ?? layer.canvas
+  const geom = buildGeometry(effectSource)
   const out = makeCanvas(layer.canvas.width, layer.canvas.height)
   const ctx = out.getContext("2d")!
 
@@ -795,6 +807,14 @@ export function applyLayerStyle(layer: Layer, fillOpacity = 1): HTMLCanvasElemen
   }
   if (style.stroke?.enabled && style.stroke.position !== "outside") drawStroke(ctx, geom, style.stroke)
   return out
+}
+
+function makeFullAlphaCanvas(width: number, height: number) {
+  const canvas = makeCanvas(width, height)
+  const ctx = canvas.getContext("2d")!
+  ctx.fillStyle = "#ffffff"
+  ctx.fillRect(0, 0, width, height)
+  return canvas
 }
 
 function blendModeMap(b?: BlendMode): GlobalCompositeOperation {

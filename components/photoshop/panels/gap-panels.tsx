@@ -4,33 +4,19 @@ import * as React from "react"
 import { useEditor } from "../editor-context"
 import { downloadText } from "../document-io"
 import { FILTERS } from "../filters"
+import { addPhotoshopEventListener } from "../events"
 import { rasterizeText } from "../tool-helpers"
-import type { AssetLibraryItem, CustomShapeId, LayerStyle, Note } from "../types"
+import type { AssetLibraryItem, LayerStyle, Note } from "../types"
 import { uid } from "../uid"
 import { createAssetLibraryBundle, filterAssetLibrary } from "../asset-library-bundles"
+import { exportCustomShapeLibrary, normalizeCustomShapeLibrary, shapeAssetToPreset, shapePresetToAsset } from "../custom-shape-library"
 import { appendThreadReply, createReviewReport, createReviewThread, setThreadResolved } from "../collaboration"
 import { buildLearningIndex, runLearningIndexItem, searchLearningIndex, type LearningPanelSource } from "../learning-index"
 import { normalizeImportedAssetLibrary } from "./assets-panel"
 import { TimelinePanel } from "./timeline-panel"
+import { readShapePresets, type ShapePresetEntry } from "../shape-preset-library"
 
 const glyphs = "©®™•…—–°±×÷µΩπ∞≤≥≈≠∑√ƒ∂∆∫∏αβγδλ✓✕★☆"
-const shapes: { id: CustomShapeId; name: string }[] = [
-  { id: "star5", name: "5 Point Star" },
-  { id: "star6", name: "6 Point Star" },
-  { id: "heart", name: "Heart" },
-  { id: "arrow-right", name: "Arrow Right" },
-  { id: "arrow-left", name: "Arrow Left" },
-  { id: "arrow-up", name: "Arrow Up" },
-  { id: "arrow-down", name: "Arrow Down" },
-  { id: "speech", name: "Speech Bubble" },
-  { id: "check", name: "Check Mark" },
-  { id: "cross", name: "Cross" },
-  { id: "lightning", name: "Lightning" },
-  { id: "polygon-hex", name: "Hexagon" },
-  { id: "polygon-tri", name: "Triangle" },
-  { id: "diamond", name: "Diamond" },
-]
-
 const learningPanels: LearningPanelSource[] = [
   { id: "assets", label: "Assets", category: "Color and Assets", complexity: "standard", keywords: ["library", "tags", "export"] },
   { id: "libraries", label: "Libraries", category: "Color and Assets", complexity: "advanced", keywords: ["bundle", "stock", "font"] },
@@ -48,6 +34,8 @@ const learningIndex = buildLearningIndex({
   panels: learningPanels,
   filters: Object.values(FILTERS),
 })
+
+const LEARNING_QUERY_KEY = "ps-learning-index-query"
 
 export function GlyphsPanel() {
   const { activeLayer, dispatch, commit } = useEditor()
@@ -245,14 +233,44 @@ export function CommentsPanel() {
 }
 
 export function DiscoverPanel() {
-  const [query, setQuery] = React.useState("")
+  const [query, setQuery] = React.useState(readLearningQuery)
+  React.useEffect(() => {
+    return addPhotoshopEventListener("ps-set-learning-query", (nextQuery) => {
+      setQuery(nextQuery)
+      writeLearningQuery(nextQuery)
+    })
+  }, [])
   const visible = React.useMemo(() => searchLearningIndex(learningIndex, query, { limit: 80 }), [query])
   return (
     <PanelShell title="Discover">
-      <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search commands, docs, panels, workflows" className={inputClass} />
+      <input
+        value={query}
+        onChange={(event) => {
+          setQuery(event.target.value)
+          writeLearningQuery(event.target.value)
+        }}
+        placeholder="Search tools, commands, docs, panels, workflows"
+        className={inputClass}
+      />
       {visible.map((item) => <SmallButton key={item.id} label={`${item.title} - ${item.type} - ${item.category}`} onClick={() => runLearningIndexItem(item)} />)}
     </PanelShell>
   )
+}
+
+function readLearningQuery() {
+  if (typeof window === "undefined") return ""
+  try {
+    return sessionStorage.getItem(LEARNING_QUERY_KEY) ?? ""
+  } catch {
+    return ""
+  }
+}
+
+function writeLearningQuery(query: string) {
+  if (typeof window === "undefined") return
+  try {
+    sessionStorage.setItem(LEARNING_QUERY_KEY, query)
+  } catch {}
 }
 
 export function MeasurementLogPanel() {
@@ -294,16 +312,81 @@ export function NotesPanel() {
 }
 
 export function ShapesPanel() {
-  const { dispatch } = useEditor()
+  const { activeDoc, activeLayer, dispatch, commit, foreground } = useEditor()
+  const [query, setQuery] = React.useState("")
+  const [shapePresets, setShapePresets] = React.useState<ShapePresetEntry[]>(readShapePresets)
+  React.useEffect(() => {
+    const syncShapes = (event: Event) => {
+      const detail = (event as CustomEvent<ShapePresetEntry[]>).detail
+      setShapePresets(Array.isArray(detail) ? detail : readShapePresets())
+    }
+    window.addEventListener("ps-shape-presets-changed", syncShapes)
+    return () => window.removeEventListener("ps-shape-presets-changed", syncShapes)
+  }, [])
+  if (!activeDoc) return <PanelEmpty text="No document open" />
+  const shapeAssets = (activeDoc.assetLibrary ?? []).filter((asset) => asset.kind === "shape")
+  const visibleAssets = filterAssetLibrary(shapeAssets, { query })
+  const setAssets = (assets: AssetLibraryItem[], label: string) => {
+    dispatch({ type: "set-asset-library", assets })
+    window.setTimeout(() => commit(label, []), 0)
+  }
+  const saveActiveShape = () => {
+    if (!activeLayer?.shape) return
+    const asset = shapePresetToAsset(activeLayer.shape, { name: `${activeLayer.name} shape`, group: "Custom Shapes", tags: ["shape", "vector"] })
+    setAssets([asset, ...(activeDoc.assetLibrary ?? [])], "Save Custom Shape")
+  }
+  const importShapes = () => {
+    const input = document.createElement("input")
+    input.type = "file"
+    input.accept = ".json,.psshapes,.pslibrary,application/json"
+    input.onchange = async () => {
+      const file = input.files?.[0]
+      if (!file) return
+      try {
+        const imported = normalizeCustomShapeLibrary(JSON.parse(await file.text()))
+        setAssets([...imported, ...(activeDoc.assetLibrary ?? [])], "Import Custom Shapes")
+      } catch {
+        window.alert("Could not import that custom shape library.")
+      }
+    }
+    input.click()
+  }
+  const selectAssetShape = (asset: AssetLibraryItem) => {
+    window.__psCustomShapePreset = shapeAssetToPreset(asset, { x: 0, y: 0, w: 100, h: 100, fill: foreground })
+    window.__psCustomShape = undefined
+    dispatch({ type: "set-tool", tool: "custom-shape" })
+  }
   return (
     <PanelShell title="Shapes">
+      <div className="grid grid-cols-3 gap-1">
+        <SmallButton label="Save Active Shape" disabled={!activeLayer?.shape} onClick={saveActiveShape} />
+        <SmallButton label="Import Shapes" onClick={importShapes} />
+        <SmallButton
+          label="Export Shapes"
+          disabled={!shapeAssets.length}
+          onClick={() => downloadText(
+            JSON.stringify(exportCustomShapeLibrary(shapeAssets, { name: `${activeDoc.name} Shapes` }), null, 2),
+            `${activeDoc.name}-custom-shapes.psshapes.json`,
+          )}
+        />
+      </div>
+      <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search custom shapes" className={inputClass} />
+      {visibleAssets.length ? (
+        <div className="grid grid-cols-2 gap-1">
+          {visibleAssets.map((asset) => (
+            <SmallButton key={asset.id} label={`${asset.name} - ${asset.group ?? "Custom"}`} onClick={() => selectAssetShape(asset)} />
+          ))}
+        </div>
+      ) : null}
+      <div className="text-[10px] uppercase tracking-wide text-[var(--ps-text-dim)]">Bundled</div>
       <div className="grid grid-cols-2 gap-1">
-        {shapes.map((shape) => (
+        {shapePresets.map((shape) => (
           <SmallButton
             key={shape.id}
             label={shape.name}
             onClick={() => {
-              ;window.__psCustomShape = shape.id
+              window.__psCustomShapePreset = undefined
+              ;window.__psCustomShape = shape.customId
               dispatch({ type: "set-tool", tool: "custom-shape" })
             }}
           />

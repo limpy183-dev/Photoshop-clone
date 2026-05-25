@@ -17,7 +17,7 @@ test("PSD report classifies rich app-only fixture metadata without overclaiming"
   expect(byLabel.get("Guides")?.status).toBe("unsupported")
   expect(byLabel.get("Slices")?.status).toBe("unsupported")
   expect(byLabel.get("Smart object sources")?.status).toBe("approximated")
-  expect(byLabel.get("Linked smart objects")?.status).toBe("unsupported")
+  expect(byLabel.get("Linked smart objects")?.status).toBe("approximated")
   expect(byLabel.get("PSD interoperability boundary")?.detail).toContain("raster-compatible approximation")
 })
 

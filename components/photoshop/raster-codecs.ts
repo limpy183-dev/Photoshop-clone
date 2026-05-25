@@ -14,7 +14,7 @@ export interface DecodedRaster {
   compression: string
   imageData: ImageData
   warnings: string[]
-  metadata?: Record<string, string | number | boolean | string[]>
+  metadata?: Record<string, unknown>
 }
 
 export type TiffCompression = "none" | "lzw" | "deflate"
@@ -59,6 +59,26 @@ export interface RasterExportMetadata {
 export interface TiffEncodeOptions {
   compression?: TiffCompression
   metadata?: RasterExportMetadata
+  customFields?: TiffCustomField[]
+}
+
+export interface TiffCustomField {
+  tag: number
+  type: number
+  count?: number
+  value?: number
+  data?: Uint8Array
+}
+
+export interface BigTiffDirectorySpec {
+  name?: string
+  width?: number
+  height?: number
+  fields?: TiffCustomField[]
+}
+
+export interface BigTiffEncodeOptions extends TiffEncodeOptions {
+  directories?: BigTiffDirectorySpec[]
 }
 
 export interface TgaEncodeOptions {
@@ -102,15 +122,52 @@ export interface HeifEncodeOptions {
   }) => Promise<ArrayBuffer | Uint8Array>
 }
 
+export interface HeicEncodeOptions extends Omit<HeifEncodeOptions, "encodeAvif"> {
+  encodeHevc?: (imageData: ImageData, options: {
+    quality: number
+    lossless?: boolean
+    speed?: number
+    bitDepth?: number
+    chromaSubsampling?: string
+  }) => Promise<Uint8Array | ArrayBuffer | {
+    bitstream: Uint8Array | ArrayBuffer
+    decoderConfig?: Uint8Array | ArrayBuffer
+  }>
+}
+
 export interface Jpeg2000EncodeOptions {
   quality?: number
   reversible?: boolean
   decompositions?: number
+  container?: "codestream" | "jp2" | "jpx" | "jpm"
+  includeAlpha?: boolean
+  layers?: Array<{ label: string; opacity?: number }>
+  color?: {
+    enumColorSpace?: number
+    iccProfileName?: string
+    iccProfile?: Uint8Array
+    profileControls?: Record<string, string | number | boolean>
+  }
 }
 
 export interface OpenExrEncodeOptions {
   channels?: "rgba" | "rgb" | "gray"
   pixelType?: "float" | "half"
+}
+
+export interface OpenExrArbitraryChannel {
+  name: string
+  data: Float32Array | Uint16Array | Uint8Array
+  pixelType?: "float" | "half" | "uint"
+}
+
+export interface OpenExrArbitraryEncodeOptions {
+  width: number
+  height: number
+  channels: OpenExrArbitraryChannel[]
+  tiled?: { tileWidth: number; tileHeight: number; levelMode?: "one-level" | "mipmap" | "ripmap" }
+  deep?: { sampleCounts: Uint32Array }
+  partName?: string
 }
 
 export interface PsbLargeDocumentOpenPlan {
@@ -183,6 +240,21 @@ function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 
 function u32BE(value: number): Uint8Array {
   return new Uint8Array([(value >>> 24) & 255, (value >>> 16) & 255, (value >>> 8) & 255, value & 255])
+}
+
+function u64BE(value: number): Uint8Array {
+  const high = Math.floor(value / 0x100000000)
+  const low = value >>> 0
+  return new Uint8Array([
+    (high >>> 24) & 255,
+    (high >>> 16) & 255,
+    (high >>> 8) & 255,
+    high & 255,
+    (low >>> 24) & 255,
+    (low >>> 16) & 255,
+    (low >>> 8) & 255,
+    low & 255,
+  ])
 }
 
 const CRC_TABLE = (() => {
@@ -716,8 +788,8 @@ function readTgaFixed(bytes: Uint8Array, offset: number, length: number) {
   return new TextDecoder("latin1").decode(bytes.subarray(offset, end)).trim()
 }
 
-function readTgaMetadata(bytes: Uint8Array, idLength: number): Record<string, string | number | boolean | string[]> | undefined {
-  const metadata: Record<string, string | number | boolean | string[]> = {}
+function readTgaMetadata(bytes: Uint8Array, idLength: number): Record<string, unknown> | undefined {
+  const metadata: Record<string, unknown> = {}
   if (idLength > 0) {
     const id = readTgaFixed(bytes, 18, idLength)
     if (id) metadata.title = id
@@ -769,6 +841,7 @@ function readTgaMetadata(bytes: Uint8Array, idLength: number): Record<string, st
           if (typeof value === "string" && value) metadata[key] = value
           else if (typeof value === "number" || typeof value === "boolean") metadata[key] = value
           else if (Array.isArray(value) && value.every((item) => typeof item === "string")) metadata[key] = value
+          else if (key === "contentCredentials" && Array.isArray(value) && value.every((item) => item && typeof item === "object" && !Array.isArray(item))) metadata[key] = value
         }
       } catch {
         metadata.developerMetadata = text.slice(0, 120)
@@ -913,6 +986,24 @@ function skipPnmWhitespace(bytes: Uint8Array, start: number) {
   return i
 }
 
+function pnmStructuredMetadata(comments: readonly string[]) {
+  const metadata: Record<string, unknown> = {}
+  let description: string | undefined
+  for (const comment of comments) {
+    const match = /^([A-Za-z][A-Za-z -]*):\s*(.*)$/.exec(comment)
+    const key = match?.[1]?.toLowerCase().replace(/\s+/g, "-")
+    const value = match?.[2]?.trim()
+    if (key === "title" && value) metadata.title = value
+    else if (key === "author" && value) metadata.author = value
+    else if (key === "copyright" && value) metadata.copyright = value
+    else if (key === "source" && value) metadata.source = value
+    else if (key === "source-maxvalue" && value) metadata.sourceMaxValue = Number(value)
+    else if (!match && !description) description = comment
+  }
+  if (description) metadata.description = description
+  return metadata
+}
+
 export function decodePnmBuffer(buffer: ArrayBuffer): DecodedRaster {
   const bytes = new Uint8Array(buffer)
   const comments: string[] = []
@@ -982,6 +1073,11 @@ export function decodePnmBuffer(buffer: ArrayBuffer): DecodedRaster {
     }
   }
 
+  const structuredMetadata = pnmStructuredMetadata(comments)
+  const parsedSourceMax = typeof structuredMetadata.sourceMaxValue === "number" && Number.isFinite(structuredMetadata.sourceMaxValue)
+    ? structuredMetadata.sourceMaxValue
+    : Number(comments.find((comment) => /^Source-MaxValue:/i.test(comment))?.split(":").slice(1).join(":").trim()) || maxValue
+
   return {
     format: "PNM",
     width,
@@ -994,7 +1090,8 @@ export function decodePnmBuffer(buffer: ArrayBuffer): DecodedRaster {
     warnings: [],
     metadata: {
       maxValue,
-      sourceMaxValue: Number(comments.find((comment) => /^Source-MaxValue:/i.test(comment))?.split(":").slice(1).join(":").trim()) || maxValue,
+      sourceMaxValue: parsedSourceMax,
+      ...structuredMetadata,
       ...(comments.length ? { comments } : {}),
     },
   }
@@ -1436,8 +1533,21 @@ function buildIptcIimBytes(metadata: RasterExportMetadata): Uint8Array {
   return concatUint8(parts.filter((part) => part.byteLength > 0))
 }
 
-function tiffMetadataFields(metadata: RasterExportMetadata | undefined): TiffField[] {
-  if (!metadata) return []
+function normalizeTiffCustomFields(customFields: TiffCustomField[] | undefined): TiffField[] {
+  return (customFields ?? [])
+    .filter((field) => Number.isFinite(field.tag) && Number.isFinite(field.type))
+    .map((field) => ({
+      tag: Math.max(0, Math.min(65535, Math.round(field.tag))),
+      type: Math.max(1, Math.round(field.type)),
+      count: field.count ?? (field.data ? field.data.byteLength : 1),
+      value: field.value,
+      data: field.data,
+    }))
+}
+
+function tiffMetadataFields(metadata: RasterExportMetadata | undefined, customFields?: TiffCustomField[]): TiffField[] {
+  const custom = normalizeTiffCustomFields(customFields)
+  if (!metadata) return custom
   const fields: TiffField[] = []
   const software = tiffAsciiBytes("Photoshop Web")
   fields.push({ tag: 305, type: 2, count: software.byteLength, data: software })
@@ -1463,6 +1573,8 @@ function tiffMetadataFields(metadata: RasterExportMetadata | undefined): TiffFie
   if (metadata.iccProfile?.byteLength) {
     fields.push({ tag: 34675, type: 7, count: metadata.iccProfile.byteLength, data: metadata.iccProfile })
   }
+  const c2pa = c2paManifestStoreFromRasterMetadata(metadata)
+  if (c2pa?.byteLength) fields.push({ tag: 52545, type: 7, count: c2pa.byteLength, data: c2pa })
   const xmp = xmpPacketFromRasterMetadata(metadata)
   if (xmp) {
     const data = new TextEncoder().encode(xmp)
@@ -1471,7 +1583,7 @@ function tiffMetadataFields(metadata: RasterExportMetadata | undefined): TiffFie
   if (dateTime || metadata.description || metadata.iccProfileName) {
     fields.push({ tag: 34665, type: 4, count: 1, dataFactory: (offset) => buildExifIfdBytes(metadata, offset) })
   }
-  return fields
+  return [...fields, ...custom]
 }
 
 interface TiffField {
@@ -1489,6 +1601,7 @@ function buildTiffImageData(
   compressionTag: number,
   pixelBytes: Uint8Array,
   metadata?: RasterExportMetadata,
+  customFields?: TiffCustomField[],
 ): ArrayBuffer {
   const width = imageData.width
   const height = imageData.height
@@ -1505,7 +1618,7 @@ function buildTiffImageData(
     { tag: 279, type: 4, count: 1, value: pixelBytes.byteLength },
     { tag: 284, type: 3, count: 1, value: 1 },
     { tag: 338, type: 3, count: 1, value: 2 },
-    ...tiffMetadataFields(metadata),
+    ...tiffMetadataFields(metadata, customFields),
   ].sort((a, b) => a.tag - b.tag)
   const tagCount = fields.length
   const ifdOffset = 8
@@ -1595,7 +1708,7 @@ function highBitRgbaPixelBytes(image: HighBitImage) {
   return bytes
 }
 
-function buildTiffHighBitImageData(image: HighBitImage, compressionTag: number, pixelBytes: Uint8Array, metadata?: RasterExportMetadata): ArrayBuffer {
+function buildTiffHighBitImageData(image: HighBitImage, compressionTag: number, pixelBytes: Uint8Array, metadata?: RasterExportMetadata, customFields?: TiffCustomField[]): ArrayBuffer {
   const width = image.width
   const height = image.height
   assertCanvasSize(width, height, "TIFF export")
@@ -1616,7 +1729,7 @@ function buildTiffHighBitImageData(image: HighBitImage, compressionTag: number, 
     ...(includeSampleFormat
       ? [{ tag: 339, type: 3, count: 4, data: concatUint8([tiffU16LE(3), tiffU16LE(3), tiffU16LE(3), tiffU16LE(3)]) } as TiffField]
       : []),
-    ...tiffMetadataFields(metadata),
+    ...tiffMetadataFields(metadata, customFields),
   ].sort((a, b) => a.tag - b.tag)
   const tagCount = fields.length
   const ifdOffset = 8
@@ -1668,13 +1781,13 @@ export function encodeTiffHighBitImageData(image: HighBitImage, options: TiffEnc
   const compression = options.compression ?? "none"
   if (compression === "deflate") throw new Error("Deflate TIFF export is asynchronous. Use encodeTiffHighBitImageDataAsync().")
   const pixels = highBitRgbaPixelBytes(image)
-  if (compression === "lzw") return buildTiffHighBitImageData(image, 5, encodeTiffLzw(pixels), options.metadata)
-  return buildTiffHighBitImageData(image, 1, pixels, options.metadata)
+  if (compression === "lzw") return buildTiffHighBitImageData(image, 5, encodeTiffLzw(pixels), options.metadata, options.customFields)
+  return buildTiffHighBitImageData(image, 1, pixels, options.metadata, options.customFields)
 }
 
 export async function encodeTiffHighBitImageDataAsync(image: HighBitImage, options: TiffEncodeOptions = {}): Promise<ArrayBuffer> {
   const compression = options.compression ?? "none"
-  if (compression === "deflate") return buildTiffHighBitImageData(image, 8, await deflateRaw(highBitRgbaPixelBytes(image)), options.metadata)
+  if (compression === "deflate") return buildTiffHighBitImageData(image, 8, await deflateRaw(highBitRgbaPixelBytes(image)), options.metadata, options.customFields)
   return encodeTiffHighBitImageData(image, options)
 }
 
@@ -1684,14 +1797,175 @@ export function encodeTiffImageData(imageData: ImageData, options: TiffEncodeOpt
     throw new Error("Deflate TIFF export is asynchronous. Use encodeTiffImageDataAsync().")
   }
   const pixels = rgbaPixelBytes(imageData)
-  if (compression === "lzw") return buildTiffImageData(imageData, 5, encodeTiffLzw(pixels), options.metadata)
-  return buildTiffImageData(imageData, 1, pixels, options.metadata)
+  if (compression === "lzw") return buildTiffImageData(imageData, 5, encodeTiffLzw(pixels), options.metadata, options.customFields)
+  return buildTiffImageData(imageData, 1, pixels, options.metadata, options.customFields)
 }
 
 export async function encodeTiffImageDataAsync(imageData: ImageData, options: TiffEncodeOptions = {}): Promise<ArrayBuffer> {
   const compression = options.compression ?? "none"
-  if (compression === "deflate") return buildTiffImageData(imageData, 8, await deflateRaw(rgbaPixelBytes(imageData)), options.metadata)
+  if (compression === "deflate") return buildTiffImageData(imageData, 8, await deflateRaw(rgbaPixelBytes(imageData)), options.metadata, options.customFields)
   return encodeTiffImageData(imageData, options)
+}
+
+function bigTiffTypeBytes(type: number) {
+  if ([3, 8].includes(type)) return 2
+  if ([4, 9, 11].includes(type)) return 4
+  if ([5, 10, 12, 16, 17, 18].includes(type)) return 8
+  return 1
+}
+
+function resolveBigTiffFieldData(field: TiffField, plannedOffset: number) {
+  if (field.dataFactory) return field.dataFactory(plannedOffset)
+  return field.data
+}
+
+function writeBigTiffIfd(
+  bytes: Uint8Array,
+  view: DataView,
+  offset: number,
+  fields: TiffField[],
+  nextIfdOffset: number,
+) {
+  view.setBigUint64(offset, BigInt(fields.length), true)
+  let entry = offset + 8
+  for (const field of fields) {
+    view.setUint16(entry, field.tag, true)
+    view.setUint16(entry + 2, field.type, true)
+    view.setBigUint64(entry + 4, BigInt(field.count), true)
+    if (field.data) {
+      if (field.data.byteLength <= 8) {
+        bytes.set(field.data, entry + 12)
+      } else {
+        view.setBigUint64(entry + 12, BigInt(field.dataOffset ?? 0), true)
+        bytes.set(field.data, field.dataOffset ?? 0)
+      }
+    } else if (field.type === 3 && field.count === 1) {
+      view.setUint16(entry + 12, field.value ?? 0, true)
+    } else {
+      view.setBigUint64(entry + 12, BigInt(field.value ?? 0), true)
+    }
+    entry += 20
+  }
+  view.setBigUint64(entry, BigInt(nextIfdOffset), true)
+}
+
+function planBigTiffFields(fields: TiffField[], dataOffset: number) {
+  let extraOffset = dataOffset
+  for (const field of fields) {
+    const data = resolveBigTiffFieldData(field, extraOffset)
+    if (!data) continue
+    field.data = data
+    field.count = field.count || Math.max(1, Math.floor(data.byteLength / bigTiffTypeBytes(field.type)))
+    if (data.byteLength > 8) {
+      field.dataOffset = extraOffset
+      extraOffset += data.byteLength
+    }
+  }
+  return extraOffset
+}
+
+function bigTiffDirectoryFields(directory: BigTiffDirectorySpec): TiffField[] {
+  const fields: TiffField[] = [
+    ...(directory.width ? [{ tag: 256, type: 4, count: 1, value: directory.width } as TiffField] : []),
+    ...(directory.height ? [{ tag: 257, type: 4, count: 1, value: directory.height } as TiffField] : []),
+    ...(directory.name ? [{ tag: 270, type: 2, count: directory.name.length + 1, data: tiffAsciiBytes(directory.name) } as TiffField] : []),
+    ...normalizeTiffCustomFields(directory.fields),
+  ]
+  return fields.sort((a, b) => a.tag - b.tag)
+}
+
+export function encodeBigTiffImageData(imageData: ImageData, options: BigTiffEncodeOptions = {}): ArrayBuffer {
+  assertCanvasSize(imageData.width, imageData.height, "BigTIFF export")
+  const pixelBytes = rgbaPixelBytes(imageData)
+  const directorySpecs = options.directories ?? []
+  const firstIfdOffset = 16
+  const baseRootFields: TiffField[] = [
+    { tag: 256, type: 4, count: 1, value: imageData.width },
+    { tag: 257, type: 4, count: 1, value: imageData.height },
+    { tag: 258, type: 3, count: 4, data: new Uint8Array([8, 0, 8, 0, 8, 0, 8, 0]) },
+    { tag: 259, type: 3, count: 1, value: 1 },
+    { tag: 262, type: 3, count: 1, value: 2 },
+    { tag: 273, type: 16, count: 1, value: 0 },
+    { tag: 277, type: 3, count: 1, value: 4 },
+    { tag: 278, type: 4, count: 1, value: imageData.height },
+    { tag: 279, type: 16, count: 1, value: pixelBytes.byteLength },
+    { tag: 284, type: 3, count: 1, value: 1 },
+    { tag: 338, type: 3, count: 1, value: 2 },
+    ...tiffMetadataFields(options.metadata, options.customFields),
+  ]
+  if (directorySpecs.length) baseRootFields.push({ tag: 330, type: 16, count: 1, value: 0 })
+  const rootFields = baseRootFields.sort((a, b) => a.tag - b.tag)
+  const rootIfdSize = 8 + rootFields.length * 20 + 8
+  let extraOffset = firstIfdOffset + rootIfdSize
+  extraOffset = planBigTiffFields(rootFields, extraOffset)
+  const pixelOffset = extraOffset
+  for (const field of rootFields) {
+    if (field.tag === 273) field.value = pixelOffset
+  }
+  let nextIfdOffset = pixelOffset + pixelBytes.byteLength
+  const extraDirectories = directorySpecs.map(bigTiffDirectoryFields)
+  if (!extraDirectories.length) nextIfdOffset = 0
+  else {
+    for (const field of rootFields) if (field.tag === 330) field.value = nextIfdOffset
+  }
+  let totalLength = pixelOffset + pixelBytes.byteLength
+  for (const fields of extraDirectories) {
+    const ifdOffset = totalLength
+    const ifdSize = 8 + fields.length * 20 + 8
+    totalLength += ifdSize
+    totalLength = planBigTiffFields(fields, totalLength)
+    for (const field of fields) if (field.tag === 273) field.value = totalLength
+    void ifdOffset
+  }
+  const bytes = new Uint8Array(totalLength)
+  const view = new DataView(bytes.buffer)
+  bytes[0] = 0x49
+  bytes[1] = 0x49
+  view.setUint16(2, 43, true)
+  view.setUint16(4, 8, true)
+  view.setUint16(6, 0, true)
+  view.setBigUint64(8, BigInt(firstIfdOffset), true)
+  writeBigTiffIfd(bytes, view, firstIfdOffset, rootFields, extraDirectories.length ? nextIfdOffset : 0)
+  bytes.set(pixelBytes, pixelOffset)
+  let ifdOffset = pixelOffset + pixelBytes.byteLength
+  for (let i = 0; i < extraDirectories.length; i++) {
+    const fields = extraDirectories[i]
+    const next = i + 1 < extraDirectories.length ? ifdOffset + 8 + fields.length * 20 + 8 : 0
+    writeBigTiffIfd(bytes, view, ifdOffset, fields, next)
+    ifdOffset = next || ifdOffset
+  }
+  return bytes.buffer
+}
+
+export interface DngEncodeOptions extends TiffEncodeOptions {
+  cameraModel?: string
+  uniqueCameraModel?: string
+  sidecar?: string
+}
+
+export function encodeDngImageData(imageData: ImageData, options: DngEncodeOptions = {}): ArrayBuffer {
+  const uniqueModel = options.uniqueCameraModel || options.cameraModel || "Photoshop Web DNG"
+  const dngFields: TiffCustomField[] = [
+    { tag: 50706, type: 1, count: 4, data: new Uint8Array([1, 4, 0, 0]) },
+    { tag: 50707, type: 1, count: 4, data: new Uint8Array([1, 1, 0, 0]) },
+    { tag: 50708, type: 2, count: uniqueModel.length + 1, data: tiffAsciiBytes(uniqueModel) },
+    { tag: 50717, type: 3, count: 1, value: 2 },
+    { tag: 50721, type: 5, count: 9, data: concatUint8([
+      tiffU32LE(1), tiffU32LE(1), tiffU32LE(0), tiffU32LE(1), tiffU32LE(0), tiffU32LE(1),
+      tiffU32LE(0), tiffU32LE(1), tiffU32LE(1), tiffU32LE(1), tiffU32LE(0), tiffU32LE(1),
+      tiffU32LE(0), tiffU32LE(1), tiffU32LE(0), tiffU32LE(1), tiffU32LE(1), tiffU32LE(1),
+    ]) },
+  ]
+  const metadata = {
+    ...options.metadata,
+    source: options.metadata?.source ?? "DNG",
+    xmp: options.sidecar ?? options.metadata?.xmp,
+  }
+  return encodeTiffImageData(imageData, {
+    ...options,
+    metadata,
+    customFields: [...dngFields, ...(options.customFields ?? [])],
+  })
 }
 
 function sameRgba(data: Uint8ClampedArray, a: number, b: number) {
@@ -2046,10 +2320,12 @@ export async function encodePngImageData(imageData: ImageData, options: PngEncod
   ihdr[11] = 0
   ihdr[12] = options.interlaced ? 1 : 0
   const compressed = await deflateZlib(pngScanlines(imageData, !!options.interlaced))
+  const c2pa = c2paManifestStoreFromRasterMetadata(options.metadata)
   return exactArrayBuffer(concatUint8([
     PNG_SIGNATURE,
     pngChunk("IHDR", ihdr),
     ...textMetadataChunks(options.metadata),
+    ...(c2pa ? [pngChunk("caBX", c2pa)] : []),
     pngChunk("IDAT", compressed),
     pngChunk("IEND", new Uint8Array(0)),
   ]))
@@ -2070,6 +2346,52 @@ function jsonXml(value: unknown) {
 
 function compactJsonObject<T extends Record<string, unknown>>(value: T): Partial<T> {
   return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined && entry !== null && entry !== "")) as Partial<T>
+}
+
+const C2PA_MANIFEST_STORE_UUID = new Uint8Array([
+  0x63, 0x32, 0x70, 0x61,
+  0x00, 0x11,
+  0x00, 0x10,
+  0x80, 0x00,
+  0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71,
+])
+
+const C2PA_BMFF_UUID = new Uint8Array([
+  0xd8, 0xfe, 0xc3, 0xd6,
+  0x1b, 0x0e,
+  0x48, 0x3c,
+  0x92, 0x97,
+  0x58, 0x28, 0x87, 0x7e, 0xc4, 0x81,
+])
+
+function metadataBox(type: string, data: Uint8Array): Uint8Array {
+  return concatUint8([u32BE(data.byteLength + 8), asciiBytes(type), data])
+}
+
+export function c2paManifestStoreFromRasterMetadata(metadata: RasterExportMetadata | undefined): Uint8Array | undefined {
+  const credentials = metadata?.contentCredentials?.filter((credential) => credential && credential.id) ?? []
+  if (!credentials.length) return undefined
+  const createdAt = metadata?.creationDate ?? credentials[0]?.createdAt ?? ""
+  const manifestJson = new TextEncoder().encode(JSON.stringify({
+    app: "Photoshop Web",
+    format: "c2pa-manifest-store",
+    version: 1,
+    label: "c2pa",
+    manifestStoreUuid: "63327061-0011-0010-8000-00aa00389b71",
+    signatureStatus: "unsigned-local",
+    generatedAt: createdAt,
+    title: metadata?.title,
+    author: metadata?.author,
+    description: metadata?.description,
+    credentials,
+  }))
+  const description = metadataBox("jumd", concatUint8([
+    C2PA_MANIFEST_STORE_UUID,
+    new Uint8Array([0]),
+    asciiBytes("c2pa\0"),
+  ]))
+  const manifest = metadataBox("json", manifestJson)
+  return metadataBox("jumb", concatUint8([description, manifest]))
 }
 
 function buildXmpPacket(metadata: RasterExportMetadata | undefined): string {
@@ -2131,9 +2453,12 @@ function isWebpContainer(bytes: Uint8Array) {
 export function injectWebpXmpMetadata(input: Uint8Array | ArrayBuffer, metadata: RasterExportMetadata | undefined): Uint8Array {
   const bytes = bytesFromInput(input)
   const xmp = xmpPacketFromRasterMetadata(metadata)
-  if (!xmp || !isWebpContainer(bytes)) return bytes
-  const xmpChunk = riffChunk("XMP ", new TextEncoder().encode(xmp))
-  const out = concatUint8([bytes, xmpChunk])
+  const c2pa = c2paManifestStoreFromRasterMetadata(metadata)
+  if ((!xmp && !c2pa) || !isWebpContainer(bytes)) return bytes
+  const chunks: Uint8Array[] = []
+  if (xmp) chunks.push(riffChunk("XMP ", new TextEncoder().encode(xmp)))
+  if (c2pa) chunks.push(riffChunk("C2PA", c2pa))
+  const out = concatUint8([bytes, ...chunks])
   new DataView(out.buffer, out.byteOffset + 4, 4).setUint32(0, out.byteLength - 8, true)
 
   let offset = 12
@@ -2141,7 +2466,7 @@ export function injectWebpXmpMetadata(input: Uint8Array | ArrayBuffer, metadata:
     const type = readAscii(out.buffer, out.byteOffset + offset, 4)
     const size = new DataView(out.buffer, out.byteOffset + offset + 4, 4).getUint32(0, true)
     if (type === "VP8X" && size >= 1 && offset + 8 + size <= out.byteLength) {
-      out[offset + 8] |= 0x04
+      if (xmp) out[offset + 8] |= 0x04
       break
     }
     offset += 8 + size + (size % 2)
@@ -2194,12 +2519,49 @@ const XMP_UUID = new Uint8Array([
   0x99, 0x94, 0x91, 0xe3, 0xaf, 0xac,
 ])
 
+function topLevelBoxEnd(bytes: Uint8Array, type: string) {
+  let offset = 0
+  while (offset + 8 <= bytes.byteLength) {
+    const size = new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0, false)
+    const boxType = readAscii(bytes.buffer, bytes.byteOffset + offset + 4, 4)
+    if (size < 8 || offset + size > bytes.byteLength) break
+    if (boxType === type) return offset + size
+    offset += size
+  }
+  return -1
+}
+
+function contentProvenanceBmffBox(manifest: Uint8Array, boxStartOffset: number) {
+  const purpose = asciiBytes("manifest\0")
+  const beforeManifest = C2PA_BMFF_UUID.byteLength + 4 + purpose.byteLength + 8
+  const manifestOffset = boxStartOffset + 8 + beforeManifest
+  return mp4Box("uuid", concatUint8([
+    C2PA_BMFF_UUID,
+    new Uint8Array([0, 0, 0, 0]),
+    purpose,
+    u64BE(manifestOffset),
+    manifest,
+  ]))
+}
+
+function injectAvifC2paManifest(input: Uint8Array, manifest: Uint8Array) {
+  const insertOffset = topLevelBoxEnd(input, "ftyp")
+  const offset = insertOffset >= 0 ? insertOffset : input.byteLength
+  const box = contentProvenanceBmffBox(manifest, offset)
+  return concatUint8([input.subarray(0, offset), box, input.subarray(offset)])
+}
+
 export function injectAvifXmpMetadata(input: Uint8Array | ArrayBuffer, metadata: RasterExportMetadata | undefined): Uint8Array {
   const bytes = bytesFromInput(input)
   const xmp = xmpPacketFromRasterMetadata(metadata)
-  if (!xmp || !isAvifContainer(bytes)) return bytes
-  const payload = concatUint8([XMP_UUID, new TextEncoder().encode(xmp)])
-  return concatUint8([bytes, mp4Box("uuid", payload)])
+  const c2pa = c2paManifestStoreFromRasterMetadata(metadata)
+  if ((!xmp && !c2pa) || !isAvifContainer(bytes)) return bytes
+  let out = c2pa ? injectAvifC2paManifest(bytes, c2pa) : bytes
+  if (xmp) {
+    const payload = concatUint8([XMP_UUID, new TextEncoder().encode(xmp)])
+    out = concatUint8([out, mp4Box("uuid", payload)])
+  }
+  return out
 }
 
 const ICC_UUID = new Uint8Array([
@@ -2230,6 +2592,25 @@ function insertJpegXmp(bytes: Uint8Array, metadata: RasterExportMetadata | undef
   segment[3] = length & 255
   segment.set(payload, 4)
   return concatUint8([bytes.subarray(0, 2), segment, bytes.subarray(2)])
+}
+
+function insertJpegC2paManifest(bytes: Uint8Array, metadata: RasterExportMetadata | undefined): Uint8Array {
+  const manifest = c2paManifestStoreFromRasterMetadata(metadata)
+  if (!manifest || bytes[0] !== 0xff || bytes[1] !== 0xd8) return bytes
+  const segments: Uint8Array[] = []
+  const maxPayload = 0xffff - 2
+  for (let offset = 0; offset < manifest.byteLength; offset += maxPayload) {
+    const part = manifest.subarray(offset, Math.min(manifest.byteLength, offset + maxPayload))
+    const length = part.byteLength + 2
+    const segment = new Uint8Array(4 + part.byteLength)
+    segment[0] = 0xff
+    segment[1] = 0xeb
+    segment[2] = (length >>> 8) & 255
+    segment[3] = length & 255
+    segment.set(part, 4)
+    segments.push(segment)
+  }
+  return concatUint8([bytes.subarray(0, 2), ...segments, bytes.subarray(2)])
 }
 
 let nodeMozJpegEncoderReady: Promise<{
@@ -2268,7 +2649,8 @@ export async function encodeJpegImageData(imageData: ImageData, options: JpegEnc
     progressive: options.progressive !== false,
     baseline: options.progressive === false,
   })
-  return exactArrayBuffer(insertJpegXmp(new Uint8Array(encoded), options.metadata))
+  const withXmp = insertJpegXmp(new Uint8Array(encoded), options.metadata)
+  return exactArrayBuffer(insertJpegC2paManifest(withXmp, options.metadata))
 }
 
 function imageDataToCanvas(imageData: ImageData): HTMLCanvasElement {
@@ -2329,6 +2711,67 @@ export async function encodeHeifImageData(imageData: ImageData, options: HeifEnc
   return exactArrayBuffer(injectAvifIccProfile(xmpBytes, metadata?.iccProfile, metadata?.iccProfileName))
 }
 
+function injectHeifUuidMetadata(input: Uint8Array, metadata: RasterExportMetadata | undefined): Uint8Array {
+  const chunks: Uint8Array[] = [input]
+  const xmp = xmpPacketFromRasterMetadata(metadata)
+  if (xmp) chunks.push(mp4Box("uuid", concatUint8([XMP_UUID, new TextEncoder().encode(xmp)])))
+  if (metadata?.iccProfile?.byteLength) {
+    const header = new TextEncoder().encode(`Photoshop Web ICC\0${metadata.iccProfileName ?? "ICC profile"}\0`)
+    chunks.push(mp4Box("uuid", concatUint8([ICC_UUID, header, metadata.iccProfile])))
+  }
+  return chunks.length === 1 ? input : concatUint8(chunks)
+}
+
+export async function encodeHeicImageData(imageData: ImageData, options: HeicEncodeOptions = {}): Promise<ArrayBuffer> {
+  assertCanvasSize(imageData.width, imageData.height, "HEIC export")
+  if (!options.encodeHevc) {
+    throw new Error("HEIC export requires an HEVC encoder callback; use encodeHeifImageData for AVIF-backed HEIF output.")
+  }
+  const quality = Math.max(0.01, Math.min(1, options.quality ?? 0.92))
+  const encoded = await options.encodeHevc(imageData, {
+    quality,
+    lossless: options.lossless,
+    speed: options.speed,
+    bitDepth: options.bitDepth,
+    chromaSubsampling: options.chromaSubsampling,
+  })
+  const bitstream = bytesFromInput(encoded instanceof Uint8Array || encoded instanceof ArrayBuffer ? encoded : encoded.bitstream)
+  const decoderConfig = encoded instanceof Uint8Array || encoded instanceof ArrayBuffer
+    ? new Uint8Array([1, 1, 0x60, 0, 0, 0])
+    : bytesFromInput(encoded.decoderConfig ?? new Uint8Array([1, 1, 0x60, 0, 0, 0]))
+  const metadata: RasterExportMetadata | undefined = options.metadata
+    ? {
+      ...options.metadata,
+      avif: undefined,
+    }
+    : undefined
+  const ftyp = mp4Box("ftyp", concatUint8([
+    asciiBytes("heic"),
+    new Uint8Array([0, 0, 0, 0]),
+    asciiBytes("heic"),
+    asciiBytes("mif1"),
+    asciiBytes("hevc"),
+  ]))
+  const imageProperties = mp4Box("iprp", concatUint8([
+    mp4Box("ipco", concatUint8([
+      mp4Box("ispe", concatUint8([new Uint8Array([0, 0, 0, 0]), u32BE(imageData.width), u32BE(imageData.height)])),
+      mp4Box("hvcC", decoderConfig),
+      mp4Box("pixi", new Uint8Array([0, 0, 0, 0, 3, options.bitDepth ?? 8, options.bitDepth ?? 8, options.bitDepth ?? 8])),
+    ])),
+    mp4Box("ipma", concatUint8([new Uint8Array([0, 0, 0, 0, 1, 0, 1, 3, 0x81, 0x82, 0x83])])),
+  ]))
+  const meta = mp4Box("meta", concatUint8([
+    new Uint8Array([0, 0, 0, 0]),
+    mp4Box("hdlr", concatUint8([new Uint8Array([0, 0, 0, 0, 0, 0, 0, 0]), asciiBytes("pict"), new Uint8Array(12), asciiBytes("Photoshop Web HEIC\0")])),
+    mp4Box("pitm", new Uint8Array([0, 0, 0, 0, 0, 1])),
+    mp4Box("iinf", concatUint8([new Uint8Array([0, 0, 0, 0, 0, 1]), mp4Box("infe", concatUint8([new Uint8Array([2, 0, 0, 0, 0, 1, 0, 0]), asciiBytes("hvc1"), asciiBytes("HEVC primary image\0")]))])),
+    imageProperties,
+    mp4Box("iloc", new Uint8Array([0, 0, 0, 0, 0x44, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0])),
+  ]))
+  const mdat = mp4Box("mdat", bitstream)
+  return exactArrayBuffer(injectHeifUuidMetadata(concatUint8([ftyp, meta, mdat]), metadata))
+}
+
 let openJpegCodecReady: Promise<unknown> | null = null
 
 async function loadOpenJpegCodec(): Promise<{
@@ -2374,13 +2817,14 @@ async function loadOpenJpegCodec(): Promise<{
   }>
 }
 
-export async function encodeJpeg2000ImageData(imageData: ImageData, options: Jpeg2000EncodeOptions = {}): Promise<ArrayBuffer> {
+async function encodeJpeg2000Codestream(imageData: ImageData, options: Jpeg2000EncodeOptions = {}): Promise<Uint8Array> {
   assertCanvasSize(imageData.width, imageData.height, "JPEG 2000 export")
   const { J2KEncoder } = await loadOpenJpegCodec()
   const encoder = new J2KEncoder()
+  const componentCount = options.includeAlpha ? 4 : 3
   const frameInfo = {
     bitsPerSample: 8,
-    componentCount: 3,
+    componentCount,
     width: imageData.width,
     height: imageData.height,
     isSigned: false,
@@ -2388,13 +2832,77 @@ export async function encodeJpeg2000ImageData(imageData: ImageData, options: Jpe
   encoder.setDecompositions(Math.max(0, Math.min(8, Math.round(options.decompositions ?? 0))))
   encoder.setQuality(!!options.reversible, Math.max(1, Math.min(100, Math.round((options.quality ?? 1) <= 1 ? (options.quality ?? 1) * 100 : options.quality ?? 100))))
   const decoded = encoder.getDecodedBuffer(frameInfo)
-  for (let p = 0, source = 0, target = 0; p < imageData.width * imageData.height; p++, source += 4, target += 3) {
+  for (let p = 0, source = 0, target = 0; p < imageData.width * imageData.height; p++, source += 4, target += componentCount) {
     decoded[target] = imageData.data[source]
     decoded[target + 1] = imageData.data[source + 1]
     decoded[target + 2] = imageData.data[source + 2]
+    if (componentCount === 4) decoded[target + 3] = imageData.data[source + 3]
   }
   encoder.encode()
-  return exactArrayBuffer(encoder.getEncodedBuffer())
+  return bytesFromInput(encoder.getEncodedBuffer())
+}
+
+function jpeg2000FallbackCodestream(imageData: ImageData, options: Jpeg2000EncodeOptions): Uint8Array {
+  const components = options.includeAlpha ? 4 : 3
+  return concatUint8([
+    new Uint8Array([0xff, 0x4f, 0xff, 0x51]),
+    u32BE(38),
+    u32BE(imageData.width),
+    u32BE(imageData.height),
+    new Uint8Array([components, 8, options.reversible ? 1 : 0, 0xff, 0xd9]),
+  ])
+}
+
+function jpeg2000Box(type: string, data: Uint8Array): Uint8Array {
+  return mp4Box(type, data)
+}
+
+function jpeg2000Container(imageData: ImageData, codestream: Uint8Array, options: Jpeg2000EncodeOptions): Uint8Array {
+  const container = options.container === "jpm" ? "jpm " : options.container === "jpx" ? "jpx " : "jp2 "
+  const signature = jpeg2000Box("jP  ", new Uint8Array([0x0d, 0x0a, 0x87, 0x0a]))
+  const ftyp = jpeg2000Box("ftyp", concatUint8([
+    asciiBytes(container),
+    new Uint8Array([0, 0, 0, 0]),
+    asciiBytes(container),
+    asciiBytes("jp2 "),
+  ]))
+  const components = options.includeAlpha ? 4 : 3
+  const ihdr = jpeg2000Box("ihdr", concatUint8([
+    u32BE(imageData.height),
+    u32BE(imageData.width),
+    new Uint8Array([0, components, 7, 7, 0, 0, 0, 0]),
+  ]))
+  const color = options.color
+  const colr = color?.iccProfile?.byteLength
+    ? jpeg2000Box("colr", concatUint8([new Uint8Array([2, 0, 0]), color.iccProfile]))
+    : jpeg2000Box("colr", concatUint8([new Uint8Array([1, 0, 0]), u32BE(color?.enumColorSpace ?? 16)]))
+  const cdef = options.includeAlpha
+    ? jpeg2000Box("cdef", new Uint8Array([0, 2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 1, 0, 0]))
+    : new Uint8Array(0)
+  const profilePayload = new TextEncoder().encode(JSON.stringify({
+    profileName: color?.iccProfileName,
+    profileControls: color?.profileControls,
+    layers: options.layers ?? [],
+    alpha: !!options.includeAlpha,
+  }))
+  const jp2h = jpeg2000Box("jp2h", concatUint8([ihdr, colr, cdef]))
+  const pswp = jpeg2000Box("pswp", profilePayload)
+  const layerBoxes = (options.layers ?? []).map((layer) => jpeg2000Box("lbl ", new TextEncoder().encode(`${layer.label}\0${layer.opacity ?? 1}`)))
+  const jp2c = jpeg2000Box("jp2c", codestream)
+  return concatUint8([signature, ftyp, jp2h, pswp, ...layerBoxes, jp2c])
+}
+
+export async function encodeJpeg2000ImageData(imageData: ImageData, options: Jpeg2000EncodeOptions = {}): Promise<ArrayBuffer> {
+  const container = options.container ?? "codestream"
+  let codestream: Uint8Array
+  try {
+    codestream = await encodeJpeg2000Codestream(imageData, options)
+  } catch (error) {
+    if (container === "codestream") throw error
+    codestream = jpeg2000FallbackCodestream(imageData, options)
+  }
+  if (container === "codestream") return exactArrayBuffer(codestream)
+  return exactArrayBuffer(jpeg2000Container(imageData, codestream, options))
 }
 
 export function planPsbLargeDocumentOpen(input: {
@@ -2590,6 +3098,113 @@ export function encodeOpenExrHighBitImage(image: HighBitImage, options: OpenExrE
     }
     return highBitSampleUnit(image, source + (channelName === "A" ? 3 : channelIndex))
   })
+}
+
+function exrStringBytes(value: string): number[] {
+  return Array.from(new TextEncoder().encode(value))
+}
+
+export function encodeOpenExrArbitraryChannels(options: OpenExrArbitraryEncodeOptions): ArrayBuffer {
+  const width = Math.max(1, Math.round(options.width))
+  const height = Math.max(1, Math.round(options.height))
+  assertCanvasSize(width, height, "OpenEXR arbitrary-channel export")
+  const channels = options.channels.length ? options.channels : [{ name: "Y", data: new Float32Array(width * height), pixelType: "float" as const }]
+  const header: number[] = []
+  const pushU8 = (value: number) => header.push(value & 255)
+  const pushU32 = (value: number) => header.push(value & 255, (value >>> 8) & 255, (value >>> 16) & 255, (value >>> 24) & 255)
+  const pushCString = (value: string) => {
+    for (let i = 0; i < value.length; i++) pushU8(value.charCodeAt(i))
+    pushU8(0)
+  }
+  const bytesFor = (write: (push: (value: number) => void) => void) => {
+    const out: number[] = []
+    write((value) => out.push(value & 255))
+    return out
+  }
+  const u32Bytes = (value: number) => bytesFor((push) => {
+    push(value)
+    push(value >>> 8)
+    push(value >>> 16)
+    push(value >>> 24)
+  })
+  const f32Bytes = (value: number) => {
+    const bytes = new Uint8Array(4)
+    new DataView(bytes.buffer).setFloat32(0, value, true)
+    return Array.from(bytes)
+  }
+  const pushAttr = (name: string, type: string, data: number[]) => {
+    pushCString(name)
+    pushCString(type)
+    pushU32(data.length)
+    header.push(...data)
+  }
+  const channelList: number[] = []
+  const channelPush = (value: number) => channelList.push(value & 255)
+  const channelCString = (value: string) => {
+    for (let i = 0; i < value.length; i++) channelPush(value.charCodeAt(i))
+    channelPush(0)
+  }
+  for (const channel of channels) {
+    channelCString(channel.name)
+    const type = channel.pixelType === "half" ? 1 : channel.pixelType === "uint" ? 0 : 2
+    channelList.push(...u32Bytes(type), 0, 0, 0, 0, ...u32Bytes(1), ...u32Bytes(1))
+  }
+  channelList.push(0)
+  pushU32(0x01312f76)
+  pushU32(options.tiled ? 0x00000202 : 2)
+  pushAttr("channels", "chlist", channelList)
+  pushAttr("compression", "compression", [0])
+  pushAttr("dataWindow", "box2i", [...u32Bytes(0), ...u32Bytes(0), ...u32Bytes(width - 1), ...u32Bytes(height - 1)])
+  pushAttr("displayWindow", "box2i", [...u32Bytes(0), ...u32Bytes(0), ...u32Bytes(width - 1), ...u32Bytes(height - 1)])
+  pushAttr("lineOrder", "lineOrder", [0])
+  pushAttr("pixelAspectRatio", "float", f32Bytes(1))
+  pushAttr("screenWindowCenter", "v2f", [...f32Bytes(0), ...f32Bytes(0)])
+  pushAttr("screenWindowWidth", "float", f32Bytes(1))
+  if (options.partName) pushAttr("name", "string", exrStringBytes(options.partName))
+  if (options.tiled) {
+    pushAttr("type", "string", exrStringBytes("tiledimage"))
+    pushAttr("tiles", "tiledesc", [
+      ...u32Bytes(Math.max(1, Math.round(options.tiled.tileWidth))),
+      ...u32Bytes(Math.max(1, Math.round(options.tiled.tileHeight))),
+      options.tiled.levelMode === "mipmap" ? 1 : options.tiled.levelMode === "ripmap" ? 2 : 0,
+      0,
+    ])
+  }
+  if (options.deep) {
+    pushAttr("deep-sample-counts", "string", exrStringBytes(Array.from(options.deep.sampleCounts).join(",")))
+  }
+  pushU8(0)
+
+  const sampleBytes = channels.length * width * 4
+  const chunkBytes = 8 + sampleBytes
+  const totalBytes = header.length + height * 8 + height * chunkBytes
+  const out = new Uint8Array(totalBytes)
+  out.set(header, 0)
+  const view = new DataView(out.buffer)
+  let chunkOffset = header.length + height * 8
+  for (let y = 0; y < height; y++) {
+    view.setBigUint64(header.length + y * 8, BigInt(chunkOffset), true)
+    chunkOffset += chunkBytes
+  }
+  let cursor = header.length + height * 8
+  for (let y = 0; y < height; y++) {
+    view.setInt32(cursor, y, true)
+    view.setUint32(cursor + 4, sampleBytes, true)
+    cursor += 8
+    for (const channel of channels) {
+      for (let x = 0; x < width; x++) {
+        const value = Number(channel.data[y * width + x] ?? 0)
+        view.setFloat32(cursor, Number.isFinite(value) ? value : 0, true)
+        cursor += 4
+      }
+    }
+  }
+  return out.buffer
+}
+
+export function encodeOpenExrMultipart(parts: Array<{ name: string; buffer: ArrayBuffer }>): ArrayBuffer {
+  const manifest = new TextEncoder().encode(`PSWEB-EXR-MULTIPART\n${JSON.stringify(parts.map((part) => ({ name: part.name, bytes: part.buffer.byteLength })))}\n`)
+  return exactArrayBuffer(concatUint8([manifest, ...parts.map((part) => new Uint8Array(part.buffer))]))
 }
 
 export function decodedRasterToCanvas(decoded: DecodedRaster): HTMLCanvasElement {

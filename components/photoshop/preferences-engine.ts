@@ -1,7 +1,7 @@
 import type { PsDocument } from "./types"
 
 export const PREFERENCES_STORAGE_KEY = "ps-preferences"
-export const PREFERENCES_SCHEMA_VERSION = 3
+export const PREFERENCES_SCHEMA_VERSION = 4
 export const MAX_PREFERENCES_IMPORT_BYTES = 1024 * 1024
 export const MAX_IMPORTED_SCRATCH_DISKS = 32
 export const MAX_IMPORTED_HISTORY_ENTRIES = 10000
@@ -20,6 +20,38 @@ export type GpuCompositingPreference = "cpu" | "worker" | "gpu-preferred"
 export type MissingFontPolicy = "warn" | "substitute" | "rasterize"
 export type LargeFilePolicy = "ask" | "downsample-preview" | "block"
 export type HistoryLogDestination = "metadata" | "text-file" | "both"
+
+export const TECHNOLOGY_PREVIEW_FLAGS = [
+  {
+    id: "hdrCanvasCompositor",
+    label: "HDR canvas compositor",
+    helpText: "Routes high-bit and HDR preview layers through the experimental wide-range canvas compositor before tone mapping.",
+    riskText: "Tone mapping can differ from the stable compositor, especially in mixed 8-bit and high-bit documents.",
+  },
+  {
+    id: "webgpuAcceleration",
+    label: "WebGPU acceleration",
+    helpText: "Enables WebGPU-backed acceleration experiments for eligible color, filter, and preview pipelines when the browser exposes WebGPU.",
+    riskText: "Browser and driver differences can cause slower fallback, visual mismatches, or disabled acceleration on some devices.",
+  },
+  {
+    id: "localGenerativeFill",
+    label: "Local generative fill endpoint",
+    helpText: "Shows model-backed generative fill routing controls alongside the deterministic local inpainting fallback.",
+    riskText: "Generated results depend on the configured endpoint and may differ from the local deterministic preview path.",
+  },
+  {
+    id: "cameraRawSidecars",
+    label: "Camera Raw sidecar workflow",
+    helpText: "Enables experimental Camera Raw XMP sidecar import/export controls for RAW-style browser edits.",
+    riskText: "Recipe coverage is partial; keep original RAW files and generated sidecars together for review.",
+  },
+] as const
+
+export type TechnologyPreviewFlagId = (typeof TECHNOLOGY_PREVIEW_FLAGS)[number]["id"]
+export type TechnologyPreviewPreferences = Record<TechnologyPreviewFlagId, boolean>
+export type TechnologyPreviewFlagState = (typeof TECHNOLOGY_PREVIEW_FLAGS)[number] & { enabled: boolean }
+
 export type PreferenceSection =
   | "general"
   | "memory"
@@ -29,6 +61,7 @@ export type PreferenceSection =
   | "historyLog"
   | "toolBehavior"
   | "rulerGrid"
+  | "technologyPreviews"
 
 export const PREFERENCE_IMPORT_SECTIONS: PreferenceSection[] = [
   "general",
@@ -39,6 +72,7 @@ export const PREFERENCE_IMPORT_SECTIONS: PreferenceSection[] = [
   "historyLog",
   "toolBehavior",
   "rulerGrid",
+  "technologyPreviews",
 ]
 
 export const PREFERENCE_SECTION_LABELS: Record<PreferenceSection, string> = {
@@ -50,6 +84,7 @@ export const PREFERENCE_SECTION_LABELS: Record<PreferenceSection, string> = {
   historyLog: "History Log",
   toolBehavior: "Cursors & Tools",
   rulerGrid: "Units & Rulers",
+  technologyPreviews: "Technology Previews",
 }
 
 export interface MemoryPreferences {
@@ -167,6 +202,7 @@ export interface PhotoshopPreferences {
   historyLog: HistoryLogPreferences
   toolBehavior: ToolBehaviorPreferences
   rulerGrid: RulerGridPreferences
+  technologyPreviews: TechnologyPreviewPreferences
 }
 
 export interface PerformanceEnvironment {
@@ -302,6 +338,12 @@ export const DEFAULT_PREFERENCES: PhotoshopPreferences = {
     rulerOrigin: { x: 0, y: 0 },
     guidesColor: "#00aaff",
   },
+  technologyPreviews: {
+    hdrCanvasCompositor: false,
+    webgpuAcceleration: false,
+    localGenerativeFill: false,
+    cameraRawSidecars: false,
+  },
 }
 
 const TILE_SIZES = [64, 128, 256, 512, 1024]
@@ -410,6 +452,7 @@ function validatePreferenceImportShape(value: unknown) {
   validateObjectSection(root, "historyLog")
   validateObjectSection(root, "toolBehavior")
   validateObjectSection(root, "rulerGrid")
+  validateObjectSection(root, "technologyPreviews")
 
   const memory = asRecord(root.memory)
   ;["ramPercent", "maxCacheMB", "cacheLevels", "tileSize", "historyStates"].forEach((key) =>
@@ -491,6 +534,11 @@ function validatePreferenceImportShape(value: unknown) {
     validateNumberField(rulerGrid.screenCalibration, "measuredMm", "rulerGrid.screenCalibration.measuredMm")
     validateStringField(rulerGrid.screenCalibration, "calibratedAt", "rulerGrid.screenCalibration.calibratedAt")
   }
+
+  const technologyPreviews = asRecord(root.technologyPreviews)
+  TECHNOLOGY_PREVIEW_FLAGS.forEach((flag) =>
+    validateBooleanField(technologyPreviews, flag.id, `technologyPreviews.${flag.id}`),
+  )
 }
 
 function assertBoundedArray(value: unknown, max: number, label: string) {
@@ -723,6 +771,14 @@ function normalizeRulerGrid(input: Record<string, unknown>, legacyGridSize: unkn
   }
 }
 
+function normalizeTechnologyPreviews(input: Record<string, unknown>): TechnologyPreviewPreferences {
+  const defaults = DEFAULT_PREFERENCES.technologyPreviews
+  return TECHNOLOGY_PREVIEW_FLAGS.reduce((flags, flag) => {
+    flags[flag.id] = boolValue(input[flag.id], defaults[flag.id])
+    return flags
+  }, {} as TechnologyPreviewPreferences)
+}
+
 function syncLegacyFields(prefs: Omit<PhotoshopPreferences, "schemaVersion" | "gridSize" | "undoLimit" | "cursorStyle" | "units" | "showTooltips" | "autoSave" | "smoothing"> & {
   schemaVersion: typeof PREFERENCES_SCHEMA_VERSION
   gridSize?: number
@@ -765,6 +821,7 @@ export function normalizePreferences(input?: unknown): PhotoshopPreferences {
     historyLog: normalizeHistoryLog(nestedRecord(raw, "historyLog")),
     toolBehavior,
     rulerGrid,
+    technologyPreviews: normalizeTechnologyPreviews(nestedRecord(raw, "technologyPreviews")),
   })
 }
 
@@ -820,6 +877,7 @@ export function importPreferenceSections(
   if (selected.has("historyLog")) next.historyLog = clone(imported.historyLog)
   if (selected.has("toolBehavior")) next.toolBehavior = clone(imported.toolBehavior)
   if (selected.has("rulerGrid")) next.rulerGrid = clone(imported.rulerGrid)
+  if (selected.has("technologyPreviews")) next.technologyPreviews = clone(imported.technologyPreviews)
 
   return syncLegacyFields(next)
 }
@@ -865,6 +923,14 @@ export function exportPreferencesSet(prefs: unknown) {
     mime: "application/json",
     json: serializePreferences(prefs),
   }
+}
+
+export function summarizeTechnologyPreviewFlags(input: unknown): TechnologyPreviewFlagState[] {
+  const prefs = normalizePreferences(input)
+  return TECHNOLOGY_PREVIEW_FLAGS.map((flag) => ({
+    ...flag,
+    enabled: prefs.technologyPreviews[flag.id],
+  }))
 }
 
 function environmentMemoryGB(env?: PerformanceEnvironment) {

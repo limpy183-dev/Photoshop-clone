@@ -85,10 +85,12 @@ export interface SelectionOptions {
   contiguous: boolean
   sampleAllLayers?: boolean
   sampleSize?: "point" | "3x3" | "5x5"
+  quickGrowAmount?: number
   magneticWidth?: number
   magneticContrast?: number
   magneticHysteresis?: number
   magneticSmoothing?: number
+  magneticFrequency?: number
 }
 
 export interface TextOptions {
@@ -606,6 +608,12 @@ export interface AdvancedBlending {
   channels: { r: boolean; g: boolean; b: boolean }
   blendIfThis: BlendIfRange
   blendIfUnderlying: BlendIfRange
+  /** When false, layer effects use a full layer rectangle instead of the layer's transparency. Defaults true. */
+  transparencyShapesLayer?: boolean
+  /** When true, the raster layer mask also clips layer effects. Defaults false. */
+  layerMaskHidesEffects?: boolean
+  /** When true, the vector mask also clips layer effects. Defaults false. */
+  vectorMaskHidesEffects?: boolean
 }
 
 export interface BlurGalleryMeshResource {
@@ -646,6 +654,8 @@ export interface SmartFilter {
   maskDensity?: number
   /** Feather radius in document pixels for the smart filter mask. */
   maskFeather?: number
+  /** False keeps the filter mask independent from layer movement/placement workflows. */
+  maskLinked?: boolean
   /** Deterministic browser-side descriptor for Blur Gallery pins/path/mesh state. */
   blurGalleryMesh?: BlurGalleryMeshResource
 }
@@ -1085,10 +1095,35 @@ export interface VariableDataSet {
 
 export interface DocumentModeSettings {
   mode: "RGB" | "CMYK" | "Grayscale" | "Duotone" | "Indexed" | "Multichannel" | "Bitmap"
-  duotone?: { ink1: string; ink2: string; curve: number }
-  indexed?: { colors: number; dither: boolean }
+  duotone?: {
+    ink1: string
+    ink2: string
+    curve: number
+    ink1Name?: string
+    ink2Name?: string
+    opacity1?: number
+    opacity2?: number
+    balance?: number
+  }
+  indexed?: {
+    colors: number
+    dither: boolean
+    palette?: "adaptive" | "perceptual" | "web" | "uniform" | "grayscale" | "custom"
+    ditherMethod?: "none" | "ordered" | "diffusion" | "noise"
+    colorTable?: string[]
+    transparency?: boolean
+    matte?: string
+    forced?: "none" | "black-white" | "primaries" | "web"
+  }
   multichannel?: { channels: { r: boolean; g: boolean; b: boolean; c?: boolean; m?: boolean; y?: boolean; k?: boolean } }
-  bitmap?: { method: "threshold" | "halftone"; threshold: number; frequency: number; angle: number }
+  bitmap?: {
+    method: "threshold" | "halftone" | "pattern-dither" | "diffusion-dither"
+    threshold: number
+    frequency: number
+    angle: number
+    shape?: "round" | "line" | "diamond" | "ellipse"
+    outputResolution?: number
+  }
   trap?: { enabled: boolean; widthPx: number; strength: number }
 }
 
@@ -1298,6 +1333,7 @@ export interface LayerComp {
       visible: boolean
       opacity: number
       fillOpacity?: number
+      advancedBlending?: AdvancedBlending
       blendMode: BlendMode
       clipped?: boolean
       maskEnabled?: boolean
@@ -1408,8 +1444,18 @@ export interface DocumentReport {
   id: string
   title: string
   createdAt: number
-  source: "PSD Import" | "PSD Export" | "Project Import" | "Project Export" | "Batch Export"
+  source: "PSD Import" | "PSD Export" | "Project Import" | "Project Export" | "Batch Export" | "Image Assets Generator"
   items: { label: string; status: "preserved" | "approximated" | "flattened" | "unsupported" | "info"; detail: string }[]
+}
+
+export interface ImageAssetGeneratorSettings {
+  enabled?: boolean
+  autoExportOnSave?: boolean
+  autoExportOnChange?: boolean
+  outputFolderName?: string
+  lastRunAt?: number
+  lastTrigger?: "manual" | "save" | "change"
+  lastSummary?: string
 }
 
 export interface DocumentMetadata {
@@ -1434,6 +1480,8 @@ export interface DocumentMetadata {
   psdRepairPlan?: PsdRepairPlanMetadata
   /** Exact original PSD/PSB bytes retained for native-source replay when the file is small enough. */
   psdNativeSource?: PsdNativeSourceSnapshotMetadata
+  /** Photoshop Generator-style layer-name asset export settings. */
+  imageAssetGenerator?: ImageAssetGeneratorSettings
 }
 
 export interface PsdNativeSourceSnapshotMetadata {
@@ -1549,6 +1597,8 @@ export interface ColorManagementSettings {
   gamutWarning: boolean
   simulateBlackInk?: boolean
   preserveNumbers?: boolean
+  proofChannels?: Array<"red" | "green" | "blue" | "cyan" | "magenta" | "yellow" | "black" | "gray">
+  proofPlateView?: "composite" | "ink" | "mask"
 }
 
 export interface PrintSettings {
@@ -1746,6 +1796,22 @@ export interface BrushSettings {
   smoothing: number
   spacing?: number
   tipShape?: "round" | "square" | "bristle" | "erodible"
+  erodibleTip?: {
+    sharpness: number
+    flatness: number
+    erosionRate: number
+    softness: number
+    aspectRatio: number
+    rotation: number
+  }
+  bristleTip?: {
+    length: number
+    density: number
+    thickness: number
+    stiffness: number
+    splay: number
+    wetness: number
+  }
   sizeControl?: "off" | "pressure" | "tilt" | "velocity" | "fade" | "random"
   angleControl?: "off" | "pressure" | "tilt" | "velocity" | "fade" | "random"
   roundnessControl?: "off" | "pressure" | "tilt" | "velocity" | "fade" | "random"
@@ -1794,6 +1860,27 @@ export interface BrushSettings {
     rotation: number
     pressure: number
     stylusAngle: number
+  }
+  mixer?: {
+    wet: number
+    load: number
+    mix: number
+    flow: number
+    sampleAllLayers: boolean
+    cleanAfterStroke: boolean
+    reservoirColor?: string
+  }
+  colorReplacement?: {
+    sampling: "continuous" | "once" | "background-swatch"
+    limits: "contiguous" | "discontiguous" | "find-edges"
+    mode: "color" | "hue" | "saturation" | "luminosity"
+    tolerance: number
+    antiAlias: boolean
+  }
+  artHistory?: {
+    style: "tight-short" | "tight-medium" | "loose-long" | "dab" | "curl"
+    area: number
+    fidelity: number
   }
   /** Other */
   wetEdges?: boolean
@@ -1920,6 +2007,8 @@ declare global {
   interface Window {
     /** Internal: current custom shape selection */
     __psCustomShape?: string
+    /** Internal: current user-library custom shape preset */
+    __psCustomShapePreset?: ShapeProps
     /** Internal: current shape tool options */
     __psShapeOptions?: Partial<{
       strokeWidth: number

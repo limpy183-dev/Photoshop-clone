@@ -298,4 +298,39 @@ export class TiledBackingStore {
   dirtyLayerTiles(layerId?: string): LayerTileRecord[] {
     return [...this.layerTiles.values()].filter((tile) => tile.dirty && (!layerId || tile.layerId === layerId))
   }
+
+  estimateCacheBytes(): number {
+    let bytes = 0
+    for (const blob of this.memory.values()) bytes += blob.size
+    for (const blob of this.layerMemory.values()) bytes += blob.size
+    for (const tile of this.tiles.values()) {
+      if (tile.storage === "opfs") bytes += tile.bytes
+    }
+    for (const tile of this.layerTiles.values()) {
+      if (tile.storage === "opfs") bytes += tile.bytes
+    }
+    return bytes
+  }
+
+  async purgeCache(): Promise<number> {
+    const estimatedBytes = this.estimateCacheBytes()
+    this.memory.clear()
+    this.layerMemory.clear()
+
+    const scratchDeletes: Promise<unknown>[] = []
+    for (const tile of this.tiles.values()) {
+      if (tile.storage === "opfs") scratchDeletes.push(deleteScratchKey(`tile-${tile.key.replace(":", "-")}`))
+      tile.storage = "memory"
+      tile.dirty = true
+    }
+    for (const tile of this.layerTiles.values()) {
+      if (tile.storage === "opfs") {
+        scratchDeletes.push(deleteScratchKey(`layer-tile-${tile.key.replace(/[^a-zA-Z0-9_.-]+/g, "-")}`))
+      }
+    }
+    this.layerTiles.clear()
+
+    await Promise.allSettled(scratchDeletes)
+    return estimatedBytes
+  }
 }

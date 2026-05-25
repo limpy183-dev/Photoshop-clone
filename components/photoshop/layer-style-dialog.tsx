@@ -15,9 +15,15 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useEditor } from "./editor-context"
 import { defaultStyle } from "./layer-styles"
-import type { BlendMode, GradientStop, LayerStyle, MultiGradient } from "./types"
+import {
+  defaultAdvancedBlending,
+  normalizeAdvancedBlending,
+  setBlendIfRangeHandle,
+} from "./layer-workflows"
+import type { AdvancedBlending, BlendIfRange, BlendMode, GradientStop, LayerStyle, MultiGradient } from "./types"
 
 type StyleKey =
+  | "blending"
   | "dropShadow"
   | "outerGlow"
   | "innerGlow"
@@ -29,7 +35,10 @@ type StyleKey =
   | "stroke"
   | "patternOverlay"
 
+type EffectKey = Exclude<StyleKey, "blending">
+
 const EFFECTS: { key: StyleKey; label: string }[] = [
+  { key: "blending", label: "Blending Options" },
   { key: "bevel", label: "Bevel & Emboss" },
   { key: "stroke", label: "Stroke" },
   { key: "innerShadow", label: "Inner Shadow" },
@@ -73,7 +82,8 @@ export function LayerStyleDialog({
 }) {
   const { activeDoc, activeLayer, foreground, dispatch, commit } = useEditor()
   const [style, setStyle] = React.useState<LayerStyle>(() => defaultStyle(foreground))
-  const [tab, setTab] = React.useState<StyleKey>("bevel")
+  const [advanced, setAdvanced] = React.useState<AdvancedBlending>(() => defaultAdvancedBlending())
+  const [tab, setTab] = React.useState<StyleKey>("blending")
   const [presetName, setPresetName] = React.useState("Custom Style")
   const [selectedPreset, setSelectedPreset] = React.useState("builtin:neon")
   const [scalePct, setScalePct] = React.useState(100)
@@ -83,10 +93,13 @@ export function LayerStyleDialog({
   React.useEffect(() => {
     if (open && activeLayer) {
       setStyle(mergeStyle(defaultStyle(foreground), activeLayer.style))
+      const nextAdvanced = normalizeAdvancedBlending(activeLayer.advancedBlending)
+      setAdvanced({ ...nextAdvanced, fillOpacity: activeLayer.fillOpacity ?? nextAdvanced.fillOpacity })
+      setTab("blending")
     }
   }, [open, activeLayer, foreground])
 
-  const update = <K extends StyleKey>(key: K, patch: Partial<NonNullable<LayerStyle[K]>>) => {
+  const update = <K extends EffectKey>(key: K, patch: Partial<NonNullable<LayerStyle[K]>>) => {
     setStyle((s) => {
       const defaults = defaultStyle(foreground)
       const base = s[key] ?? defaults[key]!
@@ -100,6 +113,8 @@ export function LayerStyleDialog({
       return
     }
     dispatch({ type: "set-layer-style", id: activeLayer.id, style })
+    dispatch({ type: "set-layer-advanced-blending", id: activeLayer.id, advancedBlending: advanced })
+    dispatch({ type: "set-layer-fill-opacity", id: activeLayer.id, fillOpacity: advanced.fillOpacity })
     setTimeout(() => commit("Layer Style", [activeLayer.id]), 0)
     onOpenChange(false)
   }
@@ -107,6 +122,7 @@ export function LayerStyleDialog({
   const reset = () => {
     if (!activeLayer) return
     dispatch({ type: "set-layer-style", id: activeLayer.id, style: undefined })
+    dispatch({ type: "set-layer-advanced-blending", id: activeLayer.id, advancedBlending: undefined })
     setTimeout(() => commit("Clear Layer Style", [activeLayer.id]), 0)
     onOpenChange(false)
   }
@@ -152,6 +168,59 @@ export function LayerStyleDialog({
 
   const renderEffectFields = () => {
     switch (tab) {
+      case "blending":
+        return (
+          <FieldGrid>
+            <SliderRow
+              label="Fill Opacity"
+              suffix="%"
+              min={0}
+              max={100}
+              value={Math.round(advanced.fillOpacity * 100)}
+              onChange={(v) => setAdvanced((current) => ({ ...current, fillOpacity: v / 100 }))}
+            />
+            <SelectRow
+              label="Knockout"
+              value={advanced.knockout}
+              options={[
+                ["none", "None"],
+                ["shallow", "Shallow"],
+                ["deep", "Deep"],
+              ]}
+              onChange={(v) => setAdvanced((current) => ({ ...current, knockout: v as AdvancedBlending["knockout"] }))}
+            />
+            <div className="grid grid-cols-3 gap-2">
+              <CheckboxRow label="R" checked={advanced.channels.r} onChange={(v) => setAdvanced((current) => ({ ...current, channels: { ...current.channels, r: v } }))} />
+              <CheckboxRow label="G" checked={advanced.channels.g} onChange={(v) => setAdvanced((current) => ({ ...current, channels: { ...current.channels, g: v } }))} />
+              <CheckboxRow label="B" checked={advanced.channels.b} onChange={(v) => setAdvanced((current) => ({ ...current, channels: { ...current.channels, b: v } }))} />
+            </div>
+            <CheckboxRow
+              label="Transparency Shapes Layer"
+              checked={advanced.transparencyShapesLayer !== false}
+              onChange={(v) => setAdvanced((current) => ({ ...current, transparencyShapesLayer: v }))}
+            />
+            <CheckboxRow
+              label="Layer Mask Hides Effects"
+              checked={advanced.layerMaskHidesEffects === true}
+              onChange={(v) => setAdvanced((current) => ({ ...current, layerMaskHidesEffects: v }))}
+            />
+            <CheckboxRow
+              label="Vector Mask Hides Effects"
+              checked={advanced.vectorMaskHidesEffects === true}
+              onChange={(v) => setAdvanced((current) => ({ ...current, vectorMaskHidesEffects: v }))}
+            />
+            <BlendIfControls
+              label="Blend If: This Layer"
+              range={advanced.blendIfThis}
+              onChange={(range) => setAdvanced((current) => ({ ...current, blendIfThis: range }))}
+            />
+            <BlendIfControls
+              label="Blend If: Underlying Layer"
+              range={advanced.blendIfUnderlying}
+              onChange={(range) => setAdvanced((current) => ({ ...current, blendIfUnderlying: range }))}
+            />
+          </FieldGrid>
+        )
       case "dropShadow": {
         const s = style.dropShadow ?? defaultStyle(foreground).dropShadow!
         return (
@@ -402,7 +471,8 @@ export function LayerStyleDialog({
         <div className="grid grid-cols-[210px_1fr] gap-4">
           <div className="border border-[var(--ps-divider)] rounded-sm bg-[var(--ps-panel-2)] p-1 max-h-[520px] overflow-y-auto">
             {EFFECTS.map((e) => {
-              const enabled = !!style[e.key]?.enabled
+              const isBlending = e.key === "blending"
+              const enabled = !isBlending && !!style[e.key as EffectKey]?.enabled
               const active = tab === e.key
               return (
                 <div
@@ -413,14 +483,18 @@ export function LayerStyleDialog({
                   }
                   onClick={() => setTab(e.key)}
                 >
-                  <Checkbox
-                    checked={enabled}
-                    onCheckedChange={(v) =>
-                      update(e.key, { enabled: v === true } as Partial<NonNullable<LayerStyle[StyleKey]>>)
-                    }
-                    onClick={(ev) => ev.stopPropagation()}
-                    className="h-3.5 w-3.5"
-                  />
+                  {isBlending ? (
+                    <span className="h-3.5 w-3.5" aria-hidden />
+                  ) : (
+                    <Checkbox
+                      checked={enabled}
+                      onCheckedChange={(v) =>
+                        update(e.key as EffectKey, { enabled: v === true } as Partial<NonNullable<LayerStyle[EffectKey]>>)
+                      }
+                      onClick={(ev) => ev.stopPropagation()}
+                      className="h-3.5 w-3.5"
+                    />
+                  )}
                   <span>{e.label}</span>
                 </div>
               )
@@ -450,6 +524,7 @@ function mergeStyle(base: LayerStyle, incoming: LayerStyle | undefined) {
   if (!incoming) return base
   const next: Partial<import("./types").LayerStyle> = { ...base }
   for (const { key } of EFFECTS) {
+    if (key === "blending") continue
     const current = (incoming as Record<string, unknown>)[key]
     if (!current) continue
     next[key] = mergeEffect((base as Record<string, unknown>)[key] as Record<string, unknown>, current as Record<string, unknown>) as any
@@ -634,6 +709,50 @@ function CheckboxRow({
       <Checkbox checked={checked} onCheckedChange={(v) => onChange(v === true)} className="h-3.5 w-3.5" />
       {label}
     </label>
+  )
+}
+
+function BlendIfControls({
+  label,
+  range,
+  onChange,
+}: {
+  label: string
+  range: BlendIfRange
+  onChange: (range: BlendIfRange) => void
+}) {
+  return (
+    <div className="grid gap-2 rounded-sm border border-[var(--ps-divider)] p-2">
+      <div className="text-[11px] font-medium">{label}</div>
+      <SliderRow
+        label="Black"
+        min={0}
+        max={255}
+        value={range.black}
+        onChange={(v) => onChange(setBlendIfRangeHandle(range, "black", v, { split: false }))}
+      />
+      <SliderRow
+        label="Black Split"
+        min={0}
+        max={255}
+        value={range.blackFeather}
+        onChange={(v) => onChange(setBlendIfRangeHandle(range, "blackFeather", v))}
+      />
+      <SliderRow
+        label="White Split"
+        min={0}
+        max={255}
+        value={range.whiteFeather}
+        onChange={(v) => onChange(setBlendIfRangeHandle(range, "whiteFeather", v))}
+      />
+      <SliderRow
+        label="White"
+        min={0}
+        max={255}
+        value={range.white}
+        onChange={(v) => onChange(setBlendIfRangeHandle(range, "white", v, { split: false }))}
+      />
+    </div>
   )
 }
 

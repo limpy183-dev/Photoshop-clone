@@ -11,6 +11,15 @@ export type ExportPresetPayload = Partial<{
   matte: string
   dither: boolean
   losslessWebp: boolean
+  webpNearLossless: number
+  webpMethod: number
+  webpExactAlpha: boolean
+  avifLossless: boolean
+  avifSpeed: number
+  avifBitDepth: number
+  avifChromaSubsampling: string
+  avifTileRowsLog2: number
+  avifTileColsLog2: number
   includeMetadata: boolean
   precision: number
   tiffCompression: TiffCompression

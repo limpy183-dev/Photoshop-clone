@@ -63,4 +63,28 @@ test("export dialog guards browser-only export limitations", async ({ page }) =>
   await page.getByRole("button", { name: "svg", exact: false }).click()
   await expect(page.getByText(/SVG export limitations/i)).toBeVisible()
   await expect(page.getByText(/Editable vector structure:/i)).toBeVisible()
+
+  await page.getByRole("button", { name: "WebP", exact: true }).click()
+  await expect(page.getByLabel("WebP near-lossless")).toBeVisible()
+  await expect(page.getByLabel("WebP method")).toBeVisible()
+  await expect(page.getByLabel("Exact alpha")).toBeVisible()
+
+  await page.getByRole("button", { name: "AVIF", exact: true }).click()
+  await expect(page.getByLabel("AVIF lossless")).toBeVisible()
+  await expect(page.getByLabel("AVIF speed")).toBeVisible()
+  await expect(page.getByLabel("AVIF bit depth")).toBeVisible()
+  await expect(page.getByLabel("AVIF chroma")).toBeVisible()
+  await expect(page.getByLabel("AVIF tile rows")).toBeVisible()
+  await expect(page.getByLabel("AVIF tile cols")).toBeVisible()
+})
+
+test("file info shows browser-local source location state", async ({ page }) => {
+  await page.goto("/editor")
+  await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
+
+  await openCommand(page, "File Info")
+  await expect(page.getByRole("dialog", { name: "File Info" })).toBeVisible()
+  await expect(page.getByText("Document Source")).toBeVisible()
+  await expect(page.getByText("Browser Handle")).toBeVisible()
+  await expect(page.getByText("No browser file handle")).toBeVisible()
 })

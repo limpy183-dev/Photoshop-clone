@@ -1,7 +1,14 @@
 export type PhotoshopEventMap = {
   "ps-open-command-palette": undefined
   "ps-open-export-as": unknown | undefined
+  "ps-open-color-picker": {
+    target?: "foreground" | "background"
+    surface?: "dialog" | "hud"
+    x?: number
+    y?: number
+  } | undefined
   "ps-open-panel": string
+  "ps-set-learning-query": string
   "ps-request-zoom": { zoom?: number; factor?: number }
   "ps-request-print-size-view": undefined
   "ps-set-dock-width": number

@@ -22,6 +22,23 @@ export function hasPsbTileViewStore(docId: string) {
   return tileStores.has(docId)
 }
 
+function storesFor(docIds?: readonly string[]) {
+  if (!docIds?.length) return [...tileStores.entries()]
+  const requested = new Set(docIds)
+  return [...tileStores.entries()].filter(([docId]) => requested.has(docId))
+}
+
+export function estimatePsbTileViewCacheBytes(docIds?: readonly string[]) {
+  return storesFor(docIds).reduce((sum, [, store]) => sum + store.estimateCacheBytes(), 0)
+}
+
+export function purgePsbTileViewCaches(docIds?: readonly string[]) {
+  const stores = storesFor(docIds).map(([, store]) => store)
+  const estimatedBytes = stores.reduce((sum, store) => sum + store.estimateCacheBytes(), 0)
+  void Promise.allSettled(stores.map((store) => store.purgeCache()))
+  return estimatedBytes
+}
+
 async function blobToCanvas(blob: Blob): Promise<HTMLCanvasElement> {
   const bitmap = await createImageBitmap(blob)
   const canvas = document.createElement("canvas")

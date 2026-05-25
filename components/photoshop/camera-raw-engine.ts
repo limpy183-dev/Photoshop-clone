@@ -125,9 +125,17 @@ export interface CameraRawDevelopRecipe {
   source: HighBitImage
   settings: CameraRawSettings
   metadata: CameraRawSourceMetadata
+  snapshots?: CameraRawSnapshot[]
+  sourceFingerprint: string
   createdAt: number
   updatedAt: number
   nonDestructive: true
+}
+
+export type CameraRawParsedSidecar = Omit<CameraRawDevelopRecipe, "source">
+
+export interface CameraRawSidecarReconciliation extends CameraRawParsedSidecar {
+  sourceMatches: boolean
 }
 
 export const DEFAULT_CAMERA_RAW_SETTINGS: CameraRawSettings = {
@@ -757,6 +765,7 @@ export function createCameraRawDevelopRecipe(
   source: HighBitImage,
   settings: CameraRawSettings,
   metadata: CameraRawSourceMetadata = {},
+  options: { snapshots?: CameraRawSnapshot[] } = {},
 ): CameraRawDevelopRecipe {
   const matched = matchCameraRawLensProfile(metadata)
   const recipeSettings = cloneCameraRawSettings({
@@ -771,10 +780,44 @@ export function createCameraRawDevelopRecipe(
     source,
     settings: recipeSettings,
     metadata: { ...metadata },
+    snapshots: (options.snapshots ?? []).map((snapshot) => ({
+      ...snapshot,
+      settings: cloneCameraRawSettings(snapshot.settings),
+    })),
+    sourceFingerprint: fingerprintHighBitImage(source),
     createdAt: now,
     updatedAt: now,
     nonDestructive: true,
   }
+}
+
+export function fingerprintHighBitImage(source: HighBitImage): string {
+  let hash = 0x811c9dc5
+  const update = (value: number) => {
+    hash ^= value & 0xff
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  const updateString = (value: string | undefined) => {
+    for (let i = 0; i < (value ?? "").length; i++) update(value!.charCodeAt(i))
+  }
+  update(source.width)
+  update(source.width >>> 8)
+  update(source.height)
+  update(source.height >>> 8)
+  update(source.channels)
+  update(source.bitDepth)
+  updateString(source.colorMode)
+  updateString(source.profile)
+  updateString(source.storage)
+  const sampleLimit = Math.min(source.data.length, 4096)
+  for (let i = 0; i < sampleLimit; i++) {
+    const value = Number(source.data[i])
+    update(Math.round(Number.isFinite(value) ? value * (source.storage === "float32" ? 1_000_000 : 1) : 0))
+    update(i)
+  }
+  update(source.data.length & 255)
+  update((source.data.length >>> 8) & 255)
+  return `fnv1a32:${hash.toString(16).padStart(8, "0")}`
 }
 
 function escapeXml(value: string) {
@@ -794,30 +837,59 @@ export function serializeCameraRawSidecar(recipe: CameraRawDevelopRecipe) {
   const payload = JSON.stringify({
     settings: recipe.settings,
     metadata: recipe.metadata,
+    snapshots: recipe.snapshots ?? [],
+    sourceFingerprint: recipe.sourceFingerprint,
     createdAt: recipe.createdAt,
     updatedAt: recipe.updatedAt,
     nonDestructive: recipe.nonDestructive,
   })
-  return `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmlns:psweb="https://example.local/photoshop-web/1.0/"><crs:Version>Photoshop Web Camera Raw 1.0</crs:Version><crs:CameraProfile>${escapeXml(recipe.settings.cameraProfileId ?? "adobe-color")}</crs:CameraProfile><psweb:CameraRawRecipe>${escapeXml(payload)}</psweb:CameraRawRecipe></rdf:Description></rdf:RDF></x:xmpmeta>`
+  const snapshots = escapeXml(JSON.stringify(recipe.snapshots ?? []))
+  return `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmlns:psweb="https://example.local/photoshop-web/1.0/"><crs:Version>Photoshop Web Camera Raw 1.0</crs:Version><crs:CameraProfile>${escapeXml(recipe.settings.cameraProfileId ?? "adobe-color")}</crs:CameraProfile><crs:RawFileName>${escapeXml(recipe.metadata.fileName ?? "")}</crs:RawFileName><psweb:SourceFingerprint>${escapeXml(recipe.sourceFingerprint)}</psweb:SourceFingerprint><psweb:CameraRawSnapshots>${snapshots}</psweb:CameraRawSnapshots><psweb:CameraRawRecipe>${escapeXml(payload)}</psweb:CameraRawRecipe></rdf:Description></rdf:RDF></x:xmpmeta>`
 }
 
-export function parseCameraRawSidecar(sidecar: string): Omit<CameraRawDevelopRecipe, "source"> {
+export function parseCameraRawSidecar(sidecar: string): CameraRawParsedSidecar {
   const match = sidecar.match(/<psweb:CameraRawRecipe>([\s\S]*?)<\/psweb:CameraRawRecipe>/)
   if (!match) {
     return {
       settings: cloneCameraRawSettings(DEFAULT_CAMERA_RAW_SETTINGS),
       metadata: {},
+      snapshots: [],
+      sourceFingerprint: "",
       createdAt: 0,
       updatedAt: 0,
       nonDestructive: true,
     }
   }
-  const parsed = JSON.parse(unescapeXml(match[1])) as Omit<CameraRawDevelopRecipe, "source">
+  const parsed = JSON.parse(unescapeXml(match[1])) as CameraRawParsedSidecar
+  const snapshots = Array.isArray(parsed.snapshots)
+    ? parsed.snapshots.map((snapshot) => ({
+      ...snapshot,
+      settings: cloneCameraRawSettings(snapshot.settings),
+    }))
+    : []
+  const fingerprint = typeof parsed.sourceFingerprint === "string" && parsed.sourceFingerprint
+    ? parsed.sourceFingerprint
+    : unescapeXml(sidecar.match(/<psweb:SourceFingerprint>([\s\S]*?)<\/psweb:SourceFingerprint>/)?.[1] ?? "")
   return {
     settings: cloneCameraRawSettings(parsed.settings),
     metadata: parsed.metadata ?? {},
+    snapshots,
+    sourceFingerprint: fingerprint,
     createdAt: Number.isFinite(parsed.createdAt) ? parsed.createdAt : 0,
     updatedAt: Number.isFinite(parsed.updatedAt) ? parsed.updatedAt : 0,
     nonDestructive: true,
+  }
+}
+
+export function reconcileCameraRawSidecarRoundTrip(
+  source: HighBitImage,
+  sidecar: CameraRawParsedSidecar | string,
+): CameraRawSidecarReconciliation {
+  const parsed = typeof sidecar === "string" ? parseCameraRawSidecar(sidecar) : sidecar
+  const sourceFingerprint = fingerprintHighBitImage(source)
+  return {
+    ...parsed,
+    sourceFingerprint: parsed.sourceFingerprint || sourceFingerprint,
+    sourceMatches: !parsed.sourceFingerprint || parsed.sourceFingerprint === sourceFingerprint,
   }
 }

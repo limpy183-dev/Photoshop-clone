@@ -1,4 +1,6 @@
-export type LearningIndexType = "command" | "doc" | "filter" | "panel" | "workflow"
+import { TOOL_LEARNING_SOURCES, type ToolLearningSource } from "./tool-help"
+
+export type LearningIndexType = "command" | "doc" | "filter" | "panel" | "tool" | "workflow"
 
 export interface LearningIndexItem {
   id: string
@@ -32,6 +34,7 @@ export interface LearningFilterSource {
 export interface LearningIndexSources {
   panels?: LearningPanelSource[]
   filters?: LearningFilterSource[]
+  tools?: ToolLearningSource[]
 }
 
 const COMMAND_ITEMS: LearningIndexItem[] = [
@@ -122,6 +125,15 @@ const WORKFLOW_ITEMS: LearningIndexItem[] = [
 ]
 
 export function buildLearningIndex(sources: LearningIndexSources = {}): LearningIndexItem[] {
+  const tools = (sources.tools ?? TOOL_LEARNING_SOURCES).map<LearningIndexItem>((tool) => ({
+    id: `tool-${tool.id}`,
+    type: "tool",
+    title: tool.title,
+    category: tool.category,
+    description: tool.description,
+    keywords: tool.keywords,
+    action: { kind: "panel", target: "discover", detail: { query: tool.keywords.slice(0, 2).join(" ") } },
+  }))
   const panels = (sources.panels ?? []).map<LearningIndexItem>((panel) => ({
     id: `panel-${panel.id}`,
     type: "panel",
@@ -140,7 +152,7 @@ export function buildLearningIndex(sources: LearningIndexSources = {}): Learning
     keywords: [filter.category, "filter"],
     action: { kind: "filter", target: filter.id },
   }))
-  return [...COMMAND_ITEMS, ...DOC_ITEMS, ...WORKFLOW_ITEMS, ...panels, ...filters]
+  return [...COMMAND_ITEMS, ...DOC_ITEMS, ...WORKFLOW_ITEMS, ...tools, ...panels, ...filters]
 }
 
 export function searchLearningIndex(items: LearningIndexItem[], query: string, options: { limit?: number } = {}) {
@@ -182,6 +194,7 @@ function scoreLearningItem(item: LearningIndexItem, terms: string[]) {
     if (description.includes(term)) score += 2
   }
   if (item.type === "workflow") score += 2
+  if (item.type === "tool") score += 4
   if (item.type === "panel" && terms.includes("panel")) score += 6
   return score
 }
@@ -196,12 +209,14 @@ function typePriority(type: LearningIndexType) {
       return 0
     case "command":
       return 1
-    case "panel":
+    case "tool":
       return 2
-    case "filter":
+    case "panel":
       return 3
+    case "filter":
+      return 4
     case "doc":
     default:
-      return 4
+      return 5
   }
 }

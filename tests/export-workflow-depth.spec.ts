@@ -198,7 +198,9 @@ test("raster export reports metadata, content credentials, and ICC embedding as 
     )
 
     expect(unsupportedMetadata, `${format} should not report metadata/ICC as unsupported`).toEqual([])
-    expect(report.items.some((item) => item.label === "Content Credentials" && item.status === "preserved")).toBe(true)
+    const credentials = report.items.find((item) => item.label === "Content Credentials")
+    expect(credentials?.status).toBe("preserved")
+    expect(credentials?.detail).toContain("C2PA")
   }
 })
 

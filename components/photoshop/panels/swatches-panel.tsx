@@ -6,84 +6,20 @@ import { Plus, Trash2, Download, Upload, RotateCcw, X } from "lucide-react"
 import { downloadText } from "../document-io"
 import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
-
-interface SwatchEntry {
-  color: string
-  name?: string
-  group?: string
-}
-
-const DEFAULT_GROUP = "Default"
-
-const DEFAULT_SWATCH_HEXES = [
-  "#000000","#1a1a1a","#333333","#4d4d4d","#666666","#808080","#999999","#b3b3b3","#cccccc","#e6e6e6","#ffffff",
-  "#ff0000","#ff3300","#ff6600","#ff9900","#ffcc00","#ffff00","#ccff00","#99ff00","#66ff00","#33ff00","#00ff00",
-  "#00ff33","#00ff66","#00ff99","#00ffcc","#00ffff","#00ccff","#0099ff","#0066ff","#0033ff","#0000ff",
-  "#3300ff","#6600ff","#9900ff","#cc00ff","#ff00ff","#ff00cc","#ff0099","#ff0066","#ff0033",
-  "#800000","#804000","#808000","#408000","#008000","#008040","#008080","#004080","#000080","#400080","#800080",
-  "#ffcccc","#ffe0cc","#ffffcc","#e0ffcc","#ccffcc","#ccffe0","#ccffff","#cce0ff","#ccccff","#e0ccff","#ffccff",
-]
-
-const DEFAULT_SWATCHES: SwatchEntry[] = DEFAULT_SWATCH_HEXES.map((color) => ({ color, group: DEFAULT_GROUP }))
-
-const STORAGE_KEY = "ps-swatches"
-const HEX_COLOR = /^#[0-9a-f]{6}$/i
-const MAX_SWATCHES = 256
-const MAX_NAME_LENGTH = 40
-const MAX_GROUP_LENGTH = 40
-
-function scopedStorageKey(docId: string | undefined) {
-  return docId ? `${STORAGE_KEY}:${docId}` : STORAGE_KEY
-}
-
-function normalizeSwatches(value: unknown): SwatchEntry[] {
-  const source =
-    value && typeof value === "object" && !Array.isArray(value) && "swatches" in value
-      ? (value as { swatches?: unknown }).swatches
-      : value
-  if (!Array.isArray(source)) return DEFAULT_SWATCHES
-  const seen = new Set<string>()
-  const out: SwatchEntry[] = []
-  for (const item of source) {
-    let color: string | null = null
-    let name: string | undefined
-    let group: string | undefined
-    if (typeof item === "string") {
-      if (HEX_COLOR.test(item)) color = item.toLowerCase()
-    } else if (item && typeof item === "object") {
-      const candidate = item as Partial<SwatchEntry>
-      if (typeof candidate.color === "string" && HEX_COLOR.test(candidate.color)) {
-        color = candidate.color.toLowerCase()
-      }
-      if (typeof candidate.name === "string") name = candidate.name.trim().slice(0, MAX_NAME_LENGTH) || undefined
-      if (typeof candidate.group === "string") group = candidate.group.trim().slice(0, MAX_GROUP_LENGTH) || undefined
-    }
-    if (!color) continue
-    const key = `${color}|${name ?? ""}|${group ?? DEFAULT_GROUP}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push({ color, name, group: group ?? DEFAULT_GROUP })
-    if (out.length >= MAX_SWATCHES) break
-  }
-  return out.length ? out : DEFAULT_SWATCHES
-}
-
-function loadSwatches(docId?: string): SwatchEntry[] {
-  if (typeof window === "undefined") return DEFAULT_SWATCHES
-  try {
-    const scoped = docId ? localStorage.getItem(scopedStorageKey(docId)) : null
-    const saved = scoped ?? localStorage.getItem(STORAGE_KEY)
-    return saved ? normalizeSwatches(JSON.parse(saved)) : DEFAULT_SWATCHES
-  } catch { return DEFAULT_SWATCHES }
-}
-
-function describeSwatch(entry: SwatchEntry): string {
-  return entry.name ? `${entry.name} (${entry.color})` : entry.color
-}
+import {
+  DEFAULT_SWATCHES,
+  DEFAULT_SWATCH_GROUP,
+  MAX_SWATCH_NAME_LENGTH,
+  SWATCHES_UPDATED_EVENT,
+  describeSwatch,
+  loadSwatches,
+  normalizeSwatches,
+  saveSwatches,
+  type SwatchEntry,
+} from "../swatches-store"
 
 export function SwatchesPanel() {
   const { activeDoc, foreground, dispatch } = useEditor()
-  const storageKey = scopedStorageKey(activeDoc?.id)
   const [swatches, setSwatches] = React.useState<SwatchEntry[]>(() => loadSwatches(activeDoc?.id))
   const [query, setQuery] = React.useState("")
   const [activeGroup, setActiveGroup] = React.useState<string>("All")
@@ -98,15 +34,20 @@ export function SwatchesPanel() {
     setActiveGroup("All")
   }, [activeDoc?.id])
 
+  React.useEffect(() => {
+    const reload = () => setSwatches(loadSwatches(activeDoc?.id))
+    window.addEventListener(SWATCHES_UPDATED_EVENT, reload)
+    return () => window.removeEventListener(SWATCHES_UPDATED_EVENT, reload)
+  }, [activeDoc?.id])
+
   const save = React.useCallback((s: SwatchEntry[]) => {
-    const next = normalizeSwatches(s)
+    const next = saveSwatches(s, activeDoc?.id)
     setSwatches(next)
-    try { localStorage.setItem(storageKey, JSON.stringify(next)) } catch { /* ignore quota */ }
-  }, [storageKey])
+  }, [activeDoc?.id])
 
   const groups = React.useMemo(() => {
     const set = new Set<string>()
-    for (const swatch of swatches) set.add(swatch.group ?? DEFAULT_GROUP)
+    for (const swatch of swatches) set.add(swatch.group ?? DEFAULT_SWATCH_GROUP)
     return Array.from(set)
   }, [swatches])
 
@@ -115,7 +56,7 @@ export function SwatchesPanel() {
     return swatches
       .map((swatch, index) => ({ swatch, index }))
       .filter(({ swatch }) => {
-        if (activeGroup !== "All" && (swatch.group ?? DEFAULT_GROUP) !== activeGroup) return false
+        if (activeGroup !== "All" && (swatch.group ?? DEFAULT_SWATCH_GROUP) !== activeGroup) return false
         if (!q) return true
         return (
           swatch.color.toLowerCase().includes(q) ||
@@ -126,14 +67,14 @@ export function SwatchesPanel() {
       .sort((a, b) => {
         if (sort === "name") return describeSwatch(a.swatch).localeCompare(describeSwatch(b.swatch))
         if (sort === "color") return a.swatch.color.localeCompare(b.swatch.color)
-        return (a.swatch.group ?? DEFAULT_GROUP).localeCompare(b.swatch.group ?? DEFAULT_GROUP) || describeSwatch(a.swatch).localeCompare(describeSwatch(b.swatch))
+        return (a.swatch.group ?? DEFAULT_SWATCH_GROUP).localeCompare(b.swatch.group ?? DEFAULT_SWATCH_GROUP) || describeSwatch(a.swatch).localeCompare(describeSwatch(b.swatch))
       })
   }, [swatches, query, activeGroup, sort])
 
   const addSwatch = () => {
     const newEntry: SwatchEntry = {
       color: foreground,
-      group: activeGroup !== "All" ? activeGroup : DEFAULT_GROUP,
+      group: activeGroup !== "All" ? activeGroup : DEFAULT_SWATCH_GROUP,
     }
     save([...swatches, newEntry])
   }
@@ -141,7 +82,7 @@ export function SwatchesPanel() {
   const removeSwatch = (idx: number) => save(swatches.filter((_, i) => i !== idx))
 
   const renameSwatch = (idx: number, name: string) => {
-    const trimmed = name.trim().slice(0, MAX_NAME_LENGTH)
+    const trimmed = name.trim().slice(0, MAX_SWATCH_NAME_LENGTH)
     const next = swatches.map((swatch, i) => (i === idx ? { ...swatch, name: trimmed || undefined } : swatch))
     save(next)
   }

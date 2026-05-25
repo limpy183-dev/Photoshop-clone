@@ -174,6 +174,536 @@
   animation: ps-marching-ants 0.5s linear infinite;
 }
 
+/* Rich tooltips: small animated previews for the left tool rail. */
+.ps-tool-preview-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-size: 12px 12px;
+  opacity: 0.7;
+}
+
+.ps-preview-stroke,
+.ps-preview-path {
+  fill: none;
+  stroke: var(--ps-accent-2);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ps-preview-stroke {
+  stroke-width: 5;
+  stroke-dasharray: 112;
+  stroke-dashoffset: 112;
+  animation: ps-preview-draw 1.8s ease-in-out infinite;
+}
+
+.ps-preview-path {
+  stroke-width: 2;
+  stroke-dasharray: 96;
+  stroke-dashoffset: 96;
+  animation: ps-preview-draw 2s ease-in-out infinite;
+}
+
+.ps-preview-anchor {
+  fill: var(--ps-panel);
+  stroke: var(--ps-accent-2);
+  stroke-width: 1.5;
+}
+
+.ps-preview-cursor {
+  position: absolute;
+  left: 38px;
+  top: 18px;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--ps-text);
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+  animation: ps-preview-cursor 1.8s ease-in-out infinite;
+}
+
+.ps-preview-selection,
+.ps-preview-crop,
+.ps-preview-transform-box,
+.ps-preview-view-frame {
+  position: absolute;
+  inset: 14px;
+  border: 1px dashed var(--ps-text);
+}
+
+.ps-preview-selection {
+  background-image:
+    linear-gradient(90deg, #000 50%, #fff 50%),
+    linear-gradient(90deg, #000 50%, #fff 50%),
+    linear-gradient(0deg, #000 50%, #fff 50%),
+    linear-gradient(0deg, #000 50%, #fff 50%);
+  background-repeat: repeat-x, repeat-x, repeat-y, repeat-y;
+  background-size: 8px 1px, 8px 1px, 1px 8px, 1px 8px;
+  background-position: 0 0, 0 100%, 0 0, 100% 0;
+  animation: ps-preview-selection 1s linear infinite;
+}
+
+.ps-preview-crop {
+  border-style: solid;
+  border-color: var(--ps-accent-2);
+  animation: ps-preview-crop 1.9s ease-in-out infinite;
+}
+
+.ps-preview-crop-line {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.ps-preview-crop-line-a {
+  left: 28px;
+  top: 8px;
+  width: 1px;
+  height: 48px;
+}
+
+.ps-preview-crop-line-b {
+  left: 8px;
+  top: 34px;
+  width: 48px;
+  height: 1px;
+}
+
+.ps-preview-swatch {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--ps-divider);
+}
+
+.ps-preview-swatch-a {
+  left: 11px;
+  top: 18px;
+  background: #2374d6;
+}
+
+.ps-preview-swatch-b {
+  right: 11px;
+  top: 24px;
+  background: #f0b429;
+}
+
+.ps-preview-sampler {
+  position: absolute;
+  left: 25px;
+  top: 14px;
+  width: 14px;
+  height: 36px;
+  border-left: 2px solid var(--ps-text);
+  border-bottom: 2px solid var(--ps-text);
+  transform: rotate(38deg);
+  animation: ps-preview-sample 1.6s ease-in-out infinite;
+}
+
+.ps-preview-blemish,
+.ps-preview-heal {
+  position: absolute;
+  border-radius: 999px;
+}
+
+.ps-preview-blemish {
+  left: 20px;
+  top: 20px;
+  width: 22px;
+  height: 22px;
+  background: #6b3b32;
+  box-shadow: 12px 12px 0 rgba(240, 180, 41, 0.35);
+}
+
+.ps-preview-heal {
+  left: 17px;
+  top: 17px;
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--ps-accent-2);
+  animation: ps-preview-pulse 1.4s ease-in-out infinite;
+}
+
+.ps-preview-clone-source,
+.ps-preview-clone-target {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--ps-accent-2);
+  background: repeating-linear-gradient(135deg, #2374d6 0 4px, #f0b429 4px 8px);
+}
+
+.ps-preview-clone-source {
+  left: 10px;
+  top: 12px;
+}
+
+.ps-preview-clone-target {
+  right: 10px;
+  bottom: 12px;
+  opacity: 0.55;
+  animation: ps-preview-clone 1.7s ease-in-out infinite;
+}
+
+.ps-preview-clone-line {
+  position: absolute;
+  left: 28px;
+  top: 30px;
+  width: 22px;
+  height: 1px;
+  background: var(--ps-accent-2);
+  transform: rotate(36deg);
+}
+
+.ps-preview-history-before,
+.ps-preview-history-after,
+.ps-preview-paint-block,
+.ps-preview-fill-band,
+.ps-preview-tonal-base {
+  position: absolute;
+  inset: 12px;
+  background: linear-gradient(135deg, #2374d6, #f0b429);
+}
+
+.ps-preview-history-after {
+  inset: 12px 12px 12px 34px;
+  background: linear-gradient(135deg, #e5e7eb, #2374d6);
+  animation: ps-preview-wipe 1.6s ease-in-out infinite;
+}
+
+.ps-preview-erase-path {
+  position: absolute;
+  left: 14px;
+  top: 30px;
+  width: 36px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--ps-panel-2);
+  transform: rotate(-22deg);
+  animation: ps-preview-erase 1.7s ease-in-out infinite;
+}
+
+.ps-preview-fill-band {
+  transform-origin: bottom;
+  animation: ps-preview-fill 1.7s ease-in-out infinite;
+}
+
+.ps-preview-fill-drop {
+  position: absolute;
+  left: 28px;
+  top: 13px;
+  width: 10px;
+  height: 16px;
+  border-radius: 999px 999px 999px 2px;
+  background: var(--ps-accent-2);
+  transform: rotate(45deg);
+}
+
+.ps-preview-detail {
+  position: absolute;
+  left: 16px;
+  width: 32px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--ps-text);
+}
+
+.ps-preview-detail-a {
+  top: 24px;
+}
+
+.ps-preview-detail-b {
+  top: 36px;
+}
+
+.ps-preview-blur-pass {
+  position: absolute;
+  left: 12px;
+  top: 16px;
+  width: 40px;
+  height: 34px;
+  border-radius: 999px;
+  backdrop-filter: blur(2px);
+  background: rgba(35, 116, 214, 0.16);
+  animation: ps-preview-scan 1.7s ease-in-out infinite;
+}
+
+.ps-preview-tonal-light {
+  position: absolute;
+  left: 20px;
+  top: 14px;
+  width: 24px;
+  height: 36px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.28);
+  mix-blend-mode: screen;
+  animation: ps-preview-pulse 1.5s ease-in-out infinite;
+}
+
+.ps-preview-type-glyph {
+  position: absolute;
+  left: 19px;
+  top: 10px;
+  font-size: 38px;
+  line-height: 1;
+  font-weight: 700;
+  color: var(--ps-text);
+}
+
+.ps-preview-type-caret {
+  position: absolute;
+  right: 16px;
+  top: 17px;
+  width: 1px;
+  height: 34px;
+  background: var(--ps-accent-2);
+  animation: ps-preview-blink 0.9s steps(2, end) infinite;
+}
+
+.ps-preview-shape-base,
+.ps-preview-shape-next {
+  position: absolute;
+  border: 2px solid var(--ps-accent-2);
+}
+
+.ps-preview-shape-base {
+  left: 12px;
+  top: 18px;
+  width: 24px;
+  height: 24px;
+}
+
+.ps-preview-shape-next {
+  right: 12px;
+  top: 20px;
+  width: 0;
+  height: 0;
+  border-left: 13px solid transparent;
+  border-right: 13px solid transparent;
+  border-bottom: 24px solid #f0b429;
+  animation: ps-preview-shape 1.8s ease-in-out infinite;
+}
+
+.ps-preview-view-frame {
+  border-style: solid;
+  transform: scale(0.78);
+  animation: ps-preview-view 1.8s ease-in-out infinite;
+}
+
+.ps-preview-view-lens {
+  position: absolute;
+  left: 24px;
+  top: 22px;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--ps-accent-2);
+  border-radius: 999px;
+}
+
+.ps-preview-transform-box {
+  border-style: solid;
+  border-color: var(--ps-accent-2);
+  transform: rotate(-8deg);
+  animation: ps-preview-transform 1.9s ease-in-out infinite;
+}
+
+.ps-preview-transform-handle {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  background: var(--ps-panel);
+  border: 1px solid var(--ps-accent-2);
+}
+
+.ps-preview-transform-handle-a {
+  left: 12px;
+  top: 12px;
+}
+
+.ps-preview-transform-handle-b {
+  right: 12px;
+  bottom: 12px;
+}
+
+.ps-preview-mask-overlay {
+  position: absolute;
+  inset: 9px;
+  background: rgba(220, 38, 88, 0.42);
+}
+
+.ps-preview-mask-brush {
+  position: absolute;
+  left: 16px;
+  top: 24px;
+  width: 34px;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.78);
+  transform: rotate(-24deg);
+  animation: ps-preview-erase 1.8s ease-in-out infinite;
+}
+
+.ps-preview-layer {
+  position: absolute;
+  width: 28px;
+  height: 22px;
+  border: 1px solid var(--ps-divider);
+  background: rgba(35, 116, 214, 0.55);
+}
+
+.ps-preview-layer-a {
+  left: 12px;
+  top: 14px;
+}
+
+.ps-preview-layer-b {
+  left: 24px;
+  top: 27px;
+  background: rgba(240, 180, 41, 0.65);
+  animation: ps-preview-move 1.8s ease-in-out infinite;
+}
+
+.ps-preview-move-arrow {
+  position: absolute;
+  right: 13px;
+  top: 13px;
+  width: 14px;
+  height: 14px;
+  border-right: 2px solid var(--ps-text);
+  border-top: 2px solid var(--ps-text);
+  animation: ps-preview-arrow 1.8s ease-in-out infinite;
+}
+
+@keyframes ps-preview-draw {
+  0%,
+  18% {
+    stroke-dashoffset: 112;
+  }
+  70%,
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes ps-preview-cursor {
+  0% {
+    transform: translate(-28px, 26px) scale(0.9);
+  }
+  65% {
+    transform: translate(9px, -3px) scale(1);
+  }
+  100% {
+    transform: translate(9px, -3px) scale(0.9);
+  }
+}
+
+@keyframes ps-preview-selection {
+  to {
+    background-position: 8px 0;
+  }
+}
+
+@keyframes ps-preview-crop {
+  50% {
+    inset: 10px 18px 18px 10px;
+  }
+}
+
+@keyframes ps-preview-sample {
+  50% {
+    transform: translate(10px, 8px) rotate(38deg);
+  }
+}
+
+@keyframes ps-preview-pulse {
+  50% {
+    transform: scale(1.12);
+    opacity: 0.68;
+  }
+}
+
+@keyframes ps-preview-clone {
+  50% {
+    opacity: 1;
+    transform: translate(-4px, -4px);
+  }
+}
+
+@keyframes ps-preview-wipe {
+  50% {
+    transform: translateX(-10px);
+  }
+}
+
+@keyframes ps-preview-erase {
+  50% {
+    transform: translate(6px, -6px) rotate(-22deg);
+  }
+}
+
+@keyframes ps-preview-fill {
+  0% {
+    transform: scaleY(0.15);
+  }
+  70%,
+  100% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes ps-preview-scan {
+  50% {
+    transform: translateX(10px);
+  }
+}
+
+@keyframes ps-preview-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes ps-preview-shape {
+  50% {
+    transform: translateX(-5px) rotate(8deg);
+  }
+}
+
+@keyframes ps-preview-view {
+  50% {
+    transform: scale(1);
+  }
+}
+
+@keyframes ps-preview-transform {
+  50% {
+    transform: rotate(7deg) scale(1.05);
+  }
+}
+
+@keyframes ps-preview-move {
+  50% {
+    transform: translate(5px, -5px);
+  }
+}
+
+@keyframes ps-preview-arrow {
+  50% {
+    transform: translate(5px, -5px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ps-tool-preview *,
+  .ps-tool-preview::before,
+  .ps-tool-preview::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
 
 
 /* =====================================================================

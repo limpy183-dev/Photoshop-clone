@@ -24,61 +24,18 @@ import { useEditor, makeDocument, makeCanvas } from "./editor-context"
 import { canvasSizeError, clampCanvasSize } from "./canvas-limits"
 import { createHighBitImageFromImageData, type HighBitImage } from "./color-pipeline"
 import type { DocumentModeSettings, Layer, PsDocument } from "./types"
+import {
+  estimateDocumentMemoryMb,
+  modeSettings,
+  NEW_DOCUMENT_PRESET_GROUPS,
+  NEW_DOCUMENT_PRESETS,
+  pixelsToUnit,
+  unitToPixels,
+  type NewDocumentUnit,
+} from "./new-document-presets"
 
-type Unit = "px" | "in" | "cm" | "mm"
 type BackgroundChoice = "white" | "black" | "transparent" | "foreground" | "background" | "custom"
 type DocumentWithHighBitSource = PsDocument & { __highBitImageData?: HighBitImage }
-
-interface Preset {
-  name: string
-  group: "Recent" | "Photo" | "Print" | "Web" | "Mobile" | "Icon" | "Social" | "Film"
-  w: number
-  h: number
-  dpi: number
-  mode: DocumentModeSettings["mode"]
-  bitDepth: 8 | 16 | 32
-}
-
-const PRESETS: Preset[] = [
-  { group: "Recent", name: "Default Canvas", w: 1200, h: 800, dpi: 72, mode: "RGB", bitDepth: 8 },
-  { group: "Photo", name: "Photo 6 x 4 in", w: 1800, h: 1200, dpi: 300, mode: "RGB", bitDepth: 16 },
-  { group: "Photo", name: "Photo 5 x 7 in", w: 1500, h: 2100, dpi: 300, mode: "RGB", bitDepth: 16 },
-  { group: "Photo", name: "Photo 8 x 10 in", w: 2400, h: 3000, dpi: 300, mode: "RGB", bitDepth: 16 },
-  { group: "Print", name: "US Letter", w: 2550, h: 3300, dpi: 300, mode: "CMYK", bitDepth: 8 },
-  { group: "Print", name: "A4", w: 2480, h: 3508, dpi: 300, mode: "CMYK", bitDepth: 8 },
-  { group: "Print", name: "Poster 18 x 24 in", w: 5400, h: 7200, dpi: 300, mode: "CMYK", bitDepth: 8 },
-  { group: "Web", name: "HD 1920 x 1080", w: 1920, h: 1080, dpi: 72, mode: "RGB", bitDepth: 8 },
-  { group: "Web", name: "Desktop 1440 x 900", w: 1440, h: 900, dpi: 72, mode: "RGB", bitDepth: 8 },
-  { group: "Mobile", name: "Phone Portrait", w: 1080, h: 1920, dpi: 72, mode: "RGB", bitDepth: 8 },
-  { group: "Mobile", name: "Tablet Portrait", w: 1536, h: 2048, dpi: 72, mode: "RGB", bitDepth: 8 },
-  { group: "Icon", name: "App Icon 1024", w: 1024, h: 1024, dpi: 72, mode: "RGB", bitDepth: 8 },
-  { group: "Icon", name: "Favicon 512", w: 512, h: 512, dpi: 72, mode: "RGB", bitDepth: 8 },
-  { group: "Social", name: "Square Social", w: 1080, h: 1080, dpi: 72, mode: "RGB", bitDepth: 8 },
-  { group: "Social", name: "Story / Reel", w: 1080, h: 1920, dpi: 72, mode: "RGB", bitDepth: 8 },
-  { group: "Film", name: "4K UHD", w: 3840, h: 2160, dpi: 72, mode: "RGB", bitDepth: 16 },
-]
-
-function unitToPixels(value: number, unit: Unit, dpi: number) {
-  if (unit === "px") return value
-  if (unit === "in") return value * dpi
-  if (unit === "cm") return (value / 2.54) * dpi
-  return (value / 25.4) * dpi
-}
-
-function pixelsToUnit(value: number, unit: Unit, dpi: number) {
-  if (unit === "px") return value
-  if (unit === "in") return value / dpi
-  if (unit === "cm") return (value / dpi) * 2.54
-  return (value / dpi) * 25.4
-}
-
-function modeSettings(mode: DocumentModeSettings["mode"]): DocumentModeSettings {
-  if (mode === "Indexed") return { mode, indexed: { colors: 256, dither: true } }
-  if (mode === "Bitmap") return { mode, bitmap: { method: "halftone", threshold: 128, frequency: 45, angle: 45 } }
-  if (mode === "Multichannel") return { mode, multichannel: { channels: { r: true, g: true, b: true, c: true, m: true, y: true, k: true } } }
-  if (mode === "Duotone") return { mode, duotone: { ink1: "#111111", ink2: "#4d78aa", curve: 50 } }
-  return { mode }
-}
 
 function readDefaultBackgroundPreference() {
   try {
@@ -102,7 +59,7 @@ export function NewDocumentDialog({
   const [name, setName] = React.useState("Untitled-1")
   const [width, setWidth] = React.useState(1200)
   const [height, setHeight] = React.useState(800)
-  const [unit, setUnit] = React.useState<Unit>("px")
+  const [unit, setUnit] = React.useState<NewDocumentUnit>("px")
   const [dpi, setDpi] = React.useState(72)
 
   const [prefBg, setPrefBg] = React.useState<string | null>(() => readDefaultBackgroundPreference())
@@ -133,11 +90,11 @@ export function NewDocumentDialog({
   const pixelWidth = Math.round(unitToPixels(width, unit, dpi))
   const pixelHeight = Math.round(unitToPixels(height, unit, dpi))
   const sizeError = canvasSizeError(pixelWidth, pixelHeight, "Document")
-  const memoryMb = (pixelWidth * pixelHeight * 4 * (bitDepth === 32 ? 4 : bitDepth === 16 ? 2 : 1)) / 1024 / 1024
+  const memoryMb = estimateDocumentMemoryMb(pixelWidth, pixelHeight, bitDepth)
 
   const setPresetByName = (value: string) => {
     setPreset(value)
-    const p = PRESETS.find((item) => item.name === value)
+    const p = NEW_DOCUMENT_PRESETS.find((item) => item.name === value)
     if (!p) return
     const size = clampCanvasSize(p.w, p.h)
     setUnit("px")
@@ -148,7 +105,7 @@ export function NewDocumentDialog({
     setBitDepth(p.bitDepth)
   }
 
-  const setUnitPreservingPixels = (nextUnit: Unit) => {
+  const setUnitPreservingPixels = (nextUnit: NewDocumentUnit) => {
     const currentW = pixelWidth
     const currentH = pixelHeight
     setUnit(nextUnit)
@@ -224,10 +181,10 @@ export function NewDocumentDialog({
           <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
             <div className="mb-2 text-[10px] uppercase tracking-wide text-[var(--ps-text-dim)]">Presets</div>
             <div className="max-h-[380px] overflow-y-auto">
-              {(["Recent", "Photo", "Print", "Web", "Mobile", "Icon", "Social", "Film"] as const).map((group) => (
+              {NEW_DOCUMENT_PRESET_GROUPS.map((group) => (
                 <div key={group} className="mb-2">
                   <div className="px-1 py-1 text-[10px] text-[var(--ps-text-dim)]">{group}</div>
-                  {PRESETS.filter((item) => item.group === group).map((item) => (
+                  {NEW_DOCUMENT_PRESETS.filter((item) => item.group === group).map((item) => (
                     <button
                       key={item.name}
                       type="button"
@@ -262,7 +219,7 @@ export function NewDocumentDialog({
 
             <div className="grid gap-1.5">
               <Label className="text-[11px]">Units</Label>
-              <Select value={unit} onValueChange={(value) => setUnitPreservingPixels(value as Unit)}>
+              <Select value={unit} onValueChange={(value) => setUnitPreservingPixels(value as NewDocumentUnit)}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="px">Pixels</SelectItem>

@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button"
 import type {
   AlphaChannel,
+  AdvancedBlending,
   AdjustmentProps,
   BlendMode,
   BrushPreset,
@@ -63,14 +64,18 @@ import type {
 } from "./types"
 import { createSmartObjectSource, markSmartObjectLinked, replaceSmartObjectContents } from "./smart-objects"
 import {
+  deleteEmptyLayersFromDocument,
   duplicateSlice,
   fillMaskCanvas,
+  flattenLayerMasks,
   invertMaskCanvas,
+  normalizeAdvancedBlending,
   normalizeGuide,
   normalizeSlice,
   reorderSmartFilterStack,
   updateSmartFilterStack,
 } from "./layer-workflows"
+import { applyLayerStyle } from "./layer-styles"
 import { compositeLayer, getNativeComposite } from "./blend-modes"
 import { loadPreferencesFromStorage, recordHistoryLogEntryFromStorage } from "./preferences-engine"
 import { createHistoryJumpScheduler, type HistoryJumpScheduler } from "./history-jump-scheduler"
@@ -87,10 +92,20 @@ import {
   selectionFromMask,
   selectionToMaskCanvas,
   smoothSelectionMask,
+  transformSelectionMask,
 } from "./tool-helpers"
 import { assertCanvasSize } from "./canvas-limits"
 import { makeCanvas } from "./canvas-utils"
+import { flattenTransparencyCanvas, type FlattenTransparencyAlphaMode } from "./flatten-transparency"
 import { uid } from "./uid"
+import {
+  estimateCanvasBytes,
+  estimateDataUrlBytes,
+  planPurgeTargets,
+  type PurgeResult,
+  type PurgeTarget,
+} from "./purge-commands"
+import { purgePsbTileViewCaches } from "./psb-tile-view"
 
 /* ----------------------------- helpers --------------------------------- */
 
@@ -123,6 +138,9 @@ export interface FileSystemWritableFileStreamLike {
 export interface FileSystemFileHandleLike {
   name: string
   createWritable(): Promise<FileSystemWritableFileStreamLike>
+  getFile?: () => Promise<File>
+  queryPermission?: (descriptor?: { mode?: "read" | "readwrite" }) => Promise<PermissionState>
+  requestPermission?: (descriptor?: { mode?: "read" | "readwrite" }) => Promise<PermissionState>
 }
 
 export interface DocumentLifecycleState {
@@ -237,6 +255,209 @@ function releaseEntriesBlobs(entries: ReadonlyArray<HistoryEntry | null | undefi
   for (const entry of entries) releaseEntryBlobs(entry)
 }
 
+interface HistoryMemoryEstimateContext {
+  canvases: Set<HTMLCanvasElement>
+  compressedBlobIds: Set<string>
+}
+
+function makeHistoryMemoryEstimateContext(): HistoryMemoryEstimateContext {
+  return { canvases: new Set(), compressedBlobIds: new Set() }
+}
+
+function estimateCanvasAllocationBytes(
+  canvas: HTMLCanvasElement | null | undefined,
+  context: HistoryMemoryEstimateContext,
+) {
+  if (!canvas) return 0
+  if (isCompressedCanvas(canvas)) {
+    const blobId = getCompressedBlobId(canvas)
+    if (!blobId || context.compressedBlobIds.has(blobId)) return 0
+    context.compressedBlobIds.add(blobId)
+    return _compressedCanvasStore.get(blobId)?.size ?? estimateCanvasBytes({
+      width: canvas.__origW ?? canvas.width,
+      height: canvas.__origH ?? canvas.height,
+    })
+  }
+  if (context.canvases.has(canvas)) return 0
+  context.canvases.add(canvas)
+  return estimateCanvasBytes(canvas)
+}
+
+function estimateLayerSnapshotBytes(snapshot: LayerSnapshot, context: HistoryMemoryEstimateContext) {
+  let bytes = estimateCanvasAllocationBytes(snapshot.canvas, context)
+  bytes += estimateCanvasAllocationBytes(snapshot.mask, context)
+  for (const patch of snapshot.canvasPatches ?? []) bytes += estimateCanvasAllocationBytes(patch.canvas, context)
+  if (snapshot.frame?.imageCanvas) bytes += estimateCanvasAllocationBytes(snapshot.frame.imageCanvas, context)
+  if (snapshot.smartSource?.canvas) bytes += estimateCanvasAllocationBytes(snapshot.smartSource.canvas, context)
+  for (const filter of snapshot.smartFilters ?? []) bytes += estimateCanvasAllocationBytes(filter.mask, context)
+  bytes += estimateDataUrlBytes(snapshot.video?.posterDataUrl)
+  return bytes
+}
+
+function estimateHistoryEntryBytes(
+  entry: HistoryEntry | null | undefined,
+  context: HistoryMemoryEstimateContext,
+) {
+  if (!entry) return 0
+  let bytes = estimateDataUrlBytes(entry.thumb)
+  for (const snapshot of entry.layers) bytes += estimateLayerSnapshotBytes(snapshot, context)
+  bytes += estimateCanvasAllocationBytes(entry.selection?.mask, context)
+  bytes += estimateCanvasAllocationBytes(entry.quickMaskCanvas, context)
+  for (const channel of entry.channels ?? []) bytes += estimateCanvasAllocationBytes(channel.canvas, context)
+  return bytes
+}
+
+function estimateHistoryEntriesBytes(entries: ReadonlyArray<HistoryEntry | null | undefined>) {
+  const context = makeHistoryMemoryEstimateContext()
+  return entries.reduce((sum, entry) => sum + estimateHistoryEntryBytes(entry, context), 0)
+}
+
+function estimateStyleClipboardBytes(style: LayerStyle | null) {
+  if (!style) return 0
+  try {
+    return JSON.stringify(style).length * 2
+  } catch {
+    return 0
+  }
+}
+
+function estimateClipboardPurgeBytes(state: EditorState) {
+  return estimateCanvasBytes(state.clipboard?.canvas) + estimateStyleClipboardBytes(state.styleClipboard)
+}
+
+function estimateUndoPurgeBytes(state: EditorState) {
+  const docId = state.activeDocId
+  if (!docId) return 0
+  const history = state.histories[docId]
+  if (!history) return 0
+  return estimateHistoryEntriesBytes(history.entries.filter((_, index) => index !== history.index))
+}
+
+function estimateHistoriesPurgeBytes(state: EditorState) {
+  const context = makeHistoryMemoryEstimateContext()
+  let bytes = 0
+  for (const doc of state.documents) {
+    const history = state.histories[doc.id]
+    if (history) {
+      for (const [index, entry] of history.entries.entries()) {
+        if (index !== history.index) bytes += estimateHistoryEntryBytes(entry, context)
+      }
+    }
+    for (const snapshot of state.snapshots[doc.id] ?? []) bytes += estimateHistoryEntryBytes(snapshot.entry, context)
+  }
+  for (const record of state.closedDocuments) {
+    const history = record.history
+    if (history) {
+      for (const [index, entry] of history.entries.entries()) {
+        if (index !== history.index) bytes += estimateHistoryEntryBytes(entry, context)
+      }
+    }
+    for (const snapshot of record.snapshots ?? []) bytes += estimateHistoryEntryBytes(snapshot.entry, context)
+  }
+  return bytes
+}
+
+function estimateFilterPreviewPurgeBytes(previews: Record<string, HTMLCanvasElement>) {
+  const context = makeHistoryMemoryEstimateContext()
+  return Object.values(previews).reduce((sum, canvas) => sum + estimateCanvasAllocationBytes(canvas, context), 0)
+}
+
+function purgeFilterPreviewCache(previews: Record<string, HTMLCanvasElement>) {
+  const bytes = estimateFilterPreviewPurgeBytes(previews)
+  for (const key of Object.keys(previews)) delete previews[key]
+  return bytes
+}
+
+function estimateVideoLayerCacheBytes(layer: Pick<Layer, "video"> | Pick<LayerSnapshot, "video">) {
+  return estimateDataUrlBytes(layer.video?.posterDataUrl)
+}
+
+function estimateVideoCacheInEntry(entry: HistoryEntry | null | undefined) {
+  if (!entry) return 0
+  return entry.layers.reduce((sum, layer) => sum + estimateVideoLayerCacheBytes(layer), 0)
+}
+
+function estimateVideoCacheInDoc(doc: PsDocument) {
+  let bytes = doc.layers.reduce((sum, layer) => sum + estimateVideoLayerCacheBytes(layer), 0)
+  for (const frame of doc.timelineFrames ?? []) bytes += estimateDataUrlBytes(frame.thumbnail)
+  return bytes
+}
+
+function estimateVideoCachePurgeBytes(state: EditorState) {
+  let bytes = 0
+  for (const doc of state.documents) {
+    bytes += estimateVideoCacheInDoc(doc)
+    for (const entry of state.histories[doc.id]?.entries ?? []) bytes += estimateVideoCacheInEntry(entry)
+    for (const snapshot of state.snapshots[doc.id] ?? []) bytes += estimateVideoCacheInEntry(snapshot.entry)
+  }
+  for (const record of state.closedDocuments) {
+    bytes += estimateVideoCacheInDoc(record.doc)
+    for (const entry of record.history?.entries ?? []) bytes += estimateVideoCacheInEntry(entry)
+    for (const snapshot of record.snapshots ?? []) bytes += estimateVideoCacheInEntry(snapshot.entry)
+  }
+  for (const action of state.actions) {
+    for (const step of action.steps) bytes += estimateVideoCacheInEntry(step.entry)
+  }
+  return bytes
+}
+
+function stripVideoLayerCache<T extends { video?: VideoLayerProps }>(layer: T): T {
+  if (!layer.video?.posterDataUrl) return layer
+  const { posterDataUrl: _posterDataUrl, ...video } = layer.video
+  return { ...layer, video } as T
+}
+
+function stripVideoFrameCache(frame: TimelineFrame): TimelineFrame {
+  if (!frame.thumbnail) return frame
+  const { thumbnail: _thumbnail, ...rest } = frame
+  return rest as TimelineFrame
+}
+
+function stripVideoCacheFromDoc(doc: PsDocument): PsDocument {
+  let changed = false
+  const layers = doc.layers.map((layer) => {
+    const next = stripVideoLayerCache(layer)
+    if (next !== layer) changed = true
+    return next
+  })
+  const timelineFrames = doc.timelineFrames?.map((frame) => {
+    const next = stripVideoFrameCache(frame)
+    if (next !== frame) changed = true
+    return next
+  })
+  if (!changed) return doc
+  return { ...doc, layers, timelineFrames }
+}
+
+function stripVideoCacheFromEntry(entry: HistoryEntry): HistoryEntry {
+  let changed = false
+  const layers = entry.layers.map((layer) => {
+    const next = stripVideoLayerCache(layer)
+    if (next !== layer) changed = true
+    return next
+  })
+  return changed ? { ...entry, layers } : entry
+}
+
+function stripVideoCacheFromSnapshots(snapshots: HistorySnapshot[] | undefined) {
+  if (!snapshots?.length) return snapshots ?? []
+  return snapshots.map((snapshot) => {
+    const entry = stripVideoCacheFromEntry(snapshot.entry)
+    return entry === snapshot.entry ? snapshot : { ...snapshot, entry }
+  })
+}
+
+function stripVideoCacheFromHistory(history: DocHistory | undefined) {
+  if (!history) return history
+  let changed = false
+  const entries = history.entries.map((entry) => {
+    const next = stripVideoCacheFromEntry(entry)
+    if (next !== entry) changed = true
+    return next
+  })
+  return changed ? { ...history, entries } : history
+}
+
 /**
  * Compress old history entries in the background to reduce memory.
  * Called after push-history when there are enough entries.
@@ -323,7 +544,17 @@ function cloneCanvas(src: HTMLCanvasElement | null | undefined): HTMLCanvasEleme
   const c = document.createElement("canvas")
   c.width = src.width
   c.height = src.height
-  c.getContext("2d")!.drawImage(src, 0, 0)
+  const ctx = c.getContext("2d")!
+  try {
+    const sourceCtx = src.getContext("2d")
+    if (sourceCtx) {
+      ctx.putImageData(sourceCtx.getImageData(0, 0, src.width, src.height), 0, 0)
+    } else {
+      ctx.drawImage(src, 0, 0)
+    }
+  } catch {
+    ctx.drawImage(src, 0, 0)
+  }
   return c
 }
 
@@ -331,8 +562,20 @@ function combineSelectionWithChannel(
   doc: PsDocument,
   channel: AlphaChannel,
   mode: SelectionChannelLoadMode = "replace",
+  invert = false,
 ) {
   const channelMask = cloneCanvas(channel.canvas) ?? makeCanvas(doc.width, doc.height)
+  if (invert) {
+    const ctx = channelMask.getContext("2d")!
+    const img = ctx.getImageData(0, 0, channelMask.width, channelMask.height)
+    for (let i = 0; i < img.data.length; i += 4) {
+      img.data[i] = 255
+      img.data[i + 1] = 255
+      img.data[i + 2] = 255
+      img.data[i + 3] = 255 - img.data[i + 3]
+    }
+    ctx.putImageData(img, 0, 0)
+  }
   if (mode === "replace") return channelMask
 
   const base = selectionToMaskCanvas(doc.width, doc.height, doc.selection) ?? makeCanvas(doc.width, doc.height)
@@ -563,6 +806,9 @@ function moveLayerPixels(layer: Layer, dx: number, dy: number) {
   if (!ix && !iy) return
   translateCanvasPixels(layer.canvas, ix, iy)
   translateCanvasPixels(layer.mask, ix, iy)
+  for (const filter of layer.smartFilters ?? []) {
+    if (filter.maskLinked !== false) translateCanvasPixels(filter.mask, ix, iy)
+  }
   if (layer.frame?.imageCanvas) translateCanvasPixels(layer.frame.imageCanvas, ix, iy)
 }
 
@@ -608,7 +854,11 @@ function cloneTranslatedSmartFilters(
 ): Layer["smartFilters"] {
   return filters?.map((filter) => {
     const mask = filter.mask ? makeCanvas(targetWidth, targetHeight) : filter.mask
-    if (mask && filter.mask) mask.getContext("2d")!.drawImage(filter.mask, dx, dy)
+    if (mask && filter.mask) {
+      const offsetX = filter.maskLinked === false ? 0 : dx
+      const offsetY = filter.maskLinked === false ? 0 : dy
+      mask.getContext("2d")!.drawImage(filter.mask, offsetX, offsetY)
+    }
     return {
       ...filter,
       params: deepClonePlain(filter.params),
@@ -927,6 +1177,55 @@ function blocksLayerMove(layer: Layer | undefined | null) {
   return isLayerLocked(layer) || !!layer?.lockMove
 }
 
+function layerCommandTargetIds(doc: PsDocument, ids: string[] | undefined, all = false) {
+  if (all) return new Set(doc.layers.map((layer) => layer.id))
+  const source = ids?.length ? ids : doc.selectedLayerIds.length ? doc.selectedLayerIds : [doc.activeLayerId]
+  return new Set(source.filter(Boolean))
+}
+
+function flattenLayerStylePixels(layer: Layer): Layer {
+  if (!layer.style) return layer
+  const advanced = normalizeAdvancedBlending(layer.advancedBlending)
+  const canvas = applyLayerStyle(layer, layer.fillOpacity ?? 1, {
+    transparencyShapesLayer: advanced.transparencyShapesLayer,
+  })
+  return {
+    ...layer,
+    canvas,
+    style: undefined,
+    fillOpacity: 1,
+  }
+}
+
+type RasterizeLayerOption = "layer" | "type" | "shape" | "smart-object" | "layer-style" | "all"
+
+function rasterizeLayerForOption(layer: Layer, option: RasterizeLayerOption, doc: PsDocument): Layer {
+  if (layer.kind === "group") return layer
+  let next = layer
+  if (option === "layer-style" || option === "all") next = flattenLayerStylePixels(next)
+  if (option === "all") next = flattenLayerMasks(next, doc.width, doc.height)
+  if (option === "type" && next.kind !== "text") return next
+  if (option === "shape" && next.kind !== "shape" && !next.path) return next
+  if (option === "smart-object" && !next.smartObject && next.kind !== "smart-object") return next
+  if (option === "layer-style") return next
+
+  return {
+    ...next,
+    kind: "raster",
+    smartObject: undefined,
+    smartSource: undefined,
+    smartFilters: option === "smart-object" || option === "all" ? undefined : next.smartFilters,
+    text: option === "type" || option === "layer" || option === "all" ? undefined : next.text,
+    shape: option === "shape" || option === "layer" || option === "all" ? undefined : next.shape,
+    path: option === "shape" || option === "layer" || option === "all" ? undefined : next.path,
+    adjustment: option === "layer" || option === "all" ? undefined : next.adjustment,
+    frame: option === "layer" || option === "all" ? undefined : next.frame,
+    artboard: option === "layer" || option === "all" ? undefined : next.artboard,
+    threeD: option === "layer" || option === "all" ? undefined : next.threeD,
+    video: option === "layer" || option === "all" ? undefined : next.video,
+  }
+}
+
 type GlobalLight = NonNullable<PsDocument["globalLight"]>
 
 function normalizeGlobalLight(light: GlobalLight): GlobalLight {
@@ -1092,6 +1391,7 @@ export type Action =
   | { type: "remove-brush-preset"; id: string }
   | { type: "set-brush-presets"; presets: BrushPreset[] }
   | { type: "new-document"; doc: PsDocument; entry: HistoryEntry; lifecycle?: Partial<DocumentLifecycleState> }
+  | { type: "replace-startup-document"; doc: PsDocument; entry: HistoryEntry; lifecycle?: Partial<DocumentLifecycleState> }
   | { type: "close-document"; id: string }
   | { type: "close-other-documents"; keepId: string }
   | { type: "reopen-closed-document"; id?: string }
@@ -1131,6 +1431,7 @@ export type Action =
   | { type: "set-layer-opacity"; id: string; opacity: number }
   | { type: "set-layer-fill-opacity"; id: string; fillOpacity: number }
   | { type: "set-layer-blend"; id: string; blendMode: BlendMode }
+  | { type: "set-layer-advanced-blending"; id: string; advancedBlending: AdvancedBlending | undefined }
   | { type: "set-layer-style"; id: string; style: LayerStyle | undefined }
   | { type: "set-layer-mask"; id: string; mask: HTMLCanvasElement | null }
   | { type: "set-layer-mask-enabled"; id: string; enabled: boolean }
@@ -1145,6 +1446,7 @@ export type Action =
   | { type: "set-layer-smart"; id: string; smart: boolean }
   | { type: "set-layer-smart-link"; id: string; source: Partial<SmartObjectSource> }
   | { type: "set-layer-smart-link-status"; id: string; status: NonNullable<SmartObjectSource["status"]> }
+  | { type: "apply-linked-smart-object-sync"; docId: string; id: string; source: Partial<SmartObjectSource> }
   | { type: "replace-smart-object-contents"; id: string; canvas: HTMLCanvasElement; source?: Partial<SmartObjectSource> }
   | { type: "update-smart-object-parent"; parentDocId: string; layerId: string; canvas: HTMLCanvasElement }
   | { type: "set-smart-object-edit-package"; id: string; editPackage: NonNullable<SmartObjectSource["editPackage"]> | undefined }
@@ -1153,6 +1455,11 @@ export type Action =
   | { type: "merge-down"; id: string }
   | { type: "merge-selected" }
   | { type: "flatten" }
+  | { type: "flatten-all-layer-effects"; ids?: string[] }
+  | { type: "flatten-all-masks"; ids?: string[] }
+  | { type: "delete-empty-layers" }
+  | { type: "rasterize-layers"; ids?: string[]; option: "layer" | "type" | "shape" | "smart-object" | "layer-style" | "all" }
+  | { type: "flatten-transparency"; matte: string; alphaMode?: FlattenTransparencyAlphaMode; layerIds?: string[] }
   | { type: "link-selected" }
   | { type: "unlink-selected" }
   | { type: "group-selected"; groupId: string }
@@ -1160,6 +1467,12 @@ export type Action =
   | { type: "toggle-group-expanded"; id: string }
   | { type: "push-history"; entry: HistoryEntry }
   | { type: "reset-history"; docId: string; entry: HistoryEntry }
+  | { type: "purge-undo"; docId: string; entry: HistoryEntry }
+  | {
+      type: "purge-histories"
+      entriesByDocId: Record<string, HistoryEntry>
+      closedEntriesByRecordId: Record<string, HistoryEntry>
+    }
   | {
       type: "restore-history"
       index: number
@@ -1184,6 +1497,8 @@ export type Action =
   | { type: "set-clipboard"; canvas: HTMLCanvasElement }
   | { type: "clear-clipboard" }
   | { type: "set-style-clipboard"; style: LayerStyle | null }
+  | { type: "purge-clipboard" }
+  | { type: "purge-video-cache" }
   | { type: "set-layer-vector-mask"; id: string; mask: PathProps | null }
   | { type: "set-layer-adjustment"; id: string; adjustment: AdjustmentProps }
   | { type: "set-layer-smart-filters"; id: string; smartFilters: SmartFilter[] }
@@ -1237,7 +1552,9 @@ export type Action =
   | { type: "set-gradient-stops"; stops: GradientSettings["stops"] }
   | { type: "grow-selection"; amount: number }
   | { type: "contract-selection"; amount: number }
+  | { type: "grow-similar-selection"; tolerance: number; iterations?: number }
   | { type: "similar-selection"; tolerance: number }
+  | { type: "transform-selection"; scale: number; rotationDeg: number; smoothing?: boolean }
   | { type: "stamp-visible" }
   | { type: "toggle-layer-lock-transparency"; id: string }
   | { type: "toggle-layer-lock-draw"; id: string }
@@ -1247,7 +1564,7 @@ export type Action =
   | { type: "border-selection"; width: number }
   | { type: "smooth-selection"; radius: number }
   | { type: "save-selection"; channel: AlphaChannel }
-  | { type: "load-selection"; channelId: string; mode?: SelectionChannelLoadMode }
+  | { type: "load-selection"; channelId: string; mode?: SelectionChannelLoadMode; invert?: boolean }
   | { type: "update-channel"; channelId: string; patch: Partial<AlphaChannel> }
   | { type: "delete-channel"; channelId: string }
   | { type: "mark-document-dirty"; id: string }
@@ -1290,7 +1607,12 @@ const DEFAULT_BRUSH_PRESETS: BrushPreset[] = [
     size: 42,
     hardness: 65,
     spacing: 12,
-    settings: { tipShape: "bristle", texture: { enabled: true, pattern: "canvas", mode: "multiply", depth: 55, depthJitter: 20, minDepth: 12, scale: 90 }, purity: -8 },
+    settings: {
+      tipShape: "bristle",
+      bristleTip: { length: 72, density: 74, thickness: 34, stiffness: 38, splay: 52, wetness: 18 },
+      texture: { enabled: true, pattern: "canvas", mode: "multiply", depth: 55, depthJitter: 20, minDepth: 12, scale: 90 },
+      purity: -8,
+    },
   },
   {
     id: "erodible-chalk",
@@ -1298,7 +1620,12 @@ const DEFAULT_BRUSH_PRESETS: BrushPreset[] = [
     size: 36,
     hardness: 78,
     spacing: 16,
-    settings: { tipShape: "erodible", noise: true, texture: { enabled: true, pattern: "paper", mode: "subtract", depth: 46, depthJitter: 28, minDepth: 8, scale: 120 } },
+    settings: {
+      tipShape: "erodible",
+      erodibleTip: { sharpness: 76, flatness: 48, erosionRate: 64, softness: 18, aspectRatio: 72, rotation: -8 },
+      noise: true,
+      texture: { enabled: true, pattern: "paper", mode: "subtract", depth: 46, depthJitter: 28, minDepth: 8, scale: 120 },
+    },
   },
 ]
 
@@ -1315,6 +1642,8 @@ const HIGH_FREQUENCY_ACTION_TYPES = new Set<Action["type"]>([
 const HISTORY_CONTEXT_INVALIDATING_ACTION_TYPES = new Set<Action["type"]>([
   "push-history",
   "reset-history",
+  "purge-undo",
+  "purge-histories",
   "restore-history-entry",
   "new-document",
   "close-document",
@@ -1336,6 +1665,7 @@ const DOCUMENT_DIRTY_ACTIONS = new Set<Action["type"]>([
   "set-layer-opacity",
   "set-layer-fill-opacity",
   "set-layer-blend",
+  "set-layer-advanced-blending",
   "set-layer-style",
   "set-layer-mask",
   "set-layer-mask-enabled",
@@ -1348,12 +1678,18 @@ const DOCUMENT_DIRTY_ACTIONS = new Set<Action["type"]>([
   "set-layer-smart",
   "set-layer-smart-link",
   "set-layer-smart-link-status",
+  "apply-linked-smart-object-sync",
   "replace-smart-object-contents",
   "rename-layer",
   "move-layer",
   "merge-down",
   "merge-selected",
   "flatten",
+  "flatten-all-layer-effects",
+  "flatten-all-masks",
+  "delete-empty-layers",
+  "rasterize-layers",
+  "flatten-transparency",
   "link-selected",
   "unlink-selected",
   "group-selected",
@@ -1403,7 +1739,9 @@ const DOCUMENT_DIRTY_ACTIONS = new Set<Action["type"]>([
   "set-gradient-stops",
   "grow-selection",
   "contract-selection",
+  "grow-similar-selection",
   "similar-selection",
+  "transform-selection",
   "stamp-visible",
   "toggle-layer-lock-transparency",
   "toggle-layer-lock-draw",
@@ -1471,6 +1809,7 @@ function dirtyDocIdsForAction(action: Action, state: EditorState) {
     return action.copy ? [action.targetDocId] : [action.sourceDocId, action.targetDocId]
   }
   if (action.type === "update-smart-object-parent") return [action.parentDocId]
+  if (action.type === "apply-linked-smart-object-sync") return [action.docId]
   if (!DOCUMENT_DIRTY_ACTIONS.has(action.type)) return []
   return state.activeDocId ? [state.activeDocId] : []
 }
@@ -1544,6 +1883,22 @@ export function reducer(state: EditorState, action: Action): EditorState {
           [action.doc.id]: makeDocumentLifecycle(action.doc, 0, action.lifecycle),
         },
         closedDocuments: state.closedDocuments.filter((record) => record.doc.id !== action.doc.id),
+      }
+    case "replace-startup-document":
+      return {
+        ...state,
+        documents: [action.doc],
+        activeDocId: action.doc.id,
+        histories: {
+          [action.doc.id]: { entries: [action.entry], index: 0 },
+        },
+        snapshots: {
+          [action.doc.id]: [],
+        },
+        documentLifecycle: {
+          [action.doc.id]: makeDocumentLifecycle(action.doc, 0, action.lifecycle),
+        },
+        closedDocuments: [],
       }
     case "close-document": {
       const closing = state.documents.find((d) => d.id === action.id)
@@ -1846,6 +2201,15 @@ export function reducer(state: EditorState, action: Action): EditorState {
         ...d,
         layers: d.layers.map((l) => (l.id === action.id && !isLayerLocked(l) ? { ...l, blendMode: action.blendMode } : l)),
       }))
+    case "set-layer-advanced-blending":
+      return mutateActiveDoc(state, (d) => ({
+        ...d,
+        layers: d.layers.map((l) =>
+          l.id === action.id && !isLayerLocked(l)
+            ? { ...l, advancedBlending: action.advancedBlending ? normalizeAdvancedBlending(action.advancedBlending) : undefined }
+            : l,
+        ),
+      }))
     case "set-layer-style":
       return mutateActiveDoc(state, (d) => ({
         ...d,
@@ -1985,6 +2349,22 @@ export function reducer(state: EditorState, action: Action): EditorState {
             : l,
         ),
       }))
+    case "apply-linked-smart-object-sync":
+      return {
+        ...state,
+        documents: state.documents.map((d) =>
+          d.id === action.docId
+            ? {
+                ...d,
+                layers: d.layers.map((l) =>
+                  l.id === action.id && (l.smartObject || l.kind === "smart-object")
+                    ? markSmartObjectLinked(l, action.source)
+                    : l,
+                ),
+              }
+            : d,
+        ),
+      }
     case "replace-smart-object-contents":
       return mutateActiveDoc(state, (d) => ({
         ...d,
@@ -2137,6 +2517,68 @@ export function reducer(state: EditorState, action: Action): EditorState {
         }
         return { ...d, layers: [layer], activeLayerId: layer.id, selectedLayerIds: [layer.id] }
       })
+    case "flatten-all-layer-effects":
+      return mutateActiveDoc(state, (d) => {
+        const targets = layerCommandTargetIds(d, action.ids, !action.ids?.length)
+        return {
+          ...d,
+          layers: d.layers.map((layer) =>
+            targets.has(layer.id) && !isLayerLocked(layer) ? flattenLayerStylePixels(layer) : layer,
+          ),
+        }
+      })
+    case "flatten-all-masks":
+      return mutateActiveDoc(state, (d) => {
+        const targets = layerCommandTargetIds(d, action.ids, !action.ids?.length)
+        return {
+          ...d,
+          layers: d.layers.map((layer) =>
+            targets.has(layer.id) && !isLayerLocked(layer) ? flattenLayerMasks(layer, d.width, d.height) : layer,
+          ),
+        }
+      })
+    case "delete-empty-layers":
+      return mutateActiveDoc(state, (d) => deleteEmptyLayersFromDocument(d))
+    case "rasterize-layers":
+      return mutateActiveDoc(state, (d) => {
+        const targets = layerCommandTargetIds(d, action.ids, action.option === "all")
+        return {
+          ...d,
+          layers: d.layers.map((layer) =>
+            targets.has(layer.id) && !isLayerLocked(layer)
+              ? rasterizeLayerForOption(layer, action.option, d)
+              : layer,
+          ),
+        }
+      })
+    case "flatten-transparency":
+      return mutateActiveDoc(state, (d) => {
+        const targetIds = new Set(
+          action.layerIds?.length
+            ? action.layerIds
+            : d.selectedLayerIds.length
+              ? d.selectedLayerIds
+              : d.activeLayerId
+                ? [d.activeLayerId]
+                : [],
+        )
+        if (!targetIds.size) return d
+
+        let changed = false
+        const layers = d.layers.map((layer) => {
+          if (!targetIds.has(layer.id) || layer.kind === "group" || isLayerLocked(layer)) return layer
+          const canvas = cloneCanvas(layer.canvas)
+          if (!canvas) return layer
+          const stats = flattenTransparencyCanvas(canvas, {
+            matte: action.matte,
+            alphaMode: action.alphaMode ?? "clear",
+          })
+          if (stats.changedPixels === 0) return layer
+          changed = true
+          return { ...layer, canvas }
+        })
+        return changed ? { ...d, layers } : d
+      })
     case "link-selected":
       return mutateActiveDoc(state, (d) => {
         if (d.selectedLayerIds.length < 2) return d
@@ -2286,6 +2728,41 @@ export function reducer(state: EditorState, action: Action): EditorState {
           [action.docId]: { entries: [action.entry], index: 0 },
         },
       }
+    }
+    case "purge-undo": {
+      const prior = state.histories[action.docId]?.entries
+      if (prior?.length) releaseEntriesBlobs(prior)
+      return {
+        ...state,
+        histories: {
+          ...state.histories,
+          [action.docId]: { entries: [action.entry], index: 0 },
+        },
+      }
+    }
+    case "purge-histories": {
+      const histories = { ...state.histories }
+      const snapshots = { ...state.snapshots }
+      for (const [docId, entry] of Object.entries(action.entriesByDocId)) {
+        const prior = histories[docId]?.entries
+        if (prior?.length) releaseEntriesBlobs(prior)
+        const priorSnapshots = snapshots[docId] ?? []
+        if (priorSnapshots.length) releaseEntriesBlobs(priorSnapshots.map((snapshot) => snapshot.entry))
+        histories[docId] = { entries: [entry], index: 0 }
+        snapshots[docId] = []
+      }
+      const closedDocuments = state.closedDocuments.map((record) => {
+        const entry = action.closedEntriesByRecordId[record.id]
+        if (!entry) return record
+        if (record.history?.entries.length) releaseEntriesBlobs(record.history.entries)
+        if (record.snapshots?.length) releaseEntriesBlobs(record.snapshots.map((snapshot) => snapshot.entry))
+        return {
+          ...record,
+          history: { entries: [entry], index: 0 },
+          snapshots: [],
+        }
+      })
+      return { ...state, histories, snapshots, closedDocuments }
     }
     case "restore-history": {
       if (!state.activeDocId) return state
@@ -2484,6 +2961,38 @@ export function reducer(state: EditorState, action: Action): EditorState {
       return { ...state, clipboard: null }
     case "set-style-clipboard":
       return { ...state, styleClipboard: action.style ? deepClonePlain(action.style) : null }
+    case "purge-clipboard":
+      return { ...state, clipboard: null, styleClipboard: null }
+    case "purge-video-cache": {
+      const histories: Record<string, DocHistory> = {}
+      for (const [docId, history] of Object.entries(state.histories)) {
+        histories[docId] = stripVideoCacheFromHistory(history) ?? history
+      }
+      const snapshots: Record<string, HistorySnapshot[]> = {}
+      for (const [docId, docSnapshots] of Object.entries(state.snapshots)) {
+        snapshots[docId] = stripVideoCacheFromSnapshots(docSnapshots)
+      }
+      const closedDocuments = state.closedDocuments.map((record) => ({
+        ...record,
+        doc: stripVideoCacheFromDoc(record.doc),
+        history: stripVideoCacheFromHistory(record.history),
+        snapshots: stripVideoCacheFromSnapshots(record.snapshots),
+      }))
+      return {
+        ...state,
+        documents: state.documents.map(stripVideoCacheFromDoc),
+        histories,
+        snapshots,
+        closedDocuments,
+        actions: state.actions.map((actionItem) => ({
+          ...actionItem,
+          steps: actionItem.steps.map((step) => {
+            const entry = stripVideoCacheFromEntry(step.entry)
+            return entry === step.entry ? step : { ...step, entry }
+          }),
+        })),
+      }
+    }
     case "set-layer-vector-mask":
       return mutateActiveDoc(state, (d) => ({
         ...d,
@@ -2836,6 +3345,7 @@ export function reducer(state: EditorState, action: Action): EditorState {
               visible: s.visible,
               opacity: s.opacity,
               fillOpacity: s.fillOpacity,
+              advancedBlending: s.advancedBlending ? normalizeAdvancedBlending(s.advancedBlending) : l.advancedBlending,
               blendMode: s.blendMode,
               clipped: s.clipped,
               maskEnabled: s.maskEnabled,
@@ -2893,6 +3403,70 @@ export function reducer(state: EditorState, action: Action): EditorState {
         const mask = amount >= 0 ? contractSelectionMask(base, amount) : expandSelectionMask(base, -amount)
         return { ...d, selection: selectionFromMask(mask, "freehand", d.selection.feather) }
       })
+    case "grow-similar-selection":
+      return mutateActiveDoc(state, (d) => {
+        if (!d.selection.bounds) return d
+        const activeLayer = d.layers.find((l) => l.id === d.activeLayerId)
+        if (!activeLayer || typeof activeLayer.canvas.getContext !== "function") return d
+        const baseMask = selectionToMaskCanvas(d.width, d.height, d.selection)
+        if (!baseMask) return d
+        const maskImg = baseMask.getContext("2d")!.getImageData(0, 0, d.width, d.height)
+        const src = activeLayer.canvas.getContext("2d")!.getImageData(0, 0, d.width, d.height)
+        const selected = new Uint8Array(d.width * d.height)
+        let rSum = 0, gSum = 0, bSum = 0, count = 0
+        for (let i = 0; i < selected.length; i++) {
+          const p = i * 4
+          if (maskImg.data[p + 3] > 8 && src.data[p + 3] > 0) {
+            selected[i] = 1
+            rSum += src.data[p]
+            gSum += src.data[p + 1]
+            bSum += src.data[p + 2]
+            count++
+          }
+        }
+        if (!count) return d
+        const target = { r: rSum / count, g: gSum / count, b: bSum / count }
+        const tol = Math.max(0, Math.min(255, action.tolerance))
+        const passes = Math.max(1, Math.min(256, Math.round(action.iterations ?? Math.max(4, tol / 8))))
+        const withinTolerance = (index: number) => {
+          const p = index * 4
+          if (src.data[p + 3] === 0) return false
+          return (
+            Math.abs(src.data[p] - target.r) <= tol &&
+            Math.abs(src.data[p + 1] - target.g) <= tol &&
+            Math.abs(src.data[p + 2] - target.b) <= tol
+          )
+        }
+        for (let pass = 0; pass < passes; pass++) {
+          const additions: number[] = []
+          for (let y = 0; y < d.height; y++) {
+            for (let x = 0; x < d.width; x++) {
+              const idx = y * d.width + x
+              if (selected[idx] || !withinTolerance(idx)) continue
+              const touches =
+                (x > 0 && selected[idx - 1]) ||
+                (x < d.width - 1 && selected[idx + 1]) ||
+                (y > 0 && selected[idx - d.width]) ||
+                (y < d.height - 1 && selected[idx + d.width])
+              if (touches) additions.push(idx)
+            }
+          }
+          if (!additions.length) break
+          for (const idx of additions) selected[idx] = 1
+        }
+        const out = makeCanvas(d.width, d.height)
+        const ctx = out.getContext("2d")!
+        const img = ctx.createImageData(d.width, d.height)
+        for (let i = 0; i < selected.length; i++) {
+          const p = i * 4
+          img.data[p] = 255
+          img.data[p + 1] = 255
+          img.data[p + 2] = 255
+          img.data[p + 3] = selected[i] ? 255 : 0
+        }
+        ctx.putImageData(img, 0, 0)
+        return { ...d, selection: selectionFromMask(out, "wand", d.selection.feather) }
+      })
     case "similar-selection":
       return mutateActiveDoc(state, (d) => {
         if (!d.selection.bounds) return d
@@ -2942,6 +3516,20 @@ export function reducer(state: EditorState, action: Action): EditorState {
         const newMask = makeCanvas(d.width, d.height)
         newMask.getContext("2d")!.putImageData(new ImageData(out, d.width, d.height), 0, 0)
         return { ...d, selection: selectionFromMask(newMask, "wand") }
+      })
+    case "transform-selection":
+      return mutateActiveDoc(state, (d) => {
+        if (!d.selection.bounds) return d
+        const base = selectionToMaskCanvas(d.width, d.height, d.selection)
+        if (!base) return d
+        const next = transformSelectionMask(
+          base,
+          d.selection.bounds,
+          Math.max(0.01, Math.min(20, action.scale)),
+          Math.max(-360, Math.min(360, action.rotationDeg)),
+          action.smoothing ?? true,
+        )
+        return { ...d, selection: selectionFromMask(next, "freehand", d.selection.feather) }
       })
     case "stamp-visible":
       return mutateActiveDoc(state, (d) => {
@@ -3030,7 +3618,7 @@ export function reducer(state: EditorState, action: Action): EditorState {
       return mutateActiveDoc(state, (d) => {
         const ch = (d.channels ?? []).find((c) => c.id === action.channelId)
         if (!ch) return d
-        return { ...d, selection: selectionFromMask(combineSelectionWithChannel(d, ch, action.mode), "freehand") }
+        return { ...d, selection: selectionFromMask(combineSelectionWithChannel(d, ch, action.mode, action.invert), "freehand") }
       })
     case "update-channel":
       return mutateActiveDoc(state, (d) => ({
@@ -3484,6 +4072,7 @@ interface EditorContextValue {
   moveLayersToDocument: (sourceDocId: string, targetDocId: string, layerIds: string[], copy?: boolean) => void
   copySelection: (cut?: boolean) => void
   pasteAsLayer: () => void
+  purgeCaches: (target: PurgeTarget) => PurgeResult
   resizeDocument: (w: number, h: number, resample?: "nearest" | "bilinear" | "bicubic" | "bicubic-smoother" | "bicubic-sharper") => void
   resizeCanvas: (w: number, h: number, anchorX: number, anchorY: number, fill: string) => void
   toggleQuickMask: () => void
@@ -3531,6 +4120,11 @@ const initialState: EditorState = {
     roundnessControl: "off",
     opacityControl: "off",
     flowControl: "off",
+    erodibleTip: { sharpness: 70, flatness: 35, erosionRate: 50, softness: 20, aspectRatio: 80, rotation: 0 },
+    bristleTip: { length: 65, density: 55, thickness: 35, stiffness: 55, splay: 35, wetness: 25 },
+    mixer: { wet: 55, load: 60, mix: 50, flow: 100, sampleAllLayers: false, cleanAfterStroke: false },
+    colorReplacement: { sampling: "continuous", limits: "contiguous", mode: "color", tolerance: 32, antiAlias: true },
+    artHistory: { style: "tight-medium", area: 24, fidelity: 60 },
   },
   gradient: { type: "linear", reverse: false },
   paintBucket: { tolerance: 32, contiguous: true },
@@ -3571,10 +4165,12 @@ const initialState: EditorState = {
     contiguous: true,
     sampleAllLayers: false,
     sampleSize: "point",
+    quickGrowAmount: 3,
     magneticWidth: 12,
     magneticContrast: 24,
     magneticHysteresis: 45,
     magneticSmoothing: 35,
+    magneticFrequency: 57,
   },
   histories: {
     [initialDoc.id]: {
@@ -3667,6 +4263,11 @@ const PERSISTED_BRUSH_KEYS = [
   "smoothing",
   "spacing",
   "tipShape",
+  "erodibleTip",
+  "bristleTip",
+  "mixer",
+  "colorReplacement",
+  "artHistory",
 ] as const satisfies readonly (keyof EditorState["brush"])[]
 const PERSISTED_GRADIENT_KEYS = ["type", "reverse"] as const satisfies readonly (keyof EditorState["gradient"])[]
 const PERSISTED_SYMMETRY_KEYS = ["enabled", "axis"] as const satisfies readonly (keyof EditorState["symmetry"])[]
@@ -3741,6 +4342,11 @@ function savePersistedSettings(state: EditorState) {
         smoothing: state.brush.smoothing,
         spacing: state.brush.spacing,
         tipShape: state.brush.tipShape,
+        erodibleTip: state.brush.erodibleTip,
+        bristleTip: state.brush.bristleTip,
+        mixer: state.brush.mixer,
+        colorReplacement: state.brush.colorReplacement,
+        artHistory: state.brush.artHistory,
       },
       gradient: state.gradient,
       symmetry: state.symmetry,
@@ -4465,6 +5071,63 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     setTimeout(() => commit("Paste", [layer.id]), 0)
   }, [activeDoc, state.clipboard, commit, dispatch])
 
+  const purgeCaches = React.useCallback((target: PurgeTarget): PurgeResult => {
+    const current = stateRef.current
+    const requestedTargets = planPurgeTargets(target)
+    let freedBytes = 0
+    const details: string[] = []
+
+    const includes = (candidate: Exclude<PurgeTarget, "all">) =>
+      target === "all" || requestedTargets.includes(candidate)
+
+    if (target === "undo") {
+      const doc = current.documents.find((candidate) => candidate.id === current.activeDocId)
+      if (doc) {
+        freedBytes += estimateUndoPurgeBytes(current)
+        dispatch({
+          type: "purge-undo",
+          docId: doc.id,
+          entry: makeHistoryEntry(doc, "Current State", undefined, "all"),
+        })
+        details.push("Undo queue reset to the current document state.")
+      }
+    } else if (includes("histories")) {
+      freedBytes += estimateHistoriesPurgeBytes(current)
+      const entriesByDocId: Record<string, HistoryEntry> = {}
+      for (const doc of current.documents) entriesByDocId[doc.id] = makeHistoryEntry(doc, "Current State", undefined, "all")
+      const closedEntriesByRecordId: Record<string, HistoryEntry> = {}
+      for (const record of current.closedDocuments) {
+        closedEntriesByRecordId[record.id] = makeHistoryEntry(record.doc, "Current State", undefined, "all")
+      }
+      dispatch({ type: "purge-histories", entriesByDocId, closedEntriesByRecordId })
+      details.push("History states and history snapshots were reset.")
+    }
+
+    if (includes("clipboard")) {
+      freedBytes += estimateClipboardPurgeBytes(current)
+      dispatch({ type: "purge-clipboard" })
+      details.push("Pixel and layer-style clipboards were cleared.")
+    }
+
+    if (includes("video-cache")) {
+      freedBytes += estimateVideoCachePurgeBytes(current)
+      dispatch({ type: "purge-video-cache" })
+      details.push("Timeline thumbnails and video posters were cleared.")
+    }
+
+    if (target === "all") {
+      freedBytes += purgeFilterPreviewCache(filterPreviewsRef.current)
+      freedBytes += purgePsbTileViewCaches()
+      details.push("Filter preview and PSB tile caches were cleared.")
+    }
+
+    if (target === "all" || includes("video-cache")) {
+      requestRender({ layerIds: "all", reason: target === "all" ? "purge" : "video-cache" })
+    }
+
+    return { target, freedBytes, details }
+  }, [dispatch, requestRender])
+
   const resizeDocument = React.useCallback(
     (w: number, h: number, resample: "nearest" | "bilinear" | "bicubic" | "bicubic-smoother" | "bicubic-sharper" = "bicubic") => {
       if (!activeDoc) return
@@ -4677,6 +5340,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     moveLayersToDocument,
     copySelection,
     pasteAsLayer,
+    purgeCaches,
     resizeDocument,
     resizeCanvas,
     toggleQuickMask,
@@ -4793,7 +5457,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     newLayer, newGroup, jumpHistory, stepHistoryBy, createHistorySnapshot, restoreHistorySnapshot,
     deleteHistorySnapshot, createAction, startRecordingAction, stopRecordingAction,
     playAction, deleteAction, clearAction, createDocument, duplicateDocument, requestCloseDocument, closeOtherDocuments,
-    reopenClosedDocument, markDocumentSaved, setDocumentLifecycle, moveLayersToDocument, copySelection, pasteAsLayer,
+    reopenClosedDocument, markDocumentSaved, setDocumentLifecycle, moveLayersToDocument, copySelection, pasteAsLayer, purgeCaches,
     resizeDocument, resizeCanvas, toggleQuickMask, addLayerMask, editSmartObject, updateSmartObjectParent,
     setFilterPreview,
   ])

@@ -54,7 +54,23 @@ export interface PathAffineTransform {
   f: number
 }
 
+export interface PathAnchorRef {
+  subpathIndex: number
+  pointIndex: number
+}
+
 const kappa = 0.5522847498
+
+type PaperModule = {
+  PaperScope: new () => any
+  Path: new (...args: any[]) => any
+  CompoundPath: new (...args: any[]) => any
+}
+
+function getPaperModule(): PaperModule | null {
+  const candidate = (globalThis as { paper?: PaperModule }).paper
+  return candidate?.PaperScope && candidate?.Path && candidate?.CompoundPath ? candidate : null
+}
 
 function distance(a: { x: number; y: number }, b: { x: number; y: number }) {
   return Math.hypot(a.x - b.x, a.y - b.y)
@@ -323,6 +339,110 @@ export function movePathAnchor(path: PathProps, index: number, point: { x: numbe
     }
   })
   return { ...path, points }
+}
+
+function pathAnchorKey(anchor: PathAnchorRef) {
+  return `${anchor.subpathIndex}:${anchor.pointIndex}`
+}
+
+function normalizePathAnchorSelection(selection: readonly PathAnchorRef[]): PathAnchorRef[] {
+  const seen = new Set<string>()
+  const out: PathAnchorRef[] = []
+  for (const anchor of selection) {
+    if (!Number.isInteger(anchor.subpathIndex) || !Number.isInteger(anchor.pointIndex) || anchor.pointIndex < 0) continue
+    const key = pathAnchorKey(anchor)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ subpathIndex: anchor.subpathIndex, pointIndex: anchor.pointIndex })
+  }
+  return out.sort((a, b) => a.subpathIndex - b.subpathIndex || a.pointIndex - b.pointIndex)
+}
+
+function rectBounds(rect: { x: number; y: number; w: number; h: number }) {
+  const x1 = Math.min(rect.x, rect.x + rect.w)
+  const x2 = Math.max(rect.x, rect.x + rect.w)
+  const y1 = Math.min(rect.y, rect.y + rect.h)
+  const y2 = Math.max(rect.y, rect.y + rect.h)
+  return { x1, y1, x2, y2 }
+}
+
+export function selectPathAnchorsInRect(path: PathProps, rect: { x: number; y: number; w: number; h: number }): PathAnchorRef[] {
+  const bounds = rectBounds(rect)
+  const selected: PathAnchorRef[] = []
+  for (const entry of pathEntries(path)) {
+    entry.path.points.forEach((point, pointIndex) => {
+      if (point.x >= bounds.x1 && point.x <= bounds.x2 && point.y >= bounds.y1 && point.y <= bounds.y2) {
+        selected.push({ subpathIndex: entry.subpathIndex, pointIndex })
+      }
+    })
+  }
+  return normalizePathAnchorSelection(selected)
+}
+
+export function selectAllPathAnchors(path: PathProps): PathAnchorRef[] {
+  return normalizePathAnchorSelection(pathEntries(path).flatMap((entry) =>
+    entry.path.points.map((_, pointIndex) => ({ subpathIndex: entry.subpathIndex, pointIndex })),
+  ))
+}
+
+export function togglePathAnchorSelection(selection: readonly PathAnchorRef[], anchor: PathAnchorRef): PathAnchorRef[] {
+  const normalized = normalizePathAnchorSelection(selection)
+  const key = pathAnchorKey(anchor)
+  if (normalized.some((candidate) => pathAnchorKey(candidate) === key)) {
+    return normalized.filter((candidate) => pathAnchorKey(candidate) !== key)
+  }
+  return normalizePathAnchorSelection([...normalized, anchor])
+}
+
+function selectedPointSet(selection: readonly PathAnchorRef[]) {
+  return new Set(normalizePathAnchorSelection(selection).map(pathAnchorKey))
+}
+
+function translatePathPoint(point: PathPoint, dx: number, dy: number): PathPoint {
+  return {
+    ...point,
+    x: roundCoord(point.x + dx),
+    y: roundCoord(point.y + dy),
+    cp1: point.cp1 ? roundedControl({ x: point.cp1.x + dx, y: point.cp1.y + dy }) : undefined,
+    cp2: point.cp2 ? roundedControl({ x: point.cp2.x + dx, y: point.cp2.y + dy }) : undefined,
+  }
+}
+
+export function moveSelectedPathAnchors(
+  path: PathProps,
+  selection: readonly PathAnchorRef[],
+  delta: { dx: number; dy: number },
+): PathProps {
+  const selected = selectedPointSet(selection)
+  const moveSingle = (single: PathProps, subpathIndex: number): PathProps => ({
+    ...single,
+    points: single.points.map((point, pointIndex) =>
+      selected.has(pathAnchorKey({ subpathIndex, pointIndex }))
+        ? translatePathPoint(point, delta.dx, delta.dy)
+        : {
+            ...point,
+            cp1: point.cp1 ? { ...point.cp1 } : undefined,
+            cp2: point.cp2 ? { ...point.cp2 } : undefined,
+          },
+    ),
+  })
+  return {
+    ...moveSingle(path, -1),
+    subpaths: path.subpaths?.map((subpath, index) => moveSingle(subpath, index)),
+  }
+}
+
+export function deleteSelectedPathAnchors(path: PathProps, selection: readonly PathAnchorRef[]): PathProps {
+  const selected = selectedPointSet(selection)
+  const deleteSingle = (single: PathProps, subpathIndex: number): PathProps => {
+    const minPoints = single.closed ? 3 : 2
+    const next = single.points.filter((_, pointIndex) => !selected.has(pathAnchorKey({ subpathIndex, pointIndex })))
+    return next.length >= minPoints ? { ...single, points: next } : clonePath(single)
+  }
+  return {
+    ...deleteSingle(path, -1),
+    subpaths: path.subpaths?.map((subpath, index) => deleteSingle(subpath, index)),
+  }
 }
 
 export function movePathHandle(
@@ -950,6 +1070,116 @@ function resolveAxisAlignedRectBooleanPath(shape: ShapeProps): PathProps | null 
   return edgePathFromCells(filled, cols, rows, xs, ys)
 }
 
+function paperPoint(scope: any, point: { x: number; y: number }) {
+  return new scope.Point(point.x, point.y)
+}
+
+function paperHandle(scope: any, anchor: { x: number; y: number }, handle: { x: number; y: number } | undefined) {
+  return handle ? new scope.Point(handle.x - anchor.x, handle.y - anchor.y) : new scope.Point(0, 0)
+}
+
+function pathToPaperItem(scope: any, path: PathProps): any | null {
+  const makePath = (single: PathProps) => {
+    if (single.points.length < (single.closed ? 3 : 2)) return null
+    const next = new scope.Path({ insert: false })
+    for (const point of single.points) {
+      next.add(new scope.Segment(
+        paperPoint(scope, point),
+        paperHandle(scope, point, point.cp1),
+        paperHandle(scope, point, point.cp2),
+      ))
+    }
+    next.closed = single.closed
+    return next
+  }
+
+  const children = [path, ...(path.subpaths ?? [])]
+    .map(makePath)
+    .filter((child): child is any => !!child)
+  if (!children.length) return null
+  if (children.length === 1) return children[0]
+  const compound = new scope.CompoundPath({ insert: false })
+  for (const child of children) compound.addChild(child)
+  return compound
+}
+
+function nonZeroHandle(handle: any) {
+  return Math.abs(handle.x) > 0.001 || Math.abs(handle.y) > 0.001
+}
+
+function paperPathToPathProps(path: any): PathProps | null {
+  if (path.segments.length < (path.closed ? 3 : 2)) return null
+  return {
+    closed: path.closed,
+    source: "compound",
+    points: path.segments.map((segment: any) => {
+      const point: PathPoint = roundPoint({ x: segment.point.x, y: segment.point.y })
+      if (nonZeroHandle(segment.handleIn)) {
+        point.cp1 = roundedControl({
+          x: segment.point.x + segment.handleIn.x,
+          y: segment.point.y + segment.handleIn.y,
+        })
+      }
+      if (nonZeroHandle(segment.handleOut)) {
+        point.cp2 = roundedControl({
+          x: segment.point.x + segment.handleOut.x,
+          y: segment.point.y + segment.handleOut.y,
+        })
+      }
+      if (point.cp1 || point.cp2) point.handleMode = "broken"
+      return point
+    }),
+  }
+}
+
+function paperItemToPathProps(paperModule: PaperModule, item: any): PathProps | null {
+  const isPaperPath = (candidate: any) => candidate instanceof paperModule.Path || candidate?.className === "Path"
+  const isCompoundPath = (candidate: any) => candidate instanceof paperModule.CompoundPath || candidate?.className === "CompoundPath"
+  if (isPaperPath(item)) return paperPathToPathProps(item)
+  if (isCompoundPath(item)) {
+    const children = item.children
+      .filter((child: any): child is any => isPaperPath(child))
+      .map(paperPathToPathProps)
+      .filter((path: PathProps | null): path is PathProps => !!path)
+      .sort((a: PathProps, b: PathProps) => Math.abs(pathArea(b.points)) - Math.abs(pathArea(a.points)))
+    if (!children.length) return null
+    return { ...children[0], subpaths: children.slice(1) }
+  }
+  return null
+}
+
+function resolveBezierBooleanPath(shape: ShapeProps): PathProps | null {
+  if (!shape.components?.length) return null
+  const paperModule = getPaperModule()
+  if (!paperModule) return null
+  try {
+    const scope = new paperModule.PaperScope()
+    scope.setup(new scope.Size(1, 1))
+    const components = shape.components.map((component) => ({
+      operation: component.operation,
+      item: pathToPaperItem(scope, shapeToEditablePath(component.shape)),
+    }))
+    if (components.some((component) => !component.item)) {
+      scope.project.remove()
+      return null
+    }
+    let result = components[0].item!
+    for (let i = 1; i < components.length; i++) {
+      const operand = components[i].item!
+      const operation = components[i].operation
+      if (operation === "unite") result = result.unite(operand, { insert: false })
+      else if (operation === "subtract") result = result.subtract(operand, { insert: false })
+      else if (operation === "intersect") result = result.intersect(operand, { insert: false })
+      else result = result.exclude(operand, { insert: false })
+    }
+    const converted = paperItemToPathProps(paperModule, result)
+    scope.project.remove()
+    return converted && converted.points.length ? converted : null
+  } catch {
+    return null
+  }
+}
+
 function pathArea(points: Array<{ x: number; y: number }>) {
   let area = 0
   for (let i = 0; i < points.length; i++) {
@@ -965,6 +1195,9 @@ export function resolveShapeBooleanPath(shape: ShapeProps, options: BooleanResol
 
   const exactRectPath = resolveAxisAlignedRectBooleanPath(shape)
   if (exactRectPath) return exactRectPath
+
+  const bezierPath = resolveBezierBooleanPath(shape)
+  if (bezierPath) return bezierPath
 
   const tolerance = Math.max(1, options.tolerance ?? 2)
   const maxGridCells = Math.max(1024, options.maxGridCells ?? 36000)

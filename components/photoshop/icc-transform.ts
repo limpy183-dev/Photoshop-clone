@@ -108,6 +108,16 @@ type CompiledGrayProfile = GrayProfileDefinition
 type CompiledCmykProfile = CmykProfileDefinition
 type CompiledProfile = CompiledRgbProfile | CompiledGrayProfile | CompiledCmykProfile | CompiledClutProfile
 
+export interface IccLutDiagnostic {
+  tag: string
+  type: string
+  inputChannels: number
+  outputChannels: number
+  gridPoints: number[]
+  clutEntries: number
+  connectionSpace: "XYZ" | "Lab"
+}
+
 export interface ParsedIccProfile {
   name: string
   kind: DeviceKind
@@ -117,6 +127,10 @@ export interface ParsedIccProfile {
   version: string
   byteLength: number
   tags: string[]
+  hasClut: boolean
+  deviceLink: boolean
+  lutTags: IccLutDiagnostic[]
+  diagnostics: string[]
 }
 
 interface ParsedIccProfileInternal extends ParsedIccProfile {
@@ -595,6 +609,44 @@ function readLutTag(
   return null
 }
 
+function readLutDiagnostics(
+  bytes: Uint8Array,
+  tags: ReturnType<typeof readIccTagDirectory>,
+  pcs: "XYZ" | "Lab",
+): IccLutDiagnostic[] {
+  const signatures = ["A2B0", "A2B1", "A2B2", "B2A0", "B2A1", "B2A2", "D2B0", "D2B1", "D2B2", "B2D0", "B2D1", "B2D2"]
+  const diagnostics: IccLutDiagnostic[] = []
+  for (const sig of signatures) {
+    const tag = findIccTag(tags, sig)
+    if (!tag) continue
+    const type = iccSig(bytes, tag.offset)
+    if (type !== "mft1" && type !== "mft2" && type !== "mAB " && type !== "mBA ") continue
+    const lut = readLutTag(bytes, tags, sig, pcs)
+    if (!lut) {
+      diagnostics.push({
+        tag: sig,
+        type,
+        inputChannels: 0,
+        outputChannels: 0,
+        gridPoints: [],
+        clutEntries: 0,
+        connectionSpace: pcs,
+      })
+      continue
+    }
+    diagnostics.push({
+      tag: sig,
+      type,
+      inputChannels: lut.inputChannels,
+      outputChannels: lut.outputChannels,
+      gridPoints: [...lut.gridPoints],
+      clutEntries: lut.outputChannels ? Math.floor(lut.clut.length / lut.outputChannels) : lut.clut.length,
+      connectionSpace: lut.pcs,
+    })
+  }
+  return diagnostics
+}
+
 function parseIccProfileInternal(value: Uint8Array | ArrayBuffer): ParsedIccProfileInternal | null {
   const bytes = iccBytes(value)
   if (!bytes || bytes.length < 132 || iccSig(bytes, 36) !== "acsp") return null
@@ -628,15 +680,29 @@ function parseIccProfileInternal(value: Uint8Array | ArrayBuffer): ParsedIccProf
     ?? readLutTag(bytes, tags, "B2A1", pcs)
     ?? readLutTag(bytes, tags, "B2A2", pcs)
     ?? undefined
+  const profileClass = cleanIccSig(iccSig(bytes, 12))
+  const lutTags = readLutDiagnostics(bytes, tags, pcs)
+  const deviceLink = profileClass === "link"
+  const diagnostics: string[] = []
+  if (lutTags.length) {
+    diagnostics.push(`CLUT/device table tags parsed for diagnostics: ${lutTags.map((tag) => `${tag.tag} ${tag.type.trim()} ${tag.inputChannels}->${tag.outputChannels}`).join(", ")}.`)
+  }
+  if (deviceLink) {
+    diagnostics.push("ICC device-link profile parsed for diagnostics only; browser-local transform execution remains an approximation.")
+  }
   return {
     name,
     kind,
     colorSpace: cleanIccSig(colorSpace),
     connectionSpace: cleanIccSig(connectionSpace),
-    profileClass: cleanIccSig(iccSig(bytes, 12)),
+    profileClass,
     version: iccVersionString(view.getUint32(8, false)),
     byteLength: bytes.byteLength,
     tags: tags.map((tag) => tag.sig),
+    hasClut: lutTags.length > 0,
+    deviceLink,
+    lutTags,
+    diagnostics,
     rgbToXyzD50: rXyz && gXyz && bXyz
       ? [
           [rXyz[0], gXyz[0], bXyz[0]],
@@ -663,6 +729,10 @@ export function parseIccProfile(value: Uint8Array | ArrayBuffer): ParsedIccProfi
     version: parsed.version,
     byteLength: parsed.byteLength,
     tags: parsed.tags,
+    hasClut: parsed.hasClut,
+    deviceLink: parsed.deviceLink,
+    lutTags: parsed.lutTags,
+    diagnostics: parsed.diagnostics,
   }
 }
 

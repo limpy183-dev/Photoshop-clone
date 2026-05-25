@@ -1310,6 +1310,7 @@ interface SerializedSmartFilter {
   maskEnabled: boolean
   maskDensity: number
   maskFeather: number
+  maskLinked: boolean
   blurGalleryMesh?: SmartFilter["blurGalleryMesh"]
 }
 
@@ -1824,6 +1825,7 @@ function nativeFilterToAppFilter(entry: PsdFilter, fallback?: SerializedSmartFil
     maskEnabled: fallback?.maskEnabled ?? true,
     maskDensity: clamp01(fallback?.maskDensity, 1),
     maskFeather: Math.max(0, Math.min(250, Number.isFinite(fallback?.maskFeather ?? 0) ? fallback?.maskFeather ?? 0 : 0)),
+    maskLinked: fallback?.maskLinked ?? true,
     blurGalleryMesh: fallback?.blurGalleryMesh,
   }
 }
@@ -1924,6 +1926,7 @@ function serializeSmartFilter(filter: SmartFilter): SerializedSmartFilter {
     maskEnabled: filter.maskEnabled !== false,
     maskDensity: clamp01(filter.maskDensity, 1),
     maskFeather: Math.max(0, Math.min(250, Number.isFinite(filter.maskFeather ?? 0) ? filter.maskFeather ?? 0 : 0)),
+    maskLinked: filter.maskLinked !== false,
     ...(blurGalleryMesh ? { blurGalleryMesh } : {}),
   }
 }
@@ -1967,7 +1970,7 @@ export function appSmartFiltersToPsd(
           enabled: true,
           validAtPosition: true,
           maskEnabled: filters.some((filter) => filter.maskEnabled !== false && !!filter.mask),
-          maskLinked: false,
+          maskLinked: filters.every((filter) => filter.maskLinked !== false),
           maskExtendWithWhite: true,
           list: nativeList,
         }
@@ -2034,6 +2037,7 @@ export function psdToAppSmartFilters(psdLayer: PsdLayer): SmartFilter[] | undefi
       const out = nativeFilterToAppFilter(entry, fallbacks[index])
       out.mask = maskCanvases[index] ?? null
       out.maskEnabled = nativeFilter.maskEnabled && out.maskEnabled !== false
+      if (nativeFilter.maskLinked === false) out.maskLinked = false
       return out
     })
   }
@@ -2051,6 +2055,7 @@ export function psdToAppSmartFilters(psdLayer: PsdLayer): SmartFilter[] | undefi
     maskEnabled: entry.maskEnabled !== false,
     maskDensity: clamp01(entry.maskDensity, 1),
     maskFeather: Math.max(0, Math.min(250, Number.isFinite(entry.maskFeather ?? 0) ? entry.maskFeather ?? 0 : 0)),
+    maskLinked: entry.maskLinked !== false,
     blurGalleryMesh: entry.blurGalleryMesh,
   }))
 }

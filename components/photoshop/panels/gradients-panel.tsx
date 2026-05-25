@@ -110,6 +110,7 @@ function loadUserGradients(): GradientPreset[] {
 function persistUserGradients(gradients: GradientPreset[]) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(gradients))
+    window.dispatchEvent(new CustomEvent("ps-gradients-changed", { detail: { gradients } }))
   } catch {
     toast.error("Gradient library is too large to save locally.")
   }
@@ -148,6 +149,15 @@ export function GradientsPanel() {
     const normalized = normalizeUserGradients(next)
     setUserGradients(normalized)
     persistUserGradients(normalized)
+  }, [])
+
+  React.useEffect(() => {
+    const syncGradients = (event: Event) => {
+      const detail = (event as CustomEvent<{ gradients?: unknown }>).detail
+      setUserGradients(normalizeUserGradients(detail?.gradients ?? loadUserGradients()))
+    }
+    window.addEventListener("ps-gradients-changed", syncGradients)
+    return () => window.removeEventListener("ps-gradients-changed", syncGradients)
   }, [])
 
   const allGradients = React.useMemo(() => [...DEFAULT_GRADIENTS, ...userGradients], [userGradients])

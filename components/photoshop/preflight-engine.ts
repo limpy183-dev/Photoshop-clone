@@ -1,4 +1,5 @@
 import { capabilityWarningsForDocument } from "./capabilities"
+import { layerHasPartialAlpha } from "./flatten-transparency"
 import { diagnoseDocumentFonts } from "./typography-engine"
 import type { Layer, PsDocument, Slice } from "./types"
 
@@ -157,6 +158,14 @@ function warnOnly(label: string, detail: string): PreflightFixAction {
   return { id: "warn-only", kind: "warn-only", label, detail, autoFixable: false }
 }
 
+function manualFix(
+  id: PreflightFixAction["kind"],
+  label: string,
+  detail: string,
+): PreflightFixAction {
+  return { id, kind: id, label, detail, autoFixable: false }
+}
+
 function processPlatesForMode(doc: PsDocument) {
   if (doc.colorMode === "CMYK") return ["Cyan", "Magenta", "Yellow", "Black"]
   if (doc.colorMode === "Grayscale" || doc.colorMode === "Bitmap") return ["Black"]
@@ -231,6 +240,7 @@ export function analyzePreflightDocument(doc: PsDocument): PreflightReport {
   const spotChannels = channels.filter(isSpotChannel).map((channel) => channel.name)
   const savedAlphaChannels = channels.filter((channel) => !isSpotChannelName(channel.name)).map((channel) => channel.name)
   const overprintLikeLayers = rasterish.filter(isOverprintLikeLayer)
+  const partialAlphaLayers = rasterish.filter((layer) => layer.visible && layerHasPartialAlpha(layer))
   const dpi = doc.dpi ?? 72
   const print = doc.printSettings
   const bleedMm = print?.bleedMm ?? 0
@@ -402,6 +412,18 @@ export function analyzePreflightDocument(doc: PsDocument): PreflightReport {
       ? `${overprintLikeLayers.length} layer${overprintLikeLayers.length === 1 ? "" : "s"} use blending, opacity, or channel masking that can change when flattened; no real overprint engine is available.`
       : "No overprint-like blending or transparency risks detected.",
     overprintLikeLayers.length ? warnOnly("Flatten/proof separations", "Review knockout/overprint behavior in a production separations preview.") : undefined,
+  ))
+  findings.push(finding(
+    "flatten-transparency",
+    "separations",
+    partialAlphaLayers.length ? "warn" : "pass",
+    "Flatten transparency",
+    partialAlphaLayers.length
+      ? `${partialAlphaLayers.length} visible layer${partialAlphaLayers.length === 1 ? "" : "s"} contain semi-transparent pixels. Use Layer > Flatten Transparency before raster handoff when the target format or print workflow cannot preserve alpha.`
+      : "No visible layer pixels carry partial alpha transparency.",
+    partialAlphaLayers.length
+      ? manualFix("rasterize-or-flatten", "Flatten transparency", "Composite partial-alpha pixels against the chosen foreground/background matte, then proof the result.")
+      : undefined,
   ))
   findings.push(finding(
     "browser-raster-export",

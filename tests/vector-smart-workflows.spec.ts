@@ -12,13 +12,24 @@ import {
   hitTestPathControls,
   movePathAnchor,
   movePathHandle,
+  moveSelectedPathAnchors,
   normalizeCornerRadii,
   pathContainsPoint,
   resizeShapeWithCornerRadii,
   resolveShapeBooleanPath,
+  selectPathAnchorsInRect,
   shapeToEditablePath,
+  togglePathAnchorSelection,
   updateRoundedRectCornerRadius,
 } from "../components/photoshop/vector-path-operations"
+import {
+  exportCustomShapeLibrary,
+  normalizeCustomShapeLibrary,
+  shapeAssetToPreset,
+  shapePresetToAsset,
+} from "../components/photoshop/custom-shape-library"
+import { copyLayerCss, copyLayerSvg } from "../components/photoshop/vector-clipboard"
+import { planStrokePathBrushSamples } from "../components/photoshop/vector-stroke-dynamics"
 import { appShapeToPsd, psdShapeToApp } from "../components/photoshop/psd-vector-text"
 import {
   applySmartObjectStackMode,
@@ -225,6 +236,19 @@ test("boolean shape operations preserve fractional rectangle edges without grid 
   ]))
 })
 
+test("curved Bezier boolean operations preserve cubic segments instead of grid-flattening", () => {
+  const outer: ShapeProps = { type: "ellipse", x: 0, y: 0, w: 120, h: 90, fill: "#112233", stroke: null }
+  const cutter: ShapeProps = { type: "ellipse", x: 42, y: 25, w: 36, h: 30, fill: "#ff0000", stroke: null }
+
+  const path = resolveShapeBooleanPath(applyShapeBooleanOperation(outer, cutter, "subtract"), { tolerance: 4 })
+  const d = exportPathToSvgPath(path)
+
+  expect(d).toContain("C")
+  expect(pathContainsPoint(path, { x: 60, y: 45 })).toBe(false)
+  expect(pathContainsPoint(path, { x: 20, y: 45 })).toBe(true)
+  expect(path.subpaths?.some((subpath) => subpath.points.some((point) => point.cp1 || point.cp2))).toBe(true)
+})
+
 test("path handle editing supports symmetric and broken modes with subpath-aware hit testing", () => {
   const smooth = convertAnchorPoint({ closed: false, points: [{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 100, y: 0 }] }, 1).path
   const movedIncoming = movePathHandle(smooth, 1, "in", { x: 35, y: -20 }, { mode: "symmetric" })
@@ -263,6 +287,55 @@ test("path anchor movement preserves relative Bezier handles for direct on-canva
     cp1: { x: 49, y: 10 },
     cp2: { x: 84, y: 50 },
     handleMode: "broken",
+  })
+})
+
+test("direct selection can toggle, marquee-select, and move multiple anchors across subpaths", () => {
+  const path = {
+    closed: false,
+    points: [
+      { x: 0, y: 0 },
+      { x: 50, y: 40, cp1: { x: 35, y: 20 }, cp2: { x: 70, y: 60 }, handleMode: "broken" as const },
+      { x: 100, y: 80 },
+    ],
+    subpaths: [
+      {
+        closed: false,
+        points: [
+          { x: 10, y: 100 },
+          { x: 60, y: 140, cp1: { x: 50, y: 120 }, cp2: { x: 70, y: 160 }, handleMode: "broken" as const },
+        ],
+      },
+    ],
+  }
+
+  const marquee = selectPathAnchorsInRect(path, { x: -5, y: -5, w: 70, h: 150 })
+  const toggled = togglePathAnchorSelection(marquee, { subpathIndex: -1, pointIndex: 0 })
+  const moved = moveSelectedPathAnchors(path, toggled, { dx: 8, dy: -6 })
+
+  expect(marquee).toEqual([
+    { subpathIndex: -1, pointIndex: 0 },
+    { subpathIndex: -1, pointIndex: 1 },
+    { subpathIndex: 0, pointIndex: 0 },
+    { subpathIndex: 0, pointIndex: 1 },
+  ])
+  expect(toggled).toEqual([
+    { subpathIndex: -1, pointIndex: 1 },
+    { subpathIndex: 0, pointIndex: 0 },
+    { subpathIndex: 0, pointIndex: 1 },
+  ])
+  expect(moved.points[0]).toMatchObject({ x: 0, y: 0 })
+  expect(moved.points[1]).toMatchObject({
+    x: 58,
+    y: 34,
+    cp1: { x: 43, y: 14 },
+    cp2: { x: 78, y: 54 },
+  })
+  expect(moved.subpaths?.[0].points[1]).toMatchObject({
+    x: 68,
+    y: 134,
+    cp1: { x: 58, y: 114 },
+    cp2: { x: 78, y: 154 },
   })
 })
 
@@ -330,6 +403,90 @@ test("freeform path fitting removes jitter and emits smooth Bezier handles", () 
   expect(fitted.slice(1, -1).some((point) => point.cp1 || point.cp2)).toBe(true)
   expect(fitted[0]).toMatchObject({ x: 0, y: 0 })
   expect(fitted[fitted.length - 1]).toMatchObject({ x: 50, y: 16 })
+})
+
+test("custom shape libraries import, organize, export, and round-trip active shape presets", () => {
+  const currentShape: ShapeProps = {
+    type: "star",
+    x: 10,
+    y: 20,
+    w: 80,
+    h: 70,
+    fill: "#00aaff",
+    stroke: { color: "#112233", width: 3 },
+    starPoints: 7,
+    innerRadiusRatio: 0.35,
+    vertexRoundness: 0.25,
+  }
+  const asset = shapePresetToAsset(currentShape, { name: "Seven Point Burst", group: "Badges", tags: ["vector", "badge"], now: 1000 })
+  const normalized = normalizeCustomShapeLibrary({
+    format: "ps-custom-shapes",
+    shapes: [
+      asset,
+      {
+        id: "imported-heart",
+        name: "Imported Heart",
+        group: "Symbols",
+        tags: ["favorite"],
+        payload: { type: "custom", customId: "heart", fill: "#ff3366", stroke: null },
+        createdAt: 900,
+      },
+    ],
+  })
+  const exported = exportCustomShapeLibrary(normalized, { name: "Vector Shapes", exportedAt: "2026-05-25T12:00:00.000Z" })
+  const restored = shapeAssetToPreset(normalized[0], { x: 100, y: 120, w: 40, h: 40, fill: "#ffffff" })
+
+  expect(normalized.map((item) => item.group)).toEqual(["Badges", "Symbols"])
+  expect(exported).toMatchObject({ format: "ps-custom-shapes", name: "Vector Shapes", shapeCount: 2 })
+  expect(restored).toMatchObject({ type: "star", x: 100, y: 120, w: 40, h: 40, fill: "#ffffff", starPoints: 7 })
+})
+
+test("stroke path brush planning samples Bezier paths with simulated pressure dynamics", () => {
+  const path = convertAnchorPoint({ closed: false, points: [{ x: 0, y: 0 }, { x: 80, y: 0 }, { x: 120, y: 60 }] }, 1).path
+  const stamps = planStrokePathBrushSamples(path, {
+    size: 20,
+    hardness: 80,
+    opacity: 75,
+    flow: 65,
+    smoothing: 0,
+    spacing: 25,
+    sizeControl: "pressure",
+    opacityControl: "pressure",
+    minDiameter: 20,
+  }, { pressureProfile: "taper-both", samplesPerSegment: 12, seed: 4 })
+
+  expect(stamps.length).toBeGreaterThan(8)
+  expect(stamps[0].size).toBeLessThan(stamps[Math.floor(stamps.length / 2)].size)
+  expect(stamps[stamps.length - 1].opacity).toBeLessThan(stamps[Math.floor(stamps.length / 2)].opacity)
+})
+
+test("vector clipboard helpers generate CSS and SVG for shape and path layers", () => {
+  const shape: ShapeProps = {
+    type: "rect",
+    x: 12,
+    y: 18,
+    w: 120,
+    h: 64,
+    fill: "#35a8ff",
+    stroke: { color: "#102030", width: 4 },
+    cornerRadii: [8, 16, 24, 32],
+  }
+  const shapeLayer = { name: "Button Shape", opacity: 0.8, shape }
+  const css = copyLayerCss(shapeLayer)
+  const svg = copyLayerSvg(shapeLayer, { width: 200, height: 120 })
+  const pathSvg = copyLayerSvg({
+    name: "Open Path",
+    opacity: 1,
+    path: { closed: false, points: [{ x: 0, y: 0 }, { x: 40, y: 20 }] },
+  }, { width: 80, height: 40 })
+
+  expect(css).toContain("border-radius: 8px 16px 24px 32px")
+  expect(css).toContain("background: #35a8ff")
+  expect(css).toContain("border: 4px solid #102030")
+  expect(svg).toContain("<svg")
+  expect(svg).toContain("fill=\"#35a8ff\"")
+  expect(pathSvg).toContain("<path")
+  expect(pathSvg).toContain("fill=\"none\"")
 })
 
 test("smart object edit document saves back to the parent layer and convert-to-layers preserves source plus filter records", () => {

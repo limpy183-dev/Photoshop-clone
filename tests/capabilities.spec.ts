@@ -45,6 +45,22 @@ test("document capability warnings explain browser pixel and color limitations",
   expect(warnings.some((warning) => warning.label === "Smart filters")).toBe(true)
 })
 
+test("smart object capability wording reflects relink polling and materialization support", () => {
+  const capability = getCapability("smart-object.linked")
+  const warnings = capabilityWarningsForDocument({
+    colorMode: "RGB",
+    bitDepth: 8,
+    layers: [{ kind: "smart-object", smartObject: true }],
+  })
+  const lifecycle = warnings.find((warning) => warning.label === "Smart object lifecycle")
+
+  expect(capability.summary).toContain("permission-aware relink")
+  expect(capability.summary).toContain("polling")
+  expect((capability.limitations ?? []).join(" ")).not.toContain("No native file watcher")
+  expect(lifecycle?.detail).toContain("polling")
+  expect(lifecycle?.detail).not.toContain("incomplete")
+})
+
 test("document reports include capability-derived interoperability warnings", () => {
   const report = createDocumentReport({
     id: "doc_test",

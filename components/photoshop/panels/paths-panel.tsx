@@ -7,9 +7,9 @@ import {
   pathToSelectionMask,
   selectionFromMask,
   selectionToPath,
-  strokePath as drawVectorPath,
 } from "../tool-helpers"
 import { appendPathToCanvas, applyShapeBooleanOperation, shapeToEditablePath } from "../vector-path-operations"
+import { strokePathWithBrushDynamics } from "../vector-stroke-dynamics"
 import type { Layer, PathProps } from "../types"
 
 export function PathsPanel() {
@@ -144,7 +144,7 @@ export function PathsPanel() {
     const path = editablePathForLayer(activeLayer)
     if (!path) return
     const ctx = activeLayer.canvas.getContext("2d")!
-    drawVectorPath(ctx, path, foreground, Math.max(1, brush.size), false, foreground)
+    strokePathWithBrushDynamics(ctx, path, brush, foreground, { pressureProfile: "taper-both", samplesPerSegment: 24, seed: Date.now() % 10000 })
     setTimeout(() => commit("Stroke Path", [activeLayer.id]), 0)
   }
 

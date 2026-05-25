@@ -4,6 +4,7 @@ import * as React from "react"
 import {
   AlignLeft,
   Archive,
+  Activity,
   BarChart3,
   BookOpen,
   CircleDot,
@@ -54,6 +55,9 @@ const AssetsPanel = lazyPanel(
 )
 const BrushPanel = lazyPanel(
   () => import("./panels/brush-panel").then((m) => ({ default: m.BrushPanel })),
+)
+const BrowserDiagnosticsPanel = lazyPanel(
+  () => import("./panels/browser-diagnostics-panel").then((m) => ({ default: m.BrowserDiagnosticsPanel })),
 )
 const ChannelsPanel = lazyPanel(
   () => import("./panels/channels-panel").then((m) => ({ default: m.ChannelsPanel })),
@@ -130,6 +134,9 @@ const PathsPanel = lazyPanel(
 const PatternsPanel = lazyPanel(
   () => import("./panels/patterns-panel").then((m) => ({ default: m.PatternsPanel })),
 )
+const PresetManagerPanel = lazyPanel(
+  () => import("./panels/preset-manager-panel").then((m) => ({ default: m.PresetManagerPanel })),
+)
 const PropertiesPanel = lazyPanel(
   () => import("./panels/properties-panel").then((m) => ({ default: m.PropertiesPanel })),
 )
@@ -202,6 +209,7 @@ export const PANEL_DEFINITIONS: PhotoshopPanelDefinition[] = [
   { id: "styles", label: "Styles", stack: "upper", category: "Type and Vector", complexity: "standard", icon: Sparkles, keywords: ["effects", "layer fx", "preset"], render: () => <StylesPanel /> },
   { id: "shapes", label: "Shapes", stack: "upper", category: "Type and Vector", complexity: "standard", icon: CircleDot, keywords: ["vector", "shape", "custom"], render: () => <ShapesPanel /> },
   { id: "tool-presets", label: "Tool Setups", stack: "upper", category: "Core", complexity: "standard", icon: SlidersHorizontal, keywords: ["tool presets", "setups", "brush presets"], render: () => <ToolPresetsPanel /> },
+  { id: "preset-manager", label: "Preset Manager", stack: "upper", category: "Color and Assets", complexity: "advanced", icon: Archive, keywords: ["preset", "manager", "brush", "swatches", "gradients", "patterns", "styles", "shapes", "assets"], render: () => <PresetManagerPanel /> },
   { id: "character", label: "Character", stack: "upper", category: "Type and Vector", complexity: "standard", icon: Type, keywords: ["font", "type", "text"], render: () => <CharacterPanel /> },
   { id: "paragraph", label: "Paragraph", stack: "upper", category: "Type and Vector", complexity: "standard", icon: AlignLeft, keywords: ["text", "type", "alignment"], render: () => <ParagraphPanel /> },
   { id: "navigator", label: "Navigator", stack: "upper", category: "Inspection and Guides", complexity: "standard", icon: Navigation, keywords: ["zoom", "pan", "view"], render: () => <NavigatorPanel /> },
@@ -220,6 +228,7 @@ export const PANEL_DEFINITIONS: PhotoshopPanelDefinition[] = [
   { id: "channels", label: "Channels", stack: "lower", category: "Core", complexity: "standard", icon: Eye, keywords: ["alpha", "rgb", "mask"], render: () => <ChannelsPanel /> },
   { id: "paths", label: "Paths", stack: "lower", category: "Type and Vector", complexity: "standard", icon: PenTool, keywords: ["vector", "pen", "path"], render: () => <PathsPanel /> },
   { id: "history", label: "History", stack: "lower", category: "Core", complexity: "core", icon: History, keywords: ["undo", "states", "snapshot"], render: () => <HistoryPanel /> },
+  { id: "browser-diagnostics", label: "Browser Diagnostics", stack: "lower", category: "Inspection and Guides", complexity: "specialized", icon: Activity, keywords: ["diagnostics", "capabilities", "browser", "canvas", "webgl", "opfs", "mediarecorder", "encoder", "heap", "fallback"], render: () => <BrowserDiagnosticsPanel /> },
   { id: "actions", label: "Actions", stack: "lower", category: "Motion and Automation", complexity: "standard", icon: Play, keywords: ["macro", "automation", "record"], render: () => <ActionsPanel /> },
   { id: "layer-comps", label: "Layer Comps", stack: "lower", category: "Core", complexity: "advanced", icon: Layers, keywords: ["compositions", "states", "presentation"], render: () => <LayerCompsPanel /> },
   { id: "clone-source", label: "Clone Source", stack: "lower", category: "Core", complexity: "advanced", icon: Stamp, keywords: ["clone", "stamp", "source"], render: () => <CloneSourcePanel /> },

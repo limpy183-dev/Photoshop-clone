@@ -23,6 +23,7 @@ import {
   PREFERENCE_IMPORT_SECTIONS,
   PREFERENCE_SECTION_LABELS,
   PREFERENCES_STORAGE_KEY,
+  type TechnologyPreviewFlagState,
   type FileHandlingPreferences,
   type GpuPreferences,
   type HistoryLogPreferences,
@@ -31,6 +32,7 @@ import {
   type PhotoshopPreferences,
   type RulerGridPreferences,
   type ScratchDiskPreference,
+  type TechnologyPreviewPreferences,
   type ToolBehaviorPreferences,
   calculateScreenDpiFromCalibration,
   deriveFileHandlingPolicy,
@@ -42,6 +44,7 @@ import {
   parsePreferencesSet,
   resetPreferencesSet,
   savePreferencesToStorage,
+  summarizeTechnologyPreviewFlags,
   summarizePerformancePolicy,
 } from "./preferences-engine"
 import { detectOffscreenCanvasCapabilities, diagnoseOffscreenCanvasTransfer } from "./offscreen-canvas"
@@ -56,6 +59,7 @@ type PreferenceTab =
   | "history"
   | "cursors"
   | "units"
+  | "technology"
   | "sets"
 
 const TABS: Array<{ id: PreferenceTab; label: string }> = [
@@ -67,6 +71,7 @@ const TABS: Array<{ id: PreferenceTab; label: string }> = [
   { id: "history", label: "History Log" },
   { id: "cursors", label: "Cursors & Tools" },
   { id: "units", label: "Units & Rulers" },
+  { id: "technology", label: "Technology Previews" },
   { id: "sets", label: "Preference Sets" },
 ]
 
@@ -79,6 +84,7 @@ const TAB_SECTION: Partial<Record<PreferenceTab, Parameters<typeof resetPreferen
   history: "historyLog",
   cursors: "toolBehavior",
   units: "rulerGrid",
+  technology: "technologyPreviews",
 }
 
 function SelectField<T extends string>({
@@ -131,6 +137,30 @@ function ToggleRow({
         className="border-[var(--ps-divider)]"
       />
       {label}
+    </label>
+  )
+}
+
+function TechnologyPreviewRow({
+  flag,
+  onCheckedChange,
+}: {
+  flag: TechnologyPreviewFlagState
+  onCheckedChange: (checked: boolean) => void
+}) {
+  return (
+    <label className="grid grid-cols-[18px_1fr] gap-2 border-b border-[var(--ps-divider)] pb-3 text-[11px] text-[var(--ps-text)] last:border-b-0 last:pb-0">
+      <Checkbox
+        aria-label={flag.label}
+        checked={flag.enabled}
+        onCheckedChange={(value) => onCheckedChange(value === true)}
+        className="mt-0.5 border-[var(--ps-divider)]"
+      />
+      <span className="grid gap-1">
+        <span className="font-medium text-[var(--ps-text)]">{flag.label}</span>
+        <span className="text-[var(--ps-text-muted)]">Help: {flag.helpText}</span>
+        <span className="text-[var(--ps-text-muted)]">Risk: {flag.riskText}</span>
+      </span>
     </label>
   )
 }
@@ -234,6 +264,7 @@ export function PreferencesDialog({
   }, [open])
 
   const performancePolicy = React.useMemo(() => summarizePerformancePolicy(prefs), [prefs])
+  const technologyPreviewFlags = React.useMemo(() => summarizeTechnologyPreviewFlags(prefs), [prefs])
   const offscreenDiagnostic = React.useMemo(() => {
     const capabilities = detectOffscreenCanvasCapabilities()
     return diagnoseOffscreenCanvasTransfer({
@@ -262,6 +293,8 @@ export function PreferencesDialog({
     setNormalized((current) => ({ ...current, toolBehavior: { ...current.toolBehavior, ...patch } }))
   const updateRulerGrid = (patch: Partial<RulerGridPreferences>) =>
     setNormalized((current) => ({ ...current, rulerGrid: { ...current.rulerGrid, ...patch } }))
+  const updateTechnologyPreviews = (patch: Partial<TechnologyPreviewPreferences>) =>
+    setNormalized((current) => ({ ...current, technologyPreviews: { ...current.technologyPreviews, ...patch } }))
 
   const updateScratchDisk = (id: string, patch: Partial<ScratchDiskPreference>) => {
     setNormalized((current) => ({
@@ -416,7 +449,7 @@ export function PreferencesDialog({
       >
         <DialogHeader>
           <DialogTitle>Preferences</DialogTitle>
-          <DialogDescription className="sr-only">Application, performance, file handling, history, cursor, ruler, and grid settings.</DialogDescription>
+          <DialogDescription className="sr-only">Application, performance, file handling, history, cursor, ruler, grid, and technology preview settings.</DialogDescription>
         </DialogHeader>
         {isDraggingPreferenceFile ? (
           <div className="pointer-events-none absolute inset-2 z-50 grid place-items-center rounded-sm border border-dashed border-[var(--ps-accent)] bg-black/45 text-[12px] font-medium text-white">
@@ -826,6 +859,28 @@ export function PreferencesDialog({
                 </>
               )}
 
+              {tab === "technology" && (
+                <>
+                  <Section title="Experimental Feature Flags">
+                    <div className="grid gap-3">
+                      {technologyPreviewFlags.map((flag) => (
+                        <TechnologyPreviewRow
+                          key={flag.id}
+                          flag={flag}
+                          onCheckedChange={(checked) => updateTechnologyPreviews({ [flag.id]: checked })}
+                        />
+                      ))}
+                    </div>
+                  </Section>
+                  <Section title="Preview Flag Handling">
+                    <div className="grid gap-1 text-[11px] text-[var(--ps-text-muted)]">
+                      <span>Reset Section restores every technology preview flag to its default off state.</span>
+                      <span>Export Preferences includes the current preview flag values in the technologyPreviews section.</span>
+                    </div>
+                  </Section>
+                </>
+              )}
+
               {tab === "sets" && (
                 <Section title="Reset, Export, and Import">
                   <div className="grid gap-4">
@@ -862,7 +917,7 @@ export function PreferencesDialog({
                   <input ref={importRef} type="file" accept="application/json,.json" onChange={importSet} className="hidden" />
                   {importError && <p className="text-[11px] text-red-300">{importError}</p>}
                   <div className="text-[11px] text-[var(--ps-text-muted)]">
-                    Preference sets include performance, scratch, GPU, file handling, history log, cursor, tool behavior, unit, ruler, and grid settings.
+                    Preference sets include performance, scratch, GPU, file handling, history log, cursor, tool behavior, unit, ruler, grid, and technology preview settings.
                   </div>
                 </Section>
               )}

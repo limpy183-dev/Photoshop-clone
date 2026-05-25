@@ -7,11 +7,13 @@ import { Button } from "@/components/ui/button"
 import {
   applyImageData,
   calculateChannelImageData,
+  mergeChannelImageData,
+  splitImageDataChannels,
   type ApplyImageTargetChannel,
   type PixelChannel,
 } from "./color-channel-ops"
 import { makeCanvas, makeDocument, useEditor } from "./editor-context"
-import { downloadText, loadRasterCanvasFromFile } from "./document-io"
+import { downloadText, loadRasterCanvasFromFile, renderDocumentComposite } from "./document-io"
 import {
   focusStackImageData,
   mergeHdrSceneLinearImageStack,
@@ -23,11 +25,14 @@ import {
 } from "./photo-workflow-engine"
 import type { HighBitImage } from "./color-pipeline"
 import type { AlphaChannel, BlendMode, Layer } from "./types"
+import { selectionFromMask, selectionToMaskCanvas } from "./tool-helpers"
 import { uid } from "./uid"
 
 export type GapWorkflowKind =
   | "apply-image"
   | "calculations"
+  | "split-channels"
+  | "merge-channels"
   | "load-stack"
   | "photomerge"
   | "hdr-merge"
@@ -37,9 +42,37 @@ export type GapWorkflowKind =
   | "scripted-pattern"
   | "image-assets"
 
-const blendModes: BlendMode[] = ["normal", "multiply", "screen", "overlay", "soft-light", "difference", "darken", "lighten"]
+const blendModes: BlendMode[] = [
+  "normal",
+  "darken",
+  "multiply",
+  "color-burn",
+  "linear-burn",
+  "lighten",
+  "screen",
+  "color-dodge",
+  "linear-dodge",
+  "overlay",
+  "soft-light",
+  "hard-light",
+  "vivid-light",
+  "linear-light",
+  "pin-light",
+  "hard-mix",
+  "difference",
+  "exclusion",
+  "subtract",
+  "divide",
+]
 const sourceChannels: PixelChannel[] = ["rgb", "gray", "red", "green", "blue", "alpha"]
 const targetChannels: ApplyImageTargetChannel[] = ["rgb", "red", "green", "blue", "alpha"]
+
+type ChannelWorkflowSource = "merged" | `layer:${string}` | `channel:${string}`
+type ApplyImageDestination = "active-layer" | "layer-mask" | "new-layer"
+type CalculationsDestination = "alpha-channel" | "selection" | "layer-mask" | "new-layer"
+type ChannelMaskSource = "none" | "selection" | "active-mask" | `channel:${string}`
+type SplitChannelsDestination = "documents" | "saved-channels"
+type MergeChannelsMode = "RGB" | "CMYK" | "Multichannel" | "Grayscale"
 
 type WorkflowCanvas = HTMLCanvasElement & {
   __highBitImageData?: HighBitImage
@@ -53,16 +86,31 @@ export function GapWorkflowDialog({
   workflow: GapWorkflowKind | null
   onOpenChange: (open: boolean) => void
 }) {
-  const { activeDoc, activeLayer, dispatch, commit, createDocument } = useEditor()
-  const [sourceId, setSourceId] = React.useState("")
-  const [sourceId2, setSourceId2] = React.useState("")
+  const { documents, activeDoc, activeLayer, dispatch, commit, createDocument } = useEditor()
+  const [sourceId, setSourceId] = React.useState<ChannelWorkflowSource>("merged")
+  const [sourceId2, setSourceId2] = React.useState<ChannelWorkflowSource>("merged")
   const [sourceChannel, setSourceChannel] = React.useState<PixelChannel>("rgb")
   const [sourceChannel2, setSourceChannel2] = React.useState<PixelChannel>("gray")
   const [targetChannel, setTargetChannel] = React.useState<ApplyImageTargetChannel>("rgb")
   const [invertSource, setInvertSource] = React.useState(false)
   const [invertSource2, setInvertSource2] = React.useState(false)
+  const [applyDestination, setApplyDestination] = React.useState<ApplyImageDestination>("active-layer")
+  const [calculationsDestination, setCalculationsDestination] = React.useState<CalculationsDestination>("alpha-channel")
+  const [preserveTransparency, setPreserveTransparency] = React.useState(false)
+  const [maskSource, setMaskSource] = React.useState<ChannelMaskSource>("none")
+  const [invertMask, setInvertMask] = React.useState(false)
+  const [maskDensity, setMaskDensity] = React.useState(100)
+  const [scale, setScale] = React.useState(1)
+  const [offset, setOffset] = React.useState(0)
   const [blend, setBlend] = React.useState<BlendMode>("normal")
   const [opacity, setOpacity] = React.useState(100)
+  const [splitDestination, setSplitDestination] = React.useState<SplitChannelsDestination>("documents")
+  const [splitIncludeAlpha, setSplitIncludeAlpha] = React.useState(false)
+  const [mergeMode, setMergeMode] = React.useState<MergeChannelsMode>("RGB")
+  const [mergeRedDoc, setMergeRedDoc] = React.useState("")
+  const [mergeGreenDoc, setMergeGreenDoc] = React.useState("")
+  const [mergeBlueDoc, setMergeBlueDoc] = React.useState("")
+  const [mergeAlphaDoc, setMergeAlphaDoc] = React.useState("")
   const [files, setFiles] = React.useState<File[]>([])
   const [stat, setStat] = React.useState<"mean" | "median" | "min" | "max">("median")
   const [pattern, setPattern] = React.useState<"brick" | "cross-weave" | "random-fill">("brick")
@@ -83,39 +131,114 @@ export function GapWorkflowDialog({
 
   React.useEffect(() => {
     if (!activeDoc) return
-    setSourceId((activeDoc.layers.find((layer) => layer.id !== activeDoc.activeLayerId && layer.kind !== "group") ?? activeLayer ?? activeDoc.layers[0])?.id ?? "")
-    setSourceId2((activeDoc.layers.find((layer) => layer.id !== activeDoc.activeLayerId && layer.kind !== "group") ?? activeDoc.layers[0])?.id ?? "")
-  }, [activeDoc, activeLayer, workflow])
+    const fallbackLayer = activeDoc.layers.find((layer) => layer.id !== activeDoc.activeLayerId && layer.kind !== "group") ?? activeLayer ?? activeDoc.layers[0]
+    setSourceId(fallbackLayer ? `layer:${fallbackLayer.id}` : "merged")
+    setSourceId2("merged")
+    setMergeRedDoc((current) => current || documents[0]?.id || "")
+    setMergeGreenDoc((current) => current || documents[1]?.id || documents[0]?.id || "")
+    setMergeBlueDoc((current) => current || documents[2]?.id || documents[0]?.id || "")
+    setMergeAlphaDoc((current) => current || "")
+  }, [activeDoc, activeLayer, documents, workflow])
 
   const close = () => onOpenChange(false)
 
+  const channelSourceOptions = React.useMemo(() => {
+    if (!activeDoc) return []
+    return [
+      { id: "merged" as ChannelWorkflowSource, label: "Merged document" },
+      ...activeDoc.layers
+        .filter((layer) => layer.kind !== "group")
+        .map((layer) => ({ id: `layer:${layer.id}` as ChannelWorkflowSource, label: layer.name })),
+      ...(activeDoc.channels ?? []).map((channel) => ({
+        id: `channel:${channel.id}` as ChannelWorkflowSource,
+        label: `Saved channel: ${channel.name}`,
+      })),
+    ]
+  }, [activeDoc])
+
+  const channelMaskOptions = React.useMemo(() => {
+    if (!activeDoc) return [{ id: "none" as ChannelMaskSource, label: "None" }]
+    return [
+      { id: "none" as ChannelMaskSource, label: "None" },
+      { id: "selection" as ChannelMaskSource, label: "Current selection" },
+      { id: "active-mask" as ChannelMaskSource, label: "Active layer mask" },
+      ...(activeDoc.channels ?? []).map((channel) => ({
+        id: `channel:${channel.id}` as ChannelMaskSource,
+        label: `Saved channel: ${channel.name}`,
+      })),
+    ]
+  }, [activeDoc])
+
+  const resolveSourceImageData = (sourceRef: ChannelWorkflowSource) => {
+    if (!activeDoc) return null
+    if (sourceRef === "merged") return canvasImageData(renderDocumentComposite(activeDoc, { transparent: true }))
+    if (sourceRef.startsWith("channel:")) {
+      const channel = (activeDoc.channels ?? []).find((item) => item.id === sourceRef.slice("channel:".length))
+      return channel ? alphaCanvasImageData(channel.canvas) : null
+    }
+    const layerId = sourceRef.slice("layer:".length)
+    const layer = activeDoc.layers.find((candidate) => candidate.id === layerId)
+    return layer?.canvas ? canvasImageData(layer.canvas) : null
+  }
+
+  const resolveMaskImageData = () => {
+    if (!activeDoc || maskSource === "none") return null
+    if (maskSource === "selection") {
+      const selection = selectionToMaskCanvas(activeDoc.width, activeDoc.height, activeDoc.selection)
+      return selection ? alphaCanvasImageData(selection) : null
+    }
+    if (maskSource === "active-mask") return activeLayer?.mask ? canvasImageData(activeLayer.mask) : null
+    const channel = (activeDoc.channels ?? []).find((item) => item.id === maskSource.slice("channel:".length))
+    return channel ? alphaCanvasImageData(channel.canvas) : null
+  }
+
+  const layerMaskCanvas = () => {
+    if (!activeDoc || !activeLayer) return null
+    const mask = activeLayer.mask ?? makeCanvas(activeDoc.width, activeDoc.height, "#ffffff")
+    return mask
+  }
+
   const runApplyImage = () => {
     if (!activeLayer || !activeDoc || activeLayer.locked) return
-    const src = activeDoc.layers.find((layer) => layer.id === sourceId)
-    if (!src || typeof src.canvas.getContext !== "function") return
-    const targetCtx = activeLayer.canvas.getContext("2d")!
-    const srcCtx = src.canvas.getContext("2d")!
-    const target = targetCtx.getImageData(0, 0, activeDoc.width, activeDoc.height)
-    const source = srcCtx.getImageData(0, 0, activeDoc.width, activeDoc.height)
-    targetCtx.putImageData(applyImageData(target, source, {
+    const source = resolveSourceImageData(sourceId)
+    if (!source) return
+    const targetCanvas = applyDestination === "layer-mask" ? layerMaskCanvas() : activeLayer.canvas
+    if (!targetCanvas) return
+    const target = canvasImageData(targetCanvas)
+    const result = applyImageData(target, source, {
       sourceChannel,
       targetChannel,
       blendMode: blend,
       opacity: opacity / 100,
       invertSource,
-    }), 0, 0)
-    commit("Apply Image", [activeLayer.id])
+      mask: resolveMaskImageData(),
+      maskChannel: "alpha",
+      invertMask,
+      maskDensity: maskDensity / 100,
+      scale,
+      offset,
+      preserveTransparency,
+    })
+    if (applyDestination === "new-layer") {
+      const canvas = imageDataCanvas(result)
+      const layer: Layer = { id: uid("layer"), name: "Apply Image Result", kind: "raster", visible: true, locked: false, opacity: 1, blendMode: "normal", canvas }
+      dispatch({ type: "add-layer", layer })
+      window.setTimeout(() => commit("Apply Image to New Layer", [layer.id]), 0)
+    } else if (applyDestination === "layer-mask") {
+      dispatch({ type: "set-layer-mask", id: activeLayer.id, mask: imageDataMaskCanvas(result) })
+      window.setTimeout(() => commit("Apply Image to Layer Mask", [activeLayer.id]), 0)
+    } else {
+      activeLayer.canvas.getContext("2d")!.putImageData(result, 0, 0)
+      commit("Apply Image", [activeLayer.id])
+    }
     close()
   }
 
   const runCalculations = () => {
     if (!activeDoc) return
-    const a = activeDoc.layers.find((layer) => layer.id === sourceId)
-    const b = activeDoc.layers.find((layer) => layer.id === sourceId2)
-    if (!a || !b) return
-    const imgA = a.canvas.getContext("2d")!.getImageData(0, 0, activeDoc.width, activeDoc.height)
-    const imgB = b.canvas.getContext("2d")!.getImageData(0, 0, activeDoc.width, activeDoc.height)
-    const mask = makeCanvas(activeDoc.width, activeDoc.height)
+    const imgA = resolveSourceImageData(sourceId)
+    const imgB = resolveSourceImageData(sourceId2)
+    if (!imgA || !imgB) return
     const out = calculateChannelImageData(imgA, imgB, {
       sourceChannelA: sourceChannel === "rgb" ? "gray" : sourceChannel,
       sourceChannelB: sourceChannel2 === "rgb" ? "gray" : sourceChannel2,
@@ -123,16 +246,29 @@ export function GapWorkflowDialog({
       opacity: opacity / 100,
       invertA: invertSource,
       invertB: invertSource2,
+      mask: resolveMaskImageData(),
+      maskChannel: "alpha",
+      invertMask,
+      maskDensity: maskDensity / 100,
+      scale,
+      offset,
     })
-    for (let i = 0; i < out.data.length; i += 4) {
-      const value = out.data[i]
-      out.data[i] = out.data[i + 1] = out.data[i + 2] = 255
-      out.data[i + 3] = value
+    const mask = imageDataMaskCanvas(out)
+    if (calculationsDestination === "selection") {
+      dispatch({ type: "set-selection", selection: selectionFromMask(mask, "freehand") })
+      commit("Calculations Selection", [])
+    } else if (calculationsDestination === "layer-mask" && activeLayer) {
+      dispatch({ type: "set-layer-mask", id: activeLayer.id, mask })
+      window.setTimeout(() => commit("Calculations Layer Mask", [activeLayer.id]), 0)
+    } else if (calculationsDestination === "new-layer") {
+      const layer: Layer = { id: uid("layer"), name: "Calculations Result", kind: "raster", visible: true, locked: false, opacity: 1, blendMode: "normal", canvas: imageDataCanvas(out) }
+      dispatch({ type: "add-layer", layer })
+      window.setTimeout(() => commit("Calculations New Layer", [layer.id]), 0)
+    } else {
+      const channel: AlphaChannel = { id: uid("alpha"), name: `Calculation ${(activeDoc.channels?.length ?? 0) + 1}`, canvas: mask }
+      dispatch({ type: "save-selection", channel })
+      commit("Calculations Alpha Channel", [])
     }
-    mask.getContext("2d")!.putImageData(out, 0, 0)
-    const channel: AlphaChannel = { id: uid("alpha"), name: `Calculation ${(activeDoc.channels?.length ?? 0) + 1}`, canvas: mask }
-    dispatch({ type: "save-selection", channel })
-    commit("Calculations Alpha Channel", [])
     close()
   }
 
@@ -227,6 +363,70 @@ export function GapWorkflowDialog({
     close()
   }
 
+  const runSplitChannels = () => {
+    if (!activeDoc) return
+    const source = canvasImageData(renderDocumentComposite(activeDoc, { transparent: true }))
+    const split = splitImageDataChannels(source, { includeAlpha: splitIncludeAlpha })
+    const plates = [
+      { key: "red", name: "Red", image: split.red },
+      { key: "green", name: "Green", image: split.green },
+      { key: "blue", name: "Blue", image: split.blue },
+      ...(splitIncludeAlpha && split.alpha ? [{ key: "alpha", name: "Alpha", image: split.alpha }] : []),
+    ]
+    if (splitDestination === "saved-channels") {
+      for (const plate of plates) {
+        dispatch({
+          type: "save-selection",
+          channel: {
+            id: uid("alpha"),
+            name: `${plate.name} ${(activeDoc.channels?.length ?? 0) + 1}`,
+            canvas: imageDataMaskCanvas(plate.image),
+          },
+        })
+      }
+      commit("Split Channels to Saved Channels", [])
+    } else {
+      for (const plate of plates) {
+        const doc = makeDocument(`${activeDoc.name} ${plate.name}`, source.width, source.height, "transparent")
+        doc.colorMode = "Grayscale"
+        doc.modeSettings = { mode: "Grayscale" }
+        const layer = doc.layers.find((candidate) => candidate.id === doc.activeLayerId)
+        if (layer) layer.canvas.getContext("2d")!.putImageData(plate.image, 0, 0)
+        createDocument(doc, `Split ${plate.name} Channel`)
+      }
+    }
+    close()
+  }
+
+  const documentImageData = (docId: string) => {
+    const doc = documents.find((candidate) => candidate.id === docId)
+    return doc ? canvasImageData(renderDocumentComposite(doc, { transparent: true })) : null
+  }
+
+  const runMergeChannels = () => {
+    const red = documentImageData(mergeRedDoc)
+    const green = documentImageData(mergeGreenDoc)
+    const blue = documentImageData(mergeBlueDoc)
+    const alpha = mergeAlphaDoc ? documentImageData(mergeAlphaDoc) : null
+    if (mergeMode === "Grayscale") {
+      const gray = red ?? green ?? blue
+      if (!gray) return
+      const doc = documentFromImageData("Merged Grayscale", mergeChannelImageData({ gray, alpha }), { mode: "Grayscale" })
+      createDocument(doc, "Merge Channels")
+      close()
+      return
+    }
+    if (!red || !green || !blue) return
+    const merged = mergeMode === "CMYK"
+      ? mergeCmykPreview(red, green, blue, alpha)
+      : mergeChannelImageData({ red, green, blue, alpha })
+    const doc = documentFromImageData(`Merged ${mergeMode}`, merged, {
+      mode: mergeMode === "CMYK" ? "CMYK" : mergeMode === "Multichannel" ? "Multichannel" : "RGB",
+    })
+    createDocument(doc, "Merge Channels")
+    close()
+  }
+
   const layers = activeDoc?.layers.filter((layer) => layer.kind !== "group") ?? []
 
   return (
@@ -237,47 +437,159 @@ export function GapWorkflowDialog({
         </DialogHeader>
         {workflow === "apply-image" || workflow === "calculations" ? (
           <div className="grid gap-3 text-[11px]">
-            <Field label="Source Layer">
-              <select value={sourceId} onChange={(event) => setSourceId(event.target.value)} className={selectClass}>{layers.map((layer) => <option key={layer.id} value={layer.id}>{layer.name}</option>)}</select>
-            </Field>
-            <Field label="Source Channel">
-              <select value={sourceChannel} onChange={(event) => setSourceChannel(event.target.value as PixelChannel)} className={selectClass}>
-                {sourceChannels.map((channel) => <option key={channel} value={channel}>{channelLabel(channel)}</option>)}
-              </select>
-            </Field>
-            {workflow === "calculations" ? (
-              <>
-                <Field label="Second Source">
-                  <select value={sourceId2} onChange={(event) => setSourceId2(event.target.value)} className={selectClass}>{layers.map((layer) => <option key={layer.id} value={layer.id}>{layer.name}</option>)}</select>
-                </Field>
-                <Field label="Second Channel">
-                  <select value={sourceChannel2} onChange={(event) => setSourceChannel2(event.target.value as PixelChannel)} className={selectClass}>
-                    {sourceChannels.filter((channel) => channel !== "rgb").map((channel) => <option key={channel} value={channel}>{channelLabel(channel)}</option>)}
-                  </select>
-                </Field>
-              </>
-            ) : null}
-            {workflow === "apply-image" ? (
-              <Field label="Target Channel">
-                <select value={targetChannel} onChange={(event) => setTargetChannel(event.target.value as ApplyImageTargetChannel)} className={selectClass}>
-                  {targetChannels.map((channel) => <option key={channel} value={channel}>{channelLabel(channel)}</option>)}
+            <div className="grid grid-cols-2 gap-3">
+              <Field label={workflow === "calculations" ? "Source 1" : "Source"}>
+                <select value={sourceId} onChange={(event) => setSourceId(event.target.value as ChannelWorkflowSource)} className={selectClass}>
+                  {channelSourceOptions.map((source) => <option key={source.id} value={source.id}>{source.label}</option>)}
                 </select>
               </Field>
-            ) : null}
-            <Field label="Blend">
-              <select value={blend} onChange={(event) => setBlend(event.target.value as BlendMode)} className={selectClass}>{blendModes.map((mode) => <option key={mode} value={mode}>{mode}</option>)}</select>
-            </Field>
-            <Field label="Opacity"><input type="number" min={0} max={100} value={opacity} onChange={(event) => setOpacity(Number(event.target.value) || 0)} className={inputClass} /></Field>
-            <label className="flex items-center gap-2 text-[11px] text-[var(--ps-text-dim)]">
-              <input type="checkbox" checked={invertSource} onChange={(event) => setInvertSource(event.target.checked)} />
-              Invert source channel
-            </label>
-            {workflow === "calculations" ? (
-              <label className="flex items-center gap-2 text-[11px] text-[var(--ps-text-dim)]">
-                <input type="checkbox" checked={invertSource2} onChange={(event) => setInvertSource2(event.target.checked)} />
-                Invert second channel
+              <Field label={workflow === "calculations" ? "Channel 1" : "Source Channel"}>
+                <select value={sourceChannel} onChange={(event) => setSourceChannel(event.target.value as PixelChannel)} className={selectClass}>
+                  {sourceChannels.map((channel) => <option key={channel} value={channel}>{channelLabel(channel)}</option>)}
+                </select>
+              </Field>
+              {workflow === "calculations" ? (
+                <>
+                  <Field label="Source 2">
+                    <select value={sourceId2} onChange={(event) => setSourceId2(event.target.value as ChannelWorkflowSource)} className={selectClass}>
+                      {channelSourceOptions.map((source) => <option key={source.id} value={source.id}>{source.label}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Channel 2">
+                    <select value={sourceChannel2} onChange={(event) => setSourceChannel2(event.target.value as PixelChannel)} className={selectClass}>
+                      {sourceChannels.filter((channel) => channel !== "rgb").map((channel) => <option key={channel} value={channel}>{channelLabel(channel)}</option>)}
+                    </select>
+                  </Field>
+                </>
+              ) : (
+                <>
+                  <Field label="Destination">
+                    <select value={applyDestination} onChange={(event) => setApplyDestination(event.target.value as ApplyImageDestination)} className={selectClass}>
+                      <option value="active-layer">Active layer pixels</option>
+                      <option value="layer-mask">Active layer mask</option>
+                      <option value="new-layer">New layer</option>
+                    </select>
+                  </Field>
+                  <Field label="Target Channel">
+                    <select value={targetChannel} onChange={(event) => setTargetChannel(event.target.value as ApplyImageTargetChannel)} className={selectClass}>
+                      {targetChannels.map((channel) => <option key={channel} value={channel}>{channelLabel(channel)}</option>)}
+                    </select>
+                  </Field>
+                </>
+              )}
+              {workflow === "calculations" ? (
+                <Field label="Result">
+                  <select value={calculationsDestination} onChange={(event) => setCalculationsDestination(event.target.value as CalculationsDestination)} className={selectClass}>
+                    <option value="alpha-channel">New alpha channel</option>
+                    <option value="selection">Current selection</option>
+                    <option value="layer-mask">Active layer mask</option>
+                    <option value="new-layer">New grayscale layer</option>
+                  </select>
+                </Field>
+              ) : null}
+              <Field label="Blend">
+                <select value={blend} onChange={(event) => setBlend(event.target.value as BlendMode)} className={selectClass}>
+                  {blendModes.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
+                </select>
+              </Field>
+              <Field label="Opacity %">
+                <input type="number" min={0} max={100} value={opacity} onChange={(event) => setOpacity(Math.max(0, Math.min(100, Number(event.target.value) || 0)))} className={inputClass} />
+              </Field>
+              <Field label="Scale">
+                <input type="number" min={0.1} max={4} step={0.1} value={scale} onChange={(event) => setScale(Math.max(0.1, Math.min(4, Number(event.target.value) || 1)))} className={inputClass} />
+              </Field>
+              <Field label="Offset">
+                <input type="number" min={-255} max={255} value={offset} onChange={(event) => setOffset(Math.max(-255, Math.min(255, Number(event.target.value) || 0)))} className={inputClass} />
+              </Field>
+              <Field label="Mask">
+                <select value={maskSource} onChange={(event) => setMaskSource(event.target.value as ChannelMaskSource)} className={selectClass}>
+                  {channelMaskOptions.map((mask) => <option key={mask.id} value={mask.id}>{mask.label}</option>)}
+                </select>
+              </Field>
+              <Field label="Mask Density %">
+                <input type="number" min={0} max={100} value={maskDensity} onChange={(event) => setMaskDensity(Math.max(0, Math.min(100, Number(event.target.value) || 0)))} className={inputClass} />
+              </Field>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-[var(--ps-text-dim)]">
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={invertSource} onChange={(event) => setInvertSource(event.target.checked)} />
+                Invert first source
               </label>
-            ) : null}
+              {workflow === "calculations" ? (
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={invertSource2} onChange={(event) => setInvertSource2(event.target.checked)} />
+                  Invert second source
+                </label>
+              ) : (
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={preserveTransparency} onChange={(event) => setPreserveTransparency(event.target.checked)} />
+                  Preserve transparency
+                </label>
+              )}
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={invertMask} disabled={maskSource === "none"} onChange={(event) => setInvertMask(event.target.checked)} />
+                Invert mask
+              </label>
+            </div>
+          </div>
+        ) : workflow === "split-channels" ? (
+          <div className="grid gap-3 text-[11px]">
+            <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2 text-[var(--ps-text-dim)]">
+              Splits the current merged composite into grayscale channel plates. Saved alpha output keeps plates in the Channels panel; document output creates separate grayscale documents.
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Output">
+                <select value={splitDestination} onChange={(event) => setSplitDestination(event.target.value as SplitChannelsDestination)} className={selectClass}>
+                  <option value="documents">Separate grayscale documents</option>
+                  <option value="saved-channels">Saved alpha channels</option>
+                </select>
+              </Field>
+              <label className="flex items-end gap-2 pb-2 text-[var(--ps-text-dim)]">
+                <input type="checkbox" checked={splitIncludeAlpha} onChange={(event) => setSplitIncludeAlpha(event.target.checked)} />
+                Include transparency plate
+              </label>
+            </div>
+          </div>
+        ) : workflow === "merge-channels" ? (
+          <div className="grid gap-3 text-[11px]">
+            <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2 text-[var(--ps-text-dim)]">
+              Merges grayscale open documents into a new RGB, CMYK-preview, multichannel, or grayscale document. Each selected document is sampled by luminance.
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Mode">
+                <select value={mergeMode} onChange={(event) => setMergeMode(event.target.value as MergeChannelsMode)} className={selectClass}>
+                  <option value="RGB">RGB</option>
+                  <option value="CMYK">CMYK preview</option>
+                  <option value="Multichannel">Multichannel</option>
+                  <option value="Grayscale">Grayscale</option>
+                </select>
+              </Field>
+              <Field label={mergeMode === "CMYK" ? "Cyan / Gray" : "Red / Gray"}>
+                <select value={mergeRedDoc} onChange={(event) => setMergeRedDoc(event.target.value)} className={selectClass}>
+                  {documents.map((doc) => <option key={doc.id} value={doc.id}>{doc.name}</option>)}
+                </select>
+              </Field>
+              {mergeMode !== "Grayscale" ? (
+                <>
+                  <Field label={mergeMode === "CMYK" ? "Magenta" : "Green"}>
+                    <select value={mergeGreenDoc} onChange={(event) => setMergeGreenDoc(event.target.value)} className={selectClass}>
+                      {documents.map((doc) => <option key={doc.id} value={doc.id}>{doc.name}</option>)}
+                    </select>
+                  </Field>
+                  <Field label={mergeMode === "CMYK" ? "Yellow" : "Blue"}>
+                    <select value={mergeBlueDoc} onChange={(event) => setMergeBlueDoc(event.target.value)} className={selectClass}>
+                      {documents.map((doc) => <option key={doc.id} value={doc.id}>{doc.name}</option>)}
+                    </select>
+                  </Field>
+                </>
+              ) : null}
+              <Field label={mergeMode === "CMYK" ? "Black" : "Alpha"}>
+                <select value={mergeAlphaDoc} onChange={(event) => setMergeAlphaDoc(event.target.value)} className={selectClass}>
+                  <option value="">{mergeMode === "CMYK" ? "No black plate" : "No alpha plate"}</option>
+                  {documents.map((doc) => <option key={doc.id} value={doc.id}>{doc.name}</option>)}
+                </select>
+              </Field>
+            </div>
           </div>
         ) : workflow === "scripted-pattern" ? (
           <Field label="Pattern">
@@ -381,10 +693,12 @@ export function GapWorkflowDialog({
         <DialogFooter>
           <Button variant="outline" onClick={close}>Cancel</Button>
           <Button
-            disabled={busy || (isFileWorkflow(workflow) && !files.length)}
+            disabled={busy || (isFileWorkflow(workflow) && !files.length) || (workflow === "merge-channels" && documents.length === 0)}
             onClick={() => {
               if (workflow === "apply-image") runApplyImage()
               else if (workflow === "calculations") runCalculations()
+              else if (workflow === "split-channels") runSplitChannels()
+              else if (workflow === "merge-channels") runMergeChannels()
               else if (workflow === "scripted-pattern") runPattern()
               else if (workflow === "image-assets") {
                 window.dispatchEvent(new CustomEvent("ps-open-batch-export", { detail: { scope: "visible-layers" } }))
@@ -408,6 +722,8 @@ function titleForWorkflow(workflow: GapWorkflowKind) {
   const labels: Record<GapWorkflowKind, string> = {
     "apply-image": "Apply Image",
     calculations: "Calculations",
+    "split-channels": "Split Channels",
+    "merge-channels": "Merge Channels",
     "load-stack": "Load Files into Stack",
     photomerge: "Photomerge",
     "hdr-merge": "Merge to HDR",
@@ -530,10 +846,72 @@ function canvasImageData(canvas: HTMLCanvasElement) {
   return canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height)
 }
 
+function alphaCanvasImageData(canvas: HTMLCanvasElement) {
+  const img = canvasImageData(canvas)
+  for (let i = 0; i < img.data.length; i += 4) {
+    const value = img.data[i + 3]
+    img.data[i] = value
+    img.data[i + 1] = value
+    img.data[i + 2] = value
+    img.data[i + 3] = 255
+  }
+  return img
+}
+
 function imageDataCanvas(image: ImageData) {
   const canvas = makeCanvas(image.width, image.height)
   canvas.getContext("2d")!.putImageData(image, 0, 0)
   return canvas
+}
+
+function imageDataMaskCanvas(image: ImageData) {
+  const mask = makeCanvas(image.width, image.height)
+  const data = new Uint8ClampedArray(image.data)
+  for (let i = 0; i < data.length; i += 4) {
+    const value = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2])
+    data[i] = value
+    data[i + 1] = value
+    data[i + 2] = value
+    data[i + 3] = value
+  }
+  mask.getContext("2d")!.putImageData(new ImageData(data, image.width, image.height), 0, 0)
+  return mask
+}
+
+function documentFromImageData(name: string, image: ImageData, settings: { mode: "RGB" | "CMYK" | "Multichannel" | "Grayscale" }) {
+  const doc = makeDocument(name, image.width, image.height, "transparent")
+  doc.colorMode = settings.mode
+  doc.modeSettings = settings.mode === "Multichannel"
+    ? { mode: "Multichannel", multichannel: { channels: { r: true, g: true, b: true } } }
+    : { mode: settings.mode }
+  const layer = doc.layers.find((candidate) => candidate.id === doc.activeLayerId)
+  if (layer) layer.canvas.getContext("2d")!.putImageData(image, 0, 0)
+  return doc
+}
+
+function sampleGray(image: ImageData, x: number, y: number) {
+  const i = (y * image.width + x) * 4
+  return Math.round(0.299 * image.data[i] + 0.587 * image.data[i + 1] + 0.114 * image.data[i + 2])
+}
+
+function mergeCmykPreview(cyan: ImageData, magenta: ImageData, yellow: ImageData, black: ImageData | null) {
+  const width = Math.min(cyan.width, magenta.width, yellow.width, black?.width ?? cyan.width)
+  const height = Math.min(cyan.height, magenta.height, yellow.height, black?.height ?? cyan.height)
+  const out = new Uint8ClampedArray(width * height * 4)
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4
+      const c = sampleGray(cyan, x, y) / 255
+      const m = sampleGray(magenta, x, y) / 255
+      const yy = sampleGray(yellow, x, y) / 255
+      const k = black ? sampleGray(black, x, y) / 255 : 0
+      out[i] = Math.round(255 * (1 - c) * (1 - k))
+      out[i + 1] = Math.round(255 * (1 - m) * (1 - k))
+      out[i + 2] = Math.round(255 * (1 - yy) * (1 - k))
+      out[i + 3] = 255
+    }
+  }
+  return new ImageData(out, width, height)
 }
 
 function workflowSearchRadius(items: { canvas: HTMLCanvasElement }[]) {

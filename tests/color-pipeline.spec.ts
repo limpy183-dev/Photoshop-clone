@@ -518,6 +518,43 @@ test("high-bit filter routing preserves typed-array precision for routable filte
   expect(blurred.warnings.join(" ")).not.toContain("8-bit fallback")
 })
 
+test("expanded high-bit filter routing covers motion, stylize, tonal, and video filters without preview fallback", () => {
+  const source = {
+    width: 3,
+    height: 3,
+    channels: 4 as const,
+    bitDepth: 16 as const,
+    colorMode: "RGB" as const,
+    storage: "uint16" as const,
+    data: new Uint16Array([
+      0, 2000, 4000, 65535, 18000, 20000, 22000, 65535, 65000, 62000, 60000, 65535,
+      5000, 7000, 9000, 65535, 32768, 32769, 12000, 65535, 58000, 54000, 50000, 65535,
+      1000, 3000, 5000, 65535, 24000, 26000, 28000, 65535, 65535, 2000, 65535, 65535,
+    ]),
+    warnings: [],
+  }
+
+  const cases = [
+    ["average-blur", {}],
+    ["motion-blur", { distance: 1, angle: 0 }],
+    ["find-edges", {}],
+    ["emboss", { amount: 55 }],
+    ["equalize", {}],
+    ["shadows-highlights", { shadows: 35, highlights: 25 }],
+    ["gradient-map", { gradient: "0,#001122;1,#ffeecc", dither: false }],
+    ["ntsc-colors", {}],
+  ] as const
+
+  for (const [filterId, params] of cases) {
+    const result = applyHighBitFilter(source, filterId, params)
+    expect(result.storage, filterId).toBe("uint16")
+    expect(result.data, filterId).toBeInstanceOf(Uint16Array)
+    expect(result.data.length, filterId).toBe(source.data.length)
+    expect(result.data[3], filterId).toBe(65535)
+    expect(result.warnings.join(" "), filterId).not.toContain("8-bit fallback")
+  }
+})
+
 test("high-bit paint dabs and canvas delta sync update typed layer sources", () => {
   const source = createHighBitImageFromImageData(
     imageData(2, 1, [
@@ -577,4 +614,81 @@ test("high-bit readout comparison reports source preview and quantization delta"
   expect(comparison?.preview.r).toBe(128)
   expect(comparison?.previewEquivalent.r).toBeGreaterThan(32700)
   expect(Math.abs(comparison!.delta.r)).toBeLessThanOrEqual(200)
+})
+
+function buildClutIccFixture(profileClass = "mntr") {
+  const inputChannels = 3
+  const outputChannels = 3
+  const gridPoints = 2
+  const inputEntries = 256
+  const outputEntries = 256
+  const clutEntries = gridPoints ** inputChannels * outputChannels
+  const payload = new Uint8Array(48 + inputChannels * inputEntries + clutEntries + outputChannels * outputEntries)
+  const payloadView = new DataView(payload.buffer)
+  payload.set(ascii("mft1"), 0)
+  payload[8] = inputChannels
+  payload[9] = outputChannels
+  payload[10] = gridPoints
+  s32be(payloadView, 12, fixed16(1))
+  s32be(payloadView, 28, fixed16(1))
+  s32be(payloadView, 44, fixed16(1))
+  let cursor = 48
+  for (let c = 0; c < inputChannels; c++) {
+    for (let i = 0; i < inputEntries; i++) payload[cursor++] = i
+  }
+  for (let i = 0; i < clutEntries; i++) payload[cursor++] = i % 256
+  for (let c = 0; c < outputChannels; c++) {
+    for (let i = 0; i < outputEntries; i++) payload[cursor++] = i
+  }
+
+  const tags = [{ sig: "A2B0", payload }]
+  const tableOffset = 128
+  const payloadOffset = tableOffset + 4 + tags.length * 12
+  const total = payloadOffset + tags.reduce((sum, tag) => sum + pad4(tag.payload.length), 0)
+  const bytes = new Uint8Array(total)
+  const view = new DataView(bytes.buffer)
+  u32be(view, 0, total)
+  bytes.set(ascii("TEST"), 4)
+  u32be(view, 8, 0x04300000)
+  bytes.set(ascii(profileClass), 12)
+  bytes.set(ascii("RGB "), 16)
+  bytes.set(ascii("Lab "), 20)
+  bytes.set(ascii("acsp"), 36)
+  bytes.set(ascii("APPL"), 40)
+  u32be(view, tableOffset, tags.length)
+  let dataOffset = payloadOffset
+  tags.forEach((tag, index) => {
+    const entry = tableOffset + 4 + index * 12
+    bytes.set(ascii(tag.sig), entry)
+    u32be(view, entry + 4, dataOffset)
+    u32be(view, entry + 8, tag.payload.length)
+    bytes.set(tag.payload, dataOffset)
+    dataOffset += pad4(tag.payload.length)
+  })
+  return bytes
+}
+
+test("ICC parser exposes CLUT and device-link diagnostics without claiming certified CMM execution", () => {
+  const clutProfile = buildClutIccFixture("mntr")
+  const deviceLinkProfile = buildClutIccFixture("link")
+
+  const clut = parseIccProfile(clutProfile)
+  const deviceLink = describeIccProfile(deviceLinkProfile)
+
+  expect(clut?.hasClut).toBe(true)
+  expect(clut?.deviceLink).toBe(false)
+  expect(clut?.lutTags).toEqual([
+    expect.objectContaining({
+      tag: "A2B0",
+      type: "mft1",
+      inputChannels: 3,
+      outputChannels: 3,
+      gridPoints: [2, 2, 2],
+    }),
+  ])
+  expect(clut?.diagnostics.join(" ")).toContain("CLUT")
+
+  expect(deviceLink?.deviceLink).toBe(true)
+  expect(deviceLink?.profileClass).toBe("link")
+  expect(deviceLink?.diagnostics.join(" ")).toContain("device-link")
 })

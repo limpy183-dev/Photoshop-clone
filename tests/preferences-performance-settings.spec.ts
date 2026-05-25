@@ -4,6 +4,7 @@ import { getCapability, listCapabilities } from "../components/photoshop/capabil
 import {
   DEFAULT_PREFERENCES,
   PREFERENCE_IMPORT_SECTIONS,
+  TECHNOLOGY_PREVIEW_FLAGS,
   appendHistoryLog,
   applyPreferencesToDocumentSettings,
   calculatePrintSizeZoom,
@@ -17,6 +18,7 @@ import {
   parsePreferencesSet,
   resetPreferencesSet,
   serializePreferences,
+  summarizeTechnologyPreviewFlags,
   summarizePerformancePolicy,
 } from "../components/photoshop/preferences-engine"
 import { buildRulerTickMarks } from "../components/photoshop/ruler-calibration"
@@ -34,7 +36,7 @@ test("normalizes legacy preference sets into the full schema", () => {
     smoothing: 123,
   })
 
-  expect(prefs.schemaVersion).toBe(3)
+  expect(prefs.schemaVersion).toBe(4)
   expect(prefs.undoLimit).toBe(500)
   expect(prefs.memory.historyStates).toBe(500)
   expect(prefs.gridSize).toBe(4)
@@ -277,20 +279,30 @@ test("exports, imports, and resets preference sets by section", () => {
   const prefs = normalizePreferences({
     gpu: { ...DEFAULT_PREFERENCES.gpu, enabled: false },
     rulerGrid: { ...DEFAULT_PREFERENCES.rulerGrid, gridColor: "#123456" },
+    technologyPreviews: {
+      ...DEFAULT_PREFERENCES.technologyPreviews,
+      webgpuAcceleration: true,
+      localGenerativeFill: true,
+    },
   })
 
   const exported = exportPreferencesSet(prefs)
   const parsed = parsePreferencesSet(exported.json)
   const fromSerialized = parsePreferencesSet(serializePreferences(prefs))
   const resetGrid = resetPreferencesSet("rulerGrid", prefs)
+  const resetPreviews = resetPreferencesSet("technologyPreviews", prefs)
   const resetAll = resetPreferencesSet()
 
   expect(exported.fileName).toMatch(/^photoshop-preferences-\d{4}-\d{2}-\d{2}\.json$/)
   expect(exported.mime).toBe("application/json")
   expect(parsed.gpu.enabled).toBe(false)
+  expect(parsed.technologyPreviews.webgpuAcceleration).toBe(true)
+  expect(parsed.technologyPreviews.localGenerativeFill).toBe(true)
   expect(fromSerialized.rulerGrid.gridColor).toBe("#123456")
   expect(resetGrid.gpu.enabled).toBe(false)
+  expect(resetGrid.technologyPreviews.webgpuAcceleration).toBe(true)
   expect(resetGrid.rulerGrid).toEqual(DEFAULT_PREFERENCES.rulerGrid)
+  expect(resetPreviews.technologyPreviews).toEqual(DEFAULT_PREFERENCES.technologyPreviews)
   expect(resetAll).toEqual(DEFAULT_PREFERENCES)
 })
 
@@ -300,6 +312,35 @@ test("validates preference imports with specific schema errors", () => {
   expect(() => parsePreferencesSet({ rulerGrid: "bad" })).toThrow(/rulerGrid must be an object/i)
   expect(() => parsePreferencesSet({ rulerGrid: { printResolution: "300" } })).toThrow(/rulerGrid\.printResolution must be a number/i)
   expect(() => parsePreferencesSet({ toolBehavior: { cursorStyle: "giant" } })).toThrow(/toolBehavior\.cursorStyle must be one of/i)
+  expect(() => parsePreferencesSet({ technologyPreviews: { webgpuAcceleration: "yes" } })).toThrow(/technologyPreviews\.webgpuAcceleration must be a boolean/i)
+})
+
+test("normalizes technology preview feature flags with per-toggle help and risk text", () => {
+  const prefs = normalizePreferences({
+    technologyPreviews: {
+      hdrCanvasCompositor: true,
+      webgpuAcceleration: true,
+      localGenerativeFill: "yes",
+    },
+  })
+
+  const previewFlags = summarizeTechnologyPreviewFlags(prefs)
+
+  expect(prefs.schemaVersion).toBe(4)
+  expect(TECHNOLOGY_PREVIEW_FLAGS.map((flag) => flag.id)).toEqual([
+    "hdrCanvasCompositor",
+    "webgpuAcceleration",
+    "localGenerativeFill",
+    "cameraRawSidecars",
+  ])
+  expect(prefs.technologyPreviews.hdrCanvasCompositor).toBe(true)
+  expect(prefs.technologyPreviews.webgpuAcceleration).toBe(true)
+  expect(prefs.technologyPreviews.localGenerativeFill).toBe(false)
+  expect(previewFlags.find((flag) => flag.id === "webgpuAcceleration")).toMatchObject({
+    enabled: true,
+    helpText: expect.stringContaining("WebGPU"),
+    riskText: expect.stringContaining("driver"),
+  })
 })
 
 test("imports only selected preference sections while preserving the rest", () => {
@@ -307,27 +348,35 @@ test("imports only selected preference sections while preserving the rest", () =
     gpu: { ...DEFAULT_PREFERENCES.gpu, enabled: false },
     rulerGrid: { ...DEFAULT_PREFERENCES.rulerGrid, rulerUnits: "px", gridColor: "#111111" },
     toolBehavior: { ...DEFAULT_PREFERENCES.toolBehavior, cursorStyle: "standard" },
+    technologyPreviews: { ...DEFAULT_PREFERENCES.technologyPreviews, hdrCanvasCompositor: false },
   })
   const imported = normalizePreferences({
     gpu: { ...DEFAULT_PREFERENCES.gpu, enabled: true },
     rulerGrid: { ...DEFAULT_PREFERENCES.rulerGrid, rulerUnits: "mm", gridColor: "#abcdef", screenDpi: 112 },
     toolBehavior: { ...DEFAULT_PREFERENCES.toolBehavior, cursorStyle: "precise" },
+    technologyPreviews: { ...DEFAULT_PREFERENCES.technologyPreviews, hdrCanvasCompositor: true },
   })
 
   const partial = importPreferenceSections(current, imported, ["rulerGrid"])
+  const previewOnly = importPreferenceSections(current, imported, ["technologyPreviews"])
 
   expect(PREFERENCE_IMPORT_SECTIONS).toContain("rulerGrid")
+  expect(PREFERENCE_IMPORT_SECTIONS).toContain("technologyPreviews")
   expect(partial.rulerGrid.rulerUnits).toBe("mm")
   expect(partial.rulerGrid.gridColor).toBe("#abcdef")
   expect(partial.rulerGrid.screenDpi).toBe(112)
   expect(partial.gpu.enabled).toBe(false)
   expect(partial.toolBehavior.cursorStyle).toBe("standard")
+  expect(partial.technologyPreviews.hdrCanvasCompositor).toBe(false)
+  expect(previewOnly.technologyPreviews.hdrCanvasCompositor).toBe(true)
+  expect(previewOnly.rulerGrid.gridColor).toBe("#111111")
 })
 
 test("capability registry exposes preferences and performance settings coverage", () => {
   expect(getCapability("preferences.performance-settings").status).toBe("usable")
   expect(getCapability("preferences.file-handling-history").status).toBe("usable")
   expect(getCapability("preferences.import-export-reset").status).toBe("usable")
+  expect(getCapability("preferences.technology-previews").status).toBe("usable")
 
   const ids = listCapabilities({ kind: "preferences" }).map((capability) => capability.id)
   expect(ids).toEqual(
@@ -335,6 +384,7 @@ test("capability registry exposes preferences and performance settings coverage"
       "preferences.performance-settings",
       "preferences.cursor-tool-units",
       "preferences.import-export-reset",
+      "preferences.technology-previews",
     ]),
   )
 })

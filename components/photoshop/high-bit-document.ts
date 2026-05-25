@@ -8,6 +8,7 @@ import {
   type PipelineBitDepth,
   type PipelineColorMode,
 } from "./color-pipeline"
+import { resolveColorReplacementPixel, type BrushRgba } from "./brush-engine"
 import { getFilter, type FilterContext } from "./filters"
 import type { SelectionImageSource } from "./selection-algorithms"
 import type { BlendMode, Layer, PsDocument } from "./types"
@@ -49,7 +50,11 @@ export interface HighBitPaintDabOptions {
   color: { r: number; g: number; b: number; a?: number }
   opacity?: number
   hardness?: number
-  mode?: "source-over" | "destination-out"
+  mode?: "source-over" | "destination-out" | "color-replace"
+  replacementMode?: "color" | "hue" | "saturation" | "luminosity"
+  sampleColor?: { r: number; g: number; b: number; a?: number }
+  tolerance?: number
+  dirtyRect?: { x: number; y: number; w: number; h: number }
 }
 
 export interface HighBitEditingSurfaceLayer {
@@ -102,8 +107,10 @@ const BLUR_FILTERS = new Set([
   "blur",
   "blur-more",
   "average",
+  "average-blur",
   "box-blur",
   "gaussian-blur",
+  "motion-blur",
   "smart-blur",
   "surface-blur",
   "shape-blur",
@@ -331,6 +338,51 @@ function boxBlur(source: HighBitImage, radius: number): HighBitImage {
   return floatToSourceStorage(source, out)
 }
 
+function averageBlur(source: HighBitImage): HighBitImage {
+  const sums = [0, 0, 0, 0]
+  const pixels = Math.max(1, source.width * source.height)
+  for (let i = 0; i < source.data.length; i += 4) {
+    sums[0] += readUnit(source, i)
+    sums[1] += readUnit(source, i + 1)
+    sums[2] += readUnit(source, i + 2)
+    sums[3] += readUnit(source, i + 3)
+  }
+  const out = new Float32Array(source.data.length)
+  for (let i = 0; i < out.length; i += 4) {
+    out[i] = sums[0] / pixels
+    out[i + 1] = sums[1] / pixels
+    out[i + 2] = sums[2] / pixels
+    out[i + 3] = sums[3] / pixels
+  }
+  return floatToSourceStorage(source, out)
+}
+
+function motionBlur(source: HighBitImage, distance: number, angleDeg: number): HighBitImage {
+  const steps = Math.max(1, Math.round(distance))
+  const rad = (angleDeg * Math.PI) / 180
+  const dx = Math.cos(rad)
+  const dy = Math.sin(rad)
+  const out = new Float32Array(source.data.length)
+  const { width, height } = source
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const sums = [0, 0, 0, 0]
+      let count = 0
+      for (let step = -steps; step <= steps; step++) {
+        const sx = Math.round(x + dx * step)
+        const sy = Math.round(y + dy * step)
+        if (sx < 0 || sx >= width || sy < 0 || sy >= height) continue
+        const i = (sy * width + sx) * 4
+        for (let c = 0; c < 4; c++) sums[c] += readUnit(source, i + c)
+        count++
+      }
+      const o = (y * width + x) * 4
+      for (let c = 0; c < 4; c++) out[o + c] = sums[c] / Math.max(1, count)
+    }
+  }
+  return floatToSourceStorage(source, out)
+}
+
 function sharpen(source: HighBitImage, amount: number): HighBitImage {
   const a = Math.max(0, amount) / 100
   if (a <= 0) return cloneHighBitImage(source)
@@ -342,6 +394,62 @@ function sharpen(source: HighBitImage, amount: number): HighBitImage {
       const o = (y * width + x) * 4
       for (let c = 0; c < 3; c++) {
         let value = 0
+        for (let ky = 0; ky < 3; ky++) {
+          for (let kx = 0; kx < 3; kx++) {
+            const sx = Math.max(0, Math.min(width - 1, x + kx - 1))
+            const sy = Math.max(0, Math.min(height - 1, y + ky - 1))
+            value += readUnit(source, (sy * width + sx) * 4 + c) * kernel[ky * 3 + kx]
+          }
+        }
+        out[o + c] = value
+      }
+      out[o + 3] = readUnit(source, o + 3)
+    }
+  }
+  return floatToSourceStorage(source, out)
+}
+
+function findEdges(source: HighBitImage): HighBitImage {
+  const out = new Float32Array(source.data.length)
+  const { width, height } = source
+  const gx = [-1, 0, 1, -2, 0, 2, -1, 0, 1]
+  const gy = [-1, -2, -1, 0, 0, 0, 1, 2, 1]
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let sx = 0
+      let sy = 0
+      for (let ky = 0; ky < 3; ky++) {
+        for (let kx = 0; kx < 3; kx++) {
+          const px = Math.max(0, Math.min(width - 1, x + kx - 1))
+          const py = Math.max(0, Math.min(height - 1, y + ky - 1))
+          const i = (py * width + px) * 4
+          const lum = 0.299 * readUnit(source, i) + 0.587 * readUnit(source, i + 1) + 0.114 * readUnit(source, i + 2)
+          const k = ky * 3 + kx
+          sx += lum * gx[k]
+          sy += lum * gy[k]
+        }
+      }
+      const edge = clamp(Math.hypot(sx, sy))
+      const o = (y * width + x) * 4
+      out[o] = edge
+      out[o + 1] = edge
+      out[o + 2] = edge
+      out[o + 3] = readUnit(source, o + 3)
+    }
+  }
+  return floatToSourceStorage(source, out)
+}
+
+function emboss(source: HighBitImage, amount: number): HighBitImage {
+  const scale = Math.max(0, amount) / 100
+  const kernel = [-2, -1, 0, -1, 1, 1, 0, 1, 2].map((value) => value * scale)
+  const out = new Float32Array(source.data.length)
+  const { width, height } = source
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const o = (y * width + x) * 4
+      for (let c = 0; c < 3; c++) {
+        let value = 0.5
         for (let ky = 0; ky < 3; ky++) {
           for (let kx = 0; kx < 3; kx++) {
             const sx = Math.max(0, Math.min(width - 1, x + kx - 1))
@@ -423,6 +531,109 @@ function perPixelFilter(source: HighBitImage, transform: (r: number, g: number, 
   return out
 }
 
+function equalize(source: HighBitImage): HighBitImage {
+  const bins = source.storage === "uint16" ? 65536 : source.storage === "float32" ? 4096 : 256
+  const hist = [new Uint32Array(bins), new Uint32Array(bins), new Uint32Array(bins)]
+  const binFor = (value: number) => Math.max(0, Math.min(bins - 1, Math.round(clamp(value) * (bins - 1))))
+  for (let i = 0; i < source.data.length; i += 4) {
+    hist[0][binFor(readUnit(source, i))]++
+    hist[1][binFor(readUnit(source, i + 1))]++
+    hist[2][binFor(readUnit(source, i + 2))]++
+  }
+  const maps = hist.map((channel) => {
+    const map = new Float32Array(bins)
+    const total = Math.max(1, source.width * source.height)
+    let cumulative = 0
+    let first = 0
+    while (first < bins - 1 && channel[first] === 0) first++
+    const base = channel[first]
+    const denom = Math.max(1, total - base)
+    for (let i = 0; i < bins; i++) {
+      cumulative += channel[i]
+      map[i] = clamp((cumulative - base) / denom)
+    }
+    return map
+  })
+  return perPixelFilter(source, (r, g, b, a) => [maps[0][binFor(r)], maps[1][binFor(g)], maps[2][binFor(b)], a])
+}
+
+function shadowsHighlights(source: HighBitImage, params: Record<string, number | string | boolean>): HighBitImage {
+  const shadows = clamp(numberParam(params, "shadows", 0) / 100)
+  const highlights = clamp(numberParam(params, "highlights", 0) / 100)
+  const tonalWidth = clamp(numberParam(params, "tonalWidth", 50) / 100, 0.05, 1)
+  const colorCorrection = numberParam(params, "colorCorrection", 0) / 100
+  return perPixelFilter(source, (r, g, b, a) => {
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b
+    const shadowMask = clamp((tonalWidth - lum) / tonalWidth)
+    const highlightMask = clamp((lum - (1 - tonalWidth)) / tonalWidth)
+    let nr = r + (1 - r) * shadows * shadowMask
+    let ng = g + (1 - g) * shadows * shadowMask
+    let nb = b + (1 - b) * shadows * shadowMask
+    nr *= 1 - highlights * highlightMask * 0.85
+    ng *= 1 - highlights * highlightMask * 0.85
+    nb *= 1 - highlights * highlightMask * 0.85
+    if (colorCorrection !== 0) {
+      const hsl = rgbToHsl(nr, ng, nb)
+      const rgb = hslToRgb(hsl.h, clamp(hsl.s * (1 + colorCorrection * 0.35)), hsl.l)
+      nr = rgb.r
+      ng = rgb.g
+      nb = rgb.b
+    }
+    return [nr, ng, nb, a]
+  })
+}
+
+function parseGradientStops(value: string) {
+  const stops = value
+    .split(";")
+    .map((part) => {
+      const [rawPosition, rawColor] = part.split(",")
+      const position = clamp(Number(rawPosition))
+      const color = parseCssColor(rawColor)
+      return Number.isFinite(position) ? { position, color } : null
+    })
+    .filter((item): item is { position: number; color: { r: number; g: number; b: number } } => !!item)
+    .sort((a, b) => a.position - b.position)
+  if (!stops.length) {
+    stops.push({ position: 0, color: { r: 0, g: 0, b: 0 } }, { position: 1, color: { r: 255, g: 255, b: 255 } })
+  }
+  if (stops[0].position > 0) stops.unshift({ position: 0, color: stops[0].color })
+  if (stops[stops.length - 1].position < 1) stops.push({ position: 1, color: stops[stops.length - 1].color })
+  return stops
+}
+
+function gradientMap(source: HighBitImage, params: Record<string, number | string | boolean>): HighBitImage {
+  const stops = parseGradientStops(String(params.gradient ?? "0,#000000;1,#ffffff"))
+  const reverse = boolParam(params, "reverse", false)
+  return perPixelFilter(source, (r, g, b, a) => {
+    const lum = reverse ? 1 - (0.299 * r + 0.587 * g + 0.114 * b) : 0.299 * r + 0.587 * g + 0.114 * b
+    let lo = stops[0]
+    let hi = stops[stops.length - 1]
+    for (let i = 0; i < stops.length - 1; i++) {
+      if (lum >= stops[i].position && lum <= stops[i + 1].position) {
+        lo = stops[i]
+        hi = stops[i + 1]
+        break
+      }
+    }
+    const t = clamp((lum - lo.position) / Math.max(0.000001, hi.position - lo.position))
+    return [
+      (lo.color.r * (1 - t) + hi.color.r * t) / 255,
+      (lo.color.g * (1 - t) + hi.color.g * t) / 255,
+      (lo.color.b * (1 - t) + hi.color.b * t) / 255,
+      a,
+    ]
+  })
+}
+
+function ntscColors(source: HighBitImage): HighBitImage {
+  return perPixelFilter(source, (r, g, b, a) => {
+    const hsl = rgbToHsl(r, g, b)
+    const rgb = hslToRgb(hsl.h, Math.min(hsl.s, 0.82), clamp(hsl.l, 0.06, 0.94))
+    return [rgb.r, rgb.g, rgb.b, a]
+  })
+}
+
 function applyHighBitColorFilter(source: HighBitImage, filterId: string, params: Record<string, number | string | boolean>) {
   if (filterId === "hue-saturation") {
     const hue = numberParam(params, "hue", 0) / 360
@@ -494,6 +705,10 @@ export function applyHighBitFilter(
   if (DIRECT_ADJUSTMENTS.has(filterId as HighBitAdjustment["type"])) {
     return applyHighBitAdjustment(source, { type: filterId as HighBitAdjustment["type"], params })
   }
+  if (filterId === "average" || filterId === "average-blur") return averageBlur(source)
+  if (filterId === "motion-blur") {
+    return motionBlur(source, numberParam(params, "distance", 10), numberParam(params, "angle", 0))
+  }
   if (BLUR_FILTERS.has(filterId)) {
     const radius = filterId === "blur" ? 1 : filterId === "blur-more" ? 2 : numberParam(params, "radius", numberParam(params, "blur", 2))
     return boxBlur(source, radius)
@@ -501,6 +716,12 @@ export function applyHighBitFilter(
   if (SHARPEN_FILTERS.has(filterId)) {
     return sharpen(source, filterId === "sharpen-more" ? 90 : numberParam(params, "amount", 50))
   }
+  if (filterId === "find-edges") return findEdges(source)
+  if (filterId === "emboss") return emboss(source, numberParam(params, "amount", 50))
+  if (filterId === "equalize") return equalize(source)
+  if (filterId === "shadows-highlights") return shadowsHighlights(source, params)
+  if (filterId === "gradient-map") return gradientMap(source, params)
+  if (filterId === "ntsc-colors") return ntscColors(source)
   if (filterId === "high-pass") return highPass(source, numberParam(params, "radius", 2))
   if (filterId === "offset") {
     const dx = Math.round(numberParam(params, "horizontal", numberParam(params, "x", 0)))
@@ -706,10 +927,23 @@ export function applyHighBitPaintDab(source: HighBitImage, options: HighBitPaint
     b: clamp(options.color.b / 255),
     a: clamp((options.color.a ?? 255) / 255),
   }
-  const x0 = Math.max(0, Math.floor(options.x - radius))
-  const y0 = Math.max(0, Math.floor(options.y - radius))
-  const x1 = Math.min(source.width - 1, Math.ceil(options.x + radius))
-  const y1 = Math.min(source.height - 1, Math.ceil(options.y + radius))
+  const dirty = options.dirtyRect
+  const x0 = Math.max(0, Math.floor(options.x - radius), dirty ? Math.floor(dirty.x) : 0)
+  const y0 = Math.max(0, Math.floor(options.y - radius), dirty ? Math.floor(dirty.y) : 0)
+  const x1 = Math.min(
+    source.width - 1,
+    Math.ceil(options.x + radius),
+    dirty ? Math.ceil(dirty.x + dirty.w) - 1 : source.width - 1,
+  )
+  const y1 = Math.min(
+    source.height - 1,
+    Math.ceil(options.y + radius),
+    dirty ? Math.ceil(dirty.y + dirty.h) - 1 : source.height - 1,
+  )
+  const sampleColor = options.sampleColor
+    ? { ...options.sampleColor, a: options.sampleColor.a ?? 255 }
+    : { r: options.color.r, g: options.color.g, b: options.color.b, a: options.color.a ?? 255 }
+  const replacementColor = { r: options.color.r, g: options.color.g, b: options.color.b, a: options.color.a ?? 255 }
   for (let y = y0; y <= y1; y++) {
     for (let x = x0; x <= x1; x++) {
       const distance = Math.hypot(x - options.x, y - options.y)
@@ -721,6 +955,28 @@ export function applyHighBitPaintDab(source: HighBitImage, options: HighBitPaint
       const i = (y * source.width + x) * 4
       if (options.mode === "destination-out") {
         writeUnit(out, i + 3, readUnit(out, i + 3) * (1 - amount))
+        continue
+      }
+      if (options.mode === "color-replace") {
+        const current: Required<BrushRgba> = {
+          r: clamp8(readUnit(out, i) * 255),
+          g: clamp8(readUnit(out, i + 1) * 255),
+          b: clamp8(readUnit(out, i + 2) * 255),
+          a: clamp(readUnit(out, i + 3)),
+        }
+        const replaced = resolveColorReplacementPixel({
+          source: current,
+          sample: { r: sampleColor.r, g: sampleColor.g, b: sampleColor.b, a: (sampleColor.a ?? 255) / 255 },
+          replacement: { r: replacementColor.r, g: replacementColor.g, b: replacementColor.b, a: (replacementColor.a ?? 255) / 255 },
+          tolerance: options.tolerance ?? 32,
+          mode: options.replacementMode ?? "color",
+          opacity: amount,
+        })
+        if (replaced.changed) {
+          writeUnit(out, i, replaced.pixel.r / 255)
+          writeUnit(out, i + 1, replaced.pixel.g / 255)
+          writeUnit(out, i + 2, replaced.pixel.b / 255)
+        }
         continue
       }
       const srcAlpha = color.a * amount

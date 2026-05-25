@@ -10,14 +10,19 @@ import {
 import {
   captureLayerCompState,
   createLayerMetadata,
+  defaultAdvancedBlending,
+  deleteEmptyLayersFromDocument,
   duplicateSlice,
+  isLayerEmpty,
   layerMatchesQuery,
   normalizeGuide,
   normalizeSlice,
+  normalizeAdvancedBlending,
   reorderSmartFilterStack,
+  setBlendIfRangeHandle,
 } from "../components/photoshop/layer-workflows"
 import type { Layer, SmartFilter } from "../components/photoshop/types"
-import { fixtureCanvas, fixtureMask, richFixtureDocument } from "./photoshop-fixtures"
+import { fixtureCanvas, fixtureMask, installFixtureDom, richFixtureDocument } from "./photoshop-fixtures"
 
 type FixtureState = ReturnType<typeof stateWithFixtureDoc>
 
@@ -48,6 +53,18 @@ function stateWithFixtureDoc() {
     recordingActionId: null,
     isPlayingAction: false,
   }
+}
+
+function setFixtureAlpha(canvas: HTMLCanvasElement, alpha: number) {
+  const ctx = canvas.getContext("2d")!
+  const image = new ImageData(new Uint8ClampedArray(canvas.width * canvas.height * 4), canvas.width, canvas.height)
+  for (let i = 0; i < image.data.length; i += 4) {
+    image.data[i] = 16
+    image.data[i + 1] = 32
+    image.data[i + 2] = 48
+    image.data[i + 3] = alpha
+  }
+  ctx.putImageData(image, 0, 0)
 }
 
 test("layer comp capture includes appearance, editable metadata, masks, smart filters, notes, and selection", () => {
@@ -92,6 +109,85 @@ test("layer search supports names, notes, metadata, smart-object state, filter, 
   expect(layerMatchesQuery(raster, "visible:false")).toBe(false)
 })
 
+test("layer search supports Photoshop-style kind, effect, mode, and attribute filters", () => {
+  const doc = richFixtureDocument()
+  const raster = doc.layers.find((layer) => layer.id === "layer_raster")!
+  raster.style = {
+    ...raster.style,
+    stroke: { enabled: true, color: "#ffffff", size: 4, position: "outside", opacity: 1 },
+    outerGlow: { enabled: true, color: "#00ffff", size: 10, opacity: 0.7 },
+  }
+  raster.advancedBlending = {
+    ...defaultAdvancedBlending(),
+    knockout: "deep",
+    channels: { r: true, g: false, b: true },
+  }
+
+  expect(layerMatchesQuery(raster, "kind:pixel effect:drop-shadow effect:stroke mode:multiply attr:masked attr:effects")).toBe(true)
+  expect(layerMatchesQuery(raster, "attribute:knockout channel:g-off")).toBe(true)
+  expect(layerMatchesQuery(raster, "effect:bevel")).toBe(false)
+  expect(layerMatchesQuery(raster, "mode:screen")).toBe(false)
+})
+
+test("advanced blending helpers normalize Photoshop defaults and split Blend If handles", () => {
+  expect(normalizeAdvancedBlending()).toMatchObject({
+    fillOpacity: 1,
+    knockout: "none",
+    channels: { r: true, g: true, b: true },
+    blendIfThis: { black: 0, blackFeather: 0, whiteFeather: 255, white: 255 },
+    blendIfUnderlying: { black: 0, blackFeather: 0, whiteFeather: 255, white: 255 },
+    transparencyShapesLayer: true,
+    layerMaskHidesEffects: false,
+    vectorMaskHidesEffects: false,
+  })
+
+  const pairedBlack = setBlendIfRangeHandle(defaultAdvancedBlending().blendIfThis, "black", 52, { split: false })
+  expect(pairedBlack).toMatchObject({ black: 52, blackFeather: 52, whiteFeather: 255, white: 255 })
+
+  const splitBlack = setBlendIfRangeHandle(pairedBlack, "blackFeather", 96)
+  expect(splitBlack).toMatchObject({ black: 52, blackFeather: 96, whiteFeather: 255, white: 255 })
+
+  const pairedWhite = setBlendIfRangeHandle(splitBlack, "white", 188, { split: false })
+  expect(pairedWhite).toMatchObject({ black: 52, blackFeather: 96, whiteFeather: 188, white: 188 })
+
+  const splitWhite = setBlendIfRangeHandle(pairedWhite, "whiteFeather", 144)
+  expect(splitWhite).toMatchObject({ black: 52, blackFeather: 96, whiteFeather: 144, white: 188 })
+})
+
+test("empty-layer helper only deletes unlocked raster layers with no pixels or metadata", () => {
+  const doc = richFixtureDocument()
+  const emptyCanvas = fixtureCanvas(8, 8, "#000000")
+  const filledCanvas = fixtureCanvas(8, 8, "#ffffff")
+  setFixtureAlpha(emptyCanvas, 0)
+  setFixtureAlpha(filledCanvas, 255)
+  const empty: Layer = {
+    id: "empty",
+    name: "Empty Pixel Layer",
+    kind: "raster",
+    visible: true,
+    locked: false,
+    opacity: 1,
+    blendMode: "normal",
+    canvas: emptyCanvas,
+  }
+  const filled: Layer = {
+    ...empty,
+    id: "filled",
+    name: "Filled Pixel Layer",
+    canvas: filledCanvas,
+  }
+  doc.layers = [empty, filled, ...doc.layers]
+  doc.activeLayerId = empty.id
+  doc.selectedLayerIds = [empty.id, filled.id]
+
+  expect(isLayerEmpty(empty)).toBe(true)
+  expect(isLayerEmpty(filled)).toBe(false)
+  const cleaned = deleteEmptyLayersFromDocument(doc)
+  expect(cleaned.layers.map((layer) => layer.id)).not.toContain("empty")
+  expect(cleaned.layers.map((layer) => layer.id)).toContain("filled")
+  expect(cleaned.selectedLayerIds).toEqual(["filled"])
+})
+
 test("guide and slice helpers clamp document workflows and preserve export metadata", () => {
   expect(normalizeGuide({ id: "g", orientation: "vertical", position: 999, color: "#fff", locked: true }, 64, 48)).toMatchObject({
     id: "g",
@@ -121,6 +217,7 @@ test("guide and slice helpers clamp document workflows and preserve export metad
 })
 
 test("smart-filter stack helpers support reordering and preserve masks", () => {
+  installFixtureDom()
   const filters: SmartFilter[] = [
     { id: "a", filterId: "box-blur", name: "Box Blur", enabled: true, params: {}, mask: fixtureMask(8, 8), maskEnabled: true },
     { id: "b", filterId: "sharpen", name: "Sharpen", enabled: true, params: {}, opacity: 0.5, blendMode: "overlay" },
@@ -188,6 +285,52 @@ test("reducer updates layer notes, metadata, guide state, slices, smart filters,
   expect(doc.slices?.[1].name).toBe("Hero Copy")
   expect(raster.smartFilters?.[0]).toMatchObject({ opacity: 0.25, blendMode: "screen", maskEnabled: false })
   expect(raster.mask).not.toBeNull()
+})
+
+test("reducer updates advanced blending and runs layer cleanup/rasterize commands", () => {
+  let state: FixtureState = stateWithFixtureDoc()
+  const emptyCanvas = fixtureCanvas(64, 48, "#000000")
+  setFixtureAlpha(emptyCanvas, 0)
+  state.documents[0].layers.unshift({
+    id: "layer_empty",
+    name: "Empty Layer",
+    kind: "raster",
+    visible: true,
+    locked: false,
+    opacity: 1,
+    blendMode: "normal",
+    canvas: emptyCanvas,
+  })
+  setFixtureAlpha(state.documents[0].layers.find((layer) => layer.id === "layer_text")!.canvas, 255)
+  state.documents[0].selectedLayerIds = ["layer_empty", "layer_text", "layer_raster"]
+
+  state = reducer(state as never, {
+    type: "set-layer-advanced-blending",
+    id: "layer_raster",
+    advancedBlending: {
+      ...defaultAdvancedBlending(),
+      knockout: "shallow",
+      blendIfThis: { black: 12, blackFeather: 28, whiteFeather: 220, white: 244 },
+      layerMaskHidesEffects: true,
+      vectorMaskHidesEffects: true,
+    },
+  } as never) as unknown as FixtureState
+  state = reducer(state as never, { type: "flatten-all-layer-effects" } as never) as unknown as FixtureState
+  state = reducer(state as never, { type: "flatten-all-masks" } as never) as unknown as FixtureState
+  state = reducer(state as never, { type: "rasterize-layers", ids: ["layer_text"], option: "type" } as never) as unknown as FixtureState
+  state = reducer(state as never, { type: "delete-empty-layers" } as never) as unknown as FixtureState
+
+  const doc = state.documents[0]
+  const raster = doc.layers.find((layer) => layer.id === "layer_raster")!
+  const text = doc.layers.find((layer) => layer.id === "layer_text")!
+
+  expect(raster.advancedBlending).toMatchObject({ knockout: "shallow", layerMaskHidesEffects: true })
+  expect(raster.style).toBeUndefined()
+  expect(raster.mask).toBeFalsy()
+  expect(raster.vectorMask).toBeFalsy()
+  expect(text.kind).toBe("raster")
+  expect(text.text).toBeUndefined()
+  expect(doc.layers.map((layer) => layer.id)).not.toContain("layer_empty")
 })
 
 test("smart-object relink metadata stores browser file-handle metadata without requiring serializable handles", () => {

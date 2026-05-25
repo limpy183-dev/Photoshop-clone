@@ -6,9 +6,13 @@ import {
   buildColorSeparationModel,
   calculateChannelImageData,
   composeSeparationPreview,
+  composeSeparationProofView,
   isApproximatelyOutOfGamut,
+  mergeChannelImageData,
   parseAlphaChannelMetadata,
+  summarizeSeparationPlates,
   simulateSpotChannelPreview,
+  splitImageDataChannels,
   softProofImageDataApprox,
 } from "../components/photoshop/color-channel-ops"
 import type { ColorManagementSettings } from "../components/photoshop/types"
@@ -81,6 +85,40 @@ test("apply image can target one channel from an inverted source channel with op
   expect(Array.from(result.data)).toEqual([100, 100, 78, 255])
 })
 
+test("apply image supports masks, scale/offset, and transparency preservation", () => {
+  const transparent = imageData(1, 1, [10, 20, 30, 0])
+  const target = imageData(1, 1, [100, 100, 100, 255])
+  const source = imageData(1, 1, [200, 20, 40, 255])
+  const halfMask = imageData(1, 1, [0, 0, 0, 128])
+
+  const masked = applyImageData(target, source, {
+    sourceChannel: "red",
+    targetChannel: "blue",
+    blendMode: "normal",
+    opacity: 1,
+    mask: halfMask,
+    maskChannel: "alpha",
+    scale: 1,
+    offset: 0,
+  })
+  const preserved = applyImageData(transparent, source, {
+    sourceChannel: "red",
+    targetChannel: "rgb",
+    preserveTransparency: true,
+  })
+  const scaled = applyImageData(target, source, {
+    sourceChannel: "red",
+    targetChannel: "red",
+    blendMode: "normal",
+    scale: 0.5,
+    offset: 20,
+  })
+
+  expect(Array.from(masked.data)).toEqual([100, 100, 150, 255])
+  expect(Array.from(preserved.data)).toEqual([10, 20, 30, 0])
+  expect(Array.from(scaled.data)).toEqual([120, 100, 100, 255])
+})
+
 test("calculations creates a grayscale alpha result from two selected channels", () => {
   const a = imageData(1, 1, [128, 20, 0, 255])
   const b = imageData(1, 1, [0, 128, 0, 255])
@@ -93,6 +131,44 @@ test("calculations creates a grayscale alpha result from two selected channels",
   })
 
   expect(Array.from(result.data)).toEqual([64, 64, 64, 255])
+})
+
+test("calculations supports masks plus scale and offset before alpha output", () => {
+  const a = imageData(1, 1, [200, 0, 0, 255])
+  const b = imageData(1, 1, [0, 100, 0, 255])
+  const halfMask = imageData(1, 1, [0, 0, 0, 128])
+
+  const result = calculateChannelImageData(a, b, {
+    sourceChannelA: "red",
+    sourceChannelB: "green",
+    blendMode: "multiply",
+    opacity: 1,
+    mask: halfMask,
+    maskChannel: "alpha",
+    scale: 1,
+    offset: 20,
+  })
+
+  expect(Array.from(result.data)).toEqual([149, 149, 149, 255])
+})
+
+test("split and merge channel image data preserve RGB and alpha plates", () => {
+  const source = imageData(2, 1, [
+    10, 20, 30, 40,
+    200, 150, 100, 255,
+  ])
+
+  const split = splitImageDataChannels(source, { includeAlpha: true })
+  const merged = mergeChannelImageData({
+    red: split.red,
+    green: split.green,
+    blue: split.blue,
+    alpha: split.alpha,
+  })
+
+  expect(Array.from(split.red.data.slice(0, 8))).toEqual([10, 10, 10, 255, 200, 200, 200, 255])
+  expect(Array.from(split.alpha!.data.slice(0, 8))).toEqual([40, 40, 40, 255, 255, 255, 255, 255])
+  expect(Array.from(merged.data)).toEqual(Array.from(source.data))
 })
 
 test("spot-channel metadata can come from explicit fields or the PSD naming convention", () => {
@@ -188,6 +264,38 @@ test("Lab and multichannel separation plates preserve signed color axes and chan
   expect(multi.process).toBe("Multichannel")
   expect(multi.plates.map((plate) => plate.name)).toEqual(["Red", "Blue"])
   expect(multi.plates.every((plate) => plate.kind === "process")).toBe(true)
+})
+
+test("separation proof view can isolate process plates and report richer coverage stats", () => {
+  const source = imageData(2, 1, [
+    255, 0, 0, 255,
+    128, 128, 128, 255,
+  ])
+  const model = buildColorSeparationModel(source, { mode: "CMYK", processProfile: "Working CMYK" })
+
+  const cyanOnly = composeSeparationProofView(model, {
+    visiblePlateIds: ["process_c"],
+    paper: "#ffffff",
+  })
+  const blackMask = composeSeparationProofView(model, {
+    isolatedPlateId: "process_k",
+    viewMode: "mask",
+  })
+  const stats = summarizeSeparationPlates(model)
+
+  expect(cyanOnly.data[0]).toBe(255)
+  expect(cyanOnly.data[2]).toBe(255)
+  expect(cyanOnly.data[4]).toBeLessThan(255)
+  expect(blackMask.data[4]).toBeGreaterThan(100)
+  expect(blackMask.data[5]).toBe(blackMask.data[4])
+  expect(stats.find((plate) => plate.id === "process_k")).toEqual(
+    expect.objectContaining({
+      name: "Black",
+      kind: "process",
+      maxCoverage: expect.any(Number),
+      averageCoverage: expect.any(Number),
+    }),
+  )
 })
 
 test("gamut warning and soft-proof helpers expose explicit browser approximation behavior", () => {

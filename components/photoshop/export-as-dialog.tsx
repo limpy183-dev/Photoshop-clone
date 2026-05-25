@@ -41,7 +41,7 @@ import {
 import type { RasterExportMetadata, TiffCompression } from "./raster-codecs"
 import { canvasSizeError } from "./canvas-limits"
 import { cn } from "@/lib/utils"
-import type { AssetLibraryItem } from "./types"
+import type { AssetLibraryItem, ColorManagementSettings } from "./types"
 import {
   deleteExportPresetAsset,
   duplicateExportPresetAsset,
@@ -51,6 +51,7 @@ import {
   upsertExportPresetAsset,
   type ExportPresetPayload,
 } from "./export-presets"
+import { supportedIccProfileNames } from "./color-pipeline"
 
 const EXPORT_FORMATS: Array<{ format: ExportFormat; label: string }> = [
   { format: "png", label: "PNG" },
@@ -84,6 +85,18 @@ const EXPORT_EXTENSIONS: Record<ExportFormat, string> = {
   apng: "png",
   "animated-webp": "webp",
   "metadata-json": "metadata.json",
+}
+
+const DEFAULT_COLOR_MANAGEMENT: ColorManagementSettings = {
+  assignedProfile: "sRGB IEC61966-2.1",
+  workingSpace: "sRGB IEC61966-2.1",
+  renderingIntent: "relative-colorimetric",
+  blackPointCompensation: true,
+  proofProfile: "None",
+  proofColors: false,
+  gamutWarning: false,
+  proofChannels: [],
+  proofPlateView: "composite",
 }
 
 function previewRasterFormat(format: ExportFormat): BrowserRasterExportFormat {
@@ -132,6 +145,15 @@ export function ExportAsDialog({
   const [tiffCompression, setTiffCompression] = React.useState<TiffCompression>("none")
   const [tgaRle, setTgaRle] = React.useState(true)
   const [losslessWebp, setLosslessWebp] = React.useState(false)
+  const [webpNearLossless, setWebpNearLossless] = React.useState(100)
+  const [webpMethod, setWebpMethod] = React.useState(4)
+  const [webpExactAlpha, setWebpExactAlpha] = React.useState(true)
+  const [avifLossless, setAvifLossless] = React.useState(false)
+  const [avifSpeed, setAvifSpeed] = React.useState(6)
+  const [avifBitDepth, setAvifBitDepth] = React.useState(8)
+  const [avifChromaSubsampling, setAvifChromaSubsampling] = React.useState("4:2:0")
+  const [avifTileRowsLog2, setAvifTileRowsLog2] = React.useState(0)
+  const [avifTileColsLog2, setAvifTileColsLog2] = React.useState(0)
   const [includeMetadata, setIncludeMetadata] = React.useState(false)
   const [metadataAuthor, setMetadataAuthor] = React.useState("")
   const [metadataCopyright, setMetadataCopyright] = React.useState("")
@@ -264,6 +286,15 @@ export function ExportAsDialog({
     if (typeof initial.matte === "string") setMatte(initial.matte)
     if (typeof initial.dither === "boolean") setDither(initial.dither)
     if (typeof initial.losslessWebp === "boolean") setLosslessWebp(initial.losslessWebp)
+    if (typeof initial.webpNearLossless === "number") setWebpNearLossless(Math.max(0, Math.min(100, Math.round(initial.webpNearLossless))))
+    if (typeof initial.webpMethod === "number") setWebpMethod(Math.max(0, Math.min(6, Math.round(initial.webpMethod))))
+    if (typeof initial.webpExactAlpha === "boolean") setWebpExactAlpha(initial.webpExactAlpha)
+    if (typeof initial.avifLossless === "boolean") setAvifLossless(initial.avifLossless)
+    if (typeof initial.avifSpeed === "number") setAvifSpeed(Math.max(0, Math.min(10, Math.round(initial.avifSpeed))))
+    if (typeof initial.avifBitDepth === "number") setAvifBitDepth(initial.avifBitDepth >= 10 ? 10 : 8)
+    if (typeof initial.avifChromaSubsampling === "string") setAvifChromaSubsampling(initial.avifChromaSubsampling)
+    if (typeof initial.avifTileRowsLog2 === "number") setAvifTileRowsLog2(Math.max(0, Math.min(4, Math.round(initial.avifTileRowsLog2))))
+    if (typeof initial.avifTileColsLog2 === "number") setAvifTileColsLog2(Math.max(0, Math.min(4, Math.round(initial.avifTileColsLog2))))
     if (typeof initial.includeMetadata === "boolean") setIncludeMetadata(initial.includeMetadata)
     if (initial.tiffCompression) setTiffCompression(initial.tiffCompression)
     if (typeof initial.tgaRle === "boolean") setTgaRle(initial.tgaRle)
@@ -364,8 +395,15 @@ export function ExportAsDialog({
           tiffCompression,
           tgaRle,
           webpLossless: losslessWebp && format === "webp",
-          webpMethod: losslessWebp && format === "webp" ? 6 : undefined,
-          webpExactAlpha: losslessWebp && format === "webp" ? true : undefined,
+          webpNearLossless: format === "webp" ? webpNearLossless : undefined,
+          webpMethod: format === "webp" ? webpMethod : undefined,
+          webpExactAlpha: format === "webp" ? webpExactAlpha : undefined,
+          avifLossless: avifLossless && format === "avif",
+          avifSpeed: format === "avif" ? avifSpeed : undefined,
+          avifBitDepth: format === "avif" ? avifBitDepth : undefined,
+          avifChromaSubsampling: format === "avif" ? avifChromaSubsampling : undefined,
+          avifTileRowsLog2: format === "avif" ? avifTileRowsLog2 : undefined,
+          avifTileColsLog2: format === "avif" ? avifTileColsLog2 : undefined,
           includeMetadata,
           metadata: metadataPayload(),
         })
@@ -387,6 +425,15 @@ export function ExportAsDialog({
     matte,
     dither,
     losslessWebp,
+    webpNearLossless,
+    webpMethod,
+    webpExactAlpha,
+    avifLossless,
+    avifSpeed,
+    avifBitDepth,
+    avifChromaSubsampling,
+    avifTileRowsLog2,
+    avifTileColsLog2,
     includeMetadata,
     precision,
     tiffCompression,
@@ -407,6 +454,15 @@ export function ExportAsDialog({
     if (typeof payload.matte === "string") setMatte(payload.matte)
     if (typeof payload.dither === "boolean") setDither(payload.dither)
     if (typeof payload.losslessWebp === "boolean") setLosslessWebp(payload.losslessWebp)
+    if (typeof payload.webpNearLossless === "number") setWebpNearLossless(Math.max(0, Math.min(100, Math.round(payload.webpNearLossless))))
+    if (typeof payload.webpMethod === "number") setWebpMethod(Math.max(0, Math.min(6, Math.round(payload.webpMethod))))
+    if (typeof payload.webpExactAlpha === "boolean") setWebpExactAlpha(payload.webpExactAlpha)
+    if (typeof payload.avifLossless === "boolean") setAvifLossless(payload.avifLossless)
+    if (typeof payload.avifSpeed === "number") setAvifSpeed(Math.max(0, Math.min(10, Math.round(payload.avifSpeed))))
+    if (typeof payload.avifBitDepth === "number") setAvifBitDepth(payload.avifBitDepth >= 10 ? 10 : 8)
+    if (typeof payload.avifChromaSubsampling === "string") setAvifChromaSubsampling(payload.avifChromaSubsampling)
+    if (typeof payload.avifTileRowsLog2 === "number") setAvifTileRowsLog2(Math.max(0, Math.min(4, Math.round(payload.avifTileRowsLog2))))
+    if (typeof payload.avifTileColsLog2 === "number") setAvifTileColsLog2(Math.max(0, Math.min(4, Math.round(payload.avifTileColsLog2))))
     if (typeof payload.includeMetadata === "boolean") setIncludeMetadata(payload.includeMetadata)
     if (payload.tiffCompression) setTiffCompression(payload.tiffCompression)
     if (typeof payload.tgaRle === "boolean") setTgaRle(payload.tgaRle)
@@ -484,6 +540,17 @@ export function ExportAsDialog({
     } finally {
       if (presetImportRef.current) presetImportRef.current.value = ""
     }
+  }
+  const colorSettings: ColorManagementSettings = {
+    ...DEFAULT_COLOR_MANAGEMENT,
+    ...(activeDoc.colorManagement ?? {}),
+  }
+  const updateColorSettings = (patch: Partial<ColorManagementSettings>, label: string) => {
+    dispatch({ type: "set-color-management", settings: { ...colorSettings, ...patch } })
+    window.setTimeout(() => {
+      commit(label, "all")
+      refreshPreview()
+    }, 0)
   }
 
   return (
@@ -638,6 +705,42 @@ export function ExportAsDialog({
               <div className="mt-2 text-[10px] text-[var(--ps-text-dim)]">Scale percent, high quality bicubic resampling.</div>
             </Panel>
 
+            <Panel title="Color Pipeline">
+              <div className="grid gap-2 text-[11px]">
+                <label className="grid gap-1">
+                  <span className="text-[var(--ps-text-dim)]">Working / export profile</span>
+                  <select
+                    value={colorSettings.workingSpace}
+                    onChange={(event) => updateColorSettings({ workingSpace: event.target.value as ColorManagementSettings["workingSpace"] }, "Export Working Profile")}
+                    className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2"
+                    aria-label="Export working profile"
+                  >
+                    {supportedIccProfileNames().map((profile) => (
+                      <option key={profile} value={profile}>{profile}</option>
+                    ))}
+                  </select>
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <CheckRow
+                    label="Use proof profile"
+                    checked={colorSettings.proofColors && colorSettings.proofProfile !== "None"}
+                    onCheckedChange={(checked) => updateColorSettings({
+                      proofColors: checked,
+                      proofProfile: checked && colorSettings.proofProfile === "None" ? "Working CMYK" : colorSettings.proofProfile,
+                    }, checked ? "Export Proof Profile On" : "Export Proof Profile Off")}
+                  />
+                  <CheckRow
+                    label="Gamut overlay"
+                    checked={colorSettings.gamutWarning}
+                    onCheckedChange={(checked) => updateColorSettings({ gamutWarning: checked }, checked ? "Export Gamut Warning On" : "Export Gamut Warning Off")}
+                  />
+                </div>
+                <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1.5 text-[10px] text-[var(--ps-text-dim)]">
+                  Source {colorSettings.assignedProfile}; export {colorSettings.proofColors && colorSettings.proofProfile !== "None" ? colorSettings.proofProfile : colorSettings.workingSpace}; plate view {(colorSettings.proofChannels?.length ?? 0) ? colorSettings.proofChannels!.join(", ") : "composite"}.
+                </div>
+              </div>
+            </Panel>
+
             {format !== "svg" && format !== "metadata-json" ? (
               <Panel title="Format Options">
                 {(format === "jpeg" || format === "webp" || format === "avif") && (
@@ -678,6 +781,102 @@ export function ExportAsDialog({
                         Metadata post-processing requires the browser to return a real {browserEncoderDiagnostic.requestedMime} blob.
                       </div>
                     ) : null}
+                  </div>
+                ) : null}
+                {format === "webp" ? (
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
+                    <div className="grid gap-1">
+                      <Label className="text-[10px] text-[var(--ps-text-dim)]">Near-lossless</Label>
+                      <Input
+                        aria-label="WebP near-lossless"
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={webpNearLossless}
+                        onChange={(event) => setWebpNearLossless(Math.max(0, Math.min(100, Math.round(Number(event.target.value) || 0))))}
+                        className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
+                      />
+                    </div>
+                    <div className="grid gap-1">
+                      <Label className="text-[10px] text-[var(--ps-text-dim)]">Method</Label>
+                      <select
+                        aria-label="WebP method"
+                        value={webpMethod}
+                        onChange={(event) => setWebpMethod(Math.max(0, Math.min(6, Number(event.target.value) || 0)))}
+                        className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px]"
+                      >
+                        {[0, 1, 2, 3, 4, 5, 6].map((method) => (
+                          <option key={method} value={method}>{method}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <CheckRow label="Exact alpha" checked={webpExactAlpha} onCheckedChange={setWebpExactAlpha} />
+                  </div>
+                ) : null}
+                {format === "avif" ? (
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
+                    <CheckRow label="AVIF lossless" checked={avifLossless} onCheckedChange={setAvifLossless} />
+                    <div className="grid gap-1">
+                      <Label className="text-[10px] text-[var(--ps-text-dim)]">Speed</Label>
+                      <Input
+                        aria-label="AVIF speed"
+                        type="number"
+                        min={0}
+                        max={10}
+                        value={avifSpeed}
+                        onChange={(event) => setAvifSpeed(Math.max(0, Math.min(10, Math.round(Number(event.target.value) || 0))))}
+                        className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
+                      />
+                    </div>
+                    <div className="grid gap-1">
+                      <Label className="text-[10px] text-[var(--ps-text-dim)]">Bit depth</Label>
+                      <select
+                        aria-label="AVIF bit depth"
+                        value={avifBitDepth}
+                        onChange={(event) => setAvifBitDepth(Number(event.target.value))}
+                        className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px]"
+                      >
+                        <option value={8}>8-bit</option>
+                        <option value={10}>10-bit</option>
+                      </select>
+                    </div>
+                    <div className="grid gap-1">
+                      <Label className="text-[10px] text-[var(--ps-text-dim)]">Chroma</Label>
+                      <select
+                        aria-label="AVIF chroma"
+                        value={avifChromaSubsampling}
+                        onChange={(event) => setAvifChromaSubsampling(event.target.value)}
+                        className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px]"
+                      >
+                        <option value="4:2:0">4:2:0</option>
+                        <option value="4:2:2">4:2:2</option>
+                        <option value="4:4:4">4:4:4</option>
+                      </select>
+                    </div>
+                    <div className="grid gap-1">
+                      <Label className="text-[10px] text-[var(--ps-text-dim)]">Tile rows</Label>
+                      <Input
+                        aria-label="AVIF tile rows"
+                        type="number"
+                        min={0}
+                        max={4}
+                        value={avifTileRowsLog2}
+                        onChange={(event) => setAvifTileRowsLog2(Math.max(0, Math.min(4, Math.round(Number(event.target.value) || 0))))}
+                        className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
+                      />
+                    </div>
+                    <div className="grid gap-1">
+                      <Label className="text-[10px] text-[var(--ps-text-dim)]">Tile cols</Label>
+                      <Input
+                        aria-label="AVIF tile cols"
+                        type="number"
+                        min={0}
+                        max={4}
+                        value={avifTileColsLog2}
+                        onChange={(event) => setAvifTileColsLog2(Math.max(0, Math.min(4, Math.round(Number(event.target.value) || 0))))}
+                        className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
+                      />
+                    </div>
                   </div>
                 ) : null}
                 {format === "tiff" ? (

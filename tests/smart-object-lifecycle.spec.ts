@@ -5,6 +5,7 @@ import {
   createLinkedSmartObjectSyncDaemon,
   exportSmartObjectContents,
   planLinkedSmartObjectSync,
+  relinkSmartObjectToFile,
   smartObjectStatus,
   syncLinkedSmartObjectSource,
 } from "../components/photoshop/smart-objects"
@@ -139,6 +140,138 @@ test("linked smart object sync detects changed file handles and replaces source 
     height: 18,
   })
   expect(result.layer.smartSource?.sourceHash).toMatch(/^fnv1a32:/)
+})
+
+test("relink workflow requests persisted file handle permission before reading source pixels", async () => {
+  const doc = richFixtureDocument()
+  const layer = doc.layers.find((item) => item.id === "layer_smart")!
+  const file = new File(["permission-source"], "permission-source.png", {
+    type: "image/png",
+    lastModified: 1_800_000_040_000,
+  })
+  const calls: string[] = []
+  const handle = {
+    name: "permission-source.png",
+    queryPermission: async () => {
+      calls.push("query")
+      return "prompt" as PermissionState
+    },
+    requestPermission: async () => {
+      calls.push("request")
+      return "granted" as PermissionState
+    },
+    getFile: async () => {
+      calls.push("getFile")
+      return file
+    },
+  } as unknown as FileSystemFileHandle
+
+  const result = await relinkSmartObjectToFile(layer, handle, {
+    hashContents: true,
+    readCanvas: async () => fixtureCanvas(24, 16, "#3366ff"),
+    now: () => 1_800_000_045_000,
+  })
+
+  expect(calls).toEqual(["query", "request", "getFile"])
+  expect(result.changed).toBe(true)
+  expect(result.status).toBe("current")
+  expect(result.layer.smartSource).toMatchObject({
+    fileName: "permission-source.png",
+    fileHandleName: "permission-source.png",
+    handlePermission: "granted",
+    lastKnownModified: 1_800_000_040_000,
+    lastKnownSize: file.size,
+    linkType: "linked",
+    relinkedAt: 1_800_000_045_000,
+    status: "current",
+    width: 24,
+    height: 16,
+  })
+  expect(result.layer.smartSource?.sourceHash).toMatch(/^fnv1a32:/)
+})
+
+test("linked smart object polling does not prompt and marks denied or missing handles", async () => {
+  const doc = richFixtureDocument()
+  const layer = doc.layers.find((item) => item.id === "layer_smart")!
+  const handle = {
+    name: "persisted-source.png",
+    queryPermission: async () => "prompt" as PermissionState,
+    requestPermission: async () => {
+      throw new Error("polling must not request permission")
+    },
+    getFile: async () => {
+      throw new Error("polling must not read without permission")
+    },
+  } as unknown as FileSystemFileHandle
+  layer.smartSource = {
+    ...layer.smartSource!,
+    fileHandle: handle,
+    fileHandleName: "persisted-source.png",
+    handlePermission: "granted",
+    status: "current",
+  }
+
+  const result = await syncLinkedSmartObjectSource(layer, { requestPermission: false })
+
+  expect(result.changed).toBe(true)
+  expect(result.status).toBe("missing")
+  expect(result.layer.smartSource).toMatchObject({
+    fileHandleName: "persisted-source.png",
+    handlePermission: "prompt",
+    status: "missing",
+  })
+
+  const missing = await syncLinkedSmartObjectSource({
+    ...layer,
+    smartSource: { ...layer.smartSource!, fileHandle: undefined, fileHandleName: "persisted-source.png" },
+  })
+  expect(missing.changed).toBe(true)
+  expect(missing.status).toBe("missing")
+  expect(missing.layer.smartSource).toMatchObject({
+    fileHandleName: "persisted-source.png",
+    status: "missing",
+  })
+})
+
+test("editor reducer applies linked smart object polling results to the owning document", () => {
+  const activeDoc = richFixtureDocument()
+  const backgroundDoc = {
+    ...richFixtureDocument(),
+    id: "doc_background",
+    name: "Background Document",
+  }
+  let state: FixtureState = {
+    ...stateWithFixtureDoc(),
+    documents: [activeDoc, backgroundDoc],
+    activeDocId: activeDoc.id,
+  }
+
+  state = reducer(state as never, {
+    type: "apply-linked-smart-object-sync",
+    docId: backgroundDoc.id,
+    id: "layer_smart",
+    source: {
+      fileName: "polled-source.png",
+      fileHandleName: "polled-source.png",
+      handlePermission: "prompt",
+      lastKnownModified: 1_800_000_050_000,
+      lastKnownSize: 2048,
+      status: "missing",
+    },
+  } as never) as unknown as FixtureState
+
+  const activeLayer = state.documents[0].layers.find((item) => item.id === "layer_smart")!
+  const backgroundLayer = state.documents[1].layers.find((item) => item.id === "layer_smart")!
+
+  expect(activeLayer.smartSource?.fileName).toBe("product-source.png")
+  expect(backgroundLayer.smartSource).toMatchObject({
+    fileName: "polled-source.png",
+    fileHandleName: "polled-source.png",
+    handlePermission: "prompt",
+    lastKnownModified: 1_800_000_050_000,
+    lastKnownSize: 2048,
+    status: "missing",
+  })
 })
 
 test("linked smart object sync daemon polls concrete targets and reports sync events", async () => {

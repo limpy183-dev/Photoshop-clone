@@ -2,7 +2,23 @@ import { expect, test } from "@playwright/test"
 
 import { buildPrintPreviewReport } from "../components/photoshop/advanced-subsystems"
 import { analyzePreflightDocument } from "../components/photoshop/preflight-engine"
-import { fixtureCanvas, richFixtureDocument } from "./photoshop-fixtures"
+import { fixtureCanvas, installFixtureDom, richFixtureDocument } from "./photoshop-fixtures"
+
+function semiTransparentCanvas(width = 8, height = 8) {
+  installFixtureDom()
+  const canvas = document.createElement("canvas")
+  canvas.width = width
+  canvas.height = height
+  const data = new Uint8ClampedArray(width * height * 4)
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = 120
+    data[i + 1] = 80
+    data[i + 2] = 40
+    data[i + 3] = i === 0 ? 128 : 255
+  }
+  canvas.getContext("2d")!.putImageData(new ImageData(data, width, height), 0, 0)
+  return canvas
+}
 
 test("preflight findings expose severity categories and fix action policy for print risks", () => {
   const doc = richFixtureDocument()
@@ -63,6 +79,36 @@ test("preflight findings expose severity categories and fix action policy for pr
         id: "overprint-transparency",
         category: "separations",
         severity: "warn",
+      }),
+    ]),
+  )
+})
+
+test("preflight warns when editable layers still contain partial alpha transparency", () => {
+  const doc = richFixtureDocument()
+  const transparentLayer = {
+    ...doc.layers[0],
+    id: "partial_alpha",
+    name: "Partially Transparent Edge",
+    opacity: 1,
+    fillOpacity: 1,
+    blendMode: "normal" as const,
+    mask: null,
+    canvas: semiTransparentCanvas(),
+  }
+
+  const report = analyzePreflightDocument({
+    ...doc,
+    layers: [transparentLayer],
+  })
+
+  expect(report.findings).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        id: "flatten-transparency",
+        category: "separations",
+        severity: "warn",
+        fixAction: expect.objectContaining({ kind: "rasterize-or-flatten", autoFixable: false }),
       }),
     ]),
   )

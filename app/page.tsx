@@ -1,13 +1,5 @@
-import EditorPage from "./editor/page"
-import { EditorBodyLock } from "@/components/photoshop/editor-body-lock"
+import { StartWorkspace } from "@/components/photoshop/start-workspace"
 
 export default function Page() {
-  return (
-    <>
-      <EditorBodyLock />
-      <div className="h-screen w-screen overflow-hidden">
-        <EditorPage />
-      </div>
-    </>
-  )
+  return <StartWorkspace />
 }

@@ -59,6 +59,7 @@ import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop }
 import { dispatchPhotoshopEvent } from "../events"
 import type { MergedRenderChange } from "../render-bus"
 import { createLayerMetadata, layerMatchesQuery } from "../layer-workflows"
+import { copyLayerCss, copyLayerSvg } from "../vector-clipboard"
 import { uid } from "../uid"
 
 const BLENDS: BlendMode[] = [
@@ -91,7 +92,33 @@ const BLENDS: BlendMode[] = [
   "luminosity",
 ]
 
-type FilterKind = "all" | LayerKind | "locked" | "hidden" | "masked" | "styled" | "smart" | "clipped"
+type FilterKind = "all" | string
+
+const LAYER_FILTER_TOKENS: Record<string, string> = {
+  raster: "kind:pixel",
+  text: "kind:text",
+  shape: "kind:shape",
+  adjustment: "kind:adjustment",
+  frame: "kind:frame",
+  artboard: "kind:artboard",
+  group: "kind:group",
+  locked: "attr:locked",
+  hidden: "attr:hidden",
+  masked: "attr:masked",
+  styled: "attr:effects",
+  smart: "attr:smart",
+  clipped: "attr:clipped",
+  "mode:multiply": "mode:multiply",
+  "mode:screen": "mode:screen",
+  "mode:overlay": "mode:overlay",
+  "effect:drop-shadow": "effect:drop-shadow",
+  "effect:stroke": "effect:stroke",
+  "effect:glow": "effect:glow",
+  "attr:smart-filter": "attr:smart-filter",
+  "attr:knockout": "attr:knockout",
+  "attr:blend-if": "attr:blend-if",
+  "channel:g-off": "channel:g-off",
+}
 
 export const COLOR_LABELS: { id: NonNullable<Layer["colorLabel"]>; bg: string; label: string }[] = [
   { id: "none", bg: "transparent", label: "None" },
@@ -116,6 +143,31 @@ function adjustmentMaskState(layer: Layer) {
     [Math.max(0, layer.mask.width - 1), 0],
     [0, Math.max(0, layer.mask.height - 1)],
     [Math.max(0, layer.mask.width - 1), Math.max(0, layer.mask.height - 1)],
+  ]
+  let min = 255
+  let max = 0
+  for (const [x, y] of points) {
+    const px = ctx.getImageData(x, y, 1, 1).data
+    const lum = (px[0] + px[1] + px[2]) / 3
+    min = Math.min(min, lum)
+    max = Math.max(max, lum)
+  }
+  if (max <= 8) return "hidden"
+  if (min >= 247) return "revealed"
+  return "mixed"
+}
+
+function smartFilterMaskState(mask: HTMLCanvasElement | null | undefined, enabled: boolean) {
+  if (!enabled) return "disabled"
+  if (!mask) return "none"
+  const ctx = mask.getContext("2d")
+  if (!ctx) return "none"
+  const points = [
+    [0, 0],
+    [Math.max(0, Math.floor(mask.width / 2)), Math.max(0, Math.floor(mask.height / 2))],
+    [Math.max(0, mask.width - 1), 0],
+    [0, Math.max(0, mask.height - 1)],
+    [Math.max(0, mask.width - 1), Math.max(0, mask.height - 1)],
   ]
   let min = 255
   let max = 0
@@ -239,13 +291,7 @@ export function LayersPanel() {
   const visibleLayers = collapseFiltered.filter((l) => {
     if (search && !layerMatchesQuery(l, search)) return false
     if (filterKind === "all") return true
-    if (filterKind === "locked") return layerLocked(l) || !!l.lockDraw || !!l.lockMove || !!l.lockTransparency
-    if (filterKind === "hidden") return !l.visible
-    if (filterKind === "masked") return !!l.mask || !!l.vectorMask
-    if (filterKind === "styled") return !!l.style
-    if (filterKind === "smart") return !!l.smartObject || l.kind === "smart-object" || !!l.smartFilters?.length
-    if (filterKind === "clipped") return !!l.clipped
-    return l.kind === filterKind
+    return layerMatchesQuery(l, LAYER_FILTER_TOKENS[filterKind] ?? filterKind)
   })
 
   const filtersActive = search.trim() || filterKind !== "all"
@@ -288,6 +334,32 @@ export function LayersPanel() {
     })
     setContextMenu(null)
     setTimeout(() => commit("Layer Metadata", [layer.id]), 0)
+  }
+
+  const writeClipboardText = (text: string) => {
+    if (!text) return
+    if (navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(text)
+    } else {
+      const textarea = document.createElement("textarea")
+      textarea.value = text
+      textarea.style.position = "fixed"
+      textarea.style.left = "-9999px"
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand("copy")
+      textarea.remove()
+    }
+  }
+
+  const copyVectorLayerCss = (layer: Layer) => {
+    writeClipboardText(copyLayerCss(layer))
+    setContextMenu(null)
+  }
+
+  const copyVectorLayerSvg = (layer: Layer) => {
+    writeClipboardText(copyLayerSvg(layer, { width: activeDoc.width, height: activeDoc.height }))
+    setContextMenu(null)
   }
 
   const updateSmartFilter = (layer: Layer, filterId: string, patch: Partial<NonNullable<Layer["smartFilters"]>[number]>, label: string) => {
@@ -427,6 +499,8 @@ export function LayersPanel() {
     return layer.smartFilters.map((filter) => {
       const editing = activeSmartFilterMaskTarget?.layerId === layer.id && activeSmartFilterMaskTarget.filterId === filter.id
       const enabled = filter.enabled !== false
+      const maskEnabled = filter.maskEnabled !== false
+      const maskLinked = filter.maskLinked !== false
       return (
         <div
           key={`${layer.id}-${filter.id}`}
@@ -509,7 +583,28 @@ export function LayersPanel() {
           >
             {enabled ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3 opacity-50" />}
           </button>
-          <SmartFilterMaskThumb mask={filter.mask} enabled={filter.maskEnabled !== false} editing={editing} />
+          <SmartFilterMaskThumb
+            layerName={layer.name}
+            filterName={filter.name}
+            mask={filter.mask}
+            enabled={maskEnabled}
+            editing={editing}
+            linked={maskLinked}
+            density={filter.maskDensity ?? 1}
+            feather={filter.maskFeather ?? 0}
+          />
+          <button
+            type="button"
+            aria-label={`${maskLinked ? "Unlink" : "Link"} ${filter.name} smart filter mask`}
+            title={`${maskLinked ? "Unlink" : "Link"} smart filter mask`}
+            className="flex h-5 w-5 items-center justify-center rounded-sm hover:bg-[var(--ps-tool-hover)] text-[var(--ps-text)]"
+            onClick={(e) => {
+              e.stopPropagation()
+              updateSmartFilter(layer, filter.id, { maskLinked: !maskLinked }, "Toggle Smart Filter Mask Link")
+            }}
+          >
+            {maskLinked ? <Link2 className="h-3 w-3" /> : <Link2Off className="h-3 w-3 text-[var(--ps-text-dim)]" />}
+          </button>
           <span className={cn("min-w-0 flex-1 truncate", !enabled && "line-through opacity-60")}>{filter.name}</span>
           <span className="shrink-0 tabular-nums">{Math.round((filter.opacity ?? 1) * 100)}%</span>
         </div>
@@ -581,7 +676,7 @@ export function LayersPanel() {
       </div>
       <div className="px-2 py-1.5 flex items-center gap-1.5 border-b border-[var(--ps-divider)]">
         <Select value={filterKind} onValueChange={(v) => setFilterKind(v as FilterKind)}>
-          <SelectTrigger aria-label="Layer filter" className="h-6 w-[78px] text-[10px]">
+          <SelectTrigger aria-label="Layer filter" className="h-6 w-[112px] text-[10px]">
             <Filter className="w-3 h-3 mr-1" />
             <SelectValue />
           </SelectTrigger>
@@ -600,6 +695,16 @@ export function LayersPanel() {
             <SelectItem value="styled" className="text-[11px]">Effects</SelectItem>
             <SelectItem value="smart" className="text-[11px]">Smart</SelectItem>
             <SelectItem value="clipped" className="text-[11px]">Clipped</SelectItem>
+            <SelectItem value="mode:multiply" className="text-[11px]">Mode: Multiply</SelectItem>
+            <SelectItem value="mode:screen" className="text-[11px]">Mode: Screen</SelectItem>
+            <SelectItem value="mode:overlay" className="text-[11px]">Mode: Overlay</SelectItem>
+            <SelectItem value="effect:drop-shadow" className="text-[11px]">FX: Drop Shadow</SelectItem>
+            <SelectItem value="effect:stroke" className="text-[11px]">FX: Stroke</SelectItem>
+            <SelectItem value="effect:glow" className="text-[11px]">FX: Glow</SelectItem>
+            <SelectItem value="attr:smart-filter" className="text-[11px]">Attr: Smart Filter</SelectItem>
+            <SelectItem value="attr:knockout" className="text-[11px]">Attr: Knockout</SelectItem>
+            <SelectItem value="attr:blend-if" className="text-[11px]">Attr: Blend If</SelectItem>
+            <SelectItem value="channel:g-off" className="text-[11px]">Channel: G Off</SelectItem>
           </SelectContent>
         </Select>
         <div className="flex-1 flex items-center bg-[var(--ps-panel-2)] rounded-sm px-1 h-6">
@@ -1063,6 +1168,24 @@ export function LayersPanel() {
                 >
                   Edit Tags/Metadata
                 </button>
+                {(layer.shape || layer.path || layer.vectorMask) ? (
+                  <>
+                    {layer.shape ? (
+                      <button
+                        className="flex w-full items-center px-2 py-1 text-left hover:bg-[var(--ps-tool-hover)]"
+                        onClick={() => copyVectorLayerCss(layer)}
+                      >
+                        Copy CSS
+                      </button>
+                    ) : null}
+                    <button
+                      className="flex w-full items-center px-2 py-1 text-left hover:bg-[var(--ps-tool-hover)]"
+                      onClick={() => copyVectorLayerSvg(layer)}
+                    >
+                      Copy SVG
+                    </button>
+                  </>
+                ) : null}
                 <div className="my-1 border-t border-[var(--ps-divider)]" />
               </>
             )
@@ -1427,15 +1550,26 @@ function AdjustmentMaskThumb({ layer, maskState }: { layer: Layer; maskState: st
 }
 
 function SmartFilterMaskThumb({
+  layerName,
+  filterName,
   mask,
   enabled,
   editing,
+  linked,
+  density,
+  feather,
 }: {
+  layerName: string
+  filterName: string
   mask?: HTMLCanvasElement | null
   enabled: boolean
   editing: boolean
+  linked: boolean
+  density: number
+  feather: number
 }) {
   const ref = React.useRef<HTMLCanvasElement>(null)
+  const state = smartFilterMaskState(mask, enabled)
   React.useEffect(() => {
     const canvas = ref.current
     if (!canvas) return
@@ -1444,31 +1578,54 @@ function SmartFilterMaskThumb({
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.fillStyle = "#202020"
     ctx.fillRect(0, 0, canvas.width, canvas.height)
+    const sq = 3
+    ctx.fillStyle = "#2f2f2f"
+    for (let y = 0; y < canvas.height; y += sq) {
+      for (let x = 0; x < canvas.width; x += sq) {
+        if (((x / sq) + (y / sq)) % 2 === 0) ctx.fillRect(x, y, sq, sq)
+      }
+    }
     if (mask) {
       ctx.globalAlpha = enabled ? 1 : 0.35
       ctx.drawImage(mask, 0, 0, canvas.width, canvas.height)
       ctx.globalAlpha = 1
+      const densityWidth = Math.round(canvas.width * Math.max(0, Math.min(1, density)))
+      ctx.fillStyle = enabled ? "#5aa7ff" : "#777"
+      ctx.fillRect(0, canvas.height - 3, densityWidth, 3)
+      if (feather > 0) {
+        ctx.fillStyle = "rgba(255,255,255,0.55)"
+        ctx.fillRect(Math.max(0, canvas.width - 5), 1, 2, canvas.height - 5)
+      }
     } else {
       ctx.strokeStyle = "#777"
       ctx.setLineDash([2, 2])
       ctx.strokeRect(2, 2, canvas.width - 4, canvas.height - 4)
       ctx.setLineDash([])
     }
+    ctx.fillStyle = linked ? "#9ad27b" : "#777"
+    ctx.beginPath()
+    ctx.arc(canvas.width - 4, 4, 2, 0, Math.PI * 2)
+    ctx.fill()
     if (editing) {
       ctx.strokeStyle = "#5aa7ff"
       ctx.lineWidth = 2
       ctx.strokeRect(1, 1, canvas.width - 2, canvas.height - 2)
     }
-  }, [mask, enabled, editing])
+  }, [mask, enabled, editing, linked, density, feather])
 
   return (
     <canvas
       ref={ref}
-      width={18}
-      height={14}
+      width={28}
+      height={20}
+      data-testid={`layer-smart-filter-mask-thumb-${layerName}-${filterName}`}
+      data-smart-filter-mask-state={state}
+      data-smart-filter-mask-linked={linked ? "true" : "false"}
+      data-smart-filter-mask-density={String(Math.round(Math.max(0, Math.min(1, density)) * 100))}
+      data-smart-filter-mask-feather={String(Math.round(Math.max(0, feather)))}
       className={cn("shrink-0 rounded-sm border", editing ? "border-[var(--ps-accent)]" : "border-[var(--ps-divider)]")}
-      title={mask ? "Smart filter mask" : "No smart filter mask"}
-      aria-label={editing ? "Editing smart filter mask" : "Smart filter mask"}
+      title={`Smart filter mask: ${state}, ${linked ? "linked" : "unlinked"}, density ${Math.round(Math.max(0, Math.min(1, density)) * 100)}%, feather ${Math.round(Math.max(0, feather))} px`}
+      aria-label={editing ? `Editing ${filterName} smart filter mask` : `${filterName} smart filter mask`}
     />
   )
 }

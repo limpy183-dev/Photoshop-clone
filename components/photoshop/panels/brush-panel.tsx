@@ -163,6 +163,10 @@ const CONTROL_VALUES = new Set(["off", "pressure", "tilt", "velocity", "fade", "
 const TEXTURE_PATTERNS = new Set(["noise", "canvas", "paper", "linen"])
 const TEXTURE_MODES = new Set(["multiply", "subtract", "burn"])
 const DUAL_BRUSH_MODES = new Set(["multiply", "screen", "subtract"])
+const COLOR_REPLACEMENT_SAMPLING = new Set(["continuous", "once", "background-swatch"])
+const COLOR_REPLACEMENT_LIMITS = new Set(["contiguous", "discontiguous", "find-edges"])
+const COLOR_REPLACEMENT_MODES = new Set(["color", "hue", "saturation", "luminosity"])
+const ART_HISTORY_STYLES = new Set(["tight-short", "tight-medium", "loose-long", "dab", "curl"])
 
 type BrushImportOptions = {
   fileSizeBytes?: number
@@ -222,6 +226,34 @@ export function BrushPanel() {
       },
     })
 
+  const setErodibleTip = (patch: Partial<NonNullable<BrushSettings["erodibleTip"]>>) =>
+    set({
+      erodibleTip: {
+        sharpness: 70,
+        flatness: 35,
+        erosionRate: 50,
+        softness: 20,
+        aspectRatio: 80,
+        rotation: 0,
+        ...(brush.erodibleTip ?? {}),
+        ...patch,
+      },
+    })
+
+  const setBristleTip = (patch: Partial<NonNullable<BrushSettings["bristleTip"]>>) =>
+    set({
+      bristleTip: {
+        length: 65,
+        density: 55,
+        thickness: 35,
+        stiffness: 55,
+        splay: 35,
+        wetness: 25,
+        ...(brush.bristleTip ?? {}),
+        ...patch,
+      },
+    })
+
   const setPose = (patch: Partial<NonNullable<BrushSettings["pose"]>>) =>
     set({
       pose: {
@@ -275,6 +307,44 @@ export function BrushPanel() {
       },
     })
   }
+
+  const setMixer = (patch: Partial<NonNullable<BrushSettings["mixer"]>>) =>
+    set({
+      mixer: {
+        wet: 55,
+        load: 60,
+        mix: 50,
+        flow: brush.flow,
+        sampleAllLayers: false,
+        cleanAfterStroke: false,
+        ...(brush.mixer ?? {}),
+        ...patch,
+      },
+    })
+
+  const setColorReplacement = (patch: Partial<NonNullable<BrushSettings["colorReplacement"]>>) =>
+    set({
+      colorReplacement: {
+        sampling: "continuous",
+        limits: "contiguous",
+        mode: "color",
+        tolerance: 32,
+        antiAlias: true,
+        ...(brush.colorReplacement ?? {}),
+        ...patch,
+      },
+    })
+
+  const setArtHistory = (patch: Partial<NonNullable<BrushSettings["artHistory"]>>) =>
+    set({
+      artHistory: {
+        style: "tight-medium",
+        area: 24,
+        fidelity: 60,
+        ...(brush.artHistory ?? {}),
+        ...patch,
+      },
+    })
 
   const exportCurrentBrush = () => {
     downloadJson(`${brush.tipShape ?? "round"}-brush.json`, brush)
@@ -459,6 +529,24 @@ export function BrushPanel() {
         <SliderRow label="Smoothing" value={brush.smoothing} onChange={(v) => set({ smoothing: v })} />
       </Section>
 
+      <Section title="Erodible Tip Physics">
+        <SliderRow label="Sharpness" value={brush.erodibleTip?.sharpness ?? 70} onChange={(v) => setErodibleTip({ sharpness: v })} />
+        <SliderRow label="Flatness" value={brush.erodibleTip?.flatness ?? 35} onChange={(v) => setErodibleTip({ flatness: v })} />
+        <SliderRow label="Erosion" value={brush.erodibleTip?.erosionRate ?? 50} onChange={(v) => setErodibleTip({ erosionRate: v })} />
+        <SliderRow label="Softness" value={brush.erodibleTip?.softness ?? 20} onChange={(v) => setErodibleTip({ softness: v })} />
+        <SliderRow label="Aspect" value={brush.erodibleTip?.aspectRatio ?? 80} onChange={(v) => setErodibleTip({ aspectRatio: v })} min={15} max={100} />
+        <SliderRow label="Rotation" value={brush.erodibleTip?.rotation ?? 0} onChange={(v) => setErodibleTip({ rotation: v })} min={-180} max={180} unit="deg" />
+      </Section>
+
+      <Section title="Bristle Tip Physics">
+        <SliderRow label="Length" value={brush.bristleTip?.length ?? 65} onChange={(v) => setBristleTip({ length: v })} />
+        <SliderRow label="Density" value={brush.bristleTip?.density ?? 55} onChange={(v) => setBristleTip({ density: v })} />
+        <SliderRow label="Thickness" value={brush.bristleTip?.thickness ?? 35} onChange={(v) => setBristleTip({ thickness: v })} />
+        <SliderRow label="Stiffness" value={brush.bristleTip?.stiffness ?? 55} onChange={(v) => setBristleTip({ stiffness: v })} />
+        <SliderRow label="Splay" value={brush.bristleTip?.splay ?? 35} onChange={(v) => setBristleTip({ splay: v })} />
+        <SliderRow label="Wetness" value={brush.bristleTip?.wetness ?? 25} onChange={(v) => setBristleTip({ wetness: v })} />
+      </Section>
+
       <Section title="Shape Dynamics">
         <SelectRow label="Size Control" value={brush.sizeControl ?? "off"} onChange={(v) => set({ sizeControl: v })} options={CONTROL_OPTIONS} />
         <SliderRow label="Size Jitter" value={brush.sizeJitter ?? 0} onChange={(v) => set({ sizeJitter: v })} />
@@ -537,6 +625,68 @@ export function BrushPanel() {
         <SliderRow label="Opacity Jitter" value={brush.opacityJitter ?? 0} onChange={(v) => set({ opacityJitter: v })} />
         <SelectRow label="Flow Ctrl" value={brush.flowControl ?? "off"} onChange={(v) => set({ flowControl: v })} options={CONTROL_OPTIONS} />
         <SliderRow label="Flow Jitter" value={brush.flowJitter ?? 0} onChange={(v) => set({ flowJitter: v })} />
+      </Section>
+
+      <Section title="Mixer Reservoir">
+        <SliderRow label="Wet" value={brush.mixer?.wet ?? 55} onChange={(v) => setMixer({ wet: v })} />
+        <SliderRow label="Load" value={brush.mixer?.load ?? 60} onChange={(v) => setMixer({ load: v })} />
+        <SliderRow label="Mix" value={brush.mixer?.mix ?? 50} onChange={(v) => setMixer({ mix: v })} />
+        <SliderRow label="Flow" value={brush.mixer?.flow ?? brush.flow} onChange={(v) => setMixer({ flow: v })} />
+        <CheckRow label="Sample All Layers" checked={brush.mixer?.sampleAllLayers ?? false} onChange={(v) => setMixer({ sampleAllLayers: v })} />
+        <CheckRow label="Clean After Stroke" checked={brush.mixer?.cleanAfterStroke ?? false} onChange={(v) => setMixer({ cleanAfterStroke: v })} />
+      </Section>
+
+      <Section title="Color Replacement">
+        <SelectRow
+          label="Sampling"
+          value={brush.colorReplacement?.sampling ?? "continuous"}
+          onChange={(v) => setColorReplacement({ sampling: v })}
+          options={[
+            { value: "continuous", label: "Continuous" },
+            { value: "once", label: "Once" },
+            { value: "background-swatch", label: "Background" },
+          ]}
+        />
+        <SelectRow
+          label="Limits"
+          value={brush.colorReplacement?.limits ?? "contiguous"}
+          onChange={(v) => setColorReplacement({ limits: v })}
+          options={[
+            { value: "contiguous", label: "Contiguous" },
+            { value: "discontiguous", label: "Discontiguous" },
+            { value: "find-edges", label: "Find Edges" },
+          ]}
+        />
+        <SelectRow
+          label="Mode"
+          value={brush.colorReplacement?.mode ?? "color"}
+          onChange={(v) => setColorReplacement({ mode: v })}
+          options={[
+            { value: "color", label: "Color" },
+            { value: "hue", label: "Hue" },
+            { value: "saturation", label: "Saturation" },
+            { value: "luminosity", label: "Luminosity" },
+          ]}
+        />
+        <SliderRow label="Tolerance" value={brush.colorReplacement?.tolerance ?? 32} onChange={(v) => setColorReplacement({ tolerance: v })} min={0} max={255} unit="" />
+        <CheckRow label="Anti-alias Edges" checked={brush.colorReplacement?.antiAlias ?? true} onChange={(v) => setColorReplacement({ antiAlias: v })} />
+      </Section>
+
+      <Section title="Art History">
+        <SelectRow
+          label="Style"
+          value={brush.artHistory?.style ?? "tight-medium"}
+          onChange={(v) => setArtHistory({ style: v })}
+          options={[
+            { value: "tight-short", label: "Tight Short" },
+            { value: "tight-medium", label: "Tight Medium" },
+            { value: "loose-long", label: "Loose Long" },
+            { value: "dab", label: "Dab" },
+            { value: "curl", label: "Curl" },
+          ]}
+        />
+        <SliderRow label="Area" value={brush.artHistory?.area ?? 24} onChange={(v) => setArtHistory({ area: v })} min={4} max={200} unit="px" />
+        <SliderRow label="Fidelity" value={brush.artHistory?.fidelity ?? 60} onChange={(v) => setArtHistory({ fidelity: v })} />
       </Section>
 
       <Section title="Brush Pose">
@@ -704,6 +854,28 @@ function normalizeImportedBrushSettings(raw: Record<string, unknown>, requireCor
       mode: cleanImportEnum(raw.dualBrush.mode, DUAL_BRUSH_MODES, "multiply"),
     } satisfies NonNullable<BrushSettings["dualBrush"]>
   }
+  if ("erodibleTip" in raw) {
+    if (!isImportRecord(raw.erodibleTip)) throw new Error("Erodible tip settings must be an object.")
+    out.erodibleTip = {
+      sharpness: cleanImportNumber(raw.erodibleTip.sharpness, 0, 100, 70, true),
+      flatness: cleanImportNumber(raw.erodibleTip.flatness, 0, 100, 35, true),
+      erosionRate: cleanImportNumber(raw.erodibleTip.erosionRate, 0, 100, 50, true),
+      softness: cleanImportNumber(raw.erodibleTip.softness, 0, 100, 20, true),
+      aspectRatio: cleanImportNumber(raw.erodibleTip.aspectRatio, 15, 100, 80, true),
+      rotation: cleanImportNumber(raw.erodibleTip.rotation, -180, 180, 0, true),
+    } satisfies NonNullable<BrushSettings["erodibleTip"]>
+  }
+  if ("bristleTip" in raw) {
+    if (!isImportRecord(raw.bristleTip)) throw new Error("Bristle tip settings must be an object.")
+    out.bristleTip = {
+      length: cleanImportNumber(raw.bristleTip.length, 0, 100, 65, true),
+      density: cleanImportNumber(raw.bristleTip.density, 0, 100, 55, true),
+      thickness: cleanImportNumber(raw.bristleTip.thickness, 0, 100, 35, true),
+      stiffness: cleanImportNumber(raw.bristleTip.stiffness, 0, 100, 55, true),
+      splay: cleanImportNumber(raw.bristleTip.splay, 0, 100, 35, true),
+      wetness: cleanImportNumber(raw.bristleTip.wetness, 0, 100, 25, true),
+    } satisfies NonNullable<BrushSettings["bristleTip"]>
+  }
   if ("pose" in raw) {
     if (!isImportRecord(raw.pose)) throw new Error("Brush pose settings must be an object.")
     out.pose = {
@@ -713,6 +885,36 @@ function normalizeImportedBrushSettings(raw: Record<string, unknown>, requireCor
       pressure: cleanImportNumber(raw.pose.pressure, 0, 100, 50, true),
       stylusAngle: cleanImportNumber(raw.pose.stylusAngle, -180, 180, 0, true),
     } satisfies NonNullable<BrushSettings["pose"]>
+  }
+  if ("mixer" in raw) {
+    if (!isImportRecord(raw.mixer)) throw new Error("Mixer brush settings must be an object.")
+    out.mixer = {
+      wet: cleanImportNumber(raw.mixer.wet, 0, 100, 55, true),
+      load: cleanImportNumber(raw.mixer.load, 0, 100, 60, true),
+      mix: cleanImportNumber(raw.mixer.mix, 0, 100, 50, true),
+      flow: cleanImportNumber(raw.mixer.flow, 0, 100, 100, true),
+      sampleAllLayers: raw.mixer.sampleAllLayers === true,
+      cleanAfterStroke: raw.mixer.cleanAfterStroke === true,
+      ...(cleanOptionalImportText(raw.mixer.reservoirColor, 32) ? { reservoirColor: cleanOptionalImportText(raw.mixer.reservoirColor, 32) } : {}),
+    } satisfies NonNullable<BrushSettings["mixer"]>
+  }
+  if ("colorReplacement" in raw) {
+    if (!isImportRecord(raw.colorReplacement)) throw new Error("Color replacement settings must be an object.")
+    out.colorReplacement = {
+      sampling: cleanImportEnum(raw.colorReplacement.sampling, COLOR_REPLACEMENT_SAMPLING, "continuous"),
+      limits: cleanImportEnum(raw.colorReplacement.limits, COLOR_REPLACEMENT_LIMITS, "contiguous"),
+      mode: cleanImportEnum(raw.colorReplacement.mode, COLOR_REPLACEMENT_MODES, "color"),
+      tolerance: cleanImportNumber(raw.colorReplacement.tolerance, 0, 255, 32, true),
+      antiAlias: raw.colorReplacement.antiAlias !== false,
+    } satisfies NonNullable<BrushSettings["colorReplacement"]>
+  }
+  if ("artHistory" in raw) {
+    if (!isImportRecord(raw.artHistory)) throw new Error("Art history settings must be an object.")
+    out.artHistory = {
+      style: cleanImportEnum(raw.artHistory.style, ART_HISTORY_STYLES, "tight-medium"),
+      area: cleanImportNumber(raw.artHistory.area, 4, 200, 24, true),
+      fidelity: cleanImportNumber(raw.artHistory.fidelity, 0, 100, 60, true),
+    } satisfies NonNullable<BrushSettings["artHistory"]>
   }
 
   return out as Partial<BrushSettings>
@@ -762,6 +964,12 @@ export function parseAbrPresets(
       hardness,
       spacing: 18 + (index % 6) * 4,
       tipShape: index % 5 === 0 ? "bristle" : index % 7 === 0 ? "erodible" : "round",
+      bristleTip: index % 5 === 0
+        ? { length: 62 + (index % 4) * 6, density: 48 + (index % 5) * 8, thickness: 28 + (index % 3) * 8, stiffness: 45, splay: 42, wetness: 18 }
+        : undefined,
+      erodibleTip: index % 7 === 0
+        ? { sharpness: 72, flatness: 38 + (index % 4) * 8, erosionRate: 58, softness: 18, aspectRatio: 76, rotation: (index % 6) * 8 - 20 }
+        : undefined,
       texture: index % 3 === 0
         ? { enabled: true, pattern: "paper", mode: "multiply", depth: 24 + (index % 5) * 8, depthJitter: 10, minDepth: 4, scale: 80 + index * 3 }
         : undefined,

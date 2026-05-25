@@ -13,6 +13,7 @@ declare global {
 import { compositeLayer } from "./blend-modes"
 import { getFilter } from "./filters"
 import { applyLayerStyle } from "./layer-styles"
+import { applyLuminanceMaskToCanvas, normalizeAdvancedBlending } from "./layer-workflows"
 import { applyModeAndColorManagement } from "./advanced-subsystems"
 import { isAdjustmentNoop } from "./adjustment-layers"
 import { smartFilterMaskAmountAt, smartFilterMaskToImageData } from "./smart-filter-masks"
@@ -121,9 +122,11 @@ import {
 } from "./psd-resources-metadata"
 import { uid } from "./uid"
 import { exportRasterImageDataToBlob } from "./export-worker"
+import { composeDocumentTile, planTileOnlyExport } from "./tile-only-pipeline"
 import { collectEmbeddedTypographyFonts } from "./typography-engine"
 import { TiledBackingStore } from "./tiled-backing-store"
 import { PSB_TILE_VIEW_LAYER_ID, PSB_TILE_VIEW_SOURCE_VERSION, registerPsbTileViewStore } from "./psb-tile-view"
+import { blobToZipEntry, createStoredZipBlob, type StoredZipEntry } from "./zip-packaging"
 import {
   encodeJpegImageData,
   encodePngImageData,
@@ -756,20 +759,22 @@ export function makeIoCanvas(w: number, h: number, fill?: string) {
 }
 
 function withLayerMask(source: HTMLCanvasElement, mask?: HTMLCanvasElement | null) {
-  if (!mask) return source
-  const tmp = makeIoCanvas(source.width, source.height)
-  const ctx = tmp.getContext("2d")!
-  ctx.drawImage(source, 0, 0)
-  ctx.globalCompositeOperation = "destination-in"
-  ctx.drawImage(mask, 0, 0)
-  return tmp
+  return mask ? applyLuminanceMaskToCanvas(source, mask) : source
 }
 
 function renderableLayer(layer: Layer) {
   const smartFiltered = applySmartFiltersForIo(layer.canvas, layer.smartFilters)
-  const renderLayer = smartFiltered === layer.canvas ? layer : { ...layer, canvas: smartFiltered }
-  const styled = layer.style ? applyLayerStyle(renderLayer, layer.fillOpacity ?? 1) : smartFiltered
-  return withLayerMask(styled, layer.mask)
+  const advanced = normalizeAdvancedBlending(layer.advancedBlending)
+  const layerMask = layer.mask && layer.maskEnabled !== false ? layer.mask : null
+  const fillContent = withLayerMask(smartFiltered, layerMask)
+  const effectContent = advanced.layerMaskHidesEffects ? withLayerMask(smartFiltered, layerMask) : smartFiltered
+  const renderLayer = { ...layer, canvas: fillContent }
+  return layer.style
+    ? applyLayerStyle(renderLayer, layer.fillOpacity ?? 1, {
+        effectSourceCanvas: effectContent,
+        transparencyShapesLayer: advanced.transparencyShapesLayer,
+      })
+    : fillContent
 }
 
 function paramsWithDefaults(filter: NonNullable<ReturnType<typeof getFilter>>, params: Record<string, number | string | boolean>) {
@@ -959,6 +964,120 @@ export function buildRasterExportCanvas(doc: PsDocument, options: RasterExportOp
   }
   ctx.putImageData(img, 0, 0)
   return scaled
+}
+
+export type TileSequenceRasterExportOptions = Omit<RasterExportOptions, "format"> & {
+  format: Exclude<BrowserRasterExportFormat, "gif">
+  tileSize?: number
+}
+
+function tileSequenceExtension(format: TileSequenceRasterExportOptions["format"]) {
+  return format === "jpeg" ? "jpg" : format
+}
+
+function scaleTileForExport(tile: HTMLCanvasElement, width: number, height: number, matte?: string) {
+  if (tile.width === width && tile.height === height) return tile
+  const out = makeIoCanvas(width, height, matte)
+  const ctx = out.getContext("2d")!
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = "high"
+  ctx.drawImage(tile, 0, 0, width, height)
+  return out
+}
+
+function ditherCanvasInPlace(canvas: HTMLCanvasElement) {
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return
+  const img = ctx.getImageData(0, 0, canvas.width, canvas.height)
+  for (let i = 0; i < img.data.length; i += 4) {
+    if (img.data[i + 3] === 0) continue
+    const n = (Math.random() - 0.5) * 1.6
+    img.data[i] = Math.max(0, Math.min(255, img.data[i] + n))
+    img.data[i + 1] = Math.max(0, Math.min(255, img.data[i + 1] + n))
+    img.data[i + 2] = Math.max(0, Math.min(255, img.data[i + 2] + n))
+  }
+  ctx.putImageData(img, 0, 0)
+}
+
+async function tileCanvasToBlob(canvas: HTMLCanvasElement, format: TileSequenceRasterExportOptions["format"], quality: number) {
+  if (typeof canvas.toBlob === "function") return canvasToBlobAsync(canvas, format, quality)
+  return dataUrlToBlob(canvas.toDataURL(rasterMime(format), quality))
+}
+
+export async function exportRasterTileSequenceBlob(
+  doc: PsDocument,
+  options: TileSequenceRasterExportOptions,
+): Promise<Blob> {
+  const plan = planTileOnlyExport({
+    documentWidth: doc.width,
+    documentHeight: doc.height,
+    tileSize: options.tileSize,
+    format: options.format,
+    scale: options.scale,
+    layers: doc.layers.map((layer) => ({ id: layer.id, kind: layer.kind, visible: layer.visible })),
+  })
+  if (plan.mode !== "tile-stream") {
+    throw new Error(`Tile-only export is unavailable: ${plan.unsupportedLayerIds.join(", ") || "unsupported document"}`)
+  }
+
+  const scale = Math.max(0.001, options.scale)
+  const needsMatte = options.format === "jpeg" || !options.transparent
+  const extension = tileSequenceExtension(options.format)
+  const tileEntries: StoredZipEntry[] = []
+  const manifestTiles: Array<{ key: string; col: number; row: number; x: number; y: number; w: number; h: number; file: string }> = []
+
+  for (const tile of plan.tiles) {
+    const sourceRect = {
+      x: tile.rect.x / scale,
+      y: tile.rect.y / scale,
+      w: tile.rect.w / scale,
+      h: tile.rect.h / scale,
+    }
+    const sourceTile = composeDocumentTile(doc, {
+      ...sourceRect,
+      transparent: !needsMatte,
+      matte: options.matte,
+    })
+    const outputTile = scaleTileForExport(sourceTile, tile.rect.w, tile.rect.h, needsMatte ? options.matte : undefined)
+    if (options.dither && options.format !== "jpeg") ditherCanvasInPlace(outputTile)
+    const file = `tiles/${tile.col}_${tile.row}.${extension}`
+    tileEntries.push(await blobToZipEntry(file, await tileCanvasToBlob(outputTile, options.format, options.quality)))
+    manifestTiles.push({
+      key: tile.key,
+      col: tile.col,
+      row: tile.row,
+      x: tile.rect.x,
+      y: tile.rect.y,
+      w: tile.rect.w,
+      h: tile.rect.h,
+      file,
+    })
+  }
+
+  const manifest = {
+    version: 1,
+    document: {
+      id: doc.id,
+      name: doc.name,
+      width: doc.width,
+      height: doc.height,
+      outputWidth: plan.outputWidth,
+      outputHeight: plan.outputHeight,
+      scale,
+    },
+    format: options.format,
+    tileSize: plan.tileSize,
+    tileColumns: plan.tileColumns,
+    tileRows: plan.tileRows,
+    tileCount: plan.tileCount,
+    materializesFullDocument: false,
+    tiles: manifestTiles,
+  }
+  const manifestEntry: StoredZipEntry = {
+    name: "manifest.json",
+    data: new TextEncoder().encode(JSON.stringify(manifest, null, 2)),
+  }
+  return createStoredZipBlob([manifestEntry, ...tileEntries])
 }
 
 export function rasterMime(format: BrowserRasterExportFormat) {
@@ -2130,12 +2249,12 @@ export function createCompatibilityManifest(
   add("Canvas", "preserved", "preserved", "preserved", {
     project: `${doc.width} x ${doc.height}px canvas, background, resolution, mode, and bit-depth metadata are serialized.`,
     psd: `${doc.width} x ${doc.height}px rendered layer pixels are written with PSD-compatible canvas metadata.`,
-    "browser-raster": `${doc.width} x ${doc.height}px composite pixels are exported through the browser encoder.`,
+    "browser-raster": `${doc.width} x ${doc.height}px composite pixels are exported through the browser encoder when they fit, or through the tile-sequence package path for oversized compatible documents.`,
   })
   add("Layer structure", "preserved", "approximated", "flattened", {
     project: `${reportPlural(layers.length, "layer")} retain app layer kind, visibility, opacity, locks, blend mode, and selection state.`,
     psd: `${reportPlural(layers.length, "layer")} are mapped to PSD layers where possible; app-only descriptors stay in the preservation report.`,
-    "browser-raster": `${reportPlural(layers.length, "layer")} are composited into one pixel surface for browser export.`,
+    "browser-raster": `${reportPlural(layers.length, "layer")} are composited into flattened export pixels; large compatible exports can be emitted as independently composed tiles.`,
   })
   if (textLayers) add("Text layers", "preserved", "preserved", "flattened", {
     project: `${reportPlural(textLayers, "editable text layer")} retain typography, OpenType, path, shape, and extrusion metadata.`,
@@ -2178,8 +2297,8 @@ export function createCompatibilityManifest(
     "browser-raster": "Adjustments are baked into the flattened export pixels.",
   })
   if (smartFilters) add("Smart filters", "preserved", "approximated", "flattened", {
-    project: `${reportPlural(smartFilters, "smart filter")} retain filter id, parameters, stack order, masks, opacity, blend mode, mask density, and mask feather${smartFilterMasks ? `, including ${reportPlural(smartFilterMasks, "filter mask state")}` : ""}.`,
-    psd: `${reportPlural(smartFilters, "smart filter")} bake their visual result into the layer pixels for native compatibility; editable filter id, parameters, mask data, opacity, blend mode, density, feather, and order restore in this app from the PSD XMP app-preservation payload.`,
+    project: `${reportPlural(smartFilters, "smart filter")} retain filter id, parameters, stack order, masks, opacity, blend mode, mask density, mask feather, and mask link state${smartFilterMasks ? `, including ${reportPlural(smartFilterMasks, "filter mask state")}` : ""}.`,
+    psd: `${reportPlural(smartFilters, "smart filter")} bake their visual result into layer pixels for native compatibility, emit native placed-filter descriptors and filter-effect masks where ag-psd exposes them, and restore private app control state from the PSD XMP app-preservation payload.`,
     "browser-raster": "Smart filters are baked into the flattened export pixels.",
   })
   if (smartObjectLayers.length) add("Smart objects", "preserved", "approximated", "flattened", {
@@ -2188,8 +2307,8 @@ export function createCompatibilityManifest(
     "browser-raster": "Smart objects are flattened to their current rendered pixels.",
   })
   if (smartObjectSources) add("Smart object sources", "preserved", "approximated", "flattened", {
-    project: `${reportPlural(smartObjectSources, "embedded smart source")} retain source canvas, link status, file name, relink metadata, exported-content timestamps, and edit-package descriptors${smartObjectEditPackages ? ` for ${reportPlural(smartObjectEditPackages, "package")}` : ""}.`,
-    psd: `${reportPlural(smartObjectSources, "embedded smart source")} round-trip via the native PSD placedLayer (PlLd/SoLd) descriptor + linkedFiles array; embedded PNG bytes are capped at 30 MB per source; ids are hashed to GUIDs the writer requires.`,
+    project: `${reportPlural(smartObjectSources, "smart source")} retain source canvas, link status, file name, relink metadata, exported-content timestamps, and edit-package descriptors${smartObjectEditPackages ? ` for ${reportPlural(smartObjectEditPackages, "package")}` : ""}.`,
+    psd: `${reportPlural(smartObjectSources, "smart source")} round-trip via the native PSD placedLayer (PlLd/SoLd) descriptor + linkedFiles array; embedded PNG bytes are capped at 30 MB per source; ids are hashed to GUIDs the writer requires.`,
     "browser-raster": "Source documents are not included in browser raster exports.",
   })
   if (smartObjectFileHandles) add("File System Access links", "preserved", "unsupported", "unsupported", {
@@ -2197,10 +2316,10 @@ export function createCompatibilityManifest(
     psd: "Browser File System Access handles cannot be represented in native PSD bytes.",
     "browser-raster": "Linked source handles are omitted from flattened image exports.",
   })
-  if (linkedSmartObjects) add("Linked smart object references", "preserved", "unsupported", "unsupported", {
-    project: `${reportPlural(linkedSmartObjects, "linked smart object reference")} retain local path/status metadata.`,
-    psd: "Native Photoshop linked smart-object resource records are not authored by the browser exporter.",
-    "browser-raster": "Linked source references are omitted from the exported image.",
+  if (linkedSmartObjects) add("Linked smart object references", "preserved", "approximated", "flattened", {
+    project: `${reportPlural(linkedSmartObjects, "linked smart object reference")} retain local path/status metadata, source hashes, permission state, and relink/update timestamps.`,
+    psd: "Native placedLayer/linkedFiles records carry the linked path and source id, while live browser File System Access handles and permission grants must be restored by relinking in this app.",
+    "browser-raster": "Linked source references are flattened to the current rendered pixels.",
   })
   if (doc.channels?.length) add("Alpha and saved channels", "preserved", "preserved", "unsupported", {
     project: `${reportPlural(doc.channels.length, "saved channel")} retain editable channel pixels.`,
@@ -2317,6 +2436,31 @@ export function createExportLimitationReport(
     }
   }
 
+  const rasterLikeFormat = format !== "svg" && format !== "apng" && format !== "animated-webp"
+  if (rasterLikeFormat) {
+    const tileExportPlan = planTileOnlyExport({
+      documentWidth: doc.width,
+      documentHeight: doc.height,
+      format,
+      scale: 1,
+      tileSize: 1024,
+      layers: doc.layers.map((layer) => ({ id: layer.id, kind: layer.kind, visible: layer.visible })),
+    })
+    if (tileExportPlan.mode === "tile-stream" && tileExportPlan.tileCount > 1) {
+      add(
+        "Tile-only export execution",
+        "preserved",
+        `${format.toUpperCase()} can be exported as ${tileExportPlan.tileCount} independently composited ${tileExportPlan.tileSize}px tiles with a manifest, avoiding a ${doc.width} x ${doc.height}px canvas allocation.`,
+      )
+    } else if (tileExportPlan.unsupportedLayerIds.length) {
+      add(
+        "Tile-only export execution",
+        "approximated",
+        `Tile-sequence export is blocked by unsupported layer payloads (${tileExportPlan.unsupportedLayerIds.join(", ")}); browser canvas export remains the fallback.`,
+      )
+    }
+  }
+
   add("Layer structure", "flattened", `${reportPlural(layers, "layer")} are composited into the exported ${format.toUpperCase()} result.`)
   if (hasEditableText) add("Editable text", "flattened", "Text remains editable in the project format, but browser image exports contain rasterized glyph pixels.")
   if (hasEditableVectors || format === "svg") {
@@ -2370,15 +2514,15 @@ export function createExportLimitationReport(
   }
   if (metadataRequested) {
     add("Metadata embedding", format === "png" || format === "jpeg" || format === "tiff" || format === "webp" || format === "avif" || format === "tga" || format === "ppm" || format === "pgm" || format === "pbm" ? "preserved" : format === "svg" ? "approximated" : "unsupported", format === "png"
-      ? "PNG export embeds author, copyright, description, creation date, and XMP text chunks."
+      ? "PNG export embeds author, copyright, description, creation date, XMP text chunks, and C2PA caBX provenance chunks."
       : format === "jpeg"
-        ? "JPEG export embeds XMP APP1 metadata for author, copyright, description, and creation date."
+        ? "JPEG export embeds XMP APP1 metadata and C2PA APP11 provenance payloads."
         : format === "tiff"
-          ? "TIFF export embeds baseline text tags, IPTC tag 33723, XMP tag 700, EXIF IFD tag 34665, ICC tag 34675, and local content credentials."
+          ? "TIFF export embeds baseline text tags, IPTC tag 33723, XMP tag 700, EXIF IFD tag 34665, ICC tag 34675, C2PA tag 52545, and local content credentials."
           : format === "webp"
-            ? "WebP export injects XMP and ICC RIFF chunks when the browser returns a real WebP container."
+            ? "WebP export injects XMP, C2PA, and ICC RIFF chunks when the browser returns a real WebP container."
             : format === "avif"
-              ? "AVIF export appends XMP and ICC UUID boxes when the browser returns a real AVIF container."
+              ? "AVIF export inserts C2PA and appends XMP/ICC UUID boxes when the browser returns a real AVIF container."
               : format === "tga"
                 ? "TGA export writes a TGA 2.0 extension area plus a developer metadata record."
                 : format === "ppm" || format === "pgm" || format === "pbm"
@@ -2387,7 +2531,7 @@ export function createExportLimitationReport(
           ? "SVG export includes a compact app metadata block, not full IPTC/XMP/content-credential payloads."
           : "This format does not carry the app's export metadata fields.")
     if (doc.metadata?.contentCredentials?.length) {
-      add("Content Credentials", "preserved", `${reportPlural(doc.metadata.contentCredentials.length, "local content credential")} are embedded as app XMP/metadata payloads; they are not C2PA-signed certificate chains.`)
+      add("Content Credentials", "preserved", `${reportPlural(doc.metadata.contentCredentials.length, "local content credential")} are embedded in C2PA carrier payloads plus app XMP/metadata records; they are unsigned local manifests, not certificate-backed C2PA signatures.`)
     }
   }
 
@@ -2405,18 +2549,18 @@ export function createExportLimitationReport(
       ? `Exports typed-array RGBA TIFF strips at ${doc.bitDepth} bits per channel with ${(options.tiffCompression ?? "none").toUpperCase()} compression.`
       : `Exports baseline RGBA TIFF strips with ${(options.tiffCompression ?? "none").toUpperCase()} compression.`)
     add("TIFF metadata", metadataRequested ? "preserved" : "info", metadataRequested
-      ? "TIFF export writes ImageDescription, DateTime, Artist, Copyright, and XMP metadata tags."
-      : "Enable metadata to write TIFF ImageDescription, DateTime, Artist, Copyright, and XMP tags.")
+      ? "TIFF export writes ImageDescription, DateTime, Artist, Copyright, IPTC, XMP, EXIF, ICC, and C2PA metadata tags."
+      : "Enable metadata to write TIFF ImageDescription, DateTime, Artist, Copyright, IPTC, XMP, EXIF, ICC, and C2PA tags.")
   } else if (format === "webp") {
-    add("WebP encoder controls", "approximated", "Browser WebP exposes quality to the encoder; lossless, near-lossless, method, and exact-alpha intent are authored into the XMP encoder-control record for downstream tools.")
+    add("WebP encoder controls", "approximated", "Browser WebP exposes quality to the encoder; lossless, near-lossless, method, and exact-alpha intent are authored into the XMP encoder-control record and preset state for downstream tools.")
     add("WebP metadata", metadataRequested ? "preserved" : "info", metadataRequested
-      ? "The app post-processes browser WebP bytes to add an XMP RIFF chunk and set the VP8X metadata flag when possible."
-      : "Enable metadata to post-process real browser WebP bytes with an XMP RIFF chunk.")
+      ? "The app post-processes browser WebP bytes to add XMP and C2PA RIFF chunks and set the VP8X metadata flag when possible."
+      : "Enable metadata to post-process real browser WebP bytes with XMP and C2PA RIFF chunks.")
   } else if (format === "avif") {
-    add("AVIF encoder controls", "approximated", "Browser AVIF exposes limited quality intent; lossless, speed, bit-depth, chroma, and tile intent are authored into the XMP encoder-control record for downstream tools.")
+    add("AVIF encoder controls", "approximated", "Browser AVIF exposes limited quality intent; lossless, speed, bit-depth, chroma, and tile intent are authored into the XMP encoder-control record and preset state for downstream tools.")
     add("AVIF metadata", metadataRequested ? "preserved" : "info", metadataRequested
-      ? "The app appends an XMP UUID box to AVIF ISOBMFF output when the browser encoder returns AVIF bytes."
-      : "Enable metadata to append an XMP UUID metadata box to real browser AVIF bytes.")
+      ? "The app inserts a C2PA UUID box and appends XMP UUID metadata to AVIF ISOBMFF output when the browser encoder returns AVIF bytes."
+      : "Enable metadata to insert C2PA and XMP UUID metadata boxes into real browser AVIF bytes.")
   } else if (format === "gif") {
     add("GIF palette", "approximated", "GIF export quantizes to a 256-color indexed palette with limited transparency.")
     if (doc.timelineFrames?.length) add("Frame animation", "approximated", "Timeline frames can be converted to GIF frames, but advanced video/audio metadata is not retained.")
@@ -2667,10 +2811,10 @@ export function createDocumentReport(
       ? `${adjustmentLayers} non-destructive adjustment layer${adjustmentLayers === 1 ? "" : "s"} round-trip the current visual result; 16 types use native ag-psd descriptors. The 6 remaining types (shadows-highlights, hdr-toning, desaturate, match-color, replace-color, equalize) preserve editable params in the PSD XMP app-preservation payload, with layer-name tokens retained as fallback.`
       : `${adjustmentLayers} non-destructive adjustment layer${adjustmentLayers === 1 ? "" : "s"} retained in project format.`,
   })
-  if (smartFilters) items.push({ label: "Smart filters", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${smartFilters} smart filter${smartFilters === 1 ? "" : "s"} bake their visual result into the layer's exported pixels; editable filter id, parameters, order, masks${smartFilterMasks ? ` (${smartFilterMasks} mask state${smartFilterMasks === 1 ? "" : "s"})` : ""}, opacity, blend mode, density, and feather restore in this app from the PSD XMP app-preservation payload.` })
-  if (smartObjectSources) items.push({ label: "Smart object sources", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${smartObjectSources} embedded smart source${smartObjectSources === 1 ? "" : "s"} round-trip via the native PSD placedLayer + linkedFiles array (PNG bytes, 30 MB cap), with app project preservation for relink metadata, export timestamps, and ${smartObjectEditPackages} edit package${smartObjectEditPackages === 1 ? "" : "s"}.` })
+  if (smartFilters) items.push({ label: "Smart filters", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${smartFilters} smart filter${smartFilters === 1 ? "" : "s"} bake their visual result into the layer's exported pixels; supported filters emit native placed-filter descriptors and filter-effect masks${smartFilterMasks ? ` (${smartFilterMasks} mask state${smartFilterMasks === 1 ? "" : "s"})` : ""}, while private app control state restores from the PSD XMP app-preservation payload.` })
+  if (smartObjectSources) items.push({ label: "Smart object sources", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${smartObjectSources} smart source${smartObjectSources === 1 ? "" : "s"} round-trip via the native PSD placedLayer + linkedFiles array (embedded PNG bytes capped at 30 MB), with app project preservation for relink metadata, export timestamps, and ${smartObjectEditPackages} edit package${smartObjectEditPackages === 1 ? "" : "s"}.` })
   if (smartObjectFileHandles) items.push({ label: "File System Access smart links", status: source.includes("PSD") ? "unsupported" : "preserved", detail: `${smartObjectFileHandles} linked smart object handle reference${smartObjectFileHandles === 1 ? "" : "s"} retain handle name, permission state, content hash, and modified time; live browser FileSystemFileHandle objects are intentionally not serialized.` })
-  if (linkedSmartObjects) items.push({ label: "Linked smart objects", status: source.includes("PSD") ? "unsupported" : "info", detail: `${linkedSmartObjects} linked smart object reference${linkedSmartObjects === 1 ? "" : "s"} round-trip via the linkedFiles "linked" type; the source file is referenced by path rather than embedded.` })
+  if (linkedSmartObjects) items.push({ label: "Linked smart objects", status: source.includes("PSD") ? "approximated" : "info", detail: `${linkedSmartObjects} linked smart object reference${linkedSmartObjects === 1 ? "" : "s"} round-trip via the linkedFiles "linked" type; the source file is referenced by path, while live browser file handles and permission grants must be restored by relinking.` })
   if (missingSmartObjects) items.push({ label: "Missing smart object links", status: "unsupported", detail: `${missingSmartObjects} smart object link${missingSmartObjects === 1 ? " is" : "s are"} marked missing and require relink before source edits are reliable.` })
   if (doc.channels?.length) items.push({ label: "Alpha channels", status: "preserved", detail: `${doc.channels.length} saved channel${doc.channels.length === 1 ? "" : "s"} retained; PSD round-trip stores pixel data in a hidden group whose layer names follow the "[spot:#rrggbb:opacity]" convention for spot channels, and the alphaChannelNames image resource carries the human-readable channel name table.` })
   if (doc.timelineFrames?.length) items.push({ label: "Timeline", status: source.includes("PSD") ? "approximated" : "preserved", detail: `${doc.timelineFrames.length} frame/video timeline entries retained in project format.` })

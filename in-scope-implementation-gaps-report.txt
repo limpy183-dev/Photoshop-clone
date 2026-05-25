@@ -173,22 +173,28 @@ Remaining in-scope gaps:
   overview/inspection/reduced-scale handling.
 
 13. Advanced raster/professional formats
-Status: partially implemented.
+Status: implemented for browser-local professional-format workflows.
 Implemented:
 - TIFF, TGA, PNM, Radiance HDR, EXR, PDF, EPS, HEIF/AVIF-related paths, JPEG
   2000, DICOM, RAW/DNG preview/import paths.
+- RAW/DNG DNG-style export with Camera Raw sidecar round-trip, source
+  fingerprint reconciliation, and snapshot/settings preservation.
+- HEVC-backed HEIC container authoring when an HEVC encoder callback is
+  configured, distinct from AVIF-backed HEIF export.
+- JPEG 2000 codestream/JP2/JPX/JPM authoring with alpha channel definitions,
+  color boxes, ICC/profile metadata, and layer labels.
+- PDF multipage authoring with app-readable editable text/vector manifests,
+  transparency group records, annotations, and flattened page previews.
+- EPS safe-subset rendering with transforms, dash patterns, fill rules, text,
+  and editable vector/text reconstruction.
+- EXR arbitrary-channel, tiled/deep metadata, and multipart manifest workflows.
+- TIFF BigTIFF authoring, richer metadata/custom fields, and subdirectory
+  records.
+- DICOM compressed transfer-syntax metadata, overlays, richer metadata export,
+  and explicit non-clinical validation labels.
 Remaining in-scope gaps:
-- RAW/DNG export and full sidecar round-trip are absent.
-- HEVC/HEIC export is absent; AVIF-backed HEIF-style paths do not replace HEIC.
-- JPEG 2000 lacks JPX/JPM authoring, alpha, advanced color boxes, and profile
-  controls.
-- PDF lacks multipage authoring/import UI, editable vector/text extraction,
-  transparency group preservation, and annotations.
-- EPS lacks broader operator coverage and editable vector reconstruction.
-- EXR lacks multipart/deep/tiled/arbitrary-channel workflows.
-- TIFF lacks BigTIFF and richer metadata/directory authoring.
-- DICOM lacks compressed transfer syntaxes, overlays, richer metadata workflow,
-  and non-clinical validation labeling.
+- Production certification remains out of scope for HEIC/JPEG 2000 archival
+  conformance, DICOM clinical validation, and prepress/PDF-X handoff checks.
 
 14. Raster export metadata
 Status: partially implemented.
@@ -219,18 +225,25 @@ Remaining in-scope gaps:
 - Per-channel proof toggles and richer gamut/plate views need UI completion.
 
 16. Smart objects and linked smart objects
-Status: partially implemented.
+Status: implemented for browser-local scope.
 Implemented:
 - Embedded/linked source metadata, edit/replace/export contents, stack modes,
   relinkedAt/source hashes, File System Access handle metadata fields, lifecycle
   reporting.
+- Permission-aware "Relink to File" and update workflows query/request persisted
+  File System Access handles before reading and mark links missing when a live
+  handle or grant is unavailable.
+- Periodic linked-file polling marks modified/missing links and notifies the
+  user without prompting from the timer.
+- Smart object and 3D layers materialize concrete tile-backed render content,
+  including smart-filtered smart-object sources and full-size 3D previews.
+- PSD export emits native placedLayer/linkedFiles and supported smart-filter
+  descriptors/masks where available; private app-only visual state is preserved
+  through the app/XMP payload and raster exports flatten the current pixels by
+  design.
 Remaining in-scope gaps:
-- No complete "Relink to File" workflow with persisted handle permission checks.
-- No periodic linked-file polling/update notification flow.
-- Smart object and 3D layer integration with tile backing/render materialization
-  remains limited in places.
-- Some smart object/filter private visual states remain metadata-preserved or
-  rasterized when exported outside the project format.
+- None for the browser-local scope. Exact private Photoshop smart object/filter
+  resources remain governed by BOUNDARIES.md.
 
 17. Smart filter editing UI
 Status: partially implemented.
