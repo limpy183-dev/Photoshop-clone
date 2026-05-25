@@ -34,6 +34,11 @@ artifacts/*.log
 artifacts/dev-server-*.out.log
 artifacts/dev-server-*.err.log
 
+# Local codex dev-process artifacts (PIDs, captured stdout/stderr)
+.codex-*.pid
+.codex-*.out
+.codex-*.err
+
 # Playwright test artifacts
 test-results/
 playwright-report/
