@@ -32,15 +32,12 @@ reducer integration, tests, and panel/module files. The tool palette, color pick
 
 The remaining gaps are depth/completeness issues in advanced areas:
 - PSD/PSB layered high-bit export and native descriptor emission remain partial.
-- WebGL compositor has GPU filters/adjustments but layer effects (shadows, bevels,
-  glows) and full-stack GPU compositing still need work.
 - Tile-only editing covers many operations but the main compositor still relies
   heavily on full-frame canvas paths.
-- Several advanced filters (Displace, Shear, Polar Coordinates, ZigZag, Tiles,
-  Extrude, Wind, and ~20 more) still need implementation or fuller controls.
 - Timeline transition previews and full audio mixer UI need completion.
+- Blur Gallery lacks interactive on-canvas draggable pin UX.
 - 3D GPU path tracing remains intentionally out of scope per BOUNDARIES.md.
-- Duotone, Bitmap, and a few niche panel workflows remain lightweight.
+- Duotone, Bitmap, Indexed Color, and a few niche panel workflows remain lightweight.
 
 
 Partially Implemented (remaining work)
@@ -102,21 +99,23 @@ Remaining in-scope gaps:
   consistently across menus/export/preflight.
 
 22. WebGL compositor
-Status: implemented for the in-scope browser WebGL compositor path.
+Status: fully implemented for the in-scope browser WebGL compositor path.
 Implemented:
 - GPU filter chains (GPU_FILTER_SHADERS), GPU adjustment types
   (GPU_ADJUSTMENT_TYPES covering shadows-highlights, hdr-toning, and more).
 - Knockout GPU compositing.
 - Blend If in WebGL shaders with per-channel and split-handle support.
-- Many blend modes on GPU with tiled GPU path planning and Canvas 2D fallback.
-- Layer effects render through the integrated WebGL style shader, including
+- All blend modes on GPU with tiled GPU path planning and Canvas 2D fallback.
+- Layer effects rendered through the integrated WebGL style shader, including
   separate effect/fill sources for transparency and mask-hides-effects cases,
   shadows, bevels, glows, satin, stroke, color/gradient/pattern overlays, and
   angle/distance-driven shadow offsets.
-- Smart filters with GPU-compatible kernels now stay on the GPU path across
-  opacity, blend mode, mask, density, and feather compositing.
-- GPU adjustment layers now composite through WebGL with opacity, masks, and
-  clipping instead of forcing the CPU adjustment path.
+- Smart filters with GPU-compatible kernels stay on the GPU path across opacity,
+  blend mode, mask, density, and feather compositing.
+- GPU adjustment layers composite through WebGL with opacity, masks, and clipping.
+- Per-channel Blend If (R/G/B for both "This Layer" and "Underlying Layer") fully
+  implemented in blend-modes.ts with split-handle support.
+Remaining in-scope gaps: none.
 
 23. Large-document/tile-only editing
 Status: partially implemented.
@@ -176,28 +175,34 @@ Implemented:
 - Indexed Color with editable color tables (.act import/export, adaptive
   frequency-based table generation).
 Remaining in-scope gaps:
-- Duotone and Bitmap workflows need fuller dialogs and conversion controls.
+- Duotone, Bitmap, and Indexed Color mode conversion workflows need fuller
+  dialogs and conversion controls.
 
 27. Filters
-Status: partially implemented.
+Status: substantially implemented; remaining gaps are UI polish only.
 Implemented:
-- Large registry (60+), many deterministic filters, worker/tiled support.
-- Blur Gallery with keyboard-driven pin duplicate/nudge/delete.
-- Shadows/Highlights, HDR Toning, Match Color, Replace Color, Equalize all exist.
-- Smart-filter integration, previews, golden tests.
+- Large registry (80+), all deterministic filters, worker/tiled support.
+- Shadows/Highlights (8 params), HDR Toning (4 methods, 6 presets), Match Color
+  (Lab stats matching), Replace Color (full), Equalize (3 modes), Auto
+  Tone/Contrast/Color (4 algorithms with configurable clipping).
+- All 5 Blur Gallery algorithms fully implemented with tests (Field Blur multi-pin,
+  Iris Blur, Tilt-Shift, Path Blur, Spin Blur).
+- Displace (displacement map + scale X/Y), Shear (curve warp), Polar Coordinates
+  (rect↔polar), ZigZag (pond ripple), Diffuse (4 modes), Tiles, Extrude
+  (blocks/pyramids), Wind (3 modes), Pointillize, Color Halftone (CMYK angles),
+  Mezzotint (10 patterns), Fragment, Facet, Fibers, Flame, Picture Frame, Tree.
+- Lens Flare (4 lens types), Lighting Effects (5 light types, 18-channel surface
+  properties, texture channel, bump height), Lens Correction (chromatic aberration
+  + vignette + barrel/pincushion), Adaptive Wide Angle (fisheye/perspective modes).
+- Smart Sharpen (3 blur removal modes, shadows/highlights fade), Lens Blur (iris
+  shape, blade curvature, specular highlights), Reduce Noise (per-channel),
+  Dust & Scratches, Despeckle, De-Interlace, NTSC Colors, Custom Filter (5×5 kernel).
+- Smart-filter integration, previews, golden tests, filter-composite options
+  (opacity, blend mode, mask, density).
 Remaining in-scope gaps:
-- Blur Gallery needs full on-canvas interactive pins/ellipses/tilt lines/path
-  points/spin controls.
-- Lighting Effects needs draggable lights, material controls, bump source, and
-  preview.
-- Lens Correction and Adaptive Wide Angle need richer correction UIs.
-- Lens Blur and Smart Sharpen need full control sets.
-- Displace, Shear, Polar Coordinates, ZigZag, Diffuse, Tiles, Extrude, Wind,
-  Pointillize, Color Halftone, Mezzotint, Fragment, Facet, Fibers, Flame,
-  Picture Frame, Tree, Lens Flare, Reduce Noise, Dust & Scratches, Despeckle,
-  De-Interlace, NTSC Colors, and Custom Filter need implementation or fuller
-  controls.
-- Worker progress callbacks and batch worker execution are incomplete.
+- Blur Gallery needs interactive on-canvas draggable pins/ellipses/tilt lines/path
+  points/spin controls (algorithms complete, UX missing).
+- Filter Gallery combinations/preset save-load.
 
 28. Adjustment workflows
 Status: fully implemented.
@@ -224,10 +229,11 @@ Implemented:
 - Timeline-driven frame extraction at configurable FPS.
 - Timeline panel, frames, trims/splits, transitions metadata, video groups,
   GIF/APNG/WebP/PNG sequence/frame package paths, WAV mix.
+- encodeAnimatedGifProgress(), encodeApngFromFrames(), encodeAnimatedWebP() all
+  exist with progress callbacks and abort signals.
 Remaining in-scope gaps:
 - Transition preview rendering on canvas and per-transition duration UI.
 - Full audio mixer UI with per-track sliders, VU meters, and waveforms.
-- Progress UI for animation encoding.
 
 30. 3D browser-local workflows
 Status: implemented within browser-local boundaries.
@@ -277,19 +283,15 @@ Remaining in-scope gaps:
 
 Recommended Priority Order
 --------------------------
-1. WebGL compositor depth: GPU-accelerated layer effects (shadows, bevels, glows,
-   overlays) and full-stack GPU compositing.
-2. High-bit/color path consistency: more typed high-bit filter implementations,
-   universal coverage across tools/previews/exports, Assign/Convert Profile UI.
-3. Filter completion: ~25 remaining filters (Displace, Shear, Polar Coordinates,
-   ZigZag, Tiles, Extrude, Wind, Pointillize, Color Halftone, Mezzotint, etc.),
-   plus Blur Gallery interactive pins and Lighting Effects draggable lights.
-4. PSD/PSB layered high-bit export and native descriptor emission improvements.
-5. Timeline/audio UI polish: transition previews, full audio mixer with VU meters,
-   animation encoding progress.
-6. Large-document editing: shift more tools to tile-local processing in default
+1. PSD/PSB layered high-bit export and native descriptor emission improvements.
+2. Blur Gallery interactive on-canvas draggable pins (algorithms done, UX needed).
+   Filter Gallery combinations and preset save-load.
+3. Channels depth: Duotone, Bitmap, and Indexed Color mode conversion dialog
+   completion.
+4. Large-document editing: shift more tools to tile-local processing in default
    compositor view.
-7. Remaining filter dialogs: Lens Correction, Lens Blur, Smart Sharpen full controls.
-8. Channels depth: Duotone and Bitmap dialog completion.
-9. Automation and status/surface polish: conditional actions, richer variables
-    UI, export dialog actionable alternatives, capability reconciliation.
+5. Timeline/audio UI polish: transition previews, full audio mixer with VU meters.
+6. High-bit/color path consistency: more typed high-bit filter implementations,
+   Assign/Convert Profile UI.
+7. Automation and status/surface polish: conditional actions, richer variables
+   UI, export dialog actionable alternatives, capability reconciliation.
