@@ -565,7 +565,6 @@ function DocumentThumbnail({ recent, large = false }: { recent: RecentDocument; 
   if (recent.thumbnail) {
     return (
       <div className={className}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={recent.thumbnail}
           alt={`${recent.name} thumbnail`}

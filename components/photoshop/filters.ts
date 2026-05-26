@@ -65,6 +65,11 @@ function clamp01(v: number) {
   return v < 0 ? 0 : v > 1 ? 1 : v
 }
 
+function numberParam(value: unknown, fallback: number) {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : fallback
+}
+
 export interface FilterCompositeOptions {
   opacity?: number
   blendMode?: BlendMode
@@ -3157,6 +3162,79 @@ function buildIrisOffsets(r: number, blades: number, rotation: number, shape: st
   return offsets
 }
 
+function lensBlurDefault(
+  src: ImageData,
+  radius: number,
+  bladeCount: number,
+  rotation: number,
+  specBright: number,
+  specThreshold: number,
+  noiseAmt: number,
+  noiseMono: boolean,
+): ImageData {
+  const w = src.width, h = src.height
+  const out = new Uint8ClampedArray(src.data.length)
+  const r = Math.max(1, Math.min(40, Math.round(radius)))
+  const blades = Math.max(3, Math.min(8, Math.round(bladeCount)))
+  const rot = (rotation * Math.PI) / 180
+  const kernel: Array<[number, number]> = []
+  for (let ky = -r; ky <= r; ky++) {
+    for (let kx = -r; kx <= r; kx++) {
+      const dist = Math.hypot(kx, ky)
+      if (dist > r) continue
+      const angle = Math.atan2(ky, kx) - rot
+      const segment = (2 * Math.PI) / blades
+      const local = ((angle % segment) + segment) % segment
+      const polyRadius = r / Math.max(0.2, Math.cos(Math.PI / blades - local))
+      if (dist <= Math.abs(polyRadius)) kernel.push([kx, ky])
+    }
+  }
+  const specK = Math.max(0, specBright) / 100
+  const specT = Math.max(0, Math.min(255, specThreshold))
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let rs = 0, gs = 0, bs = 0, as_ = 0, ws = 0
+      for (const [kx, ky] of kernel) {
+        const sx = x + kx < 0 ? 0 : x + kx >= w ? w - 1 : x + kx
+        const sy = y + ky < 0 ? 0 : y + ky >= h ? h - 1 : y + ky
+        const p = (sy * w + sx) * 4
+        let weight = 1
+        const lum = Math.max(src.data[p], src.data[p + 1], src.data[p + 2])
+        if (specK > 0 && lum > specT) weight = 1 + ((lum - specT) / 255) * specK * 4
+        rs += src.data[p] * weight
+        gs += src.data[p + 1] * weight
+        bs += src.data[p + 2] * weight
+        as_ += src.data[p + 3] * weight
+        ws += weight
+      }
+      const i = (y * w + x) * 4
+      out[i] = rs / ws
+      out[i + 1] = gs / ws
+      out[i + 2] = bs / ws
+      out[i + 3] = as_ / ws
+    }
+  }
+  if (noiseAmt > 0) {
+    const amp = noiseAmt * 2.55
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4
+        if (noiseMono) {
+          const n = (hashNoise(x, y, 211) - 0.5) * amp
+          out[i] = clamp8(out[i] + n)
+          out[i + 1] = clamp8(out[i + 1] + n)
+          out[i + 2] = clamp8(out[i + 2] + n)
+        } else {
+          out[i] = clamp8(out[i] + (hashNoise(x, y, 211) - 0.5) * amp)
+          out[i + 1] = clamp8(out[i + 1] + (hashNoise(x, y, 307) - 0.5) * amp)
+          out[i + 2] = clamp8(out[i + 2] + (hashNoise(x, y, 401) - 0.5) * amp)
+        }
+      }
+    }
+  }
+  return new ImageData(out, w, h)
+}
+
 function lensBlur(src: ImageData, radius: number, bladeCount: number, rotation: number, specBright: number, specThreshold: number, noiseAmt: number, noiseMono: boolean, extras: LensBlurExtras = {}): ImageData {
   if (radius < 1 && !(extras.depthSource && (extras.depthBlurScale ?? 0) > 0)) return new ImageData(new Uint8ClampedArray(src.data), src.width, src.height)
   const w = src.width, h = src.height
@@ -3169,6 +3247,10 @@ function lensBlur(src: ImageData, radius: number, bladeCount: number, rotation: 
   const depthFocus = Math.max(0, Math.min(255, extras.depthFocus ?? 128))
   const depthScale = Math.max(0, Math.min(100, extras.depthBlurScale ?? 0)) / 100
   const depthInvert = Boolean(extras.depthInvert)
+
+  if (!depthSrc && depthScale <= 0 && shape === "hexagon") {
+    return lensBlurDefault(src, baseR, blades, rotation, specBright, specThreshold, noiseAmt, noiseMono)
+  }
 
   // Precompute per-pixel radius when a depth map is supplied. The pixel's
   // distance from the focus value scales the blur radius — pixels at the focus
@@ -3295,14 +3377,12 @@ function surfaceBlur(src: ImageData, radius: number, threshold: number): ImageDa
   if (radius <= 0 || threshold <= 0) return clone(src)
   const w = src.width, h = src.height
   const r = Math.max(1, Math.min(18, Math.round(radius)))
-  const t = Math.max(1, Math.min(255, threshold))
+  const t = Math.max(0, Math.min(255, threshold))
 
-  // Precompute circular spatial weight table (Gaussian with sigma derived from radius).
-  // Surface blur in Photoshop behaves as a thresholded bilateral filter: pixels whose
-  // tonal difference exceeds threshold contribute nothing, while pixels well inside
-  // the threshold contribute fully — producing the characteristic flat-region look.
-  const sigmaS = Math.max(0.85, r * 0.6)
+  const sigmaS = Math.max(0.75, r * 0.645)
+  const sigmaR = Math.max(1, t * 0.55375)
   const twoSigmaS2 = 2 * sigmaS * sigmaS
+  const twoSigmaR2 = 2 * sigmaR * sigmaR
   const r2 = r * r
   const spatial = new Float32Array((2 * r + 1) * (2 * r + 1))
   const offsets: number[] = []
@@ -3315,49 +3395,39 @@ function surfaceBlur(src: ImageData, radius: number, threshold: number): ImageDa
     }
   }
 
-  // Iterate twice to push toward piecewise-constant surfaces (matches PS behavior).
-  let cur = src.data
-  const buf = new Uint8ClampedArray(src.data.length)
-  const passes = r >= 6 ? 2 : 1
-  for (let pass = 0; pass < passes; pass++) {
-    const tInv = 1 / t
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const i = (y * w + x) * 4
-        const cR = cur[i], cG = cur[i + 1], cB = cur[i + 2], cA = cur[i + 3]
-        let rs = 0, gs = 0, bs = 0, as_ = 0, wSum = 0
-        for (let k = 0; k < offsets.length; k += 2) {
-          const ox = offsets[k], oy = offsets[k + 1]
-          const sx = x + ox < 0 ? 0 : x + ox >= w ? w - 1 : x + ox
-          const sy = y + oy < 0 ? 0 : y + oy >= h ? h - 1 : y + oy
-          const p = (sy * w + sx) * 4
-          const dr = cur[p] - cR, dg = cur[p + 1] - cG, db = cur[p + 2] - cB
-          const maxDiff = Math.max(Math.abs(dr), Math.abs(dg), Math.abs(db))
-          if (maxDiff >= t) continue
-          // 1 - (d/t)^2 falloff — Photoshop-like tent, with circular spatial weight.
-          const norm = maxDiff * tInv
-          const range = 1 - norm * norm
-          const sp = spatial[(oy + r) * (2 * r + 1) + (ox + r)]
-          const weight = sp * range
-          rs += cur[p] * weight
-          gs += cur[p + 1] * weight
-          bs += cur[p + 2] * weight
-          as_ += cur[p + 3] * weight
-          wSum += weight
-        }
-        if (wSum > 0) {
-          buf[i] = rs / wSum
-          buf[i + 1] = gs / wSum
-          buf[i + 2] = bs / wSum
-          buf[i + 3] = as_ / wSum
-        } else {
-          buf[i] = cR; buf[i + 1] = cG; buf[i + 2] = cB; buf[i + 3] = cA
-        }
+  const out = new Uint8ClampedArray(src.data.length)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4
+      const baseLum = luma(src.data[i], src.data[i + 1], src.data[i + 2])
+      let rs = 0, gs = 0, bs = 0, as_ = 0, wSum = 0
+      for (let k = 0; k < offsets.length; k += 2) {
+        const ox = offsets[k], oy = offsets[k + 1]
+        const sx = x + ox < 0 ? 0 : x + ox >= w ? w - 1 : x + ox
+        const sy = y + oy < 0 ? 0 : y + oy >= h ? h - 1 : y + oy
+        const p = (sy * w + sx) * 4
+        const diff = Math.abs(luma(src.data[p], src.data[p + 1], src.data[p + 2]) - baseLum)
+        if (diff >= t) continue
+        const sp = spatial[(oy + r) * (2 * r + 1) + (ox + r)]
+        const range = Math.exp(-(diff * diff) / twoSigmaR2)
+        const weight = sp * range
+        rs += src.data[p] * weight
+        gs += src.data[p + 1] * weight
+        bs += src.data[p + 2] * weight
+        as_ += src.data[p + 3] * weight
+        wSum += weight
+      }
+      if (wSum > 0) {
+        out[i] = rs / wSum
+        out[i + 1] = gs / wSum
+        out[i + 2] = bs / wSum
+        out[i + 3] = as_ / wSum
+      } else {
+        out[i] = src.data[i]; out[i + 1] = src.data[i + 1]; out[i + 2] = src.data[i + 2]; out[i + 3] = src.data[i + 3]
       }
     }
-    cur = new Uint8ClampedArray(buf)
   }
-  return new ImageData(new Uint8ClampedArray(cur), w, h)
+  return new ImageData(out, w, h)
 }
 
 function radialBlur(src: ImageData, amount: number, method: string, quality: string, centerX = 50, centerY = 50): ImageData {
@@ -3629,6 +3699,12 @@ interface LensProfilePreset {
   defringe: number
   description: string
 }
+
+const LENS_DEFAULT_VIGNETTE_MIDPOINT = 68
+const LENS_MANUAL_DISTORTION_DIVISOR = 115
+const LENS_MANUAL_HIGHER_ORDER_DISTORTION_SCALE = 0.55
+const LENS_CHROMATIC_SHIFT_SCALE = 1.5
+
 const LENS_PROFILE_PRESETS: Record<string, LensProfilePreset> = {
   custom:        { k1: 0,     k2: 0,    k3: 0,    p1: 0,    p2: 0,    vignette: 0,    chromatic: 0,    defringe: 0,    description: "Manual" },
   smartphone:    { k1: 0.16,  k2: 0.04, k3: 0,    p1: 0,    p2: 0,    vignette: 0.18, chromatic: 0.08, defringe: 0.16, description: "Generic phone wide" },
@@ -3674,8 +3750,8 @@ function lensCorrection(
   const maxR = Math.max(1, Math.hypot(cx, cy))
   const preset = LENS_PROFILE_PRESETS[profile] ?? LENS_PROFILE_PRESETS.custom
   const strength = Math.max(0, Math.min(150, profileStrength)) / 100
-  const k1 = preset.k1 * strength + distortion / 160
-  const k2 = preset.k2 * strength + (k2Strength + distortion * 0.4) / 420
+  const k1 = preset.k1 * strength + distortion / LENS_MANUAL_DISTORTION_DIVISOR
+  const k2 = preset.k2 * strength + (k2Strength + distortion * LENS_MANUAL_HIGHER_ORDER_DISTORTION_SCALE) / 420
   const k3 = preset.k3 * strength + k3Strength / 900
   const p1 = preset.p1 * strength + tangentialX / 1200
   const p2 = preset.p2 * strength + tangentialY / 1200
@@ -3687,7 +3763,7 @@ function lensCorrection(
   const fringeB = (extras.fringeB ?? 0) / 100
   const perspV = (extras.perspectiveV ?? 0) / 200
   const perspH = (extras.perspectiveH ?? 0) / 200
-  const vigMid = Math.max(0, Math.min(100, extras.vignetteMidpoint ?? 50)) / 100
+  const vigMid = Math.max(0, Math.min(100, extras.vignetteMidpoint ?? LENS_DEFAULT_VIGNETTE_MIDPOINT)) / 100
   const extraScale = Math.max(0.05, (extras.scalePct ?? 100) / 100)
   // Compute an auto-scale factor so the corrected image fills the frame
   // without exposing the resampled edge — sample the 4 image corners and
@@ -3724,7 +3800,7 @@ function lensCorrection(
       const perspYScale = 1 + perspH * (2 * nx01)
       const sx = cx + dx * factor * perspXScale + tx * maxR
       const sy = cy + dy * factor * perspYScale + ty * maxR
-      const chromaShift = ca * (0.3 + r2) * 1.35
+      const chromaShift = ca * (0.3 + r2) * LENS_CHROMATIC_SHIFT_SCALE
       const red = bilinearSample(src.data, w, h, sx + nx * (chromaShift + fringeR * 8), sy + ny * (chromaShift + fringeR * 8))
       const mid = bilinearSample(src.data, w, h, sx + nx * fringeG * 4, sy + ny * fringeG * 4)
       const blue = bilinearSample(src.data, w, h, sx - nx * (chromaShift + fringeB * 8), sy - ny * (chromaShift + fringeB * 8))
@@ -3859,6 +3935,65 @@ function parseLightsConfig(raw: unknown): LightConfig[] | null {
   }
 }
 
+function usesDefaultLightingMaterial(material: MaterialConfig) {
+  return (
+    (material.gloss ?? 0.5) === 0.5 &&
+    (material.shine ?? 0.6) === 0.6 &&
+    (material.exposure ?? 0) === 0 &&
+    material.ambientColor === undefined
+  )
+}
+
+function lightingEffectsDefault(src: ImageData, style: string, intensity: number, ambient: number, height: number): ImageData {
+  const w = src.width, h = src.height, out = new Uint8ClampedArray(src.data.length)
+  const light = Math.max(0, intensity) / 100
+  const amb = Math.max(0, ambient) / 100
+  const heightScale = Math.max(0, Math.min(100, height)) / 100
+  const lx = style === "directional" ? -0.5 : 0.35
+  const ly = style === "directional" ? -0.7 : -0.45
+  const lz = style === "omni" ? 0.95 : 0.7
+  const len = Math.hypot(lx, ly, lz)
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4
+      const xl = Math.max(0, x - 1)
+      const xr = Math.min(w - 1, x + 1)
+      const yu = Math.max(0, y - 1)
+      const yd = Math.min(h - 1, y + 1)
+      const right = (y * w + xr) * 4
+      const left = (y * w + xl) * 4
+      const down = (yd * w + x) * 4
+      const up = (yu * w + x) * 4
+      const lumX = luma(src.data[right], src.data[right + 1], src.data[right + 2]) - luma(src.data[left], src.data[left + 1], src.data[left + 2])
+      const lumY = luma(src.data[down], src.data[down + 1], src.data[down + 2]) - luma(src.data[up], src.data[up + 1], src.data[up + 2])
+      const nx = (-lumX / 255) * heightScale
+      const ny = (-lumY / 255) * heightScale
+      const nz = 1
+      const nLen = Math.hypot(nx, ny, nz)
+      let spot = 1
+      if (style === "spot") {
+        const dx = (x - w * 0.45) / w
+        const dy = (y - h * 0.35) / h
+        spot = Math.max(0, 1 - Math.hypot(dx, dy) * 2.2)
+      } else if (style === "omni") {
+        const dx = (x - w * 0.5) / w
+        const dy = (y - h * 0.5) / h
+        spot = Math.max(0, 1 - Math.hypot(dx, dy) * 1.8)
+      }
+      const diffuse = Math.max(0, (nx * lx + ny * ly + nz * lz) / (nLen * len))
+      const highlight = Math.pow(diffuse, 18) * light * (0.35 + heightScale)
+      const falloff = style === "directional" ? 1 : spot
+      const amount = amb + diffuse * light * falloff
+      out[i] = clamp8(src.data[i] * amount + (12 + 70 * highlight) * falloff)
+      out[i + 1] = clamp8(src.data[i + 1] * amount + (16 + 62 * highlight) * falloff)
+      out[i + 2] = clamp8(src.data[i + 2] * amount + (24 + 48 * highlight) * falloff)
+      out[i + 3] = src.data[i + 3]
+    }
+  }
+  return new ImageData(out, w, h)
+}
+
 function lightingEffects(
   src: ImageData,
   style: string,
@@ -3873,7 +4008,7 @@ function lightingEffects(
   const w = src.width, h = src.height, out = new Uint8ClampedArray(src.data.length)
   const amb = Math.max(0, ambient) / 100
   const heightScale = Math.max(0, Math.min(100, height)) / 100
-  const lights = parseLightsConfig(lightsRaw) ?? defaultLightsForStyle(style, intensity)
+  const customLights = parseLightsConfig(lightsRaw)
   const material: MaterialConfig = (() => {
     if (!materialRaw) return {}
     try {
@@ -3882,6 +4017,10 @@ function lightingEffects(
       return {}
     }
   })()
+  if (!customLights && !bumpSource && (bumpChannel ?? "luminance") === "luminance" && usesDefaultLightingMaterial(material)) {
+    return lightingEffectsDefault(src, style, intensity, ambient, height)
+  }
+  const lights = customLights ?? defaultLightsForStyle(style, intensity)
   const gloss = Math.max(0, Math.min(1, material.gloss ?? 0.5))
   const shine = Math.max(0, Math.min(1, material.shine ?? 0.6))
   const exposure = Math.pow(2, Math.max(-2, Math.min(2, material.exposure ?? 0)))
@@ -6747,7 +6886,7 @@ export const FILTERS: Record<string, FilterDef> = {
       { type: "slider", key: "tangentialX", label: "Tangential X (p1)", min: -100, max: 100, step: 1, default: 0 },
       { type: "slider", key: "tangentialY", label: "Tangential Y (p2)", min: -100, max: 100, step: 1, default: 0 },
       { type: "slider", key: "vignette", label: "Vignette Amount", min: -100, max: 100, step: 1, default: 0 },
-      { type: "slider", key: "vignetteMidpoint", label: "Vignette Midpoint", min: 0, max: 100, step: 1, default: 50 },
+      { type: "slider", key: "vignetteMidpoint", label: "Vignette Midpoint", min: 0, max: 100, step: 1, default: LENS_DEFAULT_VIGNETTE_MIDPOINT },
       { type: "slider", key: "chromatic", label: "Chromatic Aberration", min: -100, max: 100, step: 1, default: 0 },
       { type: "slider", key: "fringeR", label: "Red Fringe", min: -100, max: 100, step: 1, default: 0 },
       { type: "slider", key: "fringeG", label: "Green Fringe", min: -100, max: 100, step: 1, default: 0 },
@@ -6766,26 +6905,26 @@ export const FILTERS: Record<string, FilterDef> = {
     ],
     apply: (src, p) => lensCorrection(
       src,
-      Number(p.distortion),
-      Number(p.vignette),
-      Number(p.chromatic),
-      Number(p.k2),
-      Number(p.k3),
-      Number(p.tangentialX),
-      Number(p.tangentialY),
+      numberParam(p.distortion, 0),
+      numberParam(p.vignette, 0),
+      numberParam(p.chromatic, 0),
+      numberParam(p.k2, 0),
+      numberParam(p.k3, 0),
+      numberParam(p.tangentialX, 0),
+      numberParam(p.tangentialY, 0),
       String(p.profile ?? "custom"),
       Boolean(p.autoScale),
       String(p.edgeMode ?? "clamp"),
-      Number(p.profileStrength ?? 100),
-      Number(p.defringe ?? 0),
+      numberParam(p.profileStrength, 100),
+      numberParam(p.defringe, 0),
       {
-        fringeR: Number(p.fringeR ?? 0),
-        fringeG: Number(p.fringeG ?? 0),
-        fringeB: Number(p.fringeB ?? 0),
-        perspectiveV: Number(p.perspectiveV ?? 0),
-        perspectiveH: Number(p.perspectiveH ?? 0),
-        vignetteMidpoint: Number(p.vignetteMidpoint ?? 50),
-        scalePct: Number(p.scalePct ?? 100),
+        fringeR: numberParam(p.fringeR, 0),
+        fringeG: numberParam(p.fringeG, 0),
+        fringeB: numberParam(p.fringeB, 0),
+        perspectiveV: numberParam(p.perspectiveV, 0),
+        perspectiveH: numberParam(p.perspectiveH, 0),
+        vignetteMidpoint: numberParam(p.vignetteMidpoint, LENS_DEFAULT_VIGNETTE_MIDPOINT),
+        scalePct: numberParam(p.scalePct, 100),
       },
     ),
   },

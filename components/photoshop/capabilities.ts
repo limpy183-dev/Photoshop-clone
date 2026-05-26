@@ -220,8 +220,8 @@ const records = [
     label: "UV, Material, and 3D Surface Painting",
     kind: "3d",
     status: "usable",
-    summary: "Scene metadata supports planar UV assignment, material UV scale/offset, texture paint strokes, and editable material parameters.",
-    limitations: ["Texture strokes are stored as editable browser metadata rather than baked GPU texture atlases."],
+    summary: "Scene metadata supports planar UV assignment, material UV scale/offset, editable material parameters, and texture paint strokes baked into editable browser-local atlases.",
+    limitations: ["External proprietary shader graphs and GPU-native texture stacks are approximated as editable atlas pixels and import metadata."],
     testCoverage: "unit",
   },
   {

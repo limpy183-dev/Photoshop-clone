@@ -44,6 +44,8 @@ import {
   reverseFrames,
   setDurationsFromFps,
   splitTimelineFrameAtPlayhead,
+  transitionDurationForFrame,
+  transitionProgressAtFrameTime,
   timelineDurationMs,
   timelineFrameIndexAtTime,
 } from "../timeline-engine"
@@ -242,9 +244,10 @@ export function TimelinePanel() {
       applyFrame(frame, false)
       setSelectedId(frame.id)
       const duration = Math.max(50, frame.durationMs)
+      const transitionDuration = transitionDurationForFrame(frame)
       // Animate the transition between frame and next while the frame is on screen.
       startTs = performance.now()
-      const hasTransition = frame.transition && frame.transition !== "hold" && next
+      const hasTransition = transitionDuration > 0 && next
       const animateOverlay = () => {
         if (cancelled) return
         const elapsed = performance.now() - startTs
@@ -252,7 +255,7 @@ export function TimelinePanel() {
           dispatchOverlay(null)
           return
         }
-        const progress = Math.min(1, elapsed / duration)
+        const progress = transitionProgressAtFrameTime(frame, elapsed)
         try {
           const composite = renderTimelineFrameWithTransition(activeDoc, frame, next, progress, {
             transparent: true,
@@ -261,7 +264,7 @@ export function TimelinePanel() {
         } catch {
           // ignore drawing failures (canvas size mismatch, etc.)
         }
-        if (progress < 1) {
+        if (elapsed < duration) {
           rafId = window.requestAnimationFrame(animateOverlay)
         }
       }
@@ -1489,6 +1492,7 @@ export function TimelinePanel() {
               key={frame.id}
               doc={doc}
               frame={frame}
+              nextFrame={frames[idx + 1] ?? null}
               index={idx}
               total={frames.length}
               isSelected={frame.id === selected?.id}
@@ -1550,6 +1554,7 @@ export function TimelinePanel() {
 function FrameRow({
   doc,
   frame,
+  nextFrame,
   index,
   total,
   isSelected,
@@ -1564,6 +1569,7 @@ function FrameRow({
 }: {
   doc: PsDocument
   frame: TimelineFrame
+  nextFrame: TimelineFrame | null
   index: number
   total: number
   isSelected: boolean
@@ -1601,6 +1607,9 @@ function FrameRow({
     : isMultiSelected
     ? "bg-[var(--ps-tool-hover)]"
     : ""
+  const transitionKind = frame.transition ?? "hold"
+  const hasTransitionPreview = transitionKind !== "hold" && Boolean(nextFrame)
+  const transitionDurationMs = Math.max(0, Math.round(frame.transitionDurationMs ?? frame.durationMs))
 
   return (
     <div
@@ -1673,8 +1682,16 @@ function FrameRow({
           <span className="text-[10px] text-[var(--ps-text-dim)]">ms</span>
           <select
             aria-label={`Transition for ${frame.name}`}
-            value={frame.transition ?? "hold"}
-            onChange={(e) => onChange({ transition: e.target.value as TimelineFrame["transition"] })}
+            value={transitionKind}
+            onChange={(e) => {
+              const transition = e.target.value as TimelineFrame["transition"]
+              onChange({
+                transition,
+                ...(transition && transition !== "hold" && !frame.transitionDurationMs
+                  ? { transitionDurationMs: Math.min(250, Math.max(20, frame.durationMs)) }
+                  : {}),
+              })
+            }}
             onClick={(e) => e.stopPropagation()}
             className="h-5 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]"
           >
@@ -1699,7 +1716,33 @@ function FrameRow({
               </option>
             ))}
           </select>
+          <span className="text-[10px] text-[var(--ps-text-dim)]">Trans</span>
+          <input
+            type="number"
+            min={0}
+            max={Math.max(20, frame.durationMs)}
+            step={20}
+            disabled={!hasTransitionPreview}
+            value={hasTransitionPreview ? transitionDurationMs : 0}
+            onChange={(e) =>
+              onChange({
+                transitionDurationMs: Math.max(0, Math.min(frame.durationMs, Number(e.target.value) || 0)),
+              })
+            }
+            onClick={(e) => e.stopPropagation()}
+            className="h-5 w-16 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px] disabled:opacity-40"
+            aria-label={`Transition duration ms for ${frame.name}`}
+          />
+          <span className="text-[10px] text-[var(--ps-text-dim)]">ms</span>
         </div>
+        {hasTransitionPreview && nextFrame ? (
+          <div className="flex items-center gap-2">
+            <TransitionPreviewCanvas doc={doc} frame={frame} nextFrame={nextFrame} />
+            <span className="text-[9px] text-[var(--ps-text-dim)]">
+              Preview {transitionKind} over {transitionDurationMs}ms
+            </span>
+          </div>
+        ) : null}
         <input
           aria-label={`Audio cue for ${frame.name}`}
           value={frame.audioLabel ?? ""}
@@ -1730,6 +1773,41 @@ function FrameRow({
         </ToolButton>
       </div>
     </div>
+  )
+}
+
+function TransitionPreviewCanvas({
+  doc,
+  frame,
+  nextFrame,
+}: {
+  doc: PsDocument
+  frame: TimelineFrame
+  nextFrame: TimelineFrame
+}) {
+  const canvasRef = React.useRef<HTMLCanvasElement | null>(null)
+
+  React.useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const preview = renderTimelineFrameWithTransition(doc, frame, nextFrame, 0.5, { transparent: true })
+    const aspect = Math.max(1, preview.width) / Math.max(1, preview.height)
+    const targetW = 64
+    const targetH = Math.max(24, Math.round(targetW / aspect))
+    canvas.width = targetW
+    canvas.height = targetH
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+    ctx.clearRect(0, 0, targetW, targetH)
+    ctx.drawImage(preview, 0, 0, targetW, targetH)
+  }, [doc, frame, nextFrame])
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="h-8 w-16 rounded-sm border border-[var(--ps-divider)] bg-black"
+      aria-label={`Transition preview for ${frame.name}`}
+    />
   )
 }
 
@@ -2336,8 +2414,11 @@ function AudioMixerRow({
   ])
 
   const muted = track.muted === true || (anySolo && track.solo !== true)
+  const volumePct = Math.round(Math.max(0, Math.min(1.5, track.volume ?? 1)) * 100)
+  const panPct = Math.round(Math.max(-1, Math.min(1, track.pan ?? 0)) * 100)
+  const fadeMax = Math.max(1000, Math.round(track.durationMs || 1000))
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_120px_44px_70px] items-center gap-2 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)]/30 px-2 py-1">
+    <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_minmax(150px,220px)_70px] items-center gap-2 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)]/30 px-2 py-1">
       <div className="min-w-0">
         <div className="truncate text-[10px] text-[var(--ps-text)]" title={track.name}>
           {track.name || "Audio track"}
@@ -2380,24 +2461,72 @@ function AudioMixerRow({
       >
         S
       </button>
-      <input
-        type="range"
-        min={0}
-        max={150}
-        value={Math.round(Math.max(0, Math.min(1.5, track.volume ?? 1)) * 100)}
-        onChange={(e) =>
-          onUpdate(track.id, {
-            volume: Math.max(0, Math.min(1.5, Number(e.target.value) / 100)),
-          })
-        }
-        className="h-5 w-full"
-        aria-label={`Volume for ${track.name}`}
-      />
-      <span className="text-right text-[10px] text-[var(--ps-text-dim)]">
-        {Math.round((track.volume ?? 1) * 100)}%
-      </span>
+      <div className="grid gap-1">
+        <label className="grid grid-cols-[34px_1fr_34px] items-center gap-1 text-[9px] text-[var(--ps-text-dim)]">
+          <span>Vol</span>
+          <input
+            type="range"
+            min={0}
+            max={150}
+            value={volumePct}
+            onChange={(e) =>
+              onUpdate(track.id, {
+                volume: Math.max(0, Math.min(1.5, Number(e.target.value) / 100)),
+              })
+            }
+            className="h-4 w-full"
+            aria-label={`Volume for ${track.name}`}
+          />
+          <span className="text-right">{volumePct}%</span>
+        </label>
+        <label className="grid grid-cols-[34px_1fr_34px] items-center gap-1 text-[9px] text-[var(--ps-text-dim)]">
+          <span>Pan</span>
+          <input
+            type="range"
+            min={-100}
+            max={100}
+            value={panPct}
+            onChange={(e) =>
+              onUpdate(track.id, {
+                pan: Math.max(-1, Math.min(1, Number(e.target.value) / 100)),
+              })
+            }
+            className="h-4 w-full"
+            aria-label={`Pan for ${track.name}`}
+          />
+          <span className="text-right">{panPct === 0 ? "C" : panPct < 0 ? `L${Math.abs(panPct)}` : `R${panPct}`}</span>
+        </label>
+        <div className="grid grid-cols-2 gap-1">
+          <label className="grid grid-cols-[28px_1fr] items-center gap-1 text-[9px] text-[var(--ps-text-dim)]">
+            <span>In</span>
+            <input
+              type="range"
+              min={0}
+              max={fadeMax}
+              step={50}
+              value={Math.max(0, Math.min(fadeMax, track.fadeInMs ?? 0))}
+              onChange={(e) => onUpdate(track.id, { fadeInMs: Math.max(0, Math.min(fadeMax, Number(e.target.value) || 0)) })}
+              className="h-4 w-full"
+              aria-label={`Fade in for ${track.name}`}
+            />
+          </label>
+          <label className="grid grid-cols-[32px_1fr] items-center gap-1 text-[9px] text-[var(--ps-text-dim)]">
+            <span>Out</span>
+            <input
+              type="range"
+              min={0}
+              max={fadeMax}
+              step={50}
+              value={Math.max(0, Math.min(fadeMax, track.fadeOutMs ?? 0))}
+              onChange={(e) => onUpdate(track.id, { fadeOutMs: Math.max(0, Math.min(fadeMax, Number(e.target.value) || 0)) })}
+              className="h-4 w-full"
+              aria-label={`Fade out for ${track.name}`}
+            />
+          </label>
+        </div>
+      </div>
       <div
-        className="h-3 overflow-hidden rounded-sm border border-[var(--ps-divider)] bg-black"
+        className="flex h-12 items-end overflow-hidden rounded-sm border border-[var(--ps-divider)] bg-black"
         role="meter"
         aria-label={`VU meter for ${track.name}`}
         aria-valuenow={Math.round(vu * 100)}
@@ -2406,8 +2535,8 @@ function AudioMixerRow({
         title={`${Math.round(vu * 100)}%${muted ? " (muted)" : ""}`}
       >
         <div
-          className={`h-full transition-[width] ${muted ? "bg-[var(--ps-text-dim)]/40" : "bg-[var(--ps-accent)]"}`}
-          style={{ width: `${Math.max(0, Math.min(100, vu * 100))}%` }}
+          className={`mt-auto w-full transition-[height] ${muted ? "bg-[var(--ps-text-dim)]/40" : "bg-[var(--ps-accent)]"}`}
+          style={{ height: `${Math.max(0, Math.min(100, vu * 100))}%` }}
         />
       </div>
     </div>

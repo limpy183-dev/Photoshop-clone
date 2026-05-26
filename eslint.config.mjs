@@ -36,6 +36,8 @@ export default tseslint.config(
     ignores: [
       ".next/**",
       "artifacts/**",
+      "gsap-public/**",
+      "gsap-skills-main/**",
       "node_modules/**",
       "test-results/**",
       "tsconfig.tsbuildinfo",

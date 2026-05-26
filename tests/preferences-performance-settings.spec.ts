@@ -23,6 +23,7 @@ import {
 } from "../components/photoshop/preferences-engine"
 import { buildRulerTickMarks } from "../components/photoshop/ruler-calibration"
 import { resolveCanvasCursorState } from "../components/photoshop/cursor-overlay"
+import { defaultTechPreviewFlags, getTechPreviewFlagDefinition } from "../components/photoshop/tech-previews"
 
 test("normalizes legacy preference sets into the full schema", () => {
   const prefs = normalizePreferences({
@@ -341,6 +342,20 @@ test("normalizes technology preview feature flags with per-toggle help and risk 
     helpText: expect.stringContaining("WebGPU"),
     riskText: expect.stringContaining("driver"),
   })
+})
+
+test("WebGPU 3D path tracing is exposed only as an experimental CPU-fallback tech preview", () => {
+  const flag = getTechPreviewFlagDefinition("webgpuPathTracing3D")
+  const defaults = defaultTechPreviewFlags()
+
+  expect(flag).toMatchObject({
+    id: "webgpuPathTracing3D",
+    riskLevel: "experimental",
+    defaultEnabled: false,
+  })
+  expect(defaults.webgpuPathTracing3D).toBe(false)
+  expect(flag?.helpText).toContain("CPU raytrace remains the production renderer")
+  expect(flag?.helpText).toContain("not a production replacement")
 })
 
 test("imports only selected preference sections while preserving the rest", () => {

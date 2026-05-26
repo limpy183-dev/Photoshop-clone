@@ -117,6 +117,40 @@ test("PSD app-preservation embeds used local font files and restores them as lib
   expect(imported.layers[1].text?.embeddedFont?.dataBase64).toBe(font.dataBase64)
 })
 
+test("PSD app-preservation carries document-level plugin and variable-data metadata", async () => {
+  const doc = richFixtureDocument()
+  doc.plugins = [{ id: "plugin_cep", name: "CEP Panel", kind: "cep-panel", enabled: true, createdAt: 1 }]
+  doc.pluginStorage = { plugin_cep: { panelState: "expanded", sampleCount: 3 } }
+  doc.variableDataSets = [{
+    id: "data_1",
+    name: "Hero Copy",
+    rows: [{ headline: "Launch", cta: "Buy now" }],
+    bindings: [{ id: "binding_1", layerId: doc.layers[1].id, property: "text", column: "headline" }],
+    activeRow: 0,
+  }]
+
+  const payload = createPsdAppPreservationPayload(doc)
+  const xmp = embedPsdAppPreservationInXmp(undefined, payload)
+  const extracted = extractPsdAppPreservationFromXmp(xmp)!
+  const imported: PsDocument = {
+    ...doc,
+    plugins: [],
+    pluginStorage: {},
+    variableDataSets: [],
+  }
+
+  await applyPsdAppPreservationPayload(imported, extracted)
+
+  expect(imported.plugins?.[0]).toMatchObject({ id: "plugin_cep", name: "CEP Panel", kind: "cep-panel" })
+  expect(imported.pluginStorage?.plugin_cep).toMatchObject({ panelState: "expanded", sampleCount: 3 })
+  expect(imported.variableDataSets?.[0]).toMatchObject({
+    id: "data_1",
+    name: "Hero Copy",
+    rows: [{ headline: "Launch", cta: "Buy now" }],
+    activeRow: 0,
+  })
+})
+
 test("PSD export action plan itemizes rasterized, approximated, and project-only elements", () => {
   const doc = richFixtureDocument()
   doc.layers.push({

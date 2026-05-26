@@ -6,6 +6,7 @@ import {
   createDefaultShapeAppearance,
   convertAnchorPoint,
   deleteNearestAnchorPoint,
+  duplicatePathSubpath,
   exportPathToSvgPath,
   fitFreeformPath,
   getRoundedRectCornerRadiusHandles,
@@ -18,16 +19,24 @@ import {
   resizeShapeWithCornerRadii,
   resolveShapeBooleanPath,
   selectPathAnchorsInRect,
+  selectPathSubpathAnchors,
   shapeToEditablePath,
   togglePathAnchorSelection,
   updateRoundedRectCornerRadius,
 } from "../components/photoshop/vector-path-operations"
 import {
   exportCustomShapeLibrary,
+  mergeCustomShapeLibraries,
   normalizeCustomShapeLibrary,
+  organizeCustomShapeLibrary,
   shapeAssetToPreset,
   shapePresetToAsset,
 } from "../components/photoshop/custom-shape-library"
+import {
+  activePathToolForModifiers,
+  constrainPointTo45,
+  pathModifierIntent,
+} from "../components/photoshop/path-modifier-keys"
 import { copyLayerCss, copyLayerSvg } from "../components/photoshop/vector-clipboard"
 import { planStrokePathBrushSamples } from "../components/photoshop/vector-stroke-dynamics"
 import { appShapeToPsd, psdShapeToApp } from "../components/photoshop/psd-vector-text"
@@ -339,6 +348,43 @@ test("direct selection can toggle, marquee-select, and move multiple anchors acr
   })
 })
 
+test("path selection can select and duplicate a single subpath for Alt-drag editing", () => {
+  const path = {
+    closed: true,
+    points: [
+      { x: 0, y: 0 },
+      { x: 30, y: 0 },
+      { x: 30, y: 30 },
+    ],
+    subpaths: [
+      {
+        closed: true,
+        points: [
+          { x: 100, y: 100 },
+          { x: 140, y: 100 },
+          { x: 140, y: 140 },
+        ],
+      },
+    ],
+  }
+
+  const selected = selectPathSubpathAnchors(path, 0)
+  const duplicated = duplicatePathSubpath(path, 0, { dx: 12, dy: -8 })
+
+  expect(selected).toEqual([
+    { subpathIndex: 0, pointIndex: 0 },
+    { subpathIndex: 0, pointIndex: 1 },
+    { subpathIndex: 0, pointIndex: 2 },
+  ])
+  expect(duplicated.insertedSubpathIndex).toBe(1)
+  expect(duplicated.selection).toEqual([
+    { subpathIndex: 1, pointIndex: 0 },
+    { subpathIndex: 1, pointIndex: 1 },
+    { subpathIndex: 1, pointIndex: 2 },
+  ])
+  expect(duplicated.path.subpaths?.[1].points[0]).toMatchObject({ x: 112, y: 92 })
+})
+
 test("rounded rectangle radii scale across direct resize transforms", () => {
   const rounded: ShapeProps = {
     type: "rect",
@@ -441,6 +487,64 @@ test("custom shape libraries import, organize, export, and round-trip active sha
   expect(restored).toMatchObject({ type: "star", x: 100, y: 120, w: 40, h: 40, fill: "#ffffff", starPoints: 7 })
 })
 
+test("custom shape library merge policies preserve folders and organize searchable imported sets", () => {
+  const existing = normalizeCustomShapeLibrary([
+    {
+      id: "badge",
+      name: "Badge",
+      group: "Badges",
+      tags: ["campaign"],
+      payload: { type: "star", fill: "#ffcc00", stroke: null, starPoints: 5 },
+      createdAt: 100,
+    },
+  ])
+  const incoming = normalizeCustomShapeLibrary([
+    {
+      id: "badge",
+      name: "Badge",
+      group: "Imported",
+      tags: ["campaign", "launch"],
+      payload: { type: "custom", customId: "heart", fill: "#ff3366", stroke: null },
+      createdAt: 200,
+    },
+    {
+      id: "arrow",
+      name: "Launch Arrow",
+      group: "Imported",
+      tags: ["launch"],
+      payload: { type: "custom", customId: "arrow-right", fill: "#ffffff", stroke: null },
+      createdAt: 300,
+    },
+  ])
+
+  const merged = mergeCustomShapeLibraries(existing, incoming, {
+    conflictPolicy: "keep-both",
+    idFactory: (id, attempt) => `${id}-copy-${attempt}`,
+  })
+  const organized = organizeCustomShapeLibrary(merged.shapes, {
+    query: "launch",
+    sortBy: "name",
+  })
+
+  expect(merged).toMatchObject({ added: 2, renamed: 1, replaced: 0, skipped: 0 })
+  expect(merged.shapes.map((shape) => [shape.id, shape.name, shape.group])).toEqual([
+    ["badge", "Badge", "Badges"],
+    ["badge-copy-1", "Badge copy", "Imported"],
+    ["arrow", "Launch Arrow", "Imported"],
+  ])
+  expect(organized.map((group) => [group.group, group.items.map((item) => item.name)])).toEqual([
+    ["Imported", ["Badge copy", "Launch Arrow"]],
+  ])
+
+  const replaced = mergeCustomShapeLibraries(existing, incoming.slice(0, 1), { conflictPolicy: "replace" })
+  expect(replaced).toMatchObject({ added: 0, replaced: 1, skipped: 0 })
+  expect(replaced.shapes[0]).toMatchObject({ id: "badge", group: "Imported", payload: expect.objectContaining({ customId: "heart" }) })
+
+  const skipped = mergeCustomShapeLibraries(existing, incoming, { conflictPolicy: "skip" })
+  expect(skipped).toMatchObject({ added: 1, replaced: 0, skipped: 1 })
+  expect(skipped.shapes.map((shape) => shape.id)).toEqual(["badge", "arrow"])
+})
+
 test("stroke path brush planning samples Bezier paths with simulated pressure dynamics", () => {
   const path = convertAnchorPoint({ closed: false, points: [{ x: 0, y: 0 }, { x: 80, y: 0 }, { x: 120, y: 60 }] }, 1).path
   const stamps = planStrokePathBrushSamples(path, {
@@ -479,6 +583,16 @@ test("vector clipboard helpers generate CSS and SVG for shape and path layers", 
     opacity: 1,
     path: { closed: false, points: [{ x: 0, y: 0 }, { x: 40, y: 20 }] },
   }, { width: 80, height: 40 })
+  const pathCss = copyLayerCss({
+    name: "Triangle Path",
+    opacity: 1,
+    path: { closed: true, points: [{ x: 30, y: 20 }, { x: 90, y: 20 }, { x: 60, y: 80 }] },
+  })
+  const customCss = copyLayerCss({
+    name: "Badge Shape",
+    opacity: 1,
+    shape: { type: "star", x: 20, y: 30, w: 80, h: 80, fill: "#ffcc00", stroke: null, starPoints: 5 },
+  })
 
   expect(css).toContain("border-radius: 8px 16px 24px 32px")
   expect(css).toContain("background: #35a8ff")
@@ -487,6 +601,24 @@ test("vector clipboard helpers generate CSS and SVG for shape and path layers", 
   expect(svg).toContain("fill=\"#35a8ff\"")
   expect(pathSvg).toContain("<path")
   expect(pathSvg).toContain("fill=\"none\"")
+  expect(pathCss).toContain("left: 30px")
+  expect(pathCss).toContain("width: 60px")
+  expect(pathCss).toContain("background: currentColor")
+  expect(pathCss).toContain("clip-path: path(\"M 0 0")
+  expect(customCss).toContain("left: 20px")
+  expect(customCss).toContain("clip-path: path(\"M 40 0")
+})
+
+test("path modifier helpers expose Photoshop shortcut parity for pen direct and path selection tools", () => {
+  expect(activePathToolForModifiers("pen", { ctrlKey: true })).toBe("direct-select")
+  expect(activePathToolForModifiers("curvature-pen", { metaKey: true })).toBe("direct-select")
+  expect(activePathToolForModifiers("path-select", { metaKey: true })).toBe("direct-select")
+  expect(pathModifierIntent("pen", "click-anchor", { altKey: true })).toBe("toggle-smooth-corner")
+  expect(pathModifierIntent("direct-select", "click-segment", { altKey: true })).toBe("select-subpath")
+  expect(pathModifierIntent("path-select", "drag-subpath", { altKey: true })).toBe("duplicate-subpath")
+
+  const constrained = constrainPointTo45({ x: 10, y: 10 }, { x: 21, y: 17 })
+  expect(Math.round(constrained.x - 10)).toBe(Math.round(constrained.y - 10))
 })
 
 test("smart object edit document saves back to the parent layer and convert-to-layers preserves source plus filter records", () => {

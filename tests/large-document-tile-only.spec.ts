@@ -9,6 +9,14 @@ import {
   supportsTileOnlyLayer,
 } from "../components/photoshop/tile-only-pipeline"
 import { exportRasterTileSequenceBlob } from "../components/photoshop/document-io"
+import {
+  commitPsbTileEditDocument,
+  forgetPsbTileViewStore,
+  openPsbTileEditDocument,
+  registerPsbTileViewStore,
+  writePsbTileViewCanvas,
+} from "../components/photoshop/psb-tile-view"
+import { TiledBackingStore } from "../components/photoshop/tiled-backing-store"
 import type { Layer, PsDocument } from "../components/photoshop/types"
 import { installFixtureDom, fixtureCanvas } from "./photoshop-fixtures"
 
@@ -227,4 +235,47 @@ test("tile-only raster export writes a tile sequence package with manifest metad
   expect(text).toContain("manifest.json")
   expect(text).toContain("\"tileCount\": 4")
   expect(text).toContain("tiles/0_0.png")
+})
+
+test("PSB tile view opens and commits one full-resolution tile without materializing the document", async () => {
+  installFixtureDom()
+  const parentDoc = doc([layer("overview", fixtureCanvas(64, 48, "#333333"))], {
+    id: "doc_psb",
+    name: "mural.psb",
+    width: 64,
+    height: 48,
+    metadata: {
+      largeDocumentTileView: {
+        mode: "psb-tile-view",
+        sourceName: "mural.psb",
+        originalWidth: 128,
+        originalHeight: 96,
+        overviewScale: 0.5,
+        tileSize: 64,
+        tileColumns: 2,
+        tileRows: 2,
+        tileCount: 4,
+      },
+    },
+  })
+  const store = new TiledBackingStore({ width: 128, height: 96, tileSize: 64, memoryBudgetMB: 32 })
+  registerPsbTileViewStore(parentDoc.id, store)
+  try {
+    await writePsbTileViewCanvas(parentDoc.id, 1, 0, fixtureCanvas(64, 64, "#aa2200"))
+
+    const editDoc = await openPsbTileEditDocument(parentDoc, 1, 0)
+    expect(editDoc?.metadata?.largeDocumentTileEdit).toMatchObject({
+      mode: "tile-edit",
+      parentDocId: "doc_psb",
+      tile: { col: 1, row: 0, x: 64, y: 0, width: 64, height: 64 },
+    })
+
+    editDoc!.layers[0].canvas = fixtureCanvas(64, 64, "#00aa55")
+    await expect(commitPsbTileEditDocument(editDoc!)).resolves.toBe(true)
+
+    const reopened = await openPsbTileEditDocument(parentDoc, 1, 0)
+    expect(canvasPayload(reopened!.layers[0].canvas).fill).toBe("rgba(255,255,255,0.7)")
+  } finally {
+    forgetPsbTileViewStore(parentDoc.id)
+  }
 })

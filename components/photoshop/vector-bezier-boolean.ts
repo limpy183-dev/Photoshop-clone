@@ -494,11 +494,20 @@ export function bezierBoolean(
   // Each sub-curve is kept if its midpoint passes the operation.
   for (const segment of allSubCurves) {
     const memberships = regionContainsPointAcross(regions, segment.midpoint)
-    // Include the sub-curve's own ring as "definitely inside" so a midpoint
-    // sitting precisely on the boundary still classifies.
     const ownerRegion = regions.findIndex((region) => region.rings.some((ring) => ring.ringIndex === segment.ringIndex))
-    if (ownerRegion >= 0) memberships[ownerRegion] = true
-    segment.kept = passesOperation(memberships, operations)
+    if (ownerRegion >= 0) {
+      // A boundary segment belongs in the result when crossing that owner's
+      // boundary changes the final boolean membership. This keeps fully
+      // enclosed subtract/intersect rings even when their midpoints sit exactly
+      // on the source boundary and no curve intersections were generated.
+      const outsideOwner = memberships.slice()
+      const insideOwner = memberships.slice()
+      outsideOwner[ownerRegion] = false
+      insideOwner[ownerRegion] = true
+      segment.kept = passesOperation(outsideOwner, operations) !== passesOperation(insideOwner, operations)
+    } else {
+      segment.kept = passesOperation(memberships, operations)
+    }
   }
 
   const ringsOut = stitchKeptSubCurves(allSubCurves)

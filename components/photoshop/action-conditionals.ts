@@ -31,9 +31,20 @@ export type ConditionAttribute =
   | "layer.opacityLte"
   | "selection.empty"
   | "selection.hasBounds"
+  | "selection.widthGte"
+  | "selection.heightGte"
   | "channels.count"
   | "document.colorMode"
   | "document.bitDepth"
+  | "document.widthGte"
+  | "document.widthLte"
+  | "document.heightGte"
+  | "document.heightLte"
+  | "document.layerCountGte"
+  | "document.layerCountLte"
+  | "activeLayer.kind"
+  | "activeLayer.name"
+  | "activeLayer.visible"
 
 export interface StepCondition {
   /** What to check. */
@@ -43,7 +54,9 @@ export interface StepCondition {
   /** Layer name/id when the attribute targets a specific layer. */
   layerKey?: string
   /** If the condition fails, do this. Defaults to "skip". */
-  onFail?: "skip" | "abort" | "continue"
+  onFail?: "skip" | "abort" | "continue" | "jump"
+  /** Step id to continue at when onFail is "jump". */
+  jumpToStepId?: string
 }
 
 /** Per-step playback envelope. Stored separately from the snapshot payload. */
@@ -57,6 +70,8 @@ export interface StepEnvelope {
   onError?: "skip" | "abort" | "retry"
   /** How many times to retry before giving up. */
   retryLimit?: number
+  /** Delay between retries in ms. */
+  retryDelayMs?: number
   /** Free-text label shown in the playback log. */
   note?: string
 }
@@ -115,7 +130,8 @@ function normaliseEnvelope(raw: unknown): StepEnvelope | null {
         attribute: cond.attribute as ConditionAttribute,
         value: cond.value as string | number | boolean | undefined,
         layerKey: typeof cond.layerKey === "string" ? cond.layerKey : undefined,
-        onFail: cond.onFail === "abort" || cond.onFail === "continue" ? cond.onFail : "skip",
+        onFail: cond.onFail === "abort" || cond.onFail === "continue" || cond.onFail === "jump" ? cond.onFail : "skip",
+        jumpToStepId: typeof cond.jumpToStepId === "string" ? cond.jumpToStepId.slice(0, 80) : undefined,
       }
     }
   }
@@ -123,6 +139,7 @@ function normaliseEnvelope(raw: unknown): StepEnvelope | null {
   if (typeof env.pauseMs === "number" && env.pauseMs >= 0) out.pauseMs = Math.min(env.pauseMs, 60_000)
   if (env.onError === "skip" || env.onError === "abort" || env.onError === "retry") out.onError = env.onError
   if (typeof env.retryLimit === "number" && env.retryLimit >= 0) out.retryLimit = Math.min(Math.round(env.retryLimit), 10)
+  if (typeof env.retryDelayMs === "number" && env.retryDelayMs >= 0) out.retryDelayMs = Math.min(Math.round(env.retryDelayMs), 10_000)
   if (typeof env.note === "string") out.note = env.note.slice(0, 200)
   return out
 }
@@ -130,9 +147,12 @@ function normaliseEnvelope(raw: unknown): StepEnvelope | null {
 const KNOWN_ATTRIBUTES: ReadonlySet<ConditionAttribute> = new Set([
   "layer.exists", "layer.visible", "layer.locked", "layer.hasMask", "layer.kind",
   "layer.opacityGte", "layer.opacityLte",
-  "selection.empty", "selection.hasBounds",
+  "selection.empty", "selection.hasBounds", "selection.widthGte", "selection.heightGte",
   "channels.count",
   "document.colorMode", "document.bitDepth",
+  "document.widthGte", "document.widthLte", "document.heightGte", "document.heightLte",
+  "document.layerCountGte", "document.layerCountLte",
+  "activeLayer.kind", "activeLayer.name", "activeLayer.visible",
 ])
 
 /* --------------------------- Evaluation --------------------------------- */
@@ -148,7 +168,8 @@ export interface ConditionContext {
 export interface ConditionResult {
   passed: boolean
   reason: string
-  decision: "execute" | "skip" | "abort" | "continue"
+  decision: "execute" | "skip" | "abort" | "continue" | "jump"
+  jumpToStepId?: string
 }
 
 export function evaluateCondition(condition: StepCondition | undefined, ctx: ConditionContext): ConditionResult {
@@ -156,7 +177,7 @@ export function evaluateCondition(condition: StepCondition | undefined, ctx: Con
   const passed = checkAttribute(condition, ctx)
   if (passed) return { passed: true, reason: `${condition.attribute} matched`, decision: "execute" }
   const decision = condition.onFail ?? "skip"
-  return { passed: false, reason: `${condition.attribute} did not match`, decision }
+  return { passed: false, reason: `${condition.attribute} did not match`, decision, jumpToStepId: condition.jumpToStepId }
 }
 
 function checkAttribute(condition: StepCondition, ctx: ConditionContext): boolean {
@@ -181,12 +202,34 @@ function checkAttribute(condition: StepCondition, ctx: ConditionContext): boolea
       return !selection?.bounds && !selection?.mask
     case "selection.hasBounds":
       return !!selection?.bounds
+    case "selection.widthGte":
+      return (selection?.bounds?.w ?? 0) >= asNumber(condition.value, 0)
+    case "selection.heightGte":
+      return (selection?.bounds?.h ?? 0) >= asNumber(condition.value, 0)
     case "channels.count":
       return (entry.channels?.length ?? 0) === asNumber(condition.value, 0)
     case "document.colorMode":
       return doc.colorMode === asString(condition.value, "RGB")
     case "document.bitDepth":
       return doc.bitDepth === asNumber(condition.value, 8)
+    case "document.widthGte":
+      return doc.width >= asNumber(condition.value, 0)
+    case "document.widthLte":
+      return doc.width <= asNumber(condition.value, Number.MAX_SAFE_INTEGER)
+    case "document.heightGte":
+      return doc.height >= asNumber(condition.value, 0)
+    case "document.heightLte":
+      return doc.height <= asNumber(condition.value, Number.MAX_SAFE_INTEGER)
+    case "document.layerCountGte":
+      return doc.layers.filter((item) => item.kind !== "group").length >= asNumber(condition.value, 0)
+    case "document.layerCountLte":
+      return doc.layers.filter((item) => item.kind !== "group").length <= asNumber(condition.value, Number.MAX_SAFE_INTEGER)
+    case "activeLayer.kind":
+      return !!activeLayer && activeLayer.kind === asString(condition.value, "raster")
+    case "activeLayer.name":
+      return !!activeLayer && activeLayer.name === asString(condition.value, "")
+    case "activeLayer.visible":
+      return !!activeLayer && activeLayer.visible === asBool(condition.value, true)
     default:
       return false
   }
@@ -236,7 +279,7 @@ export interface PlaybackContextProvider {
 
 export interface PlaybackResult {
   executed: string[]
-  skipped: Array<{ stepId: string; reason: string }>
+  skipped: Array<{ stepId: string; reason: string; decision?: "skip" | "jump"; jumpToStepId?: string }>
   failed: Array<{ stepId: string; error: string }>
   aborted: boolean
 }
@@ -280,7 +323,17 @@ export function readPlaybackSpeedDelayMs(): number {
  */
 export async function playAction(action: MacroAction, envelope: ActionEnvelope, providers: PlaybackContextProvider, hooks: PlaybackHooks): Promise<PlaybackResult> {
   const result: PlaybackResult = { executed: [], skipped: [], failed: [], aborted: false }
-  for (const step of action.steps) {
+  const indexByStepId = new Map(action.steps.map((step, index) => [step.id, index]))
+  let index = 0
+  let iterations = 0
+  const maxIterations = Math.max(100, action.steps.length * 8)
+  while (index < action.steps.length) {
+    if (++iterations > maxIterations) {
+      result.failed.push({ stepId: action.steps[index]?.id ?? "unknown", error: "Playback exceeded the conditional step limit." })
+      result.aborted = true
+      return result
+    }
+    const step = action.steps[index]
     const env = envelope.steps[step.id]
     if (env?.note) hooks.log?.(env.note, "info")
     const cond = evaluateCondition(env?.condition, providers.getContext(step))
@@ -291,7 +344,20 @@ export async function playAction(action: MacroAction, envelope: ActionEnvelope, 
         return result
       }
       if (cond.decision === "skip") {
-        result.skipped.push({ stepId: step.id, reason: cond.reason })
+        result.skipped.push({ stepId: step.id, reason: cond.reason, decision: "skip" })
+        index++
+        continue
+      }
+      if (cond.decision === "jump") {
+        const jumpToStepId = cond.jumpToStepId
+        const nextIndex = jumpToStepId ? indexByStepId.get(jumpToStepId) : undefined
+        result.skipped.push({ stepId: step.id, reason: cond.reason, decision: "jump", jumpToStepId })
+        if (nextIndex === undefined) {
+          result.failed.push({ stepId: step.id, error: `Conditional jump target not found: ${jumpToStepId ?? "(empty)"}` })
+          result.aborted = true
+          return result
+        }
+        index = nextIndex
         continue
       }
       // "continue" runs the step anyway
@@ -327,6 +393,9 @@ export async function playAction(action: MacroAction, envelope: ActionEnvelope, 
             result.failed.push({ stepId: step.id, error: error.message })
             break
           }
+          if (env?.retryDelayMs && env.retryDelayMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, env.retryDelayMs))
+          }
           continue
         }
         // skip
@@ -334,6 +403,7 @@ export async function playAction(action: MacroAction, envelope: ActionEnvelope, 
         break
       }
     }
+    index++
   }
   return result
 }

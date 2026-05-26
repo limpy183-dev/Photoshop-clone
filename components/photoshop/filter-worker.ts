@@ -351,6 +351,10 @@ function pseudoDither(i) {
   const x = Math.sin((i + 1) * 12.9898) * 43758.5453;
   return x - Math.floor(x);
 }
+function hashNoise(x, y, salt) {
+  const n = Math.sin(x * 12.9898 + y * 78.233 + salt * 37.719) * 43758.5453;
+  return n - Math.floor(n);
+}
 
 function parsePercentPoints(value) {
   return String(value || "")
@@ -1007,13 +1011,12 @@ function surfaceBlur(data, width, height, params) {
   const out = new Uint8ClampedArray(data.length);
   const r = Math.max(1, Math.min(18, Math.round(radius)));
   const t = Math.max(0, Math.min(255, threshold));
-  const sigmaS = Math.max(0.75, r * 0.65);
-  const sigmaR = Math.max(1, t * 0.7);
+  const sigmaS = Math.max(0.75, r * 0.645);
+  const sigmaR = Math.max(1, t * 0.55375);
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const i = (y * width + x) * 4;
-      const br = src[i], bg = src[i + 1], bb = src[i + 2];
-      const baseLum = lumaByte(br, bg, bb);
+      const baseLum = lumaByte(src[i], src[i + 1], src[i + 2]);
       let rs = 0, gs = 0, bs = 0, as_ = 0, weightSum = 0;
       for (let oy = -r; oy <= r; oy++) {
         const sy = Math.max(0, Math.min(height - 1, y + oy));
@@ -1022,10 +1025,9 @@ function surfaceBlur(data, width, height, params) {
           const sx = Math.max(0, Math.min(width - 1, x + ox));
           const p = (sy * width + sx) * 4;
           const diff = Math.abs(lumaByte(src[p], src[p + 1], src[p + 2]) - baseLum);
-          const colorDiff = Math.hypot(src[p] - br, src[p + 1] - bg, src[p + 2] - bb) / Math.sqrt(3);
-          if (Math.max(diff, colorDiff) > t) continue;
+          if (diff >= t) continue;
           const spatial = Math.exp(-(ox * ox + oy * oy) / (2 * sigmaS * sigmaS));
-          const range = Math.exp(-Math.pow(diff * 0.55 + colorDiff * 0.45, 2) / (2 * sigmaR * sigmaR));
+          const range = Math.exp(-(diff * diff) / (2 * sigmaR * sigmaR));
           const weight = spatial * range;
           rs += src[p] * weight;
           gs += src[p + 1] * weight;
@@ -1086,6 +1088,26 @@ function lensBlur(data, width, height, params) {
       out[i + 1] = gs / ws;
       out[i + 2] = bs / ws;
       out[i + 3] = as_ / ws;
+    }
+  }
+  const noiseAmt = num(params.noiseAmount, 0);
+  if (noiseAmt > 0) {
+    const amp = noiseAmt * 2.55;
+    const noiseMono = bool(params.noiseMono, true);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = (y * width + x) * 4;
+        if (noiseMono) {
+          const n = (hashNoise(x, y, 211) - 0.5) * amp;
+          out[i] = clamp8(out[i] + n);
+          out[i + 1] = clamp8(out[i + 1] + n);
+          out[i + 2] = clamp8(out[i + 2] + n);
+        } else {
+          out[i] = clamp8(out[i] + (hashNoise(x, y, 211) - 0.5) * amp);
+          out[i + 1] = clamp8(out[i + 1] + (hashNoise(x, y, 307) - 0.5) * amp);
+          out[i + 2] = clamp8(out[i + 2] + (hashNoise(x, y, 401) - 0.5) * amp);
+        }
+      }
     }
   }
   data.set(out);

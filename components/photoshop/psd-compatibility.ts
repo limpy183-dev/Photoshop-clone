@@ -81,6 +81,9 @@ export interface PsdAppPreservationPayload {
     height: number
   }
   fonts?: TypographyEmbeddedFont[]
+  plugins?: NonNullable<PsDocument["plugins"]>
+  pluginStorage?: NonNullable<PsDocument["pluginStorage"]>
+  variableDataSets?: NonNullable<PsDocument["variableDataSets"]>
   layers: PsdLayerPreservationEntry[]
 }
 
@@ -365,6 +368,9 @@ export function createPsdAppPreservationPayload(doc: PsDocument): PsdAppPreserva
       height: doc.height,
     },
     fonts: collectEmbeddedTypographyFonts(doc),
+    plugins: doc.plugins?.length ? jsonClone(doc.plugins) : undefined,
+    pluginStorage: doc.pluginStorage && Object.keys(doc.pluginStorage).length ? jsonClone(doc.pluginStorage) : undefined,
+    variableDataSets: doc.variableDataSets?.length ? jsonClone(doc.variableDataSets) : undefined,
     layers,
   }
 }
@@ -426,6 +432,9 @@ export async function applyPsdAppPreservationPayload(
   doc: PsDocument,
   payload: PsdAppPreservationPayload,
 ): Promise<PsDocument> {
+  if (payload.plugins) doc.plugins = jsonClone(payload.plugins) ?? payload.plugins
+  if (payload.pluginStorage) doc.pluginStorage = jsonClone(payload.pluginStorage) ?? payload.pluginStorage
+  if (payload.variableDataSets) doc.variableDataSets = jsonClone(payload.variableDataSets) ?? payload.variableDataSets
   if (payload.fonts?.length) {
     const existing = doc.assetLibrary ?? []
     const existingHashes = new Set(existing

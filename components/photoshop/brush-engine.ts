@@ -607,11 +607,16 @@ export function planArtHistoryStroke(
     cx += Math.cos(theta) * step
     cy += Math.sin(theta) * step
     lengthBudget -= step
-    const dx = cx - point.x
-    const dy = cy - point.y
+    let dx = cx - point.x
+    let dy = cy - point.y
     const radial = Math.hypot(dx, dy)
-    if (radial > areaRadius * 1.4) {
-      // Bend back toward the seed so the stroke stays in its allotted area.
+    if (radial > areaRadius) {
+      const bounded = areaRadius / Math.max(0.0001, radial)
+      dx *= bounded
+      dy *= bounded
+      cx = point.x + dx
+      cy = point.y + dy
+      // Bend back toward the seed so the next step stays in its allotted area.
       const back = Math.atan2(-dy, -dx)
       theta = back + (random() - 0.5) * 0.4
     }

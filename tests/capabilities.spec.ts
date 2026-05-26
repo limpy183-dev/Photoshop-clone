@@ -108,3 +108,14 @@ test("advanced format strategy aligns with capability registry limits", () => {
   expect(getCapability("format.radiance-hdr").status).toBe("usable")
   expect(getCapability("format.raw-dng").status).toBe("approximation")
 })
+
+test("advanced browser raster wording is reconciled with export and color capabilities", () => {
+  const browserRaster = capabilityForAdvancedFormat("sample.png")
+  const exportCapability = getCapability("export.browser-raster")
+  const colorCapability = getCapability("color.icc-conversion")
+
+  expect(exportCapability.summary).toMatch(/ICC/i)
+  expect(colorCapability.summary).toMatch(/export/i)
+  expect(browserRaster.exportPath).toMatch(/metadata|ICC|profile/i)
+  expect(browserRaster.limitations).not.toMatch(/ICC profiles are not converted/i)
+})

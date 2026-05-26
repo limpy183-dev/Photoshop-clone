@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button"
 import { downloadText } from "./document-io"
 import { useEditor, makeCanvas } from "./editor-context"
 import { capabilityWarningsForDocument } from "./capabilities"
+import { supportedIccProfileNames } from "./color-pipeline"
 import { diagnoseDocumentFonts } from "./typography-engine"
 import {
   analyzePreflightDocument,
@@ -358,14 +359,18 @@ export function PreflightDialog({ open, onOpenChange }: { open: boolean; onOpenC
   const { activeDoc, dispatch, commit, requestRender } = useEditor()
   const [categoryFilter, setCategoryFilter] = React.useState<PreflightCategory | "All">("All")
   const [statusFilter, setStatusFilter] = React.useState<PreflightStatus | "All">("All")
+  const [profileTarget, setProfileTarget] = React.useState<ColorManagementSettings["assignedProfile"]>("sRGB IEC61966-2.1")
   const report = React.useMemo(() => (activeDoc ? analyzePreflightDocument(activeDoc) : null), [activeDoc])
   const items = React.useMemo<PreflightFinding[]>(() => report?.findings ?? [], [report])
   const fixes = React.useMemo(() => (activeDoc ? getStructuredPreflightFixes(activeDoc) : null), [activeDoc])
+  React.useEffect(() => {
+    if (activeDoc?.colorManagement?.assignedProfile) setProfileTarget(activeDoc.colorManagement.assignedProfile)
+  }, [activeDoc?.colorManagement?.assignedProfile])
   if (!activeDoc) return null
   const fixCandidates = fixes ?? getStructuredPreflightFixes(activeDoc)
   const counts = report?.counts ?? { pass: 0, warn: 0, error: 0, info: 0 }
   const printDefaultCount = items.some((item) => item.fixAction?.kind === "set-print-defaults") ? 1 : 0
-  const profileFixCount = activeDoc.colorManagement ? 0 : 1
+  const profileFixCount = activeDoc.colorManagement?.assignedProfile === profileTarget ? 0 : 1
   const categories = ["All", ...Array.from(new Set(items.map((item) => item.category))).sort()] as Array<PreflightCategory | "All">
   const filteredItems = items.filter((item) => {
     if (categoryFilter !== "All" && item.category !== categoryFilter) return false
@@ -474,8 +479,15 @@ export function PreflightDialog({ open, onOpenChange }: { open: boolean; onOpenC
   }
 
   const assignDefaultProfile = () => {
-    dispatch({ type: "set-color-management", settings: DEFAULT_PREFLIGHT_COLOR_MANAGEMENT })
-    finishFix("Preflight Fix: Assign sRGB Profile")
+    dispatch({
+      type: "set-color-management",
+      settings: {
+        ...(activeDoc.colorManagement ?? DEFAULT_PREFLIGHT_COLOR_MANAGEMENT),
+        assignedProfile: profileTarget,
+        workingSpace: activeDoc.colorManagement?.workingSpace ?? profileTarget,
+      },
+    })
+    finishFix(`Preflight Fix: Assign ${profileTarget} Profile`)
   }
 
   return (
@@ -504,7 +516,7 @@ export function PreflightDialog({ open, onOpenChange }: { open: boolean; onOpenC
         ) : null}
         <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
           <div className="mb-2 text-[10px] uppercase tracking-wide text-[var(--ps-text-dim)]">Quick fixes</div>
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-7">
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-8">
             <QuickFixButton label="Show Hidden" count={fixCandidates.hiddenLayers.length} onClick={showHiddenLayers} />
             <QuickFixButton label="Name Layers" count={fixCandidates.unnamedLayers.length} onClick={nameUnnamedLayers} />
             <QuickFixButton label="Mask Adjust" count={fixCandidates.unmaskedAdjustments.length} onClick={maskAdjustmentLayers} />
@@ -512,6 +524,14 @@ export function PreflightDialog({ open, onOpenChange }: { open: boolean; onOpenC
             <QuickFixButton label="Repair Slices" count={fixCandidates.invalidSlices.length} onClick={repairSlices} />
             <QuickFixButton label="Print Defaults" count={printDefaultCount} onClick={setPrintDefaults} />
             <QuickFixButton label="Assign Profile" count={profileFixCount} onClick={assignDefaultProfile} />
+            <select
+              value={profileTarget}
+              onChange={(event) => setProfileTarget(event.target.value as ColorManagementSettings["assignedProfile"])}
+              className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] px-2 text-[11px]"
+              aria-label="Preflight profile target"
+            >
+              {supportedIccProfileNames().map((profile) => <option key={profile} value={profile}>{profile}</option>)}
+            </select>
           </div>
         </div>
         <div className="grid grid-cols-2 gap-2">

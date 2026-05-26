@@ -16,6 +16,7 @@ import {
   serializeHighBitDepthChannelData,
 } from "../components/photoshop/psd-color-modes"
 import { serializePsd } from "../components/photoshop/document-io"
+import { canWriteNativeLayeredPsd } from "../components/photoshop/psd-native-writer"
 import type { PsDocument } from "../components/photoshop/types"
 import { installFixtureDom } from "./photoshop-fixtures"
 
@@ -41,6 +42,19 @@ function fakeDoc(overrides: Partial<PsDocument>): PsDocument {
     selection: { bounds: null, shape: "rect" },
     ...overrides,
   }
+}
+
+function readLayerCountFromNativePsd(bytes: Uint8Array): number {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const colorModeDataLength = view.getUint32(26, false)
+  const imageResourcesLengthOffset = 30 + colorModeDataLength
+  const imageResourcesLength = view.getUint32(imageResourcesLengthOffset, false)
+  const layerAndMaskOffset = imageResourcesLengthOffset + 4 + imageResourcesLength
+  const layerAndMaskLength = view.getUint32(layerAndMaskOffset, false)
+  if (!layerAndMaskLength) return 0
+  const layerInfoLength = view.getUint32(layerAndMaskOffset + 4, false)
+  if (!layerInfoLength) return 0
+  return Math.abs(view.getInt16(layerAndMaskOffset + 8, false))
 }
 
 test("psdColorModeToApp maps every native PSD color mode to the app union", () => {
@@ -171,6 +185,63 @@ test("serializePsd emits a native 16-bit PSD header and channel planes when high
   expect(view.getUint16(22, false)).toBe(16)
   expect(view.getUint16(24, false)).toBe(PSD_COLOR_MODE.RGB)
   expect(bytes.includes(0x80)).toBe(true)
+})
+
+test("serializePsd emits layered native high-bit CMYK PSD records", async () => {
+  installFixtureDom()
+  const makeLayer = (id: string, color: [number, number, number, number]) => {
+    const canvas = document.createElement("canvas")
+    canvas.width = 2
+    canvas.height = 1
+    canvas.getContext("2d")!.putImageData(new ImageData(new Uint8ClampedArray([
+      color[0], color[1], color[2], color[3],
+      color[0], color[1], color[2], color[3],
+    ]), 2, 1), 0, 0)
+    return {
+      id,
+      name: id,
+      kind: "raster" as const,
+      visible: true,
+      locked: false,
+      opacity: 1,
+      blendMode: "normal" as const,
+      canvas,
+      __highBitImageData: {
+        width: 2,
+        height: 1,
+        channels: 4 as const,
+        bitDepth: 16 as const,
+        colorMode: "CMYK" as const,
+        storage: "uint16" as const,
+        data: new Uint16Array([
+          color[0] * 257, color[1] * 257, color[2] * 257, color[3] * 257,
+          color[0] * 257, color[1] * 257, color[2] * 257, color[3] * 257,
+        ]),
+        warnings: [],
+      },
+    }
+  }
+  const doc = fakeDoc({
+    width: 2,
+    height: 1,
+    colorMode: "CMYK",
+    modeSettings: { mode: "CMYK" },
+    bitDepth: 16,
+    layers: [makeLayer("Cyan ink", [0, 255, 255, 255]), makeLayer("Key ink", [20, 20, 20, 255])],
+    activeLayerId: "Cyan ink",
+    selectedLayerIds: ["Cyan ink"],
+  })
+
+  expect(canWriteNativeLayeredPsd(doc)).toBe(true)
+
+  const blob = await serializePsd(doc)
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+
+  expect(String.fromCharCode(...bytes.slice(0, 4))).toBe("8BPS")
+  expect(view.getUint16(22, false)).toBe(16)
+  expect(view.getUint16(24, false)).toBe(PSD_COLOR_MODE.CMYK)
+  expect(readLayerCountFromNativePsd(bytes)).toBe(2)
 })
 
 test("buildSyntheticIccProfile carries the profile name inside the ICC desc tag", () => {

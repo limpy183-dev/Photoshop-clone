@@ -1,6 +1,8 @@
 import {
+  applyFilterToHighBitImage,
   applyHighBitAdjustment,
   createHighBitImageFromImageData,
+  isHighBitFilterNativelySupported,
   toneMapHighBitImageToImageData,
   type HighBitAdjustment,
   type HighBitImage,
@@ -863,6 +865,13 @@ export function applyHighBitFilter(
   params: Record<string, number | string | boolean> = {},
   context: FilterContext = {},
 ): HighBitImage {
+  if (isHighBitFilterNativelySupported(filterId)) {
+    return applyFilterToHighBitImage(source, filterId, params, {
+      bitDepth: source.bitDepth,
+      workingSpace: source.profile ?? "sRGB IEC61966-2.1",
+      preservePrecision: true,
+    })
+  }
   if (DIRECT_ADJUSTMENTS.has(filterId as HighBitAdjustment["type"])) {
     return applyHighBitAdjustment(source, { type: filterId as HighBitAdjustment["type"], params })
   }

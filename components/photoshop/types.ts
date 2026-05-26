@@ -1224,6 +1224,10 @@ export interface DocumentModeSettings {
     ink2Name?: string
     ink3Name?: string
     ink4Name?: string
+    /** Simulated paper/base color used by browser-local duotone previews and conversions. */
+    paper?: string
+    /** Ink compositing approximation: normal replaces toward ink; multiply simulates overprint buildup. */
+    overprint?: "normal" | "multiply"
     opacity1?: number
     opacity2?: number
     opacity3?: number
@@ -1254,7 +1258,9 @@ export interface DocumentModeSettings {
     threshold: number
     frequency: number
     angle: number
-    shape?: "round" | "line" | "diamond" | "ellipse"
+    shape?: "round" | "line" | "diamond" | "ellipse" | "square" | "cross"
+    /** Source resolution used when matching Photoshop's Bitmap input/output controls. */
+    inputResolution?: number
     outputResolution?: number
   }
   trap?: { enabled: boolean; widthPx: number; strength: number }
@@ -1543,6 +1549,8 @@ export interface TimelineFrame {
   /** Per-layer transform keyframes (position, scale, rotation). */
   layerTransform?: Record<string, FrameLayerTransform>
   transition?: "hold" | "dissolve" | VideoTransition["kind"]
+  /** Duration of the transition into the next frame. Defaults to the frame duration. */
+  transitionDurationMs?: number
   /** Easing applied when interpolating tween properties into the next frame. */
   easing?: FrameEasing
   audioLabel?: string

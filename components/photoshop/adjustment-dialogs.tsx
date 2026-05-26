@@ -32,6 +32,7 @@ import { useEditor, makeCanvas } from "./editor-context"
 import { compositeLayer } from "./blend-modes"
 import { FILTERS, HDR_TONING_PRESETS, AUTO_DEFAULTS, applyAutoAdjustment, type AutoAlgorithm, type AutoOptions } from "./filters"
 import { toast } from "sonner"
+import { Minus, Plus, RotateCcw, Save, XIcon } from "lucide-react"
 import type { Layer, PsDocument } from "./types"
 
 /* ------------------------------------------------------------------ */
@@ -182,7 +183,7 @@ export function ShadowsHighlightsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[520px] bg-[var(--ps-panel)] border-[var(--ps-divider)] text-[var(--ps-text)]">
+      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto bg-[var(--ps-panel)] text-[var(--ps-text)] border-[var(--ps-divider)] sm:max-w-[560px]">
         <DialogHeader>
           <DialogTitle>Shadows/Highlights</DialogTitle>
         </DialogHeader>
@@ -209,7 +210,7 @@ export function ShadowsHighlightsDialog({
             <Group title="Adjustments">
               <SliderRow label="Color Correction" min={-100} max={100} step={1} value={state.colorCorrection} onChange={(v) => setK("colorCorrection", v)} />
               <SliderRow label="Midtone Contrast" min={-100} max={100} step={1} value={state.midtoneContrast} onChange={(v) => setK("midtoneContrast", v)} />
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <SliderRow label="Black Clip" suffix="%" min={0} max={50} step={0.01} value={state.blackClip} onChange={(v) => setK("blackClip", v)} />
                 <SliderRow label="White Clip" suffix="%" min={0} max={50} step={0.01} value={state.whiteClip} onChange={(v) => setK("whiteClip", v)} />
               </div>
@@ -221,9 +222,11 @@ export function ShadowsHighlightsDialog({
             </Button>
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={() => setState(SHADOWS_HIGHLIGHTS_FACTORY_DEFAULTS)}>
+                <RotateCcw className="size-3.5" aria-hidden="true" />
                 Reset
               </Button>
               <Button variant="outline" size="sm" onClick={() => { saveShadowsHighlightsDefaults(state); toast.success("Defaults saved.") }}>
+                <Save className="size-3.5" aria-hidden="true" />
                 Save As Defaults
               </Button>
             </div>
@@ -335,12 +338,12 @@ export function HdrToningDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[560px] bg-[var(--ps-panel)] border-[var(--ps-divider)] text-[var(--ps-text)]">
+      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto bg-[var(--ps-panel)] text-[var(--ps-text)] border-[var(--ps-divider)] sm:max-w-[600px]">
         <DialogHeader>
           <DialogTitle>HDR Toning</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <SelectRow label="Preset" value={preset} onChange={applyPreset} options={[...HDR_PRESET_OPTIONS, { value: "(custom)", label: "Custom" }]} />
             <SelectRow
               label="Method"
@@ -368,7 +371,7 @@ export function HdrToningDialog({
           </Group>
           {isLocalAdaptation ? (
             <Group title="Advanced">
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <SliderRow label="Shadow" min={-100} max={100} step={1} value={state.shadow} onChange={(v) => set("shadow", v)} />
                 <SliderRow label="Highlight" min={-100} max={100} step={1} value={state.highlight} onChange={(v) => set("highlight", v)} />
                 <SliderRow label="Vibrance" min={-100} max={100} step={1} value={state.vibrance} onChange={(v) => set("vibrance", v)} />
@@ -471,14 +474,14 @@ export function MatchColorDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[520px] bg-[var(--ps-panel)] border-[var(--ps-divider)] text-[var(--ps-text)]">
+      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto bg-[var(--ps-panel)] text-[var(--ps-text)] border-[var(--ps-divider)] sm:max-w-[560px]">
         <DialogHeader>
           <DialogTitle>Match Color</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
           <Group title="Destination Image">
             <div className="text-[11px] text-[var(--ps-text-dim)]">
-              Target: {activeDoc?.name ?? "—"} ({activeDoc?.width}×{activeDoc?.height})
+              {activeDoc ? `Target: ${activeDoc.name} (${activeDoc.width}×${activeDoc.height})` : "No active document"}
             </div>
           </Group>
           <Group title="Image Statistics">
@@ -633,17 +636,26 @@ export function ReplaceColorDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[640px] bg-[var(--ps-panel)] border-[var(--ps-divider)] text-[var(--ps-text)]">
+      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto bg-[var(--ps-panel)] text-[var(--ps-text)] border-[var(--ps-divider)] sm:max-w-[680px]">
         <DialogHeader>
           <DialogTitle>Replace Color</DialogTitle>
         </DialogHeader>
-        <div className="grid grid-cols-[1fr_300px] gap-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_300px]">
           <div className="space-y-3">
             <Group title="Selection">
-              <div className="flex items-center gap-2">
-                <Button size="sm" variant={pickMode === "add" ? "default" : "outline"} onClick={() => setPickMode("add")}>+ Add to sample</Button>
-                <Button size="sm" variant={pickMode === "subtract" ? "default" : "outline"} onClick={() => setPickMode("subtract")}>− Subtract</Button>
-                <Button size="sm" variant="ghost" onClick={() => { setIncludeSamples([]); setExcludeSamples([]) }}>Clear</Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button size="sm" variant={pickMode === "add" ? "default" : "outline"} onClick={() => setPickMode("add")}>
+                  <Plus className="size-3.5" aria-hidden="true" />
+                  Add Sample
+                </Button>
+                <Button size="sm" variant={pickMode === "subtract" ? "default" : "outline"} onClick={() => setPickMode("subtract")}>
+                  <Minus className="size-3.5" aria-hidden="true" />
+                  Subtract
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => { setIncludeSamples([]); setExcludeSamples([]) }}>
+                  <XIcon className="size-3.5" aria-hidden="true" />
+                  Clear
+                </Button>
               </div>
               <div className="text-[11px] text-[var(--ps-text-dim)]">
                 Includes: {includeSamples.length}, Excludes: {excludeSamples.length}
@@ -673,10 +685,10 @@ export function ReplaceColorDialog({
               </label>
             </Group>
           </div>
-          <div className="flex flex-col gap-1">
+          <div className="flex min-w-0 flex-col gap-1">
             <div className="text-[11px] text-[var(--ps-text-dim)]">Selection preview — click to sample</div>
-            <div className="border border-[var(--ps-divider)] bg-black p-1 inline-block">
-              <canvas ref={previewRef} onClick={samplePreview} className="block cursor-crosshair" />
+            <div className="inline-block max-w-full overflow-hidden border border-[var(--ps-divider)] bg-black p-1">
+              <canvas ref={previewRef} onClick={samplePreview} className="block max-w-full cursor-crosshair" />
             </div>
             <div className="grid grid-cols-2 gap-1 text-[10px] text-[var(--ps-text-dim)]">
               <div>+ {includeSamples.length} include</div>
@@ -755,7 +767,7 @@ export function EqualizePromptDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[420px] bg-[var(--ps-panel)] border-[var(--ps-divider)] text-[var(--ps-text)]">
+      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto bg-[var(--ps-panel)] text-[var(--ps-text)] border-[var(--ps-divider)] sm:max-w-[440px]">
         <DialogHeader>
           <DialogTitle>Equalize</DialogTitle>
         </DialogHeader>
@@ -868,7 +880,7 @@ export function AutoOptionsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[520px] bg-[var(--ps-panel)] border-[var(--ps-divider)] text-[var(--ps-text)]">
+      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto bg-[var(--ps-panel)] text-[var(--ps-text)] border-[var(--ps-divider)] sm:max-w-[560px]">
         <DialogHeader>
           <DialogTitle>{label ?? "Auto"} Options</DialogTitle>
         </DialogHeader>
@@ -898,12 +910,12 @@ export function AutoOptionsDialog({
             </label>
           </Group>
           <Group title="Target Colors and Clipping">
-            <div className="grid grid-cols-3 gap-2 text-[11px]">
+            <div className="grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-3">
               <ColorTargetRow label="Shadows" value={opts.shadowsTargetRgb} onChange={(v) => set("shadowsTargetRgb", v)} />
               <ColorTargetRow label="Midtones" value={opts.midtoneTargetRgb} onChange={(v) => set("midtoneTargetRgb", v)} />
               <ColorTargetRow label="Highlights" value={opts.highlightsTargetRgb} onChange={(v) => set("highlightsTargetRgb", v)} />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <SliderRow label="Clip Shadows" suffix="%" min={0} max={50} step={0.01} value={opts.shadowsClipPct} onChange={(v) => set("shadowsClipPct", v)} />
               <SliderRow label="Clip Highlights" suffix="%" min={0} max={50} step={0.01} value={opts.highlightsClipPct} onChange={(v) => set("highlightsClipPct", v)} />
             </div>
@@ -925,7 +937,7 @@ export function AutoOptionsDialog({
 
 function Group({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="space-y-1.5 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)]/30 p-2">
+    <div className="min-w-0 space-y-1.5 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)]/30 p-2">
       <div className="text-[10px] uppercase text-[var(--ps-text-dim)]">{title}</div>
       <div className="space-y-2">{children}</div>
     </div>
@@ -949,16 +961,71 @@ function SliderRow({
   onChange: (v: number) => void
   suffix?: string
 }) {
-  const display = step && step < 1 ? value.toFixed(2) : Math.round(value).toString()
+  const actualStep = step ?? 1
+  const [draft, setDraft] = React.useState(() => formatSliderValue(value, actualStep))
+  const display = formatSliderValue(value, actualStep)
+
+  React.useEffect(() => {
+    setDraft(formatSliderValue(value, actualStep))
+  }, [value, actualStep])
+
+  const commitDraft = React.useCallback(() => {
+    const parsed = Number(draft)
+    if (!Number.isFinite(parsed)) {
+      setDraft(display)
+      return
+    }
+    const next = snapToStep(Math.max(min, Math.min(max, parsed)), min, actualStep)
+    onChange(next)
+    setDraft(formatSliderValue(next, actualStep))
+  }, [actualStep, display, draft, max, min, onChange])
+
   return (
     <div className="space-y-1">
-      <div className="flex items-center justify-between text-[11px]">
+      <div className="flex items-center justify-between gap-3 text-[11px]">
         <span className="text-[var(--ps-text-dim)]">{label}</span>
         <span className="tabular-nums">{display}{suffix ? suffix : ""}</span>
       </div>
-      <Slider min={min} max={max} step={step ?? 1} value={[value]} onValueChange={(v) => onChange(v[0])} />
+      <div className="grid grid-cols-[minmax(0,1fr)_4.75rem] items-center gap-2">
+        <Slider min={min} max={max} step={actualStep} value={[value]} onValueChange={(v) => onChange(v[0])} className="min-w-0" />
+        <input
+          aria-label={`${label} value`}
+          type="number"
+          min={min}
+          max={max}
+          step={actualStep}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commitDraft}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur()
+          }}
+          className="h-7 w-[4.75rem] rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1.5 text-right text-[11px] tabular-nums text-[var(--ps-text)]"
+        />
+      </div>
     </div>
   )
+}
+
+function formatSliderValue(value: number, step: number) {
+  const digits = decimalsForStep(step)
+  const rounded = digits > 0 ? value.toFixed(digits) : Math.round(value).toString()
+  const trimmed = rounded.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "")
+  return trimmed === "-0" ? "0" : trimmed
+}
+
+function decimalsForStep(step: number) {
+  if (!Number.isFinite(step) || step >= 1) return 0
+  const text = step.toString()
+  if (text.includes("e-")) return Number(text.split("e-")[1]) || 0
+  return text.split(".")[1]?.length ?? 0
+}
+
+function snapToStep(value: number, min: number, step: number) {
+  if (!Number.isFinite(step) || step <= 0) return value
+  const digits = decimalsForStep(step)
+  const snapped = min + Math.round((value - min) / step) * step
+  return Number(snapped.toFixed(digits))
 }
 
 function SelectRow({
@@ -973,12 +1040,12 @@ function SelectRow({
   options: { value: string; label: string }[]
 }) {
   return (
-    <label className="grid gap-1 text-[11px]">
+    <label className="grid min-w-0 gap-1 text-[11px]">
       <span className="text-[var(--ps-text-dim)]">{label}</span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="h-7 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1.5 text-[11px]"
+        className="h-7 min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1.5 text-[11px]"
       >
         {options.map((opt) => (
           <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -998,7 +1065,7 @@ function ColorTargetRow({
   onChange: (rgb: { r: number; g: number; b: number }) => void
 }) {
   return (
-    <label className="grid gap-1">
+    <label className="grid min-w-0 gap-1">
       <span className="text-[var(--ps-text-dim)]">{label}</span>
       <input
         type="color"

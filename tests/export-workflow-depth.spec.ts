@@ -7,7 +7,8 @@ import {
   injectAvifXmpMetadata,
   injectWebpXmpMetadata,
 } from "../components/photoshop/raster-codecs"
-import { buildRasterExportMetadata, createExportLimitationReport, diagnoseBrowserRasterEncoderSupport } from "../components/photoshop/document-io"
+import { buildRasterExportMetadata, createExportLimitationReport, diagnoseBrowserRasterEncoderSupport, type ExportFormat } from "../components/photoshop/document-io"
+import { alternativesForLimitation } from "../components/photoshop/export-alternatives"
 import { createEmbeddedFontFromBuffer } from "../components/photoshop/typography-engine"
 import { createStoredZipBlob, encodeStoredZip } from "../components/photoshop/zip-packaging"
 import { runBatchExportItems } from "../components/photoshop/batch-export-engine"
@@ -168,6 +169,53 @@ test("raster export metadata carries embedded local fonts into XMP payloads", ()
   expect(xmp).toContain(font.dataBase64)
 })
 
+test("raster export metadata carries advanced encoder control surfaces", () => {
+  const doc = richFixtureDocument()
+
+  const webpMetadata = buildRasterExportMetadata(doc, {
+    format: "webp",
+    scale: 1,
+    quality: 0.72,
+    transparent: true,
+    matte: "#ffffff",
+    includeMetadata: true,
+    webpLossless: false,
+    webpNearLossless: 82,
+    webpMethod: 6,
+    webpExactAlpha: false,
+    webpAlphaQuality: 73,
+    webpAlphaFilter: "best",
+  })
+  const webpXmp = xmpPacketFromRasterMetadata(webpMetadata)
+
+  expect(webpMetadata?.webp).toMatchObject({
+    quality: 0.72,
+    nearLossless: 82,
+    method: 6,
+    exactAlpha: false,
+    alphaQuality: 73,
+    alphaFilter: "best",
+  })
+  expect(webpXmp).toContain("alphaQuality")
+  expect(webpXmp).toContain("best")
+
+  const pnmMetadata = buildRasterExportMetadata(doc, {
+    format: "ppm",
+    scale: 1,
+    quality: 1,
+    transparent: true,
+    matte: "#ffffff",
+    includeMetadata: true,
+    netpbmComments: ["Scanner source max retained"],
+    netpbmSourceMaxValue: 1023,
+  })
+
+  expect(pnmMetadata?.netpbm).toEqual({
+    comments: ["Scanner source max retained"],
+    sourceMaxValue: 1023,
+  })
+})
+
 test("raster export reports metadata, content credentials, and ICC embedding as authored for supported formats", () => {
   const base = richFixtureDocument()
   const doc = {
@@ -202,6 +250,45 @@ test("raster export reports metadata, content credentials, and ICC embedding as 
     expect(credentials?.status).toBe("preserved")
     expect(credentials?.detail).toContain("C2PA")
   }
+})
+
+test("every problematic export limitation has at least one one-click alternative", () => {
+  const doc = richFixtureDocument()
+  const formats: ExportFormat[] = [
+    "png",
+    "tiff",
+    "jpeg",
+    "webp",
+    "gif",
+    "avif",
+    "svg",
+    "tga",
+    "ppm",
+    "pgm",
+    "pbm",
+    "apng",
+    "animated-webp",
+  ]
+  const problematic = new Set(["flattened", "approximated", "unsupported"])
+  const missing: string[] = []
+
+  for (const format of formats) {
+    const report = createExportLimitationReport(doc, {
+      format,
+      includeMetadata: true,
+      interlaced: true,
+      progressive: true,
+      transparent: true,
+      quality: 55,
+    })
+    for (const item of report.items) {
+      if (!problematic.has(item.status)) continue
+      const alternatives = alternativesForLimitation(format, item)
+      if (!alternatives.length) missing.push(`${format}:${item.status}:${item.label}`)
+    }
+  }
+
+  expect(missing).toEqual([])
 })
 
 test("browser encoder diagnostics detect WebP support and AVIF MIME fallback", async () => {

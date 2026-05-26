@@ -11,6 +11,7 @@ import {
   convertAnchorPoint,
   deleteNearestAnchorPoint,
   deleteSelectedPathAnchors,
+  duplicatePathSubpath,
   fitFreeformPath,
   getRoundedRectCornerRadiusHandles,
   hitTestPathControls,
@@ -21,12 +22,14 @@ import {
   resizeShapeWithCornerRadii,
   selectAllPathAnchors,
   selectPathAnchorsInRect,
+  selectPathSubpathAnchors,
   shapeToEditablePath,
   updateRoundedRectCornerRadius,
   togglePathAnchorSelection,
   type PathAnchorRef,
   type RoundedRectCorner,
 } from "./vector-path-operations"
+import { constrainPointTo45, constrainTo45Degrees, isTempDirectSelectModifier } from "./path-modifier-keys"
 import {
   normalizeBrushPointerSample,
   planArtHistoryStroke,
@@ -175,6 +178,7 @@ import {
 } from "./tool-helpers"
 import { perspectiveCropImageData } from "./photo-workflow-engine"
 import { hexToRgba } from "./color-utils"
+import { applyThreeDMaterialDrop } from "./three-d-video-engine"
 import type { BlendMode, CustomShapeId, GradientStop, Layer, PathHandleMode, PathPoint, PathProps, PsDocument, Selection, ShapeProps } from "./types"
 
 interface BrushInput {
@@ -3751,14 +3755,13 @@ export function CanvasView() {
       dispatch({
         type: "set-layer-3d",
         id: activeLayer.id,
-        scene: {
-          ...activeLayer.threeD,
-          materials: activeLayer.threeD.materials.map((candidate) =>
-            candidate.id === material.id ? { ...candidate, color: foreground } : candidate,
-          ),
-        },
+        scene: applyThreeDMaterialDrop(activeLayer.threeD, selectedObject?.id, foreground, {
+          u: activeDoc.width ? pt.x / activeDoc.width : 0.5,
+          v: activeDoc.height ? pt.y / activeDoc.height : 0.5,
+          radius: Math.max(0.02, Math.min(0.18, brush.size / Math.max(activeDoc.width, activeDoc.height, 1))),
+        }),
       })
-      setTimeout(() => commit("Apply 3D Material", [activeLayer.id]), 0)
+      setTimeout(() => commit("Paint 3D Texture", [activeLayer.id]), 0)
       return
     }
 
@@ -3978,6 +3981,14 @@ export function CanvasView() {
       return
     }
 
+    if (
+      (tool === "pen" || tool === "curvature-pen" || tool === "freeform-pen" || tool === "path-select") &&
+      isTempDirectSelectModifier(e)
+    ) {
+      beginDirectSelectionAtPoint(e, pt)
+      return
+    }
+
     // Pen tools
     if (tool === "freeform-pen") {
       drawingRef.current = { type: "freeform-path", start: pt, last: pt, points: [pt] }
@@ -3986,6 +3997,7 @@ export function CanvasView() {
     }
 
     if (tool === "pen" || tool === "curvature-pen") {
+      if (e.altKey && convertAnchorAtPoint(pt)) return
       const curvature = tool === "curvature-pen"
       if (!pathDraftRef.current || !!pathDraftRef.current.curvature !== curvature) {
         pathDraftRef.current = { points: [{ x: pt.x, y: pt.y }], closed: false, curvature }
@@ -4000,7 +4012,8 @@ export function CanvasView() {
             return
           }
         }
-        draft.points.push({ x: pt.x, y: pt.y })
+        const nextPoint = e.shiftKey ? constrainPointTo45(draft.points[draft.points.length - 1], pt) : pt
+        draft.points.push({ x: nextPoint.x, y: nextPoint.y })
       }
       drawPathPreview()
       return
@@ -4012,6 +4025,7 @@ export function CanvasView() {
       dispatch({ type: "set-active-layer", id: hit.id })
       drawPathSelectionPreview(hit)
       if (!layerAllowsMoving(hit)) return
+      if (e.altKey && duplicateSubpathForPathSelection(hit, pt)) return
       drawingRef.current = {
         type: "move",
         moveLayerId: hit.id,
@@ -4026,55 +4040,7 @@ export function CanvasView() {
     }
 
     if (tool === "direct-select") {
-      const layer = pickVectorLayer(activeDoc, pt) ?? activeLayer
-      if (!layer || !isVectorEditableLayer(layer)) return
-      dispatch({ type: "set-active-layer", id: layer.id })
-      drawPathSelectionPreview(layer)
-      if (!layerAllowsDrawing(layer)) return
-      const direct = directSelectionTarget(layer, pt)
-      if (!direct) return
-      if (e.shiftKey && direct.shapeHandle === "center" && direct.pointIndex === undefined) {
-        drawingRef.current = {
-          type: "path-marquee",
-          start: pt,
-          last: pt,
-          directLayerId: layer.id,
-        }
-        drawMarqueePreview(pt, pt)
-        return
-      }
-      let directSelectedAnchors: PathAnchorRef[] | undefined
-      if (direct.pointIndex !== undefined) {
-        const anchor = { subpathIndex: direct.subpathIndex ?? -1, pointIndex: direct.pointIndex }
-        if (direct.pathHandle) {
-          directSelectedAnchors = isDirectAnchorSelected(layer.id, anchor)
-            ? directSelectionAnchorsFor(layer.id)
-            : setSingleDirectAnchor(layer.id, anchor)
-        } else if (e.shiftKey) {
-          directSelectedAnchors = toggleDirectAnchor(layer.id, anchor)
-          if (!directSelectedAnchors.some((selected) => selected.subpathIndex === anchor.subpathIndex && selected.pointIndex === anchor.pointIndex)) {
-            drawPathSelectionPreview(layer)
-            return
-          }
-        } else {
-          directSelectedAnchors = isDirectAnchorSelected(layer.id, anchor)
-            ? directSelectionAnchorsFor(layer.id)
-            : setSingleDirectAnchor(layer.id, anchor)
-        }
-      } else if (!e.shiftKey) {
-        setDirectAnchorSelection(null)
-      }
-      drawingRef.current = {
-        type: "path-direct",
-        start: pt,
-        last: pt,
-        directLayerId: layer.id,
-        directSubpathIndex: direct.subpathIndex,
-        directPointIndex: direct.pointIndex,
-        directPathHandle: direct.pathHandle,
-        directShapeHandle: direct.shapeHandle,
-        directSelectedAnchors,
-      }
+      beginDirectSelectionAtPoint(e, pt)
       return
     }
 
@@ -5716,6 +5682,139 @@ export function CanvasView() {
     setTimeout(() => commit(mode === "add-anchor-point" ? "Add Anchor Point" : mode === "delete-anchor-point" ? "Delete Anchor Point" : "Convert Point", [layer.id]), 0)
   }
 
+  function convertAnchorAtPoint(pt: { x: number; y: number }) {
+    const layer = activeLayer && isVectorEditableLayer(activeLayer) ? activeLayer : activeDoc ? pickVectorLayer(activeDoc, pt) : null
+    if (!layer || !layerAllowsDrawing(layer)) return false
+    const direct = directSelectionTarget(layer, pt)
+    if (!direct || direct.pointIndex === undefined || direct.pathHandle) return false
+    if (layer.path) {
+      const editablePath = pathForDirectEdit(layer.path, direct.subpathIndex)
+      layer.path = replaceDirectEditPath(layer.path, direct.subpathIndex, convertAnchorPoint(editablePath, direct.pointIndex).path)
+      dispatch({ type: "set-layer-path", id: layer.id, path: layer.path })
+    } else if (layer.shape) {
+      const basePath = layer.shape.computedPath ?? shapeToEditablePath(layer.shape)
+      const editablePath = pathForDirectEdit(basePath, direct.subpathIndex)
+      layer.shape = {
+        ...layer.shape,
+        computedPath: replaceDirectEditPath(basePath, direct.subpathIndex, convertAnchorPoint(editablePath, direct.pointIndex).path),
+      }
+      dispatch({ type: "set-layer-shape", id: layer.id, shape: layer.shape })
+    } else {
+      return false
+    }
+    setSingleDirectAnchor(layer.id, { subpathIndex: direct.subpathIndex ?? -1, pointIndex: direct.pointIndex })
+    rerenderVectorLayer(layer)
+    drawPathSelectionPreview(layer)
+    setTimeout(() => commit("Convert Point", [layer.id]), 0)
+    return true
+  }
+
+  function beginDirectSelectionAtPoint(e: Pick<React.PointerEvent<HTMLDivElement>, "shiftKey" | "altKey" | "ctrlKey" | "metaKey">, pt: { x: number; y: number }) {
+    if (!activeDoc) return false
+    const layer = pickVectorLayer(activeDoc, pt) ?? activeLayer
+    if (!layer || !isVectorEditableLayer(layer)) return false
+    dispatch({ type: "set-active-layer", id: layer.id })
+    drawPathSelectionPreview(layer)
+    if (!layerAllowsDrawing(layer)) return true
+    const direct = directSelectionTarget(layer, pt)
+    if (!direct) return true
+    if (e.altKey && direct.segmentIndex !== undefined) {
+      const editablePath = editablePathForDirectSelection(layer)
+      const directSelectedAnchors = editablePath ? selectPathSubpathAnchors(editablePath, direct.subpathIndex ?? -1) : []
+      setDirectAnchorSelection(directSelectedAnchors.length ? { layerId: layer.id, anchors: directSelectedAnchors } : null)
+      drawingRef.current = {
+        type: "path-direct",
+        start: pt,
+        last: pt,
+        directLayerId: layer.id,
+        directSubpathIndex: direct.subpathIndex,
+        directSelectedAnchors,
+      }
+      drawPathSelectionPreview(layer)
+      return true
+    }
+    if (direct.shapeHandle === "center" && direct.pointIndex === undefined && direct.segmentIndex === undefined && !e.altKey) {
+      drawingRef.current = {
+        type: "path-marquee",
+        start: pt,
+        last: pt,
+        directLayerId: layer.id,
+      }
+      drawMarqueePreview(pt, pt)
+      return true
+    }
+    let directSelectedAnchors: PathAnchorRef[] | undefined
+    if (direct.pointIndex !== undefined) {
+      const anchor = { subpathIndex: direct.subpathIndex ?? -1, pointIndex: direct.pointIndex }
+      if (direct.pathHandle) {
+        directSelectedAnchors = isDirectAnchorSelected(layer.id, anchor)
+          ? directSelectionAnchorsFor(layer.id)
+          : setSingleDirectAnchor(layer.id, anchor)
+      } else if (e.shiftKey) {
+        directSelectedAnchors = toggleDirectAnchor(layer.id, anchor)
+        if (!directSelectedAnchors.some((selected) => selected.subpathIndex === anchor.subpathIndex && selected.pointIndex === anchor.pointIndex)) {
+          drawPathSelectionPreview(layer)
+          return true
+        }
+      } else {
+        directSelectedAnchors = isDirectAnchorSelected(layer.id, anchor)
+          ? directSelectionAnchorsFor(layer.id)
+          : setSingleDirectAnchor(layer.id, anchor)
+      }
+    } else if (!e.shiftKey) {
+      setDirectAnchorSelection(null)
+    }
+    drawingRef.current = {
+      type: "path-direct",
+      start: pt,
+      last: pt,
+      directLayerId: layer.id,
+      directSubpathIndex: direct.subpathIndex,
+      directPointIndex: direct.pointIndex,
+      directPathHandle: direct.pathHandle,
+      directShapeHandle: direct.shapeHandle,
+      directSelectedAnchors,
+    }
+    return true
+  }
+
+  function duplicateSubpathForPathSelection(layer: Layer, pt: { x: number; y: number }) {
+    if (!layerAllowsDrawing(layer)) return false
+    const editablePath = editablePathForDirectSelection(layer)
+    if (!editablePath?.points.length) return false
+    const hit = hitTestPathControls(editablePath, pt, {
+      maxAnchorDistance: 14,
+      maxHandleDistance: 14,
+      maxSegmentDistance: 9,
+      segmentSamples: 32,
+    })
+    const sourceSubpathIndex = hit?.subpathIndex ?? -1
+    const duplicated = duplicatePathSubpath(editablePath, sourceSubpathIndex)
+    if (duplicated.insertedSubpathIndex < 0) return false
+    if (layer.path) {
+      layer.path = duplicated.path
+      dispatch({ type: "set-layer-path", id: layer.id, path: layer.path })
+    } else if (layer.shape) {
+      layer.shape = { ...layer.shape, computedPath: duplicated.path }
+      dispatch({ type: "set-layer-shape", id: layer.id, shape: layer.shape })
+    } else {
+      return false
+    }
+    setDirectAnchorSelection({ layerId: layer.id, anchors: duplicated.selection })
+    drawingRef.current = {
+      type: "path-direct",
+      start: pt,
+      last: pt,
+      directLayerId: layer.id,
+      directSubpathIndex: duplicated.insertedSubpathIndex,
+      directSelectedAnchors: duplicated.selection,
+    }
+    rerenderVectorLayer(layer)
+    requestRender()
+    drawPathSelectionPreview(layer)
+    return true
+  }
+
   function isVectorEditableLayer(layer: Layer | null | undefined) {
     return Boolean(layer && layer.kind !== "group" && (layer.path || textLayerPath(layer) || layer.shape || layer.frame || layer.artboard || layer.kind === "shape" || layer.kind === "frame" || layer.kind === "artboard"))
   }
@@ -5774,6 +5873,9 @@ export function CanvasView() {
       }
       if (hit?.kind === "handle") {
         return { subpathIndex: hit.subpathIndex, pointIndex: hit.pointIndex, pathHandle: hit.handle, shapeHandle: undefined }
+      }
+      if (hit?.kind === "segment") {
+        return { subpathIndex: hit.subpathIndex, segmentIndex: hit.segmentIndex, pointIndex: undefined, pathHandle: undefined, shapeHandle: undefined }
       }
     }
     if (layer.shape?.type === "rect") {
@@ -5837,10 +5939,15 @@ export function CanvasView() {
 
   function constrainedDelta(dx: number, dy: number, constrain: boolean) {
     if (!constrain) return { dx, dy }
-    return Math.abs(dx) >= Math.abs(dy) ? { dx, dy: 0 } : { dx: 0, dy }
+    return constrainTo45Degrees(dx, dy)
   }
 
   function updateDirectSelectionDrag(layer: Layer, pt: { x: number; y: number }, drag: typeof drawingRef.current, mirrorPathHandles = true, constrainMove = false) {
+    if (layer.path && drag.directSelectedAnchors?.length && drag.last && drag.directPointIndex === undefined && !drag.directPathHandle) {
+      layer.path = moveSelectedPathAnchors(layer.path, drag.directSelectedAnchors, constrainedDelta(pt.x - drag.last.x, pt.y - drag.last.y, constrainMove))
+      rerenderVectorLayer(layer)
+      return
+    }
     if (layer.path && drag.directPointIndex !== undefined && drag.directPointIndex >= 0) {
       const editablePath = pathForDirectEdit(layer.path, drag.directSubpathIndex)
       if (drag.directPathHandle) {
@@ -5860,6 +5967,15 @@ export function CanvasView() {
         return
       }
       layer.path = replaceDirectEditPath(layer.path, drag.directSubpathIndex, movePathAnchor(editablePath, drag.directPointIndex, pt))
+      rerenderVectorLayer(layer)
+      return
+    }
+    if (layer.shape && drag.directSelectedAnchors?.length && drag.last && drag.directPointIndex === undefined && !drag.directPathHandle) {
+      const basePath = layer.shape.computedPath ?? shapeToEditablePath(layer.shape)
+      layer.shape = {
+        ...layer.shape,
+        computedPath: moveSelectedPathAnchors(basePath, drag.directSelectedAnchors, constrainedDelta(pt.x - drag.last.x, pt.y - drag.last.y, constrainMove)),
+      }
       rerenderVectorLayer(layer)
       return
     }
@@ -7523,9 +7639,11 @@ function renderLayerSourceForCompositor(layer: Layer, filterPreviewCanvas?: HTML
     } else {
       // Lazy import to avoid circular ref hazards
       const { applyLayerStyle } = require("./layer-styles") as typeof import("./layer-styles")
-      const gpuStyled = effectContent === fillContent && advanced.transparencyShapesLayer
-        ? applyGpuLayerStyleToCanvas(renderLayer, fillOp)
-        : null
+      const gpuEffectSource = advanced.transparencyShapesLayer ? effectContent : makeOpaqueMask(content.width, content.height)
+      const gpuStyled = applyGpuLayerStyleToCanvas(renderLayer, fillOp, {
+        effectSourceCanvas: gpuEffectSource,
+        fillSourceCanvas: fillContent,
+      })
       toDraw = gpuStyled ?? applyLayerStyle(renderLayer, fillOp, {
         effectSourceCanvas: effectContent,
         transparencyShapesLayer: advanced.transparencyShapesLayer,

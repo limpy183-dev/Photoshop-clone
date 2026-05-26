@@ -1238,14 +1238,12 @@ export function LayersPanel() {
                 </button>
                 {(layer.shape || layer.path || layer.vectorMask) ? (
                   <>
-                    {layer.shape ? (
-                      <button
-                        className="flex w-full items-center px-2 py-1 text-left hover:bg-[var(--ps-tool-hover)]"
-                        onClick={() => copyVectorLayerCss(layer)}
-                      >
-                        Copy CSS
-                      </button>
-                    ) : null}
+                    <button
+                      className="flex w-full items-center px-2 py-1 text-left hover:bg-[var(--ps-tool-hover)]"
+                      onClick={() => copyVectorLayerCss(layer)}
+                    >
+                      Copy CSS
+                    </button>
                     <button
                       className="flex w-full items-center px-2 py-1 text-left hover:bg-[var(--ps-tool-hover)]"
                       onClick={() => copyVectorLayerSvg(layer)}

@@ -14,12 +14,21 @@ export type ExportPresetPayload = Partial<{
   webpNearLossless: number
   webpMethod: number
   webpExactAlpha: boolean
+  webpAlphaQuality: number
+  webpAlphaFilter: "none" | "fast" | "best"
   avifLossless: boolean
   avifSpeed: number
   avifBitDepth: number
   avifChromaSubsampling: string
   avifTileRowsLog2: number
   avifTileColsLog2: number
+  tgaJobName: string
+  tgaSoftwareId: string
+  tgaAspectRatioNumerator: number
+  tgaAspectRatioDenominator: number
+  tgaGamma: number
+  netpbmComments: string
+  netpbmSourceMaxValue: number
   includeMetadata: boolean
   precision: number
   tiffCompression: TiffCompression

@@ -26,7 +26,11 @@ export type { VariableDataSet, VariableBinding } from "./types"
 
 export const MAX_DATASET_ROWS = 2000
 export const MAX_DATASET_COLUMNS = 64
+export const MAX_DATASET_IMPORTS = 64
+export const VARIABLE_DATA_SET_FORMAT = "ps-variable-data-sets"
+export const VARIABLE_DATA_SET_VERSION = 1
 const MAX_NAME_LENGTH = 80
+const MAX_CELL_LENGTH = 20_000
 
 /* --------------------------- Parsing ------------------------------------ */
 
@@ -51,6 +55,191 @@ function collectColumns(rows: Record<string, string>[]): string[] {
     }
   }
   return Array.from(set)
+}
+
+/* --------------------------- Import / export --------------------------- */
+
+export interface VariableDataSetExportPayload {
+  app: "Photoshop Web"
+  format: typeof VARIABLE_DATA_SET_FORMAT
+  version: typeof VARIABLE_DATA_SET_VERSION
+  exportedAt: string
+  dataSets: VariableDataSet[]
+}
+
+export interface VariableDataSetImportOptions {
+  doc?: PsDocument
+  makeId?: (prefix: string, index: number) => string
+}
+
+const VARIABLE_BINDING_PROPERTIES: ReadonlySet<VariableBinding["property"]> = new Set([
+  "text",
+  "visibility",
+  "opacity",
+  "image",
+])
+
+export function buildVariableDataSetExportPayload(
+  dataSets: VariableDataSet[],
+  options: { exportedAt?: string } = {},
+): VariableDataSetExportPayload {
+  return {
+    app: "Photoshop Web",
+    format: VARIABLE_DATA_SET_FORMAT,
+    version: VARIABLE_DATA_SET_VERSION,
+    exportedAt: options.exportedAt ?? new Date().toISOString(),
+    dataSets: dataSets.slice(0, MAX_DATASET_IMPORTS).map((set) => clampActiveRow({
+      id: cleanText(set.id, "dataset", 80),
+      name: cleanText(set.name, "Untitled Data Set", MAX_NAME_LENGTH),
+      rows: normalizeRows(set.rows),
+      bindings: normalizeBindingsForExport(set.bindings, collectColumns(set.rows)),
+      activeRow: set.activeRow,
+    })),
+  }
+}
+
+export function parseVariableDataSetImportPayload(parsed: unknown, options: VariableDataSetImportOptions = {}): VariableDataSet[] {
+  const list = extractDataSetRecords(parsed)
+  const makeId = options.makeId ?? ((prefix: string, index: number) => `${prefix}-${Date.now().toString(36)}-${index}`)
+  return list.slice(0, MAX_DATASET_IMPORTS).map((record, setIndex) => {
+    const rows = normalizeRows(Array.isArray(record.rows) ? record.rows : [])
+    const columns = collectColumns(rows)
+    const activeRow = clampRowIndex(record.activeRow, rows.length)
+    return {
+      id: makeId("dataset", setIndex),
+      name: cleanText(record.name, `Data Set ${setIndex + 1}`, MAX_NAME_LENGTH),
+      rows,
+      bindings: normalizeBindings(Array.isArray(record.bindings) ? record.bindings : [], columns, options.doc, setIndex, makeId),
+      activeRow,
+    }
+  }).filter((set) => set.rows.length)
+}
+
+export function serializeDatasetRowsCsv(rows: Record<string, string>[], columns = collectColumns(rows)): string {
+  if (!rows.length || !columns.length) return ""
+  const header = columns.map(csvCell).join(",")
+  const body = rows.map((row) => columns.map((column) => csvCell(row[column] ?? "")).join(","))
+  return [header, ...body].join("\r\n")
+}
+
+export function inferVariableBindings(doc: PsDocument, columns: string[]): VariableBinding[] {
+  const normalizedColumns = columns.map((column) => ({ raw: column, key: normalizeKey(column) }))
+  const bindings: VariableBinding[] = []
+  for (const layer of doc.layers) {
+    const layerKey = normalizeKey(layer.name)
+    if (layer.text) {
+      const column =
+        normalizedColumns.find((item) => item.key === layerKey)?.raw ??
+        normalizedColumns.find((item) => item.key === "text" || item.key === "headline" || item.key === "title")?.raw
+      if (column) bindings.push(createBinding(layer.id, "text", column))
+    }
+    const visible = normalizedColumns.find((item) => item.key === `show_${layerKey}` || item.key === `${layerKey}_visible`)?.raw
+    if (visible) bindings.push(createBinding(layer.id, "visibility", visible))
+    const opacity = normalizedColumns.find((item) => item.key === `${layerKey}_opacity` || item.key === "opacity")?.raw
+    if (opacity) bindings.push(createBinding(layer.id, "opacity", opacity))
+    const image = normalizedColumns.find((item) => item.key === `${layerKey}_image` || item.key === "image")?.raw
+    if (image) bindings.push(createBinding(layer.id, "image", image))
+  }
+  return bindings
+}
+
+function extractDataSetRecords(parsed: unknown): Array<Record<string, unknown>> {
+  if (isRecord(parsed) && parsed.format === VARIABLE_DATA_SET_FORMAT) {
+    if (parsed.version !== VARIABLE_DATA_SET_VERSION) throw new Error(`Unsupported variable data set version: ${String(parsed.version)}`)
+    if (!Array.isArray(parsed.dataSets)) throw new Error("Variable data set file must contain a dataSets array.")
+    return parsed.dataSets.filter(isRecord)
+  }
+  if (Array.isArray(parsed)) return parsed.filter(isRecord)
+  if (isRecord(parsed) && Array.isArray(parsed.rows)) return [parsed]
+  throw new Error("File does not contain variable data sets.")
+}
+
+function normalizeRows(rows: unknown): Record<string, string>[] {
+  if (!Array.isArray(rows)) return []
+  return rows.slice(0, MAX_DATASET_ROWS).filter(isRecord).map((row) => {
+    const out: Record<string, string> = {}
+    for (const [key, value] of Object.entries(row).slice(0, MAX_DATASET_COLUMNS)) {
+      const cleanKey = cleanText(key, "", MAX_NAME_LENGTH)
+      if (!cleanKey) continue
+      out[cleanKey] = normalizeCell(value)
+    }
+    return out
+  })
+}
+
+function normalizeBindings(
+  bindings: unknown[],
+  columns: string[],
+  doc?: PsDocument,
+  setIndex = 0,
+  makeId: (prefix: string, index: number) => string = (prefix, index) => `${prefix}-${index}`,
+): VariableBinding[] {
+  const out: VariableBinding[] = []
+  bindings.slice(0, MAX_DATASET_COLUMNS * 4).forEach((raw) => {
+    if (!isRecord(raw)) return
+    const property = raw.property
+    if (!VARIABLE_BINDING_PROPERTIES.has(property as VariableBinding["property"])) return
+    const layerId = cleanText(raw.layerId, "", 120)
+    const column = cleanText(raw.column, "", MAX_NAME_LENGTH)
+    if (!layerId || !column || !columns.includes(column)) return
+    if (doc && !doc.layers.some((layer) => layer.id === layerId)) return
+    out.push({
+      id: makeId(`binding_${setIndex}`, out.length),
+      layerId,
+      property: property as VariableBinding["property"],
+      column,
+    })
+  })
+  return out
+}
+
+function normalizeBindingsForExport(bindings: VariableBinding[], columns: string[]): VariableBinding[] {
+  const out: VariableBinding[] = []
+  for (const binding of bindings.slice(0, MAX_DATASET_COLUMNS * 4)) {
+    if (!VARIABLE_BINDING_PROPERTIES.has(binding.property)) continue
+    const layerId = cleanText(binding.layerId, "", 120)
+    const column = cleanText(binding.column, "", MAX_NAME_LENGTH)
+    if (!layerId || !column || !columns.includes(column)) continue
+    out.push({
+      id: cleanText(binding.id, `binding-${out.length}`, 80),
+      layerId,
+      property: binding.property,
+      column,
+    })
+  }
+  return out
+}
+
+function clampRowIndex(value: unknown, rowCount: number): number | undefined {
+  if (!rowCount) return undefined
+  const index = typeof value === "number" && Number.isFinite(value) ? Math.round(value) : 0
+  return Math.max(0, Math.min(rowCount - 1, index))
+}
+
+function normalizeCell(value: unknown): string {
+  if (value === undefined || value === null) return ""
+  if (typeof value === "string") return value.slice(0, MAX_CELL_LENGTH)
+  if (typeof value === "number" || typeof value === "boolean") return String(value)
+  return JSON.stringify(value).slice(0, MAX_CELL_LENGTH)
+}
+
+function csvCell(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`
+}
+
+function cleanText(value: unknown, fallback: string, limit: number): string {
+  const next = typeof value === "string"
+    ? value.replace(/[\u0000-\u001f\u007f]/g, "").replace(/\s+/g, " ").trim().slice(0, limit)
+    : ""
+  return next || fallback
+}
+
+function normalizeKey(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, "_")
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value)
 }
 
 /* --------------------------- Binding ------------------------------------ */

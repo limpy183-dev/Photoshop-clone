@@ -1011,6 +1011,77 @@ test("WebGL layer-stack planner keeps compatible filters effects adjustments and
   expect(plan.effectFallbacks).toEqual([])
 })
 
+test("WebGL layer-stack planner keeps masked smart filters on the full GPU path", () => {
+  installFixtureDom()
+  const maskedSmartLayer: Layer = {
+    id: "masked-smart",
+    name: "Masked Smart Filter",
+    kind: "smart-object",
+    visible: true,
+    locked: false,
+    opacity: 0.82,
+    blendMode: "screen",
+    canvas: fixtureCanvas(128, 96),
+    smartFilters: [
+      {
+        id: "sf-blur",
+        filterId: "gaussian-blur",
+        name: "Gaussian Blur",
+        enabled: true,
+        opacity: 0.7,
+        blendMode: "overlay",
+        params: { radius: 5 },
+        mask: fixtureMask(128, 96),
+        maskEnabled: true,
+        maskDensity: 0.55,
+        maskFeather: 6,
+      },
+      {
+        id: "sf-tonal",
+        filterId: "brightness-contrast",
+        name: "Brightness/Contrast",
+        enabled: true,
+        params: { brightness: 12, contrast: 18 },
+      },
+    ],
+  }
+  const maskedAdjustment: Layer = {
+    id: "masked-adjustment",
+    name: "Masked Shadows/Highlights",
+    kind: "adjustment",
+    visible: true,
+    locked: false,
+    opacity: 0.6,
+    blendMode: "normal",
+    canvas: fixtureCanvas(128, 96),
+    mask: fixtureMask(128, 96),
+    maskEnabled: true,
+    clipped: true,
+    adjustment: { type: "shadows-highlights", params: { shadows: 25, highlights: 20 } },
+  }
+
+  expect(getWebGLLayerCapability(maskedSmartLayer)).toMatchObject({
+    supported: true,
+    effectFallbacks: [],
+    unsupportedReasons: [],
+  })
+
+  const plan = planWebGLLayerStack({
+    width: 4096,
+    height: 3072,
+    layerCount: 2,
+    layers: [maskedSmartLayer, maskedAdjustment],
+    preferWebGL: true,
+    webglAvailable: true,
+    maxTextureSize: 8192,
+  })
+
+  expect(plan.compatible).toBe(true)
+  expect(plan.gpuLayerCount).toBe(2)
+  expect(plan.effectFallbacks).toEqual([])
+  expect(plan.unsupportedLayers).toEqual([])
+})
+
 test("priority RAF scheduler coalesces filter previews and skips low priority work over budget", () => {
   const callbacks: FrameRequestCallback[] = []
   const emitted: string[] = []

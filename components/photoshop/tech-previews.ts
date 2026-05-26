@@ -123,7 +123,7 @@ export const TECH_PREVIEW_FLAGS: readonly TechPreviewFlagDefinition[] = [
     label: "WebGPU 3D path tracing",
     riskLevel: "experimental",
     helpText:
-      "Replaces the CPU raytrace 3D preview with a WebGPU path tracer when WebGPU is available. Quality and timing differ from the deterministic CPU path.",
+      "Exposes experimental WebGPU path-tracing probes when WebGPU is available. CPU raytrace remains the production renderer; this is not a production replacement.",
     defaultEnabled: false,
   },
   {

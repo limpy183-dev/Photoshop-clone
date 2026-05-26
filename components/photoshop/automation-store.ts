@@ -11,6 +11,7 @@
 
 import * as React from "react"
 import { validateDsl } from "./command-dsl"
+import type { AutomationWorkflow } from "./automation-engine"
 
 const MACROS_KEY = "ps-command-macros"
 const DROPLETS_KEY = "ps-droplets"
@@ -34,8 +35,11 @@ export interface Droplet {
   actionId?: string
   preScript?: string
   postScript?: string
-  condition?: "always" | "has-selection" | "has-active-layer" | "multi-layer" | "rgb"
-  exportFormat?: "none" | "png" | "jpeg" | "webp"
+  condition?: "always" | "has-selection" | "has-active-layer" | "multi-layer" | "rgb" | "print-ready" | "document-open"
+  event?: string
+  manualOnly?: boolean
+  workflow?: AutomationWorkflow
+  exportFormat?: "none" | "png" | "jpeg" | "webp" | "gif" | "avif"
   exportName?: string
   createdAt: number
   updatedAt: number
@@ -63,16 +67,21 @@ function cleanScript(value: unknown): string {
 
 function cleanCondition(value: unknown): Droplet["condition"] {
   if (typeof value !== "string") return "always"
-  return (["always", "has-selection", "has-active-layer", "multi-layer", "rgb"] as const).includes(
+  return (["always", "has-selection", "has-active-layer", "multi-layer", "rgb", "print-ready", "document-open"] as const).includes(
     value as Droplet["condition"] & string,
   )
     ? (value as Droplet["condition"])
     : "always"
 }
 
+function cleanEvent(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined
+  return cleanName(value, "", 80) || undefined
+}
+
 function cleanExportFormat(value: unknown): Droplet["exportFormat"] {
   if (typeof value !== "string") return "png"
-  return (["none", "png", "jpeg", "webp"] as const).includes(value as Droplet["exportFormat"] & string)
+  return (["none", "png", "jpeg", "webp", "gif", "avif"] as const).includes(value as Droplet["exportFormat"] & string)
     ? (value as Droplet["exportFormat"])
     : "png"
 }
@@ -111,6 +120,9 @@ function sanitizeDroplet(value: unknown): Droplet | null {
     preScript: cleanScript(record.preScript) || undefined,
     postScript: cleanScript(record.postScript) || undefined,
     condition: cleanCondition(record.condition),
+    event: cleanEvent(record.event),
+    manualOnly: typeof record.manualOnly === "boolean" ? record.manualOnly : true,
+    workflow: record.workflow && typeof record.workflow === "object" ? record.workflow as AutomationWorkflow : undefined,
     exportFormat: cleanExportFormat(record.exportFormat),
     exportName: typeof record.exportName === "string" ? cleanName(record.exportName, "", 120) || undefined : undefined,
     createdAt,
@@ -291,6 +303,9 @@ export function useDroplets(): DropletsApi {
         preScript: input.preScript ? cleanScript(input.preScript) : undefined,
         postScript: input.postScript ? cleanScript(input.postScript) : undefined,
         condition: cleanCondition(input.condition),
+        event: cleanEvent(input.event),
+        manualOnly: input.manualOnly ?? true,
+        workflow: input.workflow,
         exportFormat: cleanExportFormat(input.exportFormat),
         exportName: input.exportName ? cleanName(input.exportName, "", 120) : undefined,
       }
@@ -312,6 +327,9 @@ export function useDroplets(): DropletsApi {
               ...(patch.preScript !== undefined ? { preScript: patch.preScript ? cleanScript(patch.preScript) : undefined } : {}),
               ...(patch.postScript !== undefined ? { postScript: patch.postScript ? cleanScript(patch.postScript) : undefined } : {}),
               ...(patch.condition !== undefined ? { condition: cleanCondition(patch.condition) } : {}),
+              ...(patch.event !== undefined ? { event: cleanEvent(patch.event) } : {}),
+              ...(patch.manualOnly !== undefined ? { manualOnly: patch.manualOnly } : {}),
+              ...(patch.workflow !== undefined ? { workflow: patch.workflow } : {}),
               ...(patch.exportFormat !== undefined ? { exportFormat: cleanExportFormat(patch.exportFormat) } : {}),
               ...(patch.exportName !== undefined ? { exportName: patch.exportName ? cleanName(patch.exportName, "", 120) : undefined } : {}),
               updatedAt: now,

@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test"
 import {
   buildIndexedColorTable,
   convertImageDataToDocumentMode,
+  resolveBitmapScreenCellSize,
 } from "../components/photoshop/color-mode-conversion"
 import type { DocumentModeSettings } from "../components/photoshop/types"
 
@@ -101,6 +102,43 @@ test("bitmap conversion supports threshold, halftone, and diffusion dither metho
   expect(new Set([diffusion.data[0], diffusion.data[4], diffusion.data[8], diffusion.data[12]])).toEqual(new Set([0, 255]))
 })
 
+test("bitmap halftone controls derive screen cell size from output resolution and frequency", () => {
+  expect(resolveBitmapScreenCellSize({ outputResolution: 600, frequency: 60 })).toBe(10)
+  expect(resolveBitmapScreenCellSize({ outputResolution: 300, frequency: 75 })).toBe(4)
+  expect(resolveBitmapScreenCellSize({ outputResolution: 72, frequency: 200 })).toBe(1)
+})
+
+test("bitmap halftone conversion honors resolution and screen shape controls", () => {
+  const pixels = Array.from({ length: 8 * 8 }, (_, index) => {
+    const x = index % 8
+    const y = Math.floor(index / 8)
+    const value = 72 + x * 14 + y * 9
+    return [value, value, value, 255]
+  }).flat()
+  const source = imageData(8, 8, pixels)
+
+  const coarseRound = convertImageDataToDocumentMode(source, {
+    mode: "Bitmap",
+    bitmap: { method: "halftone", threshold: 128, frequency: 10, angle: 0, outputResolution: 80, shape: "round" },
+  })
+  const fineRound = convertImageDataToDocumentMode(source, {
+    mode: "Bitmap",
+    bitmap: { method: "halftone", threshold: 128, frequency: 10, angle: 0, outputResolution: 20, shape: "round" },
+  })
+  const square = convertImageDataToDocumentMode(source, {
+    mode: "Bitmap",
+    bitmap: { method: "halftone", threshold: 128, frequency: 10, angle: 0, outputResolution: 40, shape: "square" },
+  } as unknown as DocumentModeSettings)
+  const cross = convertImageDataToDocumentMode(source, {
+    mode: "Bitmap",
+    bitmap: { method: "halftone", threshold: 128, frequency: 10, angle: 0, outputResolution: 40, shape: "cross" },
+  } as unknown as DocumentModeSettings)
+
+  expect(Array.from(coarseRound.data)).not.toEqual(Array.from(fineRound.data))
+  expect(Array.from(square.data)).not.toEqual(Array.from(cross.data))
+  expect(new Set([square.data[0], square.data[4], cross.data[0], cross.data[4]])).toEqual(new Set([0, 255]))
+})
+
 test("duotone conversion uses paper-white highlights and inked shadows", () => {
   const source = imageData(2, 1, [
     255, 255, 255, 255,
@@ -125,4 +163,43 @@ test("duotone conversion uses paper-white highlights and inked shadows", () => {
   expect(converted.data[4]).toBeGreaterThan(converted.data[5])
   expect(converted.data[5]).toBe(0)
   expect(converted.data[6]).toBe(0)
+})
+
+test("duotone conversion supports paper color and multiply overprint inks", () => {
+  const whiteAndBlack = imageData(2, 1, [
+    255, 255, 255, 255,
+    0, 0, 0, 255,
+  ])
+
+  const paper = convertImageDataToDocumentMode(whiteAndBlack, {
+    mode: "Duotone",
+    duotone: {
+      inkCount: 1,
+      ink1: "#000000",
+      ink2: "#000000",
+      ink1Name: "Black",
+      curve: 1,
+      paper: "#f0e0c0",
+      opacity1: 100,
+    },
+  } as unknown as DocumentModeSettings)
+
+  expect(Array.from(paper.data.slice(0, 4))).toEqual([240, 224, 192, 255])
+
+  const overprint = convertImageDataToDocumentMode(whiteAndBlack, {
+    mode: "Duotone",
+    duotone: {
+      inkCount: 2,
+      ink1: "#00ffff",
+      ink2: "#ff00ff",
+      ink1Name: "Cyan",
+      ink2Name: "Magenta",
+      curve: 1,
+      opacity1: 100,
+      opacity2: 100,
+      overprint: "multiply",
+    },
+  } as unknown as DocumentModeSettings)
+
+  expect(Array.from(overprint.data.slice(4, 8))).toEqual([0, 0, 255, 255])
 })

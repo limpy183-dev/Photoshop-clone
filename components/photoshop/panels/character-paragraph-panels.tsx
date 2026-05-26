@@ -26,7 +26,21 @@ import {
   Subscript,
   CaseLower,
   CaseUpper,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  AlignJustify,
 } from "lucide-react"
+
+const PARAGRAPH_ALIGNMENT_CONTROLS = [
+  { id: "left", label: "Align left" },
+  { id: "center", label: "Align center" },
+  { id: "right", label: "Align right" },
+  { id: "justify-left", label: "Justify left" },
+  { id: "justify-center", label: "Justify center" },
+  { id: "justify-right", label: "Justify right" },
+  { id: "justify-all", label: "Justify all" },
+] as const
 
 export function CharacterPanel() {
   const { activeDoc, activeLayer, dispatch, requestRender, commit } = useEditor()
@@ -123,7 +137,7 @@ export function CharacterPanel() {
   const openTypeToggles = listOpenTypeFeatureToggles(supportedTags?.size ? { supportedTags } : {})
 
   return (
-    <div className="overflow-y-auto text-[11px]">
+    <div data-testid="typography-character-panel" className="overflow-y-auto text-[11px]">
       {/* Font and Size row */}
       <div className="px-3 py-2 border-b border-[var(--ps-divider)] space-y-2">
         <div className="grid grid-cols-2 gap-2">
@@ -155,30 +169,30 @@ export function CharacterPanel() {
 
         {/* Style buttons row */}
         <div className="flex items-center gap-1">
-          <StyleBtn active={text.weight === "bold"} onClick={() => { update({ weight: text.weight === "bold" ? "normal" : "bold" }); commitChange("Bold") }}>
+          <StyleBtn title="Bold" active={text.weight === "bold"} onClick={() => { update({ weight: text.weight === "bold" ? "normal" : "bold" }); commitChange("Bold") }}>
             <Bold className="w-3 h-3" />
           </StyleBtn>
-          <StyleBtn active={text.italic} onClick={() => { update({ italic: !text.italic }); commitChange("Italic") }}>
+          <StyleBtn title="Italic" active={text.italic} onClick={() => { update({ italic: !text.italic }); commitChange("Italic") }}>
             <Italic className="w-3 h-3" />
           </StyleBtn>
-          <StyleBtn active={text.underline === true} onClick={() => { update({ underline: !text.underline }); commitChange("Underline") }}>
+          <StyleBtn title="Underline" active={text.underline === true} onClick={() => { update({ underline: !text.underline }); commitChange("Underline") }}>
             <Underline className="w-3 h-3" />
           </StyleBtn>
-          <StyleBtn active={text.strikethrough === true} onClick={() => { update({ strikethrough: !text.strikethrough }); commitChange("Strikethrough") }}>
+          <StyleBtn title="Strikethrough" active={text.strikethrough === true} onClick={() => { update({ strikethrough: !text.strikethrough }); commitChange("Strikethrough") }}>
             <Strikethrough className="w-3 h-3" />
           </StyleBtn>
           <div className="w-px h-4 bg-[var(--ps-divider)] mx-0.5" />
-          <StyleBtn active={text.allCaps === true} onClick={() => { update({ allCaps: !text.allCaps, smallCaps: false }); commitChange("All Caps") }}>
+          <StyleBtn title="All Caps" active={text.allCaps === true} onClick={() => { update({ allCaps: !text.allCaps, smallCaps: false }); commitChange("All Caps") }}>
             <CaseUpper className="w-3 h-3" />
           </StyleBtn>
-          <StyleBtn active={text.smallCaps === true} onClick={() => { update({ smallCaps: !text.smallCaps, allCaps: false }); commitChange("Small Caps") }}>
+          <StyleBtn title="Small Caps" active={text.smallCaps === true} onClick={() => { update({ smallCaps: !text.smallCaps, allCaps: false }); commitChange("Small Caps") }}>
             <CaseLower className="w-3 h-3" />
           </StyleBtn>
           <div className="w-px h-4 bg-[var(--ps-divider)] mx-0.5" />
-          <StyleBtn active={text.superscript === true} onClick={() => { update({ superscript: !text.superscript, subscript: false }); commitChange("Superscript") }}>
+          <StyleBtn title="Superscript" active={text.superscript === true} onClick={() => { update({ superscript: !text.superscript, subscript: false }); commitChange("Superscript") }}>
             <Superscript className="w-3 h-3" />
           </StyleBtn>
-          <StyleBtn active={text.subscript === true} onClick={() => { update({ subscript: !text.subscript, superscript: false }); commitChange("Subscript") }}>
+          <StyleBtn title="Subscript" active={text.subscript === true} onClick={() => { update({ subscript: !text.subscript, superscript: false }); commitChange("Subscript") }}>
             <Subscript className="w-3 h-3" />
           </StyleBtn>
         </div>
@@ -260,212 +274,241 @@ export function CharacterPanel() {
         />
       </div>
 
-      <div className="px-3 py-2 border-b border-[var(--ps-divider)] space-y-2">
-        <div className="flex items-center justify-between gap-2">
-          <label className="text-[10px] text-[var(--ps-text-dim)]">Variable Font Axes</label>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => {
-                if (!text) return
-                update({
-                  variableAxes: Object.fromEntries(axisDefinitions.map((axis) => [axis.tag, axis.defaultValue])),
-                  variableNamedInstance: undefined,
-                })
-                commitChange("Reset Variable Axes")
-              }}
-              className="h-5 rounded-sm border border-[var(--ps-divider)] px-1.5 text-[9px] hover:bg-[var(--ps-tool-hover)]"
-            >
-              Reset
-            </button>
-            <button
-              type="button"
-              onClick={() => void inspectActiveFont(true)}
-              className="h-5 rounded-sm border border-[var(--ps-divider)] px-1.5 text-[9px] hover:bg-[var(--ps-tool-hover)]"
-              title="Inspect the local font file for real variation axes and named instances"
-            >
-              Inspect
-            </button>
-          </div>
-        </div>
-        {axisModel ? (
-          <p className="text-[9px] leading-snug text-[var(--ps-text-dim)]">{axisModel.status}</p>
-        ) : null}
-        {axisModel?.namedInstances.length ? (
-          <label className="grid gap-1 text-[10px] text-[var(--ps-text-dim)]">
-            Instance
-            <select
-              value={text.variableNamedInstance ?? ""}
-              onChange={(e) => applyNamedInstance(e.target.value)}
-              className="h-6 bg-[var(--ps-panel-2)] border border-[var(--ps-divider)] rounded-sm px-1 text-[10px]"
-            >
-              <option value="">Custom</option>
-              {axisModel.namedInstances.map((instance) => (
-                <option key={instance.name} value={instance.name}>{instance.name}</option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-        {axisDefinitions.map((axis) => (
-          <div key={axis.tag} className="space-y-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-1.5">
-            <CharSlider
-              label={`${axis.name} (${axis.tag})`}
-              value={axis.value}
-              min={axis.min}
-              max={axis.max}
-              step={Math.abs(axis.max - axis.min) <= 4 ? 0.01 : 1}
-              onChange={(v) => updateAxis(axis.tag, v)}
-              onCommit={() => commitChange(`Variable ${axis.name}`)}
-            />
-            <div className="flex items-center justify-between gap-2 text-[9px] text-[var(--ps-text-dim)]">
-              <span>{axis.source} · {axis.min} / {axis.defaultValue} / {axis.max}</span>
+      <section
+        data-testid="type-variable-font-surface"
+        data-density="compact-polished"
+        aria-label="Variable font controls"
+        className="border-b border-[var(--ps-divider)] px-2 py-2"
+      >
+        <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+          <div className="flex items-start justify-between gap-2 border-b border-[var(--ps-divider)] bg-[rgba(255,255,255,0.025)] px-2 py-1.5">
+            <div className="min-w-0">
+              <label className="block text-[10px] font-medium text-[var(--ps-text)]">Variable Font Axes</label>
+              {axisModel ? (
+                <p className="mt-0.5 truncate text-[9px] leading-snug text-[var(--ps-text-dim)]">{axisModel.status}</p>
+              ) : null}
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
               <button
                 type="button"
-                onClick={() => resetAxis(axis.tag, axis.defaultValue)}
-                className="rounded-sm border border-[var(--ps-divider)] px-1 hover:bg-[var(--ps-tool-hover)]"
+                onClick={() => {
+                  if (!text) return
+                  update({
+                    variableAxes: Object.fromEntries(axisDefinitions.map((axis) => [axis.tag, axis.defaultValue])),
+                    variableNamedInstance: undefined,
+                  })
+                  commitChange("Reset Variable Axes")
+                }}
+                className="h-5 rounded-sm border border-[var(--ps-divider)] px-1.5 text-[9px] hover:bg-[var(--ps-tool-hover)]"
               >
-                Default
+                Reset
+              </button>
+              <button
+                type="button"
+                onClick={() => void inspectActiveFont(true)}
+                className="h-5 rounded-sm border border-[var(--ps-divider)] px-1.5 text-[9px] hover:bg-[var(--ps-tool-hover)]"
+                title="Inspect the local font file for real variation axes and named instances"
+              >
+                Inspect
               </button>
             </div>
           </div>
-        ))}
-        <div className="grid grid-cols-[1fr_52px] gap-1">
-          <input
-            value={customAxisTag}
-            maxLength={4}
-            onChange={(e) => setCustomAxisTag(e.target.value)}
-            placeholder="Axis tag"
-            className="h-6 bg-[var(--ps-panel-2)] border border-[var(--ps-divider)] rounded-sm px-1 text-[10px]"
-          />
-          <button
-            type="button"
-            onClick={addCustomAxis}
-            className="h-6 rounded-sm border border-[var(--ps-divider)] text-[10px] hover:bg-[var(--ps-tool-hover)]"
-          >
-            Add
-          </button>
-        </div>
-        {fontInspection?.error ? (
-          <p className="text-[9px] leading-snug text-amber-300">{fontInspection.error}</p>
-        ) : !axisModel?.axes.length ? (
-          <p className="text-[9px] leading-snug text-[var(--ps-text-dim)]">
-            No variable axes are known for this font yet.
-          </p>
-        ) : null}
-      </div>
-
-      <div className="px-3 py-2 border-b border-[var(--ps-divider)] space-y-2">
-        <div className="flex items-center justify-between gap-2">
-          <label className="text-[10px] text-[var(--ps-text-dim)]">OpenType</label>
-          <span className="text-[9px] text-[var(--ps-text-dim)]">
-            {openTypeToggles.length} features
-          </span>
-        </div>
-        <div className="grid grid-cols-2 gap-1">
-          {openTypeToggles.map((toggle) => {
-            const checked = text.openType?.[toggle.key] ?? (text as unknown as Record<string, boolean | undefined>)[toggle.key] ?? toggle.defaultEnabled
-            return (
-              <CheckRow
-                key={toggle.tag}
-                label={toggle.label}
-                checked={!!checked}
-                onChange={(v) => {
-                  update({ openType: { ...(text.openType ?? {}), [toggle.key]: v } })
-                  commitChange(toggle.label)
-                }}
+          <div className="space-y-2 p-2">
+            {axisModel?.namedInstances.length ? (
+              <label className="grid gap-1 text-[10px] text-[var(--ps-text-dim)]">
+                Instance
+                <select
+                  value={text.variableNamedInstance ?? ""}
+                  onChange={(e) => applyNamedInstance(e.target.value)}
+                  className="h-6 bg-[var(--ps-panel)] border border-[var(--ps-divider)] rounded-sm px-1 text-[10px]"
+                >
+                  <option value="">Custom</option>
+                  {axisModel.namedInstances.map((instance) => (
+                    <option key={instance.name} value={instance.name}>{instance.name}</option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            {axisDefinitions.map((axis) => (
+              <div key={axis.tag} className="space-y-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] p-1.5">
+                <CharSlider
+                  label={`${axis.name} (${axis.tag})`}
+                  value={axis.value}
+                  min={axis.min}
+                  max={axis.max}
+                  step={Math.abs(axis.max - axis.min) <= 4 ? 0.01 : 1}
+                  onChange={(v) => updateAxis(axis.tag, v)}
+                  onCommit={() => commitChange(`Variable ${axis.name}`)}
+                />
+                <div className="flex items-center justify-between gap-2 text-[9px] text-[var(--ps-text-dim)]">
+                  <span className="truncate">{axis.source} · {axis.min} / {axis.defaultValue} / {axis.max}</span>
+                  <button
+                    type="button"
+                    onClick={() => resetAxis(axis.tag, axis.defaultValue)}
+                    className="shrink-0 rounded-sm border border-[var(--ps-divider)] px-1 hover:bg-[var(--ps-tool-hover)]"
+                  >
+                    Default
+                  </button>
+                </div>
+              </div>
+            ))}
+            <div className="grid grid-cols-[1fr_52px] gap-1">
+              <input
+                value={customAxisTag}
+                maxLength={4}
+                onChange={(e) => setCustomAxisTag(e.target.value)}
+                placeholder="Axis tag"
+                className="h-6 min-w-0 bg-[var(--ps-panel)] border border-[var(--ps-divider)] rounded-sm px-1 text-[10px]"
               />
-            )
-          })}
+              <button
+                type="button"
+                onClick={addCustomAxis}
+                className="h-6 rounded-sm border border-[var(--ps-divider)] text-[10px] hover:bg-[var(--ps-tool-hover)]"
+              >
+                Add
+              </button>
+            </div>
+            {fontInspection?.error ? (
+              <p className="text-[9px] leading-snug text-amber-300">{fontInspection.error}</p>
+            ) : !axisModel?.axes.length ? (
+              <p className="text-[9px] leading-snug text-[var(--ps-text-dim)]">
+                No variable axes are known for this font yet.
+              </p>
+            ) : null}
+          </div>
         </div>
-      </div>
+      </section>
 
-      <div className="px-3 py-2 border-b border-[var(--ps-divider)] space-y-2">
-        <label className="text-[10px] text-[var(--ps-text-dim)]">Vertical Type</label>
-        <div className="grid grid-cols-2 gap-2">
-          <select
-            value={text.vertical ? (text.verticalWritingMode === "lr" ? "vertical-lr" : "vertical-rl") : "horizontal"}
-            onChange={(e) => {
-              const value = e.target.value
-              update({
-                vertical: value !== "horizontal",
-                verticalWritingMode: value === "vertical-lr" ? "lr" : "rl",
-              })
-              commitChange("Writing Mode")
-            }}
-            className="h-6 bg-[var(--ps-panel-2)] border border-[var(--ps-divider)] rounded-sm px-1 text-[10px]"
-          >
-            <option value="horizontal">Horizontal</option>
-            <option value="vertical-rl">Vertical RL</option>
-            <option value="vertical-lr">Vertical LR</option>
-          </select>
-          <select
-            value={text.mojikumi ?? "default"}
-            onChange={(e) => {
-              update({ mojikumi: e.target.value as NonNullable<typeof text>["mojikumi"] })
-              commitChange("Mojikumi")
-            }}
-            className="h-6 bg-[var(--ps-panel-2)] border border-[var(--ps-divider)] rounded-sm px-1 text-[10px]"
-          >
-            <option value="default">Default</option>
-            <option value="compact">Compact</option>
-            <option value="loose">Loose</option>
-            <option value="none">None</option>
-          </select>
-          <select
-            value={text.textOrientation ?? (text.tateChuYoko ? "mixed" : "upright")}
-            onChange={(e) => {
-              update({ textOrientation: e.target.value as NonNullable<typeof text>["textOrientation"] })
-              commitChange("Text Orientation")
-            }}
-            className="h-6 bg-[var(--ps-panel-2)] border border-[var(--ps-divider)] rounded-sm px-1 text-[10px]"
-          >
-            <option value="mixed">Mixed</option>
-            <option value="upright">Upright</option>
-            <option value="sideways">Sideways</option>
-          </select>
-          <select
-            value={text.verticalAlign ?? "top"}
-            onChange={(e) => {
-              update({ verticalAlign: e.target.value as NonNullable<typeof text>["verticalAlign"] })
-              commitChange("Vertical Align")
-            }}
-            className="h-6 bg-[var(--ps-panel-2)] border border-[var(--ps-divider)] rounded-sm px-1 text-[10px]"
-          >
-            <option value="top">Top</option>
-            <option value="middle">Middle</option>
-            <option value="bottom">Bottom</option>
-          </select>
+      <section
+        data-testid="type-opentype-surface"
+        data-density="compact-polished"
+        aria-label="OpenType feature controls"
+        className="border-b border-[var(--ps-divider)] px-2 py-2"
+      >
+        <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+          <div className="flex items-center justify-between gap-2 border-b border-[var(--ps-divider)] bg-[rgba(255,255,255,0.025)] px-2 py-1.5">
+            <label className="text-[10px] font-medium text-[var(--ps-text)]">OpenType</label>
+            <span className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] px-1.5 py-0.5 text-[9px] text-[var(--ps-text-dim)]">
+              {openTypeToggles.length} features
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-1 p-2">
+            {openTypeToggles.map((toggle) => {
+              const checked = text.openType?.[toggle.key] ?? (text as unknown as Record<string, boolean | undefined>)[toggle.key] ?? toggle.defaultEnabled
+              return (
+                <CheckRow
+                  key={toggle.tag}
+                  label={toggle.label}
+                  checked={!!checked}
+                  onChange={(v) => {
+                    update({ openType: { ...(text.openType ?? {}), [toggle.key]: v } })
+                    commitChange(toggle.label)
+                  }}
+                />
+              )
+            })}
+          </div>
         </div>
-        <CheckRow label="Tate Chu Yoko" checked={text.tateChuYoko === true} onChange={(v) => { update({ tateChuYoko: v }); commitChange("Tate Chu Yoko") }} />
-        <CharSlider
-          label="Column Gap"
-          value={text.verticalColumnGap ?? Math.round(text.leading ?? text.size * 1.2)}
-          min={0}
-          max={300}
-          suffix="px"
-          onChange={(v) => update({ verticalColumnGap: v })}
-          onCommit={() => commitChange("Vertical Column Gap")}
-        />
-        <CharSlider
-          label="Glyph Spacing"
-          value={text.verticalGlyphSpacing ?? 0}
-          min={-40}
-          max={120}
-          suffix="px"
-          onChange={(v) => update({ verticalGlyphSpacing: v })}
-          onCommit={() => commitChange("Vertical Glyph Spacing")}
-        />
-        <CharSlider
-          label="Glyph Scale"
-          value={Math.round((text.verticalGlyphScale ?? 1) * 100)}
-          min={25}
-          max={200}
-          suffix="%"
-          onChange={(v) => update({ verticalGlyphScale: v / 100 })}
-          onCommit={() => commitChange("Vertical Glyph Scale")}
-        />
-        <CheckRow label="Proportional vertical metrics" checked={text.verticalUseProportionalMetrics === true} onChange={(v) => { update({ verticalUseProportionalMetrics: v }); commitChange("Vertical Metrics") }} />
-      </div>
+      </section>
+
+      <section
+        data-testid="type-vertical-surface"
+        data-density="compact-polished"
+        aria-label="Vertical type controls"
+        className="border-b border-[var(--ps-divider)] px-2 py-2"
+      >
+        <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+          <div className="border-b border-[var(--ps-divider)] bg-[rgba(255,255,255,0.025)] px-2 py-1.5">
+            <label className="text-[10px] font-medium text-[var(--ps-text)]">Vertical Type</label>
+          </div>
+          <div className="space-y-2 p-2">
+            <div className="grid grid-cols-2 gap-2">
+              <select
+                value={text.vertical ? (text.verticalWritingMode === "lr" ? "vertical-lr" : "vertical-rl") : "horizontal"}
+                onChange={(e) => {
+                  const value = e.target.value
+                  update({
+                    vertical: value !== "horizontal",
+                    verticalWritingMode: value === "vertical-lr" ? "lr" : "rl",
+                  })
+                  commitChange("Writing Mode")
+                }}
+                className="h-6 min-w-0 bg-[var(--ps-panel)] border border-[var(--ps-divider)] rounded-sm px-1 text-[10px]"
+              >
+                <option value="horizontal">Horizontal</option>
+                <option value="vertical-rl">Vertical RL</option>
+                <option value="vertical-lr">Vertical LR</option>
+              </select>
+              <select
+                value={text.mojikumi ?? "default"}
+                onChange={(e) => {
+                  update({ mojikumi: e.target.value as NonNullable<typeof text>["mojikumi"] })
+                  commitChange("Mojikumi")
+                }}
+                className="h-6 min-w-0 bg-[var(--ps-panel)] border border-[var(--ps-divider)] rounded-sm px-1 text-[10px]"
+              >
+                <option value="default">Default</option>
+                <option value="compact">Compact</option>
+                <option value="loose">Loose</option>
+                <option value="none">None</option>
+              </select>
+              <select
+                value={text.textOrientation ?? (text.tateChuYoko ? "mixed" : "upright")}
+                onChange={(e) => {
+                  update({ textOrientation: e.target.value as NonNullable<typeof text>["textOrientation"] })
+                  commitChange("Text Orientation")
+                }}
+                className="h-6 min-w-0 bg-[var(--ps-panel)] border border-[var(--ps-divider)] rounded-sm px-1 text-[10px]"
+              >
+                <option value="mixed">Mixed</option>
+                <option value="upright">Upright</option>
+                <option value="sideways">Sideways</option>
+              </select>
+              <select
+                value={text.verticalAlign ?? "top"}
+                onChange={(e) => {
+                  update({ verticalAlign: e.target.value as NonNullable<typeof text>["verticalAlign"] })
+                  commitChange("Vertical Align")
+                }}
+                className="h-6 min-w-0 bg-[var(--ps-panel)] border border-[var(--ps-divider)] rounded-sm px-1 text-[10px]"
+              >
+                <option value="top">Top</option>
+                <option value="middle">Middle</option>
+                <option value="bottom">Bottom</option>
+              </select>
+            </div>
+            <CheckRow label="Tate Chu Yoko" checked={text.tateChuYoko === true} onChange={(v) => { update({ tateChuYoko: v }); commitChange("Tate Chu Yoko") }} />
+            <CharSlider
+              label="Column Gap"
+              value={text.verticalColumnGap ?? Math.round(text.leading ?? text.size * 1.2)}
+              min={0}
+              max={300}
+              suffix="px"
+              onChange={(v) => update({ verticalColumnGap: v })}
+              onCommit={() => commitChange("Vertical Column Gap")}
+            />
+            <CharSlider
+              label="Glyph Spacing"
+              value={text.verticalGlyphSpacing ?? 0}
+              min={-40}
+              max={120}
+              suffix="px"
+              onChange={(v) => update({ verticalGlyphSpacing: v })}
+              onCommit={() => commitChange("Vertical Glyph Spacing")}
+            />
+            <CharSlider
+              label="Glyph Scale"
+              value={Math.round((text.verticalGlyphScale ?? 1) * 100)}
+              min={25}
+              max={200}
+              suffix="%"
+              onChange={(v) => update({ verticalGlyphScale: v / 100 })}
+              onCommit={() => commitChange("Vertical Glyph Scale")}
+            />
+            <CheckRow label="Proportional vertical metrics" checked={text.verticalUseProportionalMetrics === true} onChange={(v) => { update({ verticalUseProportionalMetrics: v }); commitChange("Vertical Metrics") }} />
+          </div>
+        </div>
+      </section>
 
       <div className="px-3 py-2">
         <label className="text-[10px] text-[var(--ps-text-dim)]">Anti-Alias</label>
@@ -516,43 +559,30 @@ export function ParagraphPanel() {
   const justify = text.justify ?? text.align ?? "left"
 
   return (
-    <div className="overflow-y-auto text-[11px]">
+    <div data-testid="typography-paragraph-panel" className="overflow-y-auto text-[11px]">
       {/* Justification buttons */}
       <div className="px-3 py-2 border-b border-[var(--ps-divider)]">
         <label className="text-[10px] text-[var(--ps-text-dim)] mb-1.5 block">Alignment / Justification</label>
-        <div className="grid grid-cols-7 gap-0.5">
-          {(
-            [
-              { id: "left", label: "Left" },
-              { id: "center", label: "Center" },
-              { id: "right", label: "Right" },
-              { id: "justify-left", label: "Justify Left" },
-              { id: "justify-center", label: "Justify Center" },
-              { id: "justify-right", label: "Justify Right" },
-              { id: "justify-all", label: "Justify All" },
-            ] as const
-          ).map((j) => (
+        <div data-testid="paragraph-alignment-controls" className="grid grid-cols-7 gap-0.5">
+          {PARAGRAPH_ALIGNMENT_CONTROLS.map((j) => (
             <button
               key={j.id}
+              type="button"
+              aria-label={j.label}
+              aria-pressed={justify === j.id}
               title={j.label}
               onClick={() => {
                 const align = j.id.startsWith("justify") ? "left" : j.id as "left" | "center" | "right"
                 update({ justify: j.id, align })
                 commitChange("Justification")
               }}
-              className={`h-6 rounded-sm flex items-center justify-center text-[9px] font-medium ${
+              className={`h-6 rounded-sm flex items-center justify-center ${
                 justify === j.id
                   ? "bg-[var(--ps-tool-active)] text-white"
                   : "bg-[var(--ps-panel-2)] hover:bg-[var(--ps-tool-hover)] text-[var(--ps-text-dim)]"
               }`}
             >
-              {j.id === "left" && "≡←"}
-              {j.id === "center" && "≡↔"}
-              {j.id === "right" && "≡→"}
-              {j.id === "justify-left" && "J←"}
-              {j.id === "justify-center" && "J↔"}
-              {j.id === "justify-right" && "J→"}
-              {j.id === "justify-all" && "J≡"}
+              <ParagraphAlignmentIcon id={j.id} />
             </button>
           ))}
         </div>
@@ -630,9 +660,36 @@ export function ParagraphPanel() {
 
 /* ---- Reusable sub-components ---- */
 
-function StyleBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+type ParagraphAlignmentId = (typeof PARAGRAPH_ALIGNMENT_CONTROLS)[number]["id"]
+
+function ParagraphAlignmentIcon({ id }: { id: ParagraphAlignmentId }) {
+  if (id === "left") return <AlignLeft className="h-3.5 w-3.5" />
+  if (id === "center") return <AlignCenter className="h-3.5 w-3.5" />
+  if (id === "right") return <AlignRight className="h-3.5 w-3.5" />
+  if (id === "justify-all") return <AlignJustify className="h-3.5 w-3.5" />
+
+  const marker =
+    id === "justify-left"
+      ? "left-0"
+      : id === "justify-right"
+        ? "right-0"
+        : "left-1/2 -translate-x-1/2"
+
+  return (
+    <span className="relative flex h-4 w-4 items-center justify-center">
+      <AlignJustify className="h-3.5 w-3.5" />
+      <span className={`absolute bottom-0 h-0.5 w-1.5 rounded-full bg-current ${marker}`} />
+    </span>
+  )
+}
+
+function StyleBtn({ title, active, onClick, children }: { title: string; active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
+      type="button"
+      aria-label={title}
+      aria-pressed={active}
+      title={title}
       onClick={onClick}
       className={`w-6 h-6 rounded-sm flex items-center justify-center ${
         active

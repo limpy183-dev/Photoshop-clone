@@ -890,6 +890,7 @@ function readTgaMetadata(bytes: Uint8Array, idLength: number): Record<string, un
           if (typeof value === "string" && value) metadata[key] = value
           else if (typeof value === "number" || typeof value === "boolean") metadata[key] = value
           else if (Array.isArray(value) && value.every((item) => typeof item === "string")) metadata[key] = value
+          else if (key === "tga" && value && typeof value === "object" && !Array.isArray(value)) metadata[key] = value
           else if (key === "contentCredentials" && Array.isArray(value) && value.every((item) => item && typeof item === "object" && !Array.isArray(item))) metadata[key] = value
         }
       } catch {
@@ -1704,6 +1705,9 @@ function tiffMetadataFields(metadata: RasterExportMetadata | undefined, customFi
   if (dateTime || metadata.description || metadata.iccProfileName) {
     fields.push({ tag: 34665, type: 4, count: 1, dataFactory: (offset) => buildExifIfdBytes(metadata, offset) })
   }
+  if (buildGpsIfdBytes(metadata, 0)?.byteLength) {
+    fields.push({ tag: 34853, type: 4, count: 1, dataFactory: (offset) => buildGpsIfdBytes(metadata, offset) ?? new Uint8Array(0) })
+  }
   return [...fields, ...custom]
 }
 
@@ -2121,6 +2125,23 @@ const TGA_DEVELOPER_TAG_METADATA = 65000
 const TGA_DEVELOPER_PREFIX = "PSWEBMETA\0"
 const TGA_SIGNATURE = "TRUEVISION-XFILE.\0"
 
+function writeTgaRational(view: DataView, offset: number, numerator: number | undefined, denominator: number | undefined) {
+  if (
+    typeof numerator !== "number" ||
+    typeof denominator !== "number" ||
+    !Number.isFinite(numerator) ||
+    !Number.isFinite(denominator) ||
+    numerator <= 0 ||
+    denominator <= 0
+  ) {
+    view.setUint16(offset, 0, true)
+    view.setUint16(offset + 2, 0, true)
+    return
+  }
+  view.setUint16(offset, Math.max(1, Math.min(0xffff, Math.round(numerator))), true)
+  view.setUint16(offset + 2, Math.max(1, Math.min(0xffff, Math.round(denominator))), true)
+}
+
 function buildTgaMetadataBlocks(metadata: RasterExportMetadata | undefined) {
   if (!metadata) return null
   const extension = new Uint8Array(495)
@@ -2133,10 +2154,16 @@ function buildTgaMetadataBlocks(metadata: RasterExportMetadata | undefined) {
   }
   const dateParts = tgaDateParts(metadata.creationDate)
   if (dateParts) dateParts.forEach((part, index) => view.setUint16(367 + index * 2, part, true))
-  extension.set(fixedLatin1(metadata.title ?? metadata.source, 41), 379)
-  extension.set(fixedLatin1("Photoshop Web", 41), 426)
+  extension.set(fixedLatin1(metadata.tga?.jobName ?? metadata.title ?? metadata.source, 41), 379)
+  extension.set(fixedLatin1(metadata.tga?.softwareId ?? "Photoshop Web", 41), 426)
   view.setUint16(467, 1, true)
   extension[469] = " ".charCodeAt(0)
+  writeTgaRational(view, 474, metadata.tga?.aspectRatioNumerator, metadata.tga?.aspectRatioDenominator)
+  if (typeof metadata.tga?.gamma === "number" && Number.isFinite(metadata.tga.gamma) && metadata.tga.gamma > 0) {
+    writeTgaRational(view, 478, Math.round(metadata.tga.gamma * 1000), 1000)
+  } else {
+    writeTgaRational(view, 478, undefined, undefined)
+  }
   extension[494] = 4
 
   const developerPayload = new TextEncoder().encode(`${TGA_DEVELOPER_PREFIX}${JSON.stringify({
@@ -2150,6 +2177,7 @@ function buildTgaMetadataBlocks(metadata: RasterExportMetadata | undefined) {
     credit: metadata.credit,
     contentCredentials: metadata.contentCredentials,
     iccProfileName: metadata.iccProfileName,
+    tga: metadata.tga,
   })}`)
   const developer = new Uint8Array(2 + 10 + developerPayload.byteLength)
   const devView = new DataView(developer.buffer)

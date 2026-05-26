@@ -318,6 +318,16 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value))
 }
 
+function timelineTransitionProgress(frame: TimelineFrame, sampleIndex: number, sampleCount: number) {
+  if (!frame.transition || frame.transition === "hold") return 0
+  const frameDuration = Math.max(1, Math.round(frame.durationMs))
+  const transitionDuration = clamp(Math.round(frame.transitionDurationMs ?? frameDuration), 1, frameDuration)
+  const elapsed = sampleCount <= 1 ? frameDuration : (sampleIndex / Math.max(1, sampleCount - 1)) * frameDuration
+  const transitionStart = Math.max(0, frameDuration - transitionDuration)
+  const raw = (elapsed - transitionStart) / transitionDuration
+  return clamp(raw, 0, 1)
+}
+
 function vec(x = 0, y = 0, z = 0): Vec3 {
   return { x, y, z }
 }
@@ -1704,6 +1714,35 @@ export function paintThreeDSurface(
   }
 }
 
+export interface ThreeDMaterialDropOptions {
+  u?: number
+  v?: number
+  radius?: number
+  opacity?: number
+  blendMode?: ThreeDTexturePixel["blendMode"]
+}
+
+export function applyThreeDMaterialDrop(
+  scene: ThreeDScene,
+  objectId: string | undefined,
+  color: string,
+  options: ThreeDMaterialDropOptions = {},
+): ThreeDScene {
+  const target = scene.objects.find((item) => item.id === objectId) ?? scene.objects[0]
+  if (!target) return scene
+  const hasUsableUvs = target.uvs?.length === target.vertices.length
+    && target.faces.every((face) => !face.indices.length || face.uvIndices?.length === face.indices.length)
+  const uvScene = hasUsableUvs ? scene : assignPlanarUvs(scene, target.id)
+  return paintThreeDSurface(uvScene, target.id, {
+    u: options.u ?? 0.5,
+    v: options.v ?? 0.5,
+    radius: options.radius ?? 0.08,
+    color,
+    opacity: options.opacity ?? 1,
+    blendMode: options.blendMode ?? "normal",
+  })
+}
+
 type TraceTriangle = {
   a: Vec3
   b: Vec3
@@ -2054,7 +2093,28 @@ export function hashThreeDScene(scene: ThreeDScene): string {
     mix(Math.round((material.opacity ?? 1) * 1000))
     mix(Math.round((material.roughness ?? 0) * 1000))
     mix(Math.round((material.metallic ?? 0) * 1000))
-    if (material.texture?.bakedBytes?.length) mix(material.texture.bakedBytes.length)
+    if (material.texture) {
+      mix(Math.round((material.texture.width ?? 0) * 1000))
+      mix(Math.round((material.texture.height ?? 0) * 1000))
+      for (const pixel of material.texture.pixels ?? []) {
+        const rgb = hexToRgb(pixel.color)
+        mix(Math.round(pixel.u * 10000) ^ Math.round(pixel.v * 10000))
+        mix(Math.round(pixel.radius * 10000) ^ Math.round(pixel.opacity * 10000))
+        mix(rgb.r * 65536 + rgb.g * 256 + rgb.b)
+      }
+      if (material.texture.bakedBytes?.length) {
+        const bytes = material.texture.bakedBytes
+        mix(bytes.length)
+        for (let index = 0; index < bytes.length; index += 4) {
+          mix(
+            (bytes[index] ?? 0)
+            | ((bytes[index + 1] ?? 0) << 8)
+            | ((bytes[index + 2] ?? 0) << 16)
+            | ((bytes[index + 3] ?? 0) << 24),
+          )
+        }
+      }
+    }
   }
   mix(Math.round(scene.camera.position.x * 1000) + Math.round(scene.camera.position.y * 1000) + Math.round(scene.camera.position.z * 1000))
   mix(Math.round(scene.camera.target.x * 1000) + Math.round(scene.camera.target.y * 1000) + Math.round(scene.camera.target.z * 1000))
@@ -3151,9 +3211,7 @@ export function convertVideoTimelineToFrameAnimation(
   for (const frame of frames) {
     const count = Math.max(1, Math.round(frame.durationMs / frameDuration))
     for (let i = 0; i < count; i++) {
-      const progress = options.includeTransitions && frame.transition && frame.transition !== "hold"
-        ? count <= 1 ? 1 : i / (count - 1)
-        : 0
+      const progress = options.includeTransitions ? timelineTransitionProgress(frame, i, count) : 0
       out.push({
         id: `${frame.id}_${i}`,
         sourceFrameId: frame.id,

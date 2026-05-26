@@ -186,7 +186,7 @@ export function ColorPickerDialog({
       },
       activeDoc?.id,
     )
-    setStatusMessage(`Added ${name || picker.description.web} to swatches.`)
+    setStatusMessage(`Captured ${name || picker.description.web}.`)
     setCaptureOpen(false)
   }
 
@@ -277,49 +277,42 @@ export function ColorPickerDialog({
           <div className="min-w-0 space-y-3">
             <ModeTabs value={fieldMode} onChange={setFieldMode} />
 
-            {fieldMode === "hsb" ? (
-              <FieldGroup title="HSB">
-                <NumberField label="HSB hue" shortLabel="H" suffix="°" value={picker.description.hsb.h} min={0} max={360} onChange={(value) => picker.setFromRgb(hsbToRgb({ ...picker.description.hsb, h: value }))} />
-                <NumberField label="HSB saturation" shortLabel="S" suffix="%" value={picker.description.hsb.s} min={0} max={100} onChange={(value) => picker.setFromRgb(hsbToRgb({ ...picker.description.hsb, s: value }))} />
-                <NumberField label="HSB brightness" shortLabel="B" suffix="%" value={picker.description.hsb.b} min={0} max={100} onChange={(value) => picker.setFromRgb(hsbToRgb({ ...picker.description.hsb, b: value }))} />
-              </FieldGroup>
-            ) : null}
+            <FieldGroup title="HSB" active={fieldMode === "hsb"}>
+              <NumberField label="HSB hue" shortLabel="H" suffix="°" value={picker.description.hsb.h} min={0} max={360} onChange={(value) => picker.setFromRgb(hsbToRgb({ ...picker.description.hsb, h: value }))} />
+              <NumberField label="HSB saturation" shortLabel="S" suffix="%" value={picker.description.hsb.s} min={0} max={100} onChange={(value) => picker.setFromRgb(hsbToRgb({ ...picker.description.hsb, s: value }))} />
+              <NumberField label="HSB brightness" shortLabel="B" suffix="%" value={picker.description.hsb.b} min={0} max={100} onChange={(value) => picker.setFromRgb(hsbToRgb({ ...picker.description.hsb, b: value }))} />
+            </FieldGroup>
 
-            {fieldMode === "rgb" ? (
-              <FieldGroup title="RGB (sRGB)">
-                <NumberField label="RGB red" shortLabel="R" value={picker.description.rgb.r} min={0} max={255} onChange={(value) => picker.setFromRgb({ ...picker.description.rgb, r: value })} />
-                <NumberField label="RGB green" shortLabel="G" value={picker.description.rgb.g} min={0} max={255} onChange={(value) => picker.setFromRgb({ ...picker.description.rgb, g: value })} />
-                <NumberField label="RGB blue" shortLabel="B" value={picker.description.rgb.b} min={0} max={255} onChange={(value) => picker.setFromRgb({ ...picker.description.rgb, b: value })} />
-              </FieldGroup>
-            ) : null}
+            <FieldGroup title="RGB" active={fieldMode === "rgb"} hint={<span className="text-[10px] text-[var(--ps-text-dim)]">sRGB</span>}>
+              <NumberField label="RGB red" shortLabel="R" value={picker.description.rgb.r} min={0} max={255} onChange={(value) => picker.setFromRgb({ ...picker.description.rgb, r: value })} />
+              <NumberField label="RGB green" shortLabel="G" value={picker.description.rgb.g} min={0} max={255} onChange={(value) => picker.setFromRgb({ ...picker.description.rgb, g: value })} />
+              <NumberField label="RGB blue" shortLabel="B" value={picker.description.rgb.b} min={0} max={255} onChange={(value) => picker.setFromRgb({ ...picker.description.rgb, b: value })} />
+            </FieldGroup>
 
-            {fieldMode === "lab" ? (
-              <FieldGroup title="Lab (D50)">
-                <NumberField label="Lab lightness" shortLabel="L" value={picker.description.lab.l} min={0} max={100} onChange={(value) => picker.setFromRgb(labFieldsToRgb({ ...picker.description.lab, l: value }))} />
-                <NumberField label="Lab a" shortLabel="a" value={picker.description.lab.a} min={-128} max={127} onChange={(value) => picker.setFromRgb(labFieldsToRgb({ ...picker.description.lab, a: value }))} />
-                <NumberField label="Lab b" shortLabel="b" value={picker.description.lab.b} min={-128} max={127} onChange={(value) => picker.setFromRgb(labFieldsToRgb({ ...picker.description.lab, b: value }))} />
-              </FieldGroup>
-            ) : null}
+            <FieldGroup title="Lab" active={fieldMode === "lab"} hint={<span className="text-[10px] text-[var(--ps-text-dim)]">D50 reference</span>}>
+              <NumberField label="Lab lightness" shortLabel="L" value={picker.description.lab.l} min={0} max={100} onChange={(value) => picker.setFromRgb(labFieldsToRgb({ ...picker.description.lab, l: value }))} />
+              <NumberField label="Lab a" shortLabel="a" value={picker.description.lab.a} min={-128} max={127} onChange={(value) => picker.setFromRgb(labFieldsToRgb({ ...picker.description.lab, a: value }))} />
+              <NumberField label="Lab b" shortLabel="b" value={picker.description.lab.b} min={-128} max={127} onChange={(value) => picker.setFromRgb(labFieldsToRgb({ ...picker.description.lab, b: value }))} />
+            </FieldGroup>
 
-            {fieldMode === "cmyk" ? (
-              <FieldGroup
-                title="CMYK"
-                hint={
-                  <span
-                    className="inline-flex items-center gap-1 text-[10px] text-[var(--ps-text-dim)]"
-                    title="Informational only. The browser color picker is not a certified CMM — see BOUNDARIES.md."
-                  >
-                    <Info className="h-3 w-3" />
-                    Not color-managed
-                  </span>
-                }
-              >
-                <NumberField label="CMYK cyan" shortLabel="C" suffix="%" value={picker.description.cmyk.c} min={0} max={100} onChange={(value) => picker.setFromRgb(cmykFieldsToRgb({ ...picker.description.cmyk, c: value }))} />
-                <NumberField label="CMYK magenta" shortLabel="M" suffix="%" value={picker.description.cmyk.m} min={0} max={100} onChange={(value) => picker.setFromRgb(cmykFieldsToRgb({ ...picker.description.cmyk, m: value }))} />
-                <NumberField label="CMYK yellow" shortLabel="Y" suffix="%" value={picker.description.cmyk.y} min={0} max={100} onChange={(value) => picker.setFromRgb(cmykFieldsToRgb({ ...picker.description.cmyk, y: value }))} />
-                <NumberField label="CMYK black" shortLabel="K" suffix="%" value={picker.description.cmyk.k} min={0} max={100} onChange={(value) => picker.setFromRgb(cmykFieldsToRgb({ ...picker.description.cmyk, k: value }))} />
-              </FieldGroup>
-            ) : null}
+            <FieldGroup
+              title="CMYK"
+              active={fieldMode === "cmyk"}
+              hint={
+                <span
+                  className="inline-flex items-center gap-1 text-[10px] text-[var(--ps-text-dim)]"
+                  title="Informational only. The browser color picker is not a certified CMM — see BOUNDARIES.md."
+                >
+                  <Info className="h-3 w-3" />
+                  Not color-managed
+                </span>
+              }
+            >
+              <NumberField label="CMYK cyan" shortLabel="C" suffix="%" value={picker.description.cmyk.c} min={0} max={100} onChange={(value) => picker.setFromRgb(cmykFieldsToRgb({ ...picker.description.cmyk, c: value }))} />
+              <NumberField label="CMYK magenta" shortLabel="M" suffix="%" value={picker.description.cmyk.m} min={0} max={100} onChange={(value) => picker.setFromRgb(cmykFieldsToRgb({ ...picker.description.cmyk, m: value }))} />
+              <NumberField label="CMYK yellow" shortLabel="Y" suffix="%" value={picker.description.cmyk.y} min={0} max={100} onChange={(value) => picker.setFromRgb(cmykFieldsToRgb({ ...picker.description.cmyk, y: value }))} />
+              <NumberField label="CMYK black" shortLabel="K" suffix="%" value={picker.description.cmyk.k} min={0} max={100} onChange={(value) => picker.setFromRgb(cmykFieldsToRgb({ ...picker.description.cmyk, k: value }))} />
+            </FieldGroup>
 
             {fieldMode === "hex" ? (
               <FieldGroup title="Hex">
@@ -367,6 +360,7 @@ export function ColorPickerDialog({
                 </div>
                 <button
                   type="button"
+                  aria-label="Capture swatch"
                   className="inline-flex h-7 items-center gap-1 rounded-sm border border-[var(--ps-divider)] px-2 text-[11px] hover:bg-[var(--ps-tool-hover)]"
                   onClick={() => setCaptureOpen((value) => !value)}
                 >
@@ -392,6 +386,7 @@ export function ColorPickerDialog({
                     />
                     <button
                       type="button"
+                      aria-label="Save swatch"
                       className="inline-flex h-7 items-center gap-1 rounded-sm bg-[var(--ps-accent)] px-2 text-[11px] text-white hover:brightness-110"
                       onClick={saveSwatch}
                     >
@@ -494,6 +489,23 @@ export function ColorPickerHud({
 
       <HudColorWheel description={picker.description} onChange={picker.setFromRgb} size={size - 16} />
 
+      <div className="mt-2 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-1.5">
+        <div className="mb-1 text-[10px] font-medium uppercase text-[var(--ps-text-dim)]">Harmony</div>
+        <div className="grid grid-cols-3 gap-1">
+          {buildColorHarmony(picker.description.web, "triadic").map((swatch) => (
+            <button
+              key={`${swatch.role}-${swatch.color}`}
+              type="button"
+              aria-label={`Use HUD harmony ${swatch.role} ${swatch.color}`}
+              title={`${swatch.role} ${swatch.color}`}
+              onClick={() => picker.setColor(swatch.color)}
+              className="h-5 rounded-[2px] border border-[var(--ps-divider)] hover:border-[var(--ps-accent)]"
+              style={{ background: swatch.color }}
+            />
+          ))}
+        </div>
+      </div>
+
       <div className="mt-2 flex items-center justify-between gap-2 text-[10.5px]">
         <div className="flex items-center gap-2">
           <div
@@ -516,6 +528,7 @@ export function ColorPickerHud({
       <div className="mt-2 flex items-center justify-between gap-2 border-t border-[var(--ps-divider)] pt-2">
         <button
           type="button"
+          aria-label="Open full color picker"
           className="inline-flex h-7 items-center gap-1 rounded-sm border border-[var(--ps-divider)] px-2 text-[11px] hover:bg-[var(--ps-tool-hover)]"
           onClick={onOpenFull}
         >
@@ -859,14 +872,16 @@ function ModeTabs({
 function FieldGroup({
   title,
   hint,
+  active = false,
   children,
 }: {
   title: string
   hint?: React.ReactNode
+  active?: boolean
   children: React.ReactNode
 }) {
   return (
-    <fieldset className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
+    <fieldset className={`rounded-sm border bg-[var(--ps-panel-2)] p-2 ${active ? "border-[var(--ps-accent)]" : "border-[var(--ps-divider)]"}`}>
       <legend className="px-1 text-[10px] font-medium uppercase text-[var(--ps-text-dim)]">{title}</legend>
       {hint ? <div className="mb-1.5">{hint}</div> : null}
       <div className="grid gap-1.5">{children}</div>
@@ -1103,7 +1118,7 @@ function HudColorWheel({
         ref={canvasRef}
         width={size}
         height={size}
-        aria-label="HUD color wheel"
+        aria-label="HUD saturation and brightness"
         role="application"
         onPointerDown={onPointerDown}
         className="block cursor-crosshair touch-none rounded-full"

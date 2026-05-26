@@ -128,6 +128,21 @@ function presetScaleToPercent(scale: number | undefined) {
   return value <= 8 ? Math.round(value * 100) : Math.round(value)
 }
 
+type WebpAlphaFilter = NonNullable<RasterExportMetadata["webp"]>["alphaFilter"]
+
+function splitMetadataCommentLines(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 8)
+}
+
+function cleanOptionalText(value: string) {
+  const clean = value.trim()
+  return clean || undefined
+}
+
 export function ExportAsDialog({
   open,
   onOpenChange,
@@ -154,12 +169,21 @@ export function ExportAsDialog({
   const [webpNearLossless, setWebpNearLossless] = React.useState(100)
   const [webpMethod, setWebpMethod] = React.useState(4)
   const [webpExactAlpha, setWebpExactAlpha] = React.useState(true)
+  const [webpAlphaQuality, setWebpAlphaQuality] = React.useState(100)
+  const [webpAlphaFilter, setWebpAlphaFilter] = React.useState<WebpAlphaFilter>("none")
   const [avifLossless, setAvifLossless] = React.useState(false)
   const [avifSpeed, setAvifSpeed] = React.useState(6)
   const [avifBitDepth, setAvifBitDepth] = React.useState(8)
   const [avifChromaSubsampling, setAvifChromaSubsampling] = React.useState("4:2:0")
   const [avifTileRowsLog2, setAvifTileRowsLog2] = React.useState(0)
   const [avifTileColsLog2, setAvifTileColsLog2] = React.useState(0)
+  const [tgaJobName, setTgaJobName] = React.useState("")
+  const [tgaSoftwareId, setTgaSoftwareId] = React.useState("Photoshop Web")
+  const [tgaAspectRatioNumerator, setTgaAspectRatioNumerator] = React.useState(1)
+  const [tgaAspectRatioDenominator, setTgaAspectRatioDenominator] = React.useState(1)
+  const [tgaGamma, setTgaGamma] = React.useState(2.2)
+  const [netpbmComments, setNetpbmComments] = React.useState("")
+  const [netpbmSourceMaxValue, setNetpbmSourceMaxValue] = React.useState(255)
   const [includeMetadata, setIncludeMetadata] = React.useState(false)
   const [metadataAuthor, setMetadataAuthor] = React.useState("")
   const [metadataCopyright, setMetadataCopyright] = React.useState("")
@@ -178,6 +202,33 @@ export function ExportAsDialog({
     description: metadataDescription.trim() || undefined,
     creationDate: metadataCreationDate.trim() || undefined,
   }), [metadataAuthor, metadataCopyright, metadataCreationDate, metadataDescription])
+
+  const encoderMetadataOptions = React.useCallback(() => {
+    const isNetpbm = format === "ppm" || format === "pgm" || format === "pbm"
+    const comments = splitMetadataCommentLines(netpbmComments)
+    return {
+      webpAlphaQuality: format === "webp" ? webpAlphaQuality : undefined,
+      webpAlphaFilter: format === "webp" ? webpAlphaFilter : undefined,
+      tgaJobName: format === "tga" ? cleanOptionalText(tgaJobName) : undefined,
+      tgaSoftwareId: format === "tga" ? cleanOptionalText(tgaSoftwareId) : undefined,
+      tgaAspectRatioNumerator: format === "tga" ? tgaAspectRatioNumerator : undefined,
+      tgaAspectRatioDenominator: format === "tga" ? tgaAspectRatioDenominator : undefined,
+      tgaGamma: format === "tga" ? tgaGamma : undefined,
+      netpbmComments: isNetpbm && comments.length ? comments : undefined,
+      netpbmSourceMaxValue: isNetpbm ? netpbmSourceMaxValue : undefined,
+    }
+  }, [
+    format,
+    netpbmComments,
+    netpbmSourceMaxValue,
+    tgaAspectRatioDenominator,
+    tgaAspectRatioNumerator,
+    tgaGamma,
+    tgaJobName,
+    tgaSoftwareId,
+    webpAlphaFilter,
+    webpAlphaQuality,
+  ])
 
   const refreshPreview = React.useCallback(() => {
     if (!activeDoc || !previewRef.current) return
@@ -246,6 +297,7 @@ export function ExportAsDialog({
               dither,
               tiffCompression,
               tgaRle,
+              ...encoderMetadataOptions(),
               includeMetadata,
               metadata: metadataPayload(),
             })
@@ -254,6 +306,7 @@ export function ExportAsDialog({
   }, [
     activeDoc,
     dither,
+    encoderMetadataOptions,
     format,
     includeMetadata,
     losslessWebp,
@@ -295,12 +348,21 @@ export function ExportAsDialog({
     if (typeof initial.webpNearLossless === "number") setWebpNearLossless(Math.max(0, Math.min(100, Math.round(initial.webpNearLossless))))
     if (typeof initial.webpMethod === "number") setWebpMethod(Math.max(0, Math.min(6, Math.round(initial.webpMethod))))
     if (typeof initial.webpExactAlpha === "boolean") setWebpExactAlpha(initial.webpExactAlpha)
+    if (typeof initial.webpAlphaQuality === "number") setWebpAlphaQuality(Math.max(0, Math.min(100, Math.round(initial.webpAlphaQuality))))
+    if (initial.webpAlphaFilter === "none" || initial.webpAlphaFilter === "fast" || initial.webpAlphaFilter === "best") setWebpAlphaFilter(initial.webpAlphaFilter)
     if (typeof initial.avifLossless === "boolean") setAvifLossless(initial.avifLossless)
     if (typeof initial.avifSpeed === "number") setAvifSpeed(Math.max(0, Math.min(10, Math.round(initial.avifSpeed))))
     if (typeof initial.avifBitDepth === "number") setAvifBitDepth(initial.avifBitDepth >= 10 ? 10 : 8)
     if (typeof initial.avifChromaSubsampling === "string") setAvifChromaSubsampling(initial.avifChromaSubsampling)
     if (typeof initial.avifTileRowsLog2 === "number") setAvifTileRowsLog2(Math.max(0, Math.min(4, Math.round(initial.avifTileRowsLog2))))
     if (typeof initial.avifTileColsLog2 === "number") setAvifTileColsLog2(Math.max(0, Math.min(4, Math.round(initial.avifTileColsLog2))))
+    if (typeof initial.tgaJobName === "string") setTgaJobName(initial.tgaJobName)
+    if (typeof initial.tgaSoftwareId === "string") setTgaSoftwareId(initial.tgaSoftwareId)
+    if (typeof initial.tgaAspectRatioNumerator === "number") setTgaAspectRatioNumerator(Math.max(1, Math.min(65535, Math.round(initial.tgaAspectRatioNumerator))))
+    if (typeof initial.tgaAspectRatioDenominator === "number") setTgaAspectRatioDenominator(Math.max(1, Math.min(65535, Math.round(initial.tgaAspectRatioDenominator))))
+    if (typeof initial.tgaGamma === "number") setTgaGamma(Math.max(0.01, Math.min(65.535, initial.tgaGamma)))
+    if (typeof initial.netpbmComments === "string") setNetpbmComments(initial.netpbmComments)
+    if (typeof initial.netpbmSourceMaxValue === "number") setNetpbmSourceMaxValue(Math.max(1, Math.min(65535, Math.round(initial.netpbmSourceMaxValue))))
     if (typeof initial.includeMetadata === "boolean") setIncludeMetadata(initial.includeMetadata)
     if (initial.tiffCompression) setTiffCompression(initial.tiffCompression)
     if (typeof initial.tgaRle === "boolean") setTgaRle(initial.tgaRle)
@@ -373,10 +435,11 @@ export function ExportAsDialog({
     transparent,
     quality,
   })
-  const visibleLimitations = limitationReport.items.filter((item) => item.status !== "info").slice(0, 6)
+  const visibleLimitations = limitationReport.items.filter((item) =>
+    item.status === "flattened" || item.status === "approximated" || item.status === "unsupported",
+  )
   const visibleManifestItems = compatibilityManifest.entries
     .filter((item) => item.label !== "Layer structure" && (item.status === "unsupported" || item.status === "flattened" || item.status === "approximated"))
-    .slice(0, 4)
   const safeName = activeDoc.name.replace(/\.[^.]+$/, "").replace(/[\\/:*?"<>|]/g, "_")
 
   const exportCompatibilityManifest = () => {
@@ -421,6 +484,7 @@ export function ExportAsDialog({
           webpNearLossless: format === "webp" ? webpNearLossless : undefined,
           webpMethod: format === "webp" ? webpMethod : undefined,
           webpExactAlpha: format === "webp" ? webpExactAlpha : undefined,
+          ...encoderMetadataOptions(),
           avifLossless: avifLossless && format === "avif",
           avifSpeed: format === "avif" ? avifSpeed : undefined,
           avifBitDepth: format === "avif" ? avifBitDepth : undefined,
@@ -451,12 +515,21 @@ export function ExportAsDialog({
     webpNearLossless,
     webpMethod,
     webpExactAlpha,
+    webpAlphaQuality,
+    webpAlphaFilter,
     avifLossless,
     avifSpeed,
     avifBitDepth,
     avifChromaSubsampling,
     avifTileRowsLog2,
     avifTileColsLog2,
+    tgaJobName,
+    tgaSoftwareId,
+    tgaAspectRatioNumerator,
+    tgaAspectRatioDenominator,
+    tgaGamma,
+    netpbmComments,
+    netpbmSourceMaxValue,
     includeMetadata,
     precision,
     tiffCompression,
@@ -480,12 +553,21 @@ export function ExportAsDialog({
     if (typeof payload.webpNearLossless === "number") setWebpNearLossless(Math.max(0, Math.min(100, Math.round(payload.webpNearLossless))))
     if (typeof payload.webpMethod === "number") setWebpMethod(Math.max(0, Math.min(6, Math.round(payload.webpMethod))))
     if (typeof payload.webpExactAlpha === "boolean") setWebpExactAlpha(payload.webpExactAlpha)
+    if (typeof payload.webpAlphaQuality === "number") setWebpAlphaQuality(Math.max(0, Math.min(100, Math.round(payload.webpAlphaQuality))))
+    if (payload.webpAlphaFilter === "none" || payload.webpAlphaFilter === "fast" || payload.webpAlphaFilter === "best") setWebpAlphaFilter(payload.webpAlphaFilter)
     if (typeof payload.avifLossless === "boolean") setAvifLossless(payload.avifLossless)
     if (typeof payload.avifSpeed === "number") setAvifSpeed(Math.max(0, Math.min(10, Math.round(payload.avifSpeed))))
     if (typeof payload.avifBitDepth === "number") setAvifBitDepth(payload.avifBitDepth >= 10 ? 10 : 8)
     if (typeof payload.avifChromaSubsampling === "string") setAvifChromaSubsampling(payload.avifChromaSubsampling)
     if (typeof payload.avifTileRowsLog2 === "number") setAvifTileRowsLog2(Math.max(0, Math.min(4, Math.round(payload.avifTileRowsLog2))))
     if (typeof payload.avifTileColsLog2 === "number") setAvifTileColsLog2(Math.max(0, Math.min(4, Math.round(payload.avifTileColsLog2))))
+    if (typeof payload.tgaJobName === "string") setTgaJobName(payload.tgaJobName)
+    if (typeof payload.tgaSoftwareId === "string") setTgaSoftwareId(payload.tgaSoftwareId)
+    if (typeof payload.tgaAspectRatioNumerator === "number") setTgaAspectRatioNumerator(Math.max(1, Math.min(65535, Math.round(payload.tgaAspectRatioNumerator))))
+    if (typeof payload.tgaAspectRatioDenominator === "number") setTgaAspectRatioDenominator(Math.max(1, Math.min(65535, Math.round(payload.tgaAspectRatioDenominator))))
+    if (typeof payload.tgaGamma === "number") setTgaGamma(Math.max(0.01, Math.min(65.535, payload.tgaGamma)))
+    if (typeof payload.netpbmComments === "string") setNetpbmComments(payload.netpbmComments)
+    if (typeof payload.netpbmSourceMaxValue === "number") setNetpbmSourceMaxValue(Math.max(1, Math.min(65535, Math.round(payload.netpbmSourceMaxValue))))
     if (typeof payload.includeMetadata === "boolean") setIncludeMetadata(payload.includeMetadata)
     if (payload.tiffCompression) setTiffCompression(payload.tiffCompression)
     if (typeof payload.tgaRle === "boolean") setTgaRle(payload.tgaRle)
@@ -731,6 +813,19 @@ export function ExportAsDialog({
             <Panel title="Color Pipeline">
               <div className="grid gap-2 text-[11px]">
                 <label className="grid gap-1">
+                  <span className="text-[var(--ps-text-dim)]">Assigned profile</span>
+                  <select
+                    value={colorSettings.assignedProfile}
+                    onChange={(event) => updateColorSettings({ assignedProfile: event.target.value as ColorManagementSettings["assignedProfile"] }, "Export Assigned Profile")}
+                    className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2"
+                    aria-label="Export assigned profile"
+                  >
+                    {supportedIccProfileNames().map((profile) => (
+                      <option key={profile} value={profile}>{profile}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-1">
                   <span className="text-[var(--ps-text-dim)]">Working / export profile</span>
                   <select
                     value={colorSettings.workingSpace}
@@ -740,6 +835,19 @@ export function ExportAsDialog({
                   >
                     {supportedIccProfileNames().map((profile) => (
                       <option key={profile} value={profile}>{profile}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-1">
+                  <span className="text-[var(--ps-text-dim)]">Rendering intent</span>
+                  <select
+                    value={colorSettings.renderingIntent}
+                    onChange={(event) => updateColorSettings({ renderingIntent: event.target.value as ColorManagementSettings["renderingIntent"] }, "Export Rendering Intent")}
+                    className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2"
+                    aria-label="Export rendering intent"
+                  >
+                    {(["perceptual", "relative-colorimetric", "saturation", "absolute-colorimetric"] as const).map((intent) => (
+                      <option key={intent} value={intent}>{intent}</option>
                     ))}
                   </select>
                 </label>
@@ -759,7 +867,7 @@ export function ExportAsDialog({
                   />
                 </div>
                 <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1.5 text-[10px] text-[var(--ps-text-dim)]">
-                  Source {colorSettings.assignedProfile}; export {colorSettings.proofColors && colorSettings.proofProfile !== "None" ? colorSettings.proofProfile : colorSettings.workingSpace}; plate view {(colorSettings.proofChannels?.length ?? 0) ? colorSettings.proofChannels!.join(", ") : "composite"}.
+                  Source {colorSettings.assignedProfile}; export {colorSettings.proofColors && colorSettings.proofProfile !== "None" ? colorSettings.proofProfile : colorSettings.workingSpace}; intent {colorSettings.renderingIntent}; plate view {(colorSettings.proofChannels?.length ?? 0) ? colorSettings.proofChannels!.join(", ") : "composite"}.
                 </div>
               </div>
             </Panel>
@@ -844,6 +952,31 @@ export function ExportAsDialog({
                       </select>
                     </div>
                     <CheckRow label="Exact alpha" checked={webpExactAlpha} onCheckedChange={setWebpExactAlpha} />
+                    <div className="grid gap-1">
+                      <Label className="text-[10px] text-[var(--ps-text-dim)]">Alpha quality</Label>
+                      <Input
+                        aria-label="WebP alpha quality"
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={webpAlphaQuality}
+                        onChange={(event) => setWebpAlphaQuality(Math.max(0, Math.min(100, Math.round(Number(event.target.value) || 0))))}
+                        className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
+                      />
+                    </div>
+                    <div className="grid gap-1">
+                      <Label className="text-[10px] text-[var(--ps-text-dim)]">Alpha filter</Label>
+                      <select
+                        aria-label="WebP alpha filter"
+                        value={webpAlphaFilter}
+                        onChange={(event) => setWebpAlphaFilter(event.target.value as WebpAlphaFilter)}
+                        className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px]"
+                      >
+                        <option value="none">None</option>
+                        <option value="fast">Fast</option>
+                        <option value="best">Best</option>
+                      </select>
+                    </div>
                   </div>
                 ) : null}
                 {format === "avif" ? (
@@ -924,6 +1057,86 @@ export function ExportAsDialog({
                       <option value="lzw">LZW</option>
                       <option value="deflate">Deflate</option>
                     </select>
+                  </div>
+                ) : null}
+                {format === "tga" ? (
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
+                    <Input
+                      aria-label="TGA job name"
+                      placeholder="Job name"
+                      value={tgaJobName}
+                      onChange={(event) => setTgaJobName(event.target.value)}
+                      className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
+                    />
+                    <Input
+                      aria-label="TGA software ID"
+                      placeholder="Software ID"
+                      value={tgaSoftwareId}
+                      onChange={(event) => setTgaSoftwareId(event.target.value)}
+                      className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
+                    />
+                    <div className="grid gap-1">
+                      <Label className="text-[10px] text-[var(--ps-text-dim)]">Aspect X</Label>
+                      <Input
+                        aria-label="TGA aspect numerator"
+                        type="number"
+                        min={1}
+                        max={65535}
+                        value={tgaAspectRatioNumerator}
+                        onChange={(event) => setTgaAspectRatioNumerator(Math.max(1, Math.min(65535, Math.round(Number(event.target.value) || 1))))}
+                        className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
+                      />
+                    </div>
+                    <div className="grid gap-1">
+                      <Label className="text-[10px] text-[var(--ps-text-dim)]">Aspect Y</Label>
+                      <Input
+                        aria-label="TGA aspect denominator"
+                        type="number"
+                        min={1}
+                        max={65535}
+                        value={tgaAspectRatioDenominator}
+                        onChange={(event) => setTgaAspectRatioDenominator(Math.max(1, Math.min(65535, Math.round(Number(event.target.value) || 1))))}
+                        className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
+                      />
+                    </div>
+                    <div className="grid gap-1">
+                      <Label className="text-[10px] text-[var(--ps-text-dim)]">Gamma</Label>
+                      <Input
+                        aria-label="TGA gamma"
+                        type="number"
+                        min={0.01}
+                        max={65.535}
+                        step={0.01}
+                        value={tgaGamma}
+                        onChange={(event) => setTgaGamma(Math.max(0.01, Math.min(65.535, Number(event.target.value) || 2.2)))}
+                        className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
+                      />
+                    </div>
+                  </div>
+                ) : null}
+                {format === "ppm" || format === "pgm" || format === "pbm" ? (
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
+                    <div className="grid gap-1">
+                      <Label className="text-[10px] text-[var(--ps-text-dim)]">Source max</Label>
+                      <Input
+                        aria-label="Netpbm source max value"
+                        type="number"
+                        min={1}
+                        max={65535}
+                        value={netpbmSourceMaxValue}
+                        onChange={(event) => setNetpbmSourceMaxValue(Math.max(1, Math.min(65535, Math.round(Number(event.target.value) || 255))))}
+                        className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
+                      />
+                    </div>
+                    <div className="grid gap-1">
+                      <Label className="text-[10px] text-[var(--ps-text-dim)]">Comments</Label>
+                      <textarea
+                        aria-label="Netpbm comments"
+                        value={netpbmComments}
+                        onChange={(event) => setNetpbmComments(event.target.value)}
+                        className="min-h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1 text-[11px]"
+                      />
+                    </div>
                   </div>
                 ) : null}
                 {includeMetadata && metadataCapable ? (

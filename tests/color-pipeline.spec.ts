@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test"
 
 import {
+  applyFilterToHighBitImage,
   applyFloatBufferFilter,
   applyHighBitAdjustment,
   applyIccTransformToImageData,
@@ -553,6 +554,108 @@ test("expanded high-bit filter routing covers motion, stylize, tonal, and video 
     expect(result.data[3], filterId).toBe(65535)
     expect(result.warnings.join(" "), filterId).not.toContain("8-bit fallback")
   }
+})
+
+test("standalone high-bit filter helper applies expanded native filters without 8-bit quantization", () => {
+  const source = {
+    width: 3,
+    height: 3,
+    channels: 4 as const,
+    bitDepth: 16 as const,
+    colorMode: "RGB" as const,
+    profile: "ProPhoto RGB",
+    storage: "uint16" as const,
+    data: new Uint16Array([
+      123, 2345, 4567, 65535, 18001, 20003, 22005, 65535, 65001, 62003, 60005, 65535,
+      5007, 7009, 9011, 65535, 32767, 32769, 12001, 65535, 58003, 54005, 50007, 65535,
+      1009, 3011, 5013, 65535, 24001, 26003, 28005, 65535, 65533, 2001, 65531, 65535,
+    ]),
+    warnings: [],
+  }
+  const context = { bitDepth: 16 as const, workingSpace: "ProPhoto RGB", preservePrecision: true }
+  const cases = [
+    ["average-blur", {}],
+    ["gaussian-blur", { radius: 1 }],
+    ["motion-blur", { distance: 1, angle: 0 }],
+    ["sharpen", { amount: 60 }],
+    ["hue-saturation", { hue: 20, saturation: 15, lightness: 0 }],
+    ["vibrance", { vibrance: 35, saturation: 5 }],
+    ["exposure", { ev: 0.5 }],
+    ["find-edges", {}],
+    ["emboss", { amount: 55 }],
+    ["high-pass", { radius: 1 }],
+    ["pixelate", { cellSize: 2 }],
+    ["offset", { horizontal: 1, vertical: 0, edgeMode: "wrap" }],
+    ["maximum", { radius: 1 }],
+    ["minimum", { radius: 1 }],
+    ["photo-filter", { color: "#ffb74d", density: 25 }],
+    ["color-balance", { cyanRed: 12, magentaGreen: -8, yellowBlue: 5 }],
+  ] as const
+  const precisionSignalFilters = new Set([
+    "average-blur",
+    "gaussian-blur",
+    "motion-blur",
+    "sharpen",
+    "hue-saturation",
+    "vibrance",
+    "exposure",
+    "high-pass",
+    "pixelate",
+    "offset",
+    "maximum",
+    "minimum",
+    "photo-filter",
+    "color-balance",
+  ])
+
+  for (const [filterId, params] of cases) {
+    const result = applyFilterToHighBitImage(source, filterId, params, context)
+    expect(result.storage, filterId).toBe("uint16")
+    expect(result.data, filterId).toBeInstanceOf(Uint16Array)
+    expect(result.profile, filterId).toBe("ProPhoto RGB")
+    expect(result.warnings.join(" "), filterId).not.toContain("8-bit fallback")
+    if (precisionSignalFilters.has(filterId)) {
+      const hasSub8BitPrecision = Array.from(result.data).some((value, index) => index % 4 !== 3 && value % 257 !== 0)
+      expect(hasSub8BitPrecision, `${filterId} should retain non-8-bit-aligned samples`).toBe(true)
+    }
+  }
+})
+
+test("standalone high-bit filter helper preserves float buffers for preview and export filters", () => {
+  const source = {
+    width: 2,
+    height: 1,
+    channels: 4 as const,
+    bitDepth: 32 as const,
+    colorMode: "RGB" as const,
+    profile: "Display P3",
+    storage: "float32" as const,
+    data: new Float32Array([
+      0.12345, 0.23456, 0.34567, 1,
+      0.45678, 0.56789, 0.67891, 1,
+    ]),
+    warnings: [],
+  }
+
+  const exposed = applyFilterToHighBitImage(source, "exposure", { ev: 1 }, {
+    bitDepth: 32,
+    workingSpace: "Display P3",
+    preservePrecision: true,
+  })
+  const shifted = applyFilterToHighBitImage(source, "hue-saturation", { hue: 18, saturation: 20 }, {
+    bitDepth: 32,
+    workingSpace: "Display P3",
+    preservePrecision: true,
+  })
+
+  expect(exposed.storage).toBe("float32")
+  expect(exposed.data).toBeInstanceOf(Float32Array)
+  expect(exposed.data[0]).toBeCloseTo(0.2469, 5)
+  expect(exposed.data[1]).toBeCloseTo(0.46912, 5)
+  expect(shifted.storage).toBe("float32")
+  expect(shifted.data).toBeInstanceOf(Float32Array)
+  expect(shifted.data[0]).not.toBeCloseTo(Math.round(source.data[0] * 255) / 255, 5)
+  expect(shifted.warnings.join(" ")).not.toContain("8-bit fallback")
 })
 
 test("high-bit paint dabs and canvas delta sync update typed layer sources", () => {

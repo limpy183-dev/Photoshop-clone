@@ -12,6 +12,7 @@ import {
 import {
   collectAnimationFramesAtFps,
   encodeAnimatedGif,
+  encodeAnimatedGifProgress,
   encodeAnimatedWebP,
   encodeApngFromFrames,
   packagePngSequenceZip,
@@ -226,6 +227,27 @@ test("animation export encoders emit animated GIF, APNG, and WebP containers", a
   expect(webpText).toContain("VP8X")
   expect(webpText).toContain("ANIM")
   expect(webpText).toContain("ANMF")
+})
+
+test("animation export encoders publish per-frame progress", async () => {
+  const frames = animatedFrames()
+  const events: string[] = []
+  const onProgress = (done: number, total: number, phase: string) => {
+    events.push(`${phase}:${done}/${total}`)
+  }
+
+  await encodeAnimatedGifProgress(frames, { onProgress })
+  await encodeApngFromFrames(frames, { onProgress })
+  await encodeAnimatedWebP(frames, { onProgress })
+
+  expect(events).toEqual([
+    "gif:1/2",
+    "gif:2/2",
+    "apng:1/2",
+    "apng:2/2",
+    "webp:1/2",
+    "webp:2/2",
+  ])
 })
 
 test("timeline frame extraction samples document frames at a requested FPS", () => {

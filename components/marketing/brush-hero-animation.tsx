@@ -278,7 +278,11 @@ export function BrushHeroAnimation() {
             const a = s.rotation + (j * Math.PI) / 4
             const px = s.x + Math.cos(a) * r
             const py = s.y + Math.sin(a) * r
-            j === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
+            if (j === 0) {
+              ctx.moveTo(px, py)
+            } else {
+              ctx.lineTo(px, py)
+            }
           }
           ctx.closePath()
           ctx.fillStyle = "rgba(220, 240, 255, 1)"

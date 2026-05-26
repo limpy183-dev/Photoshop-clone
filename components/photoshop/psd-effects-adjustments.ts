@@ -108,12 +108,12 @@ export const EFFECTS_ADJUSTMENTS_CAPABILITY: EffectsAdjustmentsCapability = {
     threshold: "round-trip",
     "gradient-map": "round-trip",
     "selective-color": "round-trip",
-    "shadows-highlights": "metadata-preserved",
-    "hdr-toning": "metadata-preserved",
+    "shadows-highlights": "round-trip",
+    "hdr-toning": "round-trip",
     desaturate: "round-trip",
-    "match-color": "metadata-preserved",
-    "replace-color": "metadata-preserved",
-    equalize: "metadata-preserved",
+    "match-color": "round-trip",
+    "replace-color": "round-trip",
+    equalize: "round-trip",
   },
   smartFilters: "metadata-preserved",
   advancedBlending: "round-trip",
@@ -731,6 +731,8 @@ export function psdEffectsToLayerStyle(effects: LayerEffectsInfo | undefined): L
 const MARKER_PREFIX = "__adj:"
 const MARKER_SUFFIX = "__"
 const MARKER_RE = /^__adj:([a-z-]+):([A-Za-z0-9+/=]+)__$/
+const DESCRIPTOR_PRESET_PREFIX = "__psweb_adj:"
+const DESCRIPTOR_PRESET_RE = /^__psweb_adj:([a-z-]+):([A-Za-z0-9+/=]+)$/
 
 /**
  * Round-trip encoding for adjustment types ag-psd doesn't model natively.
@@ -754,6 +756,26 @@ function decodeAdjustmentMarker(name: string | undefined): AdjustmentProps | nul
   try {
     const decoded = decodeURIComponent(atob(match[2]))
     const params = JSON.parse(decoded) as Record<string, number | string | boolean>
+    return { type, params }
+  } catch {
+    return null
+  }
+}
+
+function encodeAdjustmentDescriptorPreset(adjustment: AdjustmentProps): string {
+  const safe = JSON.stringify(adjustment.params ?? {})
+  return `${DESCRIPTOR_PRESET_PREFIX}${adjustment.type}:${btoa(encodeURIComponent(safe))}`
+}
+
+function decodeAdjustmentDescriptorPreset(adjustment: PsdAdjustmentLayer | undefined): AdjustmentProps | null {
+  const presetFileName = (adjustment as PsdAdjustmentLayer & { presetFileName?: string } | undefined)?.presetFileName
+  if (typeof presetFileName !== "string") return null
+  const match = presetFileName.match(DESCRIPTOR_PRESET_RE)
+  if (!match) return null
+  const type = match[1] as AdjustmentType
+  if (!ADJUSTMENT_TYPES_SET.has(type)) return null
+  try {
+    const params = JSON.parse(decodeURIComponent(atob(match[2]))) as Record<string, number | string | boolean>
     return { type, params }
   } catch {
     return null
@@ -833,6 +855,34 @@ function channelMixerRow(
     green: Number(g) || 0,
     blue: Number(b) || 0,
     constant,
+  }
+}
+
+function appOnlyAdjustmentPreset(layer: Layer): string {
+  return encodeAdjustmentDescriptorPreset(layer.adjustment!)
+}
+
+function appOnlyCurvesAdjustment(
+  layer: Layer,
+  rgb: CurvesAdjustmentChannel,
+): CurvesAdjustment {
+  return {
+    type: "curves",
+    rgb,
+    presetKind: 1,
+    presetFileName: appOnlyAdjustmentPreset(layer),
+  }
+}
+
+function appOnlyHueSaturationAdjustment(
+  layer: Layer,
+  params: Record<string, number | string | boolean>,
+): HueSaturationAdjustment {
+  return {
+    type: "hue/saturation",
+    master: hueSatChannelFromParams(params),
+    presetKind: 1,
+    presetFileName: appOnlyAdjustmentPreset(layer),
   }
 }
 
@@ -1047,18 +1097,59 @@ export function appAdjustmentToPsdLayer(layer: Layer): Partial<PsdLayer> {
           saturation: -100,
           lightness: 0,
         },
+        presetKind: 1,
+        presetFileName: appOnlyAdjustmentPreset(layer),
       }
       return { adjustment }
     }
-    // ag-psd doesn't expose native descriptors for these Photoshop commands.
-    // Preserve their editable params through the XMP app-preservation payload
-    // instead of encoding data into the visible layer name.
-    case "shadows-highlights":
-    case "hdr-toning":
+    case "shadows-highlights": {
+      const shadowAmount = Math.max(0, Math.min(100, Number(params.shadowAmount) || 0))
+      const highlightAmount = Math.max(0, Math.min(100, Number(params.highlightAmount) || 0))
+      const midtoneContrast = Math.max(-100, Math.min(100, Number(params.midtoneContrast) || 0))
+      const adjustment = appOnlyCurvesAdjustment(layer, [
+        { input: 0, output: clampByte(shadowAmount * 1.2) },
+        { input: 128, output: clampByte(128 + midtoneContrast * 0.6, 128) },
+        { input: 255, output: clampByte(255 - highlightAmount * 0.9, 255) },
+      ])
+      return { adjustment }
+    }
+    case "hdr-toning": {
+      const strength = Math.max(0, Math.min(4, Number(params.strength) || 0))
+      const adjustment: ExposureAdjustment = {
+        type: "exposure",
+        exposure: Math.max(-20, Math.min(20, strength)),
+        offset: 0,
+        gamma: 1,
+        presetKind: 1,
+        presetFileName: appOnlyAdjustmentPreset(layer),
+      }
+      return { adjustment }
+    }
     case "match-color":
+      return {
+        adjustment: appOnlyHueSaturationAdjustment(layer, {
+          hue: 0,
+          saturation: Math.round(((Number(params.colorIntensity) || 1) - 1) * 100),
+          lightness: Math.round(((Number(params.luminance) || 1) - 1) * 100),
+        }),
+      }
     case "replace-color":
+      return {
+        adjustment: appOnlyHueSaturationAdjustment(layer, {
+          hue: 0,
+          saturation: Math.max(-100, Math.min(100, Number(params.fuzziness) || 0)),
+          lightness: 0,
+        }),
+      }
     case "equalize":
-      return {}
+      return {
+        adjustment: appOnlyCurvesAdjustment(layer, [
+          { input: 0, output: 0 },
+          { input: 64, output: 96 },
+          { input: 192, output: 224 },
+          { input: 255, output: 255 },
+        ]),
+      }
     default:
       return {}
   }
@@ -1074,6 +1165,8 @@ export function psdLayerToAppAdjustment(psdLayer: PsdLayer): AdjustmentProps | n
   if (marker) return marker
   const adjustment = psdLayer.adjustment as PsdAdjustmentLayer | undefined
   if (!adjustment) return null
+  const descriptorPreset = decodeAdjustmentDescriptorPreset(adjustment)
+  if (descriptorPreset) return descriptorPreset
 
   switch (adjustment.type) {
     case "brightness/contrast":

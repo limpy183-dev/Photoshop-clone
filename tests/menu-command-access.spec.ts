@@ -74,7 +74,7 @@ test("selection commands stay reachable and load selection expands even without 
 })
 
 test("profile and proof controls are reachable from Image and View menus", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   await openTopMenu(page, "Image")
@@ -83,6 +83,18 @@ test("profile and proof controls are reachable from Image and View menus", async
   await expectCommandEnabled(page, "Convert to Profile...")
   await expectCommandEnabled(page, "Color Settings / Proof Setup...")
 
+  await page.getByRole("menuitem", { name: "Assign Profile..." }).click()
+  await expect(page.getByRole("dialog", { name: "Advanced Photoshop Subsystems" })).toBeVisible()
+  await expect(page.getByRole("button", { name: /^assign$/i })).toHaveAttribute("aria-pressed", "true")
+  await page.keyboard.press("Escape")
+
+  await openTopMenu(page, "Image")
+  await page.getByRole("menuitem", { name: "Mode" }).hover()
+  await page.getByRole("menuitem", { name: "Convert to Profile..." }).click()
+  await expect(page.getByRole("dialog", { name: "Advanced Photoshop Subsystems" })).toBeVisible()
+  await expect(page.getByRole("button", { name: /^convert$/i })).toHaveAttribute("aria-pressed", "true")
+  await page.keyboard.press("Escape")
+
   await page.keyboard.press("Escape")
   await openTopMenu(page, "View")
   await page.getByRole("menuitem", { name: "Proof Setup" }).hover()
@@ -90,6 +102,13 @@ test("profile and proof controls are reachable from Image and View menus", async
   await expectCommandEnabled(page, /Gamut Warning/)
   await expectCommandEnabled(page, "Proof Profile")
   await expectCommandEnabled(page, "Plate Channels")
+
+  await page.keyboard.press("Escape")
+  await openTopMenu(page, "Image")
+  await page.getByRole("menuitem", { name: "Mode" }).hover()
+  await page.getByRole("menuitem", { name: "Color Settings / Proof Setup..." }).click()
+  await expect(page.getByRole("dialog", { name: "Advanced Photoshop Subsystems" })).toBeVisible()
+  await expect(page.getByRole("button", { name: /^proof$/i })).toHaveAttribute("aria-pressed", "true")
 })
 
 test("stateful layer and type commands are clickable instead of greyed out", async ({ page }) => {

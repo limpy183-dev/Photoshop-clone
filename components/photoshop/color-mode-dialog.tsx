@@ -32,6 +32,8 @@ const defaultSettings: Record<DocumentModeSettings["mode"], DocumentModeSettings
       ink2: "#1f80ff",
       ink1Name: "Black",
       ink2Name: "Second Ink",
+      paper: "#ffffff",
+      overprint: "normal",
       curve: 1,
       opacity1: 100,
       opacity2: 70,
@@ -55,8 +57,37 @@ const defaultSettings: Record<DocumentModeSettings["mode"], DocumentModeSettings
   },
   Bitmap: {
     mode: "Bitmap",
-    bitmap: { method: "halftone", threshold: 128, frequency: 10, angle: 45, shape: "round", outputResolution: 300 },
+    bitmap: { method: "halftone", threshold: 128, frequency: 10, angle: 45, shape: "round", inputResolution: 300, outputResolution: 300 },
   },
+}
+
+function hydratedModeSettings(settings: DocumentModeSettings, docDpi = 300): DocumentModeSettings {
+  if (settings.mode === "Bitmap") {
+    return {
+      ...settings,
+      bitmap: {
+        ...defaultSettings.Bitmap.bitmap!,
+        ...(settings.bitmap ?? {}),
+        inputResolution: settings.bitmap?.inputResolution ?? docDpi,
+        outputResolution: settings.bitmap?.outputResolution ?? docDpi,
+      },
+    }
+  }
+  if (settings.mode === "Duotone") {
+    return {
+      ...settings,
+      duotone: {
+        ...defaultSettings.Duotone.duotone!,
+        ...(settings.duotone ?? defaultSettings.Duotone.duotone!),
+      },
+    }
+  }
+  return settings
+}
+
+function bitmapDocumentDpi(settings: DocumentModeSettings) {
+  const dpi = settings.mode === "Bitmap" ? settings.bitmap?.outputResolution : undefined
+  return typeof dpi === "number" && Number.isFinite(dpi) ? dpi : undefined
 }
 
 export function ColorModeDialog({
@@ -76,8 +107,8 @@ export function ColorModeDialog({
   React.useEffect(() => {
     if (!mode) return
     const base = activeDoc?.modeSettings?.mode === mode ? activeDoc.modeSettings : defaultSettings[mode]
-    setSettings(base)
-  }, [activeDoc?.id, activeDoc?.modeSettings, mode])
+    setSettings(hydratedModeSettings(base, activeDoc?.dpi ?? 300))
+  }, [activeDoc?.dpi, activeDoc?.id, activeDoc?.modeSettings, mode])
 
   if (!mode || !activeDoc) {
     return (
@@ -107,7 +138,7 @@ export function ColorModeDialog({
   }
 
   const previewMode = () => {
-    dispatch({ type: "set-document-mode-settings", colorMode: settings.mode, settings })
+    dispatch({ type: "set-document-mode-settings", colorMode: settings.mode, settings, dpi: bitmapDocumentDpi(settings) })
     requestRender()
     window.setTimeout(() => commit(`Mode Preview: ${settings.mode}`, []), 0)
   }
@@ -127,13 +158,14 @@ export function ColorModeDialog({
       if (layer.locked || layer.lockAll || !layer.canvas) continue
       if (convertLayer(layer)) changed.push(layer.id)
     }
-    dispatch({ type: "set-document-mode-settings", colorMode: settings.mode, settings })
+    dispatch({ type: "set-document-mode-settings", colorMode: settings.mode, settings, dpi: bitmapDocumentDpi(settings) })
     requestRender()
     window.setTimeout(() => commit(`Apply ${settings.mode} Conversion`, changed.length ? changed : "all"), 0)
     onOpenChange(false)
   }
 
   const colorTable = settings.indexed?.colorTable ?? []
+  const bitmapSettings = settings.bitmap ?? defaultSettings.Bitmap.bitmap!
 
   // ----- Color Table (.act) load/save -------------------------------------------------------
   const exportActTable = () => {
@@ -315,27 +347,34 @@ export function ColorModeDialog({
 
           {/* ------------- BITMAP ------------- */}
           {mode === "Bitmap" && !isColorTable ? (
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <Field label="Method">
-                <select value={settings.bitmap?.method ?? "halftone"} onChange={(event) => updateBitmap({ method: event.target.value as NonNullable<DocumentModeSettings["bitmap"]>["method"] })} className={selectClass}>
+                <select value={bitmapSettings.method} onChange={(event) => updateBitmap({ method: event.target.value as NonNullable<DocumentModeSettings["bitmap"]>["method"] })} className={selectClass}>
                   <option value="threshold">50% Threshold</option>
                   <option value="halftone">Halftone Screen</option>
                   <option value="pattern-dither">Pattern Dither</option>
                   <option value="diffusion-dither">Diffusion Dither</option>
                 </select>
               </Field>
-              <Field label="Shape">
-                <select value={settings.bitmap?.shape ?? "round"} onChange={(event) => updateBitmap({ shape: event.target.value as NonNullable<DocumentModeSettings["bitmap"]>["shape"] })} className={selectClass}>
-                  <option value="round">Round</option>
-                  <option value="line">Line</option>
-                  <option value="diamond">Diamond</option>
-                  <option value="ellipse">Ellipse</option>
-                </select>
-              </Field>
-              <NumberField label="Threshold" value={settings.bitmap?.threshold ?? 128} min={0} max={255} onChange={(value) => updateBitmap({ threshold: value })} />
-              <NumberField label="Frequency" value={settings.bitmap?.frequency ?? 10} min={1} max={120} onChange={(value) => updateBitmap({ frequency: value })} />
-              <NumberField label="Angle" value={settings.bitmap?.angle ?? 45} min={-180} max={180} onChange={(value) => updateBitmap({ angle: value })} />
-              <NumberField label="Output PPI" value={settings.bitmap?.outputResolution ?? 300} min={1} max={2400} onChange={(value) => updateBitmap({ outputResolution: value })} />
+              <NumberField label="Input PPI" value={bitmapSettings.inputResolution ?? activeDoc.dpi ?? 300} min={1} max={2400} onChange={(value) => updateBitmap({ inputResolution: value })} />
+              <NumberField label="Output PPI" value={bitmapSettings.outputResolution ?? activeDoc.dpi ?? 300} min={1} max={2400} onChange={(value) => updateBitmap({ outputResolution: value })} />
+              <NumberField label="Threshold" value={bitmapSettings.threshold} min={0} max={255} onChange={(value) => updateBitmap({ threshold: value })} />
+              {bitmapSettings.method === "halftone" ? (
+                <>
+                  <NumberField label="Frequency" value={bitmapSettings.frequency} min={1} max={200} onChange={(value) => updateBitmap({ frequency: value })} />
+                  <NumberField label="Angle" value={bitmapSettings.angle} min={-180} max={180} onChange={(value) => updateBitmap({ angle: value })} />
+                  <Field label="Shape">
+                    <select value={bitmapSettings.shape ?? "round"} onChange={(event) => updateBitmap({ shape: event.target.value as NonNullable<DocumentModeSettings["bitmap"]>["shape"] })} className={selectClass}>
+                      <option value="round">Round</option>
+                      <option value="line">Line</option>
+                      <option value="diamond">Diamond</option>
+                      <option value="ellipse">Ellipse</option>
+                      <option value="square">Square</option>
+                      <option value="cross">Cross</option>
+                    </select>
+                  </Field>
+                </>
+              ) : null}
             </div>
           ) : null}
 
@@ -432,7 +471,7 @@ function DuotonePanel({
   ]
   return (
     <div className="grid gap-3">
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-5 gap-3">
         <Field label="Type">
           <select value={String(inkCount)} onChange={(event) => update({ inkCount: Number(event.target.value) as 1 | 2 | 3 | 4 })} className={selectClass}>
             <option value="1">Monotone</option>
@@ -451,6 +490,15 @@ function DuotonePanel({
             {Object.keys(DUOTONE_PRESETS).map((key) => (
               <option key={key} value={key}>{key}</option>
             ))}
+          </select>
+        </Field>
+        <Field label="Paper">
+          <Input type="color" value={duotone.paper ?? "#ffffff"} onChange={(event) => update({ paper: event.target.value })} className={inputClass} />
+        </Field>
+        <Field label="Overprint">
+          <select value={duotone.overprint ?? "normal"} onChange={(event) => update({ overprint: event.target.value as NonNullable<DocumentModeSettings["duotone"]>["overprint"] })} className={selectClass}>
+            <option value="normal">Normal</option>
+            <option value="multiply">Multiply</option>
           </select>
         </Field>
         <NumberField label="Balance" value={duotone.balance ?? 1} min={0} max={1} step={0.05} onChange={(value) => update({ balance: value })} />

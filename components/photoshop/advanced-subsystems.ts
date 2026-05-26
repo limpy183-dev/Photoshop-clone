@@ -77,8 +77,8 @@ export const ADVANCED_FORMAT_CAPABILITIES: AdvancedFormatCapability[] = [
     supportLabel: "Browser native",
     decodePath: "Decoded by the browser image engine when the current browser supports the MIME type.",
     metadataPath: "JPEG EXIF/XMP/IPTC is scanned; other raster metadata is not embedded into layers.",
-    exportPath: "Exports flattened browser canvas pixels through canvas encoders for supported MIME types.",
-    limitations: "Animated GIF imports as the browser-selected poster/first decoded frame. ICC profiles are not converted.",
+    exportPath: "Exports flattened browser canvas pixels through supported MIME encoders; PNG, JPEG, WebP, and AVIF paths can post-process app metadata plus ICC/profile carrier chunks when requested.",
+    limitations: "Animated GIF imports as the browser-selected poster/first decoded frame. Browser image decode still creates 8-bit RGBA layers, and production ICC/profile validation remains outside the browser pipeline.",
     layerResult: "Creates an 8-bit RGBA canvas layer.",
   },
   {

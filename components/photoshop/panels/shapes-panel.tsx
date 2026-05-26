@@ -22,6 +22,7 @@ import { downloadText } from "../document-io"
 import { uid } from "../uid"
 import {
   exportCustomShapeLibrary,
+  mergeCustomShapeLibraries,
   normalizeCustomShapeLibrary,
   shapeAssetToPreset,
   shapePresetToAsset,
@@ -367,8 +368,13 @@ export function ShapesPanel() {
         persistBundled([...altShapes, ...shapePresets], `Imported ${altShapes.length} bundled shape${altShapes.length === 1 ? "" : "s"}`)
         return
       }
-      setAssets([...incoming, ...allAssets], "Import Custom Shapes")
-      toast.success(`Imported ${incoming.length} shape${incoming.length === 1 ? "" : "s"}.`)
+      const merged = mergeCustomShapeLibraries(shapeAssets, incoming, { conflictPolicy: "keep-both" })
+      const nonShapeAssets = allAssets.filter((asset) => asset.kind !== "shape")
+      setAssets([...merged.shapes, ...nonShapeAssets], "Import Custom Shapes")
+      const conflictNote = merged.renamed || merged.skipped || merged.replaced
+        ? ` (${merged.renamed} renamed, ${merged.replaced} replaced, ${merged.skipped} skipped)`
+        : ""
+      toast.success(`Imported ${merged.added} shape${merged.added === 1 ? "" : "s"}${conflictNote}.`)
     } catch (err) {
       toast.error(`Could not import: ${err instanceof Error ? err.message : String(err)}`)
     }

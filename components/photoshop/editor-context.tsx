@@ -1534,7 +1534,7 @@ export type Action =
   | { type: "set-document-metadata"; metadata: DocumentMetadata }
   | { type: "set-color-management"; settings: ColorManagementSettings }
   | { type: "set-print-settings"; settings: PrintSettings }
-  | { type: "set-document-mode-settings"; colorMode: PsDocument["colorMode"]; settings?: DocumentModeSettings }
+  | { type: "set-document-mode-settings"; colorMode: PsDocument["colorMode"]; settings?: DocumentModeSettings; dpi?: number }
   | { type: "set-plugins"; plugins: PluginDescriptor[] }
   | { type: "set-plugin-storage"; pluginStorage: NonNullable<PsDocument["pluginStorage"]> }
   | { type: "set-variable-data-sets"; dataSets: VariableDataSet[] }
@@ -3142,6 +3142,9 @@ export function reducer(state: EditorState, action: Action): EditorState {
         ...d,
         colorMode: action.colorMode,
         modeSettings: action.settings ?? { mode: action.colorMode },
+        dpi: typeof action.dpi === "number" && Number.isFinite(action.dpi)
+          ? Math.max(1, Math.min(2400, Math.round(action.dpi)))
+          : d.dpi,
       }))
     case "set-plugins":
       return mutateActiveDoc(state, (d) => ({

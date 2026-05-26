@@ -21,10 +21,14 @@ import {
   encodeWavFromAudioBuffer,
   evaluateThreeDAnimation,
   exportAdvancedThreeDScene,
+  applyThreeDMaterialDrop,
+  getBakedTextureImageData,
   getBrowserMuxCapability,
+  hashThreeDScene,
   importAdvancedThreeDScene,
   paintThreeDSurface,
   rayTraceScene,
+  replaceBakedTexture,
   renderVideoTransitionPreview,
   seekVideoElement,
   resolveVideoExportPreset,
@@ -323,6 +327,53 @@ test("UV/material editing and direct 3D surface painting update editable scene m
   expect(material.texture?.pixels.some((pixel) => pixel.color === "#00aaee")).toBe(true)
 })
 
+test("3D surface painting bakes editable atlas pixels and invalidates scene hashes by pixel content", () => {
+  const scene = assignPlanarUvs(createPrimitiveThreeDScene("cube"))
+  const objectId = scene.objects[0].id
+  const materialId = scene.objects[0].materialId
+
+  const redPaint = paintThreeDSurface(scene, objectId, { u: 0.5, v: 0.5, radius: 0.12, color: "#ff0000", opacity: 1 })
+  const bluePaint = paintThreeDSurface(scene, objectId, { u: 0.5, v: 0.5, radius: 0.12, color: "#0000ff", opacity: 1 })
+  const atlas = getBakedTextureImageData(redPaint, materialId)
+
+  expect(atlas).not.toBeNull()
+  expect(atlas!.width).toBe(512)
+  expect(atlas!.height).toBe(512)
+  expect(Array.from(atlas!.data).some((value, index) => index % 4 === 0 && value > 0)).toBe(true)
+  expect(hashThreeDScene(redPaint)).not.toBe(hashThreeDScene(bluePaint))
+})
+
+test("3D material drop and external atlas replacement use baked editable texture atlases", () => {
+  const scene = assignPlanarUvs(createPrimitiveThreeDScene("cube"))
+  const objectId = scene.objects[0].id
+  const materialId = scene.objects[0].materialId
+  const originalColor = scene.materials[0].color
+
+  const dropped = applyThreeDMaterialDrop(scene, objectId, "#14b8a6", { u: 0.25, v: 0.75, radius: 0.08 })
+  const droppedMaterial = dropped.materials.find((item) => item.id === materialId)!
+  const droppedAtlas = getBakedTextureImageData(dropped, materialId)
+
+  expect(droppedMaterial.color).toBe(originalColor)
+  expect(droppedMaterial.texture?.pixels.at(-1)).toMatchObject({ u: 0.25, v: 0.75, color: "#14b8a6" })
+  expect(droppedAtlas).not.toBeNull()
+  expect(Array.from(droppedAtlas!.data).some((value, index) => index % 4 === 1 && value > 0)).toBe(true)
+
+  const replacementBytes = new Uint8ClampedArray(4 * 4 * 4)
+  for (let index = 0; index < replacementBytes.length; index += 4) {
+    replacementBytes[index] = 255
+    replacementBytes[index + 1] = 128
+    replacementBytes[index + 2] = 64
+    replacementBytes[index + 3] = 255
+  }
+  const replaced = replaceBakedTexture(dropped, materialId, new ImageData(replacementBytes, 4, 4))
+  const replacedAtlas = getBakedTextureImageData(replaced, materialId)
+
+  expect(replacedAtlas?.width).toBe(4)
+  expect(replacedAtlas?.height).toBe(4)
+  expect(Array.from(replacedAtlas!.data.slice(0, 4))).toEqual([255, 128, 64, 255])
+  expect(replaced.materials.find((item) => item.id === materialId)?.texture?.pixels).toEqual([])
+})
+
 test("ray tracing, cross sections, and 3D print checks operate on scene geometry", () => {
   const scene = createPrimitiveThreeDScene("cube")
   const traced = rayTraceScene(scene, 16, 12, { samples: 1, background: "#000000" })
@@ -609,4 +660,23 @@ test("video export presets and frame animation conversion support timeline workf
   expect(preset.codec).toBe("h264")
   expect(animation.frames).toHaveLength(12)
   expect(animation.frames.some((frame) => frame.transitionProgress > 0)).toBe(true)
+})
+
+test("frame animation conversion respects per-frame transition durations", () => {
+  const frames: Array<TimelineFrame & { transitionDurationMs?: number }> = [
+    {
+      id: "f1",
+      name: "Hold then wipe",
+      durationMs: 1000,
+      layerVisibility: { clip: true },
+      transition: "wipe-right",
+      transitionDurationMs: 250,
+      easing: "linear",
+    },
+    { id: "f2", name: "Next", durationMs: 250, layerVisibility: { clip: false }, transition: "hold" },
+  ]
+
+  const animation = convertVideoTimelineToFrameAnimation(frames, { fps: 4, includeTransitions: true })
+
+  expect(animation.frames.slice(0, 4).map((frame) => frame.transitionProgress)).toEqual([0, 0, 0, 1])
 })

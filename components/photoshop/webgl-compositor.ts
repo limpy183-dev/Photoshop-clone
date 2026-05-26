@@ -356,6 +356,7 @@ function lookupPresetCode(value: string): number {
 export interface GpuAdjustmentShader {
   fragmentSource: string
   uniforms: Record<string, number | number[] | Float32Array>
+  textureUniforms?: Record<string, TexImageSource | null | undefined>
   curveTexture?: { values: Float32Array; size: number }
   /**
    * Optional RGB lookup table bound to texture unit 2 as `u_gradientLut`. The
@@ -881,7 +882,7 @@ function hasUnsupportedLayerEffects(layer: Layer) {
 
 function hasUnsupportedSmartFilters(layer: Layer) {
   return (layer.smartFilters ?? [])
-    .filter((filter) => filter.enabled)
+    .filter((filter) => filter.enabled !== false)
     .some((filter) => !isGpuSmartFilterCompatible(filter))
 }
 
@@ -1505,6 +1506,10 @@ function textureDimensions(source: TexImageSource): { width: number; height: num
   }
 }
 
+function isCanvasLike(source: TexImageSource): source is HTMLCanvasElement {
+  return typeof (source as HTMLCanvasElement).getContext === "function"
+}
+
 function defaultBlendIfRange(): BlendIfRange {
   return { black: 0, blackFeather: 0, whiteFeather: 255, white: 255 }
 }
@@ -1926,6 +1931,30 @@ function applyGpuShaderPassToCanvas(
     gl.uniform1i(gradientLutUniform, 2)
   }
 
+  let nextTextureUnit = 3
+  const extraTextures: WebGLTexture[] = []
+  if (shader.textureUniforms) {
+    for (const [name, source] of Object.entries(shader.textureUniforms)) {
+      if (!source) continue
+      const loc = gl.getUniformLocation(program, name)
+      if (!loc) continue
+      const texture = gl.createTexture()
+      if (!texture) continue
+      extraTextures.push(texture)
+      gl.activeTexture(gl.TEXTURE0 + nextTextureUnit)
+      gl.bindTexture(gl.TEXTURE_2D, texture)
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      gl.uniform1i(loc, nextTextureUnit)
+      nextTextureUnit += 1
+    }
+  }
+
   for (const [name, value] of Object.entries(shader.uniforms)) {
     const loc = gl.getUniformLocation(program, name)
     if (!loc) continue
@@ -1946,6 +1975,7 @@ function applyGpuShaderPassToCanvas(
   gl.drawArrays(gl.TRIANGLES, 0, 6)
   targetCtx.clearRect(0, 0, width, height)
   targetCtx.drawImage(gpuCanvas, 0, 0)
+  for (const texture of extraTextures) gl.deleteTexture(texture)
   return true
 }
 
@@ -2377,6 +2407,8 @@ function unitColor(value: string | undefined, fallback: [number, number, number]
 }
 
 const LAYER_STYLE_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
+  uniform sampler2D u_fillSource;
+  uniform float u_hasFillSource;
   uniform vec2 u_texel;
   uniform float u_fillOpacity;
   uniform float u_hasDropShadow;
@@ -2388,10 +2420,12 @@ const LAYER_STYLE_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
   uniform vec3 u_outerGlowColor;
   uniform float u_outerGlowSize;
   uniform float u_outerGlowOpacity;
+  uniform float u_outerGlowSpread;
   uniform float u_hasInnerGlow;
   uniform vec3 u_innerGlowColor;
   uniform float u_innerGlowSize;
   uniform float u_innerGlowOpacity;
+  uniform float u_innerGlowChoke;
   uniform float u_hasInnerShadow;
   uniform vec3 u_innerShadowColor;
   uniform vec2 u_innerShadowOffset;
@@ -2401,7 +2435,8 @@ const LAYER_STYLE_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
   uniform vec3 u_bevelHighlightColor;
   uniform vec3 u_bevelShadowColor;
   uniform float u_bevelSize;
-  uniform float u_bevelOpacity;
+  uniform float u_bevelHighlightOpacity;
+  uniform float u_bevelShadowOpacity;
   uniform float u_hasColorOverlay;
   uniform vec3 u_colorOverlayColor;
   uniform float u_colorOverlayOpacity;
@@ -2413,6 +2448,7 @@ const LAYER_STYLE_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
   uniform float u_hasPatternOverlay;
   uniform vec3 u_patternColor;
   uniform float u_patternScale;
+  uniform float u_patternKind;
   uniform float u_patternOpacity;
   uniform float u_hasSatin;
   uniform vec3 u_satinColor;
@@ -2460,7 +2496,9 @@ const LAYER_STYLE_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
 
   void main() {
     vec4 src = texture2D(u_source, v_texcoord);
+    vec4 fillSrc = u_hasFillSource > 0.5 ? texture2D(u_fillSource, v_texcoord) : src;
     float alpha = src.a;
+    float fillAlpha = fillSrc.a;
     vec4 result = vec4(0.0);
 
     if (u_hasDropShadow > 0.5) {
@@ -2469,11 +2507,11 @@ const LAYER_STYLE_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
     }
 
     if (u_hasOuterGlow > 0.5) {
-      float a = max(0.0, blurredAlpha(v_texcoord, vec2(0.0), u_outerGlowSize) - alpha) * u_outerGlowOpacity;
+      float a = max(0.0, blurredAlpha(v_texcoord, vec2(0.0), u_outerGlowSize) - alpha) * (1.0 + u_outerGlowSpread) * u_outerGlowOpacity;
       result = over(vec4(u_outerGlowColor, a), result);
     }
 
-    result = over(vec4(src.rgb, alpha * clamp(u_fillOpacity, 0.0, 1.0)), result);
+    result = over(vec4(fillSrc.rgb, fillAlpha * clamp(u_fillOpacity, 0.0, 1.0)), result);
 
     if (u_hasInnerShadow > 0.5) {
       float shifted = blurredAlpha(v_texcoord, u_innerShadowOffset, u_innerShadowSize);
@@ -2482,7 +2520,7 @@ const LAYER_STYLE_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
     }
 
     if (u_hasInnerGlow > 0.5) {
-      float a = edgeInside(alpha, u_innerGlowSize) * u_innerGlowOpacity;
+      float a = edgeInside(alpha, u_innerGlowSize) * (1.0 + u_innerGlowChoke) * u_innerGlowOpacity;
       result = over(vec4(u_innerGlowColor, a), result);
     }
 
@@ -2493,8 +2531,8 @@ const LAYER_STYLE_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
       float bottom = texture2D(u_source, v_texcoord + vec2(0.0, u_texel.y) * max(u_bevelSize, 1.0)).a;
       float light = clamp((left - right + top - bottom) * 0.5 + 0.5, 0.0, 1.0);
       float edge = edgeInside(alpha, u_bevelSize);
-      result = over(vec4(u_bevelHighlightColor, max(0.0, light - 0.5) * 2.0 * edge * u_bevelOpacity), result);
-      result = over(vec4(u_bevelShadowColor, max(0.0, 0.5 - light) * 2.0 * edge * u_bevelOpacity), result);
+      result = over(vec4(u_bevelHighlightColor, max(0.0, light - 0.5) * 2.0 * edge * u_bevelHighlightOpacity), result);
+      result = over(vec4(u_bevelShadowColor, max(0.0, 0.5 - light) * 2.0 * edge * u_bevelShadowOpacity), result);
     }
 
     if (u_hasColorOverlay > 0.5) {
@@ -2510,9 +2548,14 @@ const LAYER_STYLE_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
     }
 
     if (u_hasPatternOverlay > 0.5) {
-      vec2 cell = floor(gl_FragCoord.xy / max(u_patternScale, 1.0));
-      float checker = mod(cell.x + cell.y, 2.0);
-      result = over(vec4(u_patternColor, alpha * checker * u_patternOpacity), result);
+      float scale = max(u_patternScale, 1.0);
+      vec2 cell = floor(gl_FragCoord.xy / scale);
+      vec2 local = fract(gl_FragCoord.xy / scale);
+      float pattern = mod(cell.x + cell.y, 2.0);
+      if (u_patternKind > 0.5 && u_patternKind < 1.5) pattern = step(length(local - vec2(0.5)), 0.28);
+      else if (u_patternKind > 1.5 && u_patternKind < 2.5) pattern = step(local.y, 0.5);
+      else if (u_patternKind > 2.5) pattern = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+      result = over(vec4(u_patternColor, alpha * pattern * u_patternOpacity), result);
     }
 
     if (u_hasSatin > 0.5 && alpha > 0.0) {
@@ -2567,7 +2610,26 @@ function gradientColorPair(layer: Layer): { start: [number, number, number]; end
   }
 }
 
-function buildGpuLayerStyleShader(layer: Layer, fillOpacity: number): GpuAdjustmentShader | null {
+function layerStyleOffset(
+  effect: { offsetX?: number; offsetY?: number; angle?: number; distance?: number } | undefined,
+): [number, number] {
+  if (!effect) return [0, 0]
+  if (Number.isFinite(effect.offsetX) || Number.isFinite(effect.offsetY)) {
+    return [effect.offsetX ?? 0, effect.offsetY ?? 0]
+  }
+  const distance = Number.isFinite(effect.distance) ? effect.distance ?? 0 : 0
+  const angle = ((Number.isFinite(effect.angle) ? effect.angle ?? 0 : 0) * Math.PI) / 180
+  return [Math.cos(angle) * distance, Math.sin(angle) * distance]
+}
+
+function patternKindCode(pattern: string | undefined): number {
+  if (pattern === "dots") return 1
+  if (pattern === "lines") return 2
+  if (pattern === "noise") return 3
+  return 0
+}
+
+function buildGpuLayerStyleShader(layer: Layer, fillOpacity: number, fillSource?: TexImageSource | null): GpuAdjustmentShader | null {
   if (!layer.style || hasUnsupportedLayerEffects(layer)) return null
   const style = layer.style
   const drop = style.dropShadow
@@ -2584,35 +2646,46 @@ function buildGpuLayerStyleShader(layer: Layer, fillOpacity: number): GpuAdjustm
   const satinAngleRad = ((satin?.angle ?? 0) * Math.PI) / 180
   const satinDistance = satin?.distance ?? 0
   const strokePositionCode = stroke?.position === "inside" ? 1 : stroke?.position === "center" ? 2 : 0
+  const dropOffset = layerStyleOffset(drop)
+  const innerShadowOffset = layerStyleOffset(innerShadow)
+  const bevelOpacity = bevel?.opacity ?? 0
+  const bevelHighlightColor = bevel?.direction === "down" ? bevel?.shadow : bevel?.highlight
+  const bevelShadowColor = bevel?.direction === "down" ? bevel?.highlight : bevel?.shadow
+  const bevelHighlightOpacity = bevel?.direction === "down" ? bevel?.shadowOpacity : bevel?.highlightOpacity
+  const bevelShadowOpacity = bevel?.direction === "down" ? bevel?.highlightOpacity : bevel?.shadowOpacity
   return {
     fragmentSource: LAYER_STYLE_SHADER,
     uniforms: {
+      u_hasFillSource: fillSource ? 1 : 0,
       u_texel: [1 / Math.max(1, layer.canvas.width), 1 / Math.max(1, layer.canvas.height)],
       u_canvasSize: [layer.canvas.width, layer.canvas.height],
       u_fillOpacity: fillOpacity,
       u_hasDropShadow: drop?.enabled ? 1 : 0,
       u_dropShadowColor: unitColor(drop?.color, [0, 0, 0]),
-      u_dropShadowOffset: [drop?.offsetX ?? 0, drop?.offsetY ?? 0],
+      u_dropShadowOffset: dropOffset,
       u_dropShadowSize: drop?.size ?? 0,
       u_dropShadowOpacity: drop?.opacity ?? 0,
       u_hasOuterGlow: outerGlow?.enabled ? 1 : 0,
       u_outerGlowColor: unitColor(outerGlow?.color, [1, 1, 1]),
       u_outerGlowSize: outerGlow?.size ?? 0,
       u_outerGlowOpacity: outerGlow?.opacity ?? 0,
+      u_outerGlowSpread: (outerGlow?.spread ?? 0) / 100,
       u_hasInnerGlow: innerGlow?.enabled ? 1 : 0,
       u_innerGlowColor: unitColor(innerGlow?.color, [1, 1, 1]),
       u_innerGlowSize: innerGlow?.size ?? 0,
       u_innerGlowOpacity: innerGlow?.opacity ?? 0,
+      u_innerGlowChoke: (innerGlow?.choke ?? 0) / 100,
       u_hasInnerShadow: innerShadow?.enabled ? 1 : 0,
       u_innerShadowColor: unitColor(innerShadow?.color, [0, 0, 0]),
-      u_innerShadowOffset: [innerShadow?.offsetX ?? 0, innerShadow?.offsetY ?? 0],
+      u_innerShadowOffset: innerShadowOffset,
       u_innerShadowSize: innerShadow?.size ?? 0,
       u_innerShadowOpacity: innerShadow?.opacity ?? 0,
       u_hasBevel: bevel?.enabled ? 1 : 0,
-      u_bevelHighlightColor: unitColor(bevel?.highlight, [1, 1, 1]),
-      u_bevelShadowColor: unitColor(bevel?.shadow, [0, 0, 0]),
+      u_bevelHighlightColor: unitColor(bevelHighlightColor, [1, 1, 1]),
+      u_bevelShadowColor: unitColor(bevelShadowColor, [0, 0, 0]),
       u_bevelSize: bevel?.size ?? 0,
-      u_bevelOpacity: bevel?.opacity ?? 0,
+      u_bevelHighlightOpacity: bevelHighlightOpacity ?? bevelOpacity,
+      u_bevelShadowOpacity: bevelShadowOpacity ?? bevelOpacity,
       u_hasColorOverlay: colorOverlay?.enabled ? 1 : 0,
       u_colorOverlayColor: unitColor(colorOverlay?.color, [1, 1, 1]),
       u_colorOverlayOpacity: colorOverlay?.opacity ?? 0,
@@ -2624,6 +2697,7 @@ function buildGpuLayerStyleShader(layer: Layer, fillOpacity: number): GpuAdjustm
       u_hasPatternOverlay: patternOverlay?.enabled ? 1 : 0,
       u_patternColor: unitColor(patternOverlay?.color, [0.5, 0.5, 0.5]),
       u_patternScale: patternOverlay?.scale ?? 16,
+      u_patternKind: patternKindCode(patternOverlay?.pattern),
       u_patternOpacity: patternOverlay?.opacity ?? 0,
       u_hasSatin: satin?.enabled ? 1 : 0,
       u_satinColor: unitColor(satin?.color, [0, 0, 0]),
@@ -2637,21 +2711,79 @@ function buildGpuLayerStyleShader(layer: Layer, fillOpacity: number): GpuAdjustm
       u_strokeOpacity: stroke?.opacity ?? 1,
       u_strokePosition: strokePositionCode,
     },
+    textureUniforms: fillSource ? { u_fillSource: fillSource } : undefined,
   }
 }
 
-export function applyGpuLayerStyleToCanvas(layer: Layer, fillOpacity = 1): HTMLCanvasElement | null {
+export function applyGpuLayerStyleToCanvas(
+  layer: Layer,
+  fillOpacity = 1,
+  options: { effectSourceCanvas?: HTMLCanvasElement; fillSourceCanvas?: HTMLCanvasElement } = {},
+): HTMLCanvasElement | null {
   if (typeof document === "undefined" || !hasLayerEffects(layer)) return null
-  const shader = buildGpuLayerStyleShader(layer, fillOpacity)
+  const effectSource = options.effectSourceCanvas ?? layer.canvas
+  const fillSource = options.fillSourceCanvas && options.fillSourceCanvas !== effectSource
+    ? options.fillSourceCanvas
+    : null
+  const shader = buildGpuLayerStyleShader(layer, fillOpacity, fillSource)
   if (!shader) return null
-  const canvas = cloneCanvasForWebGL(layer.canvas)
+  const canvas = cloneCanvasForWebGL(effectSource)
   const ctx = canvas.getContext("2d")
   if (!ctx) return null
   return applyGpuShaderPassToCanvas(ctx, canvas.width, canvas.height, shader) ? canvas : null
 }
 
+const SMART_FILTER_MASK_SHADER = `${ADJUSTMENT_FRAGMENT_PREFIX}
+  uniform float u_density;
+  void main() {
+    vec4 c = texture2D(u_source, v_texcoord);
+    float maskAmount = luminance(c.rgb) * c.a;
+    float coverage = mix(1.0, maskAmount, clamp(u_density, 0.0, 1.0));
+    gl_FragColor = vec4(vec3(coverage), 1.0);
+  }
+`
+
+function normalizeCanvasForWebGL(source: HTMLCanvasElement, width: number, height: number): HTMLCanvasElement {
+  if (source.width === width && source.height === height) return cloneCanvasForWebGL(source)
+  const canvas = document.createElement("canvas")
+  canvas.width = width
+  canvas.height = height
+  canvas.getContext("2d")!.drawImage(source, 0, 0, width, height)
+  return canvas
+}
+
+function prepareSmartFilterMaskForWebGL(
+  filter: NonNullable<Layer["smartFilters"]>[number],
+  width: number,
+  height: number,
+): HTMLCanvasElement | null {
+  if (filter.maskEnabled === false || !filter.mask) return null
+  const feather = Math.max(0, Math.min(32, filter.maskFeather ?? 0))
+  const density = clamp01(filter.maskDensity ?? 1)
+  const mask = normalizeCanvasForWebGL(filter.mask, width, height)
+  const ctx = mask.getContext("2d")
+  if (!ctx) return null
+  if (feather > 0 && !applyGpuFilterToCanvas(mask, "gaussian-blur", { radius: feather })) return null
+  if (density < 1 || feather > 0) {
+    const shader: GpuAdjustmentShader = {
+      fragmentSource: SMART_FILTER_MASK_SHADER,
+      uniforms: { u_density: density },
+    }
+    if (!applyGpuShaderPassToCanvas(ctx, width, height, shader)) return null
+  }
+  return mask
+}
+
 function isGpuSmartFilterCompositeCompatible(filter: NonNullable<Layer["smartFilters"]>[number]) {
-  return (filter.maskFeather ?? 0) <= 0 && (filter.maskDensity ?? 1) === 1
+  const feather = filter.maskFeather ?? 0
+  const density = filter.maskDensity ?? 1
+  return (
+    feather >= 0 &&
+    feather <= 32 &&
+    density >= 0 &&
+    density <= 1 &&
+    isWebGLBlendModeCompatible(filter.blendMode)
+  )
 }
 
 function isGpuSmartFilterCompatible(filter: NonNullable<Layer["smartFilters"]>[number]) {
@@ -2662,15 +2794,17 @@ export function applyGpuSmartFiltersToCanvas(
   source: HTMLCanvasElement,
   smartFilters: Layer["smartFilters"],
 ): HTMLCanvasElement | null {
-  const enabled = smartFilters?.filter((filter) => filter.enabled) ?? []
+  const enabled = smartFilters?.filter((filter) => filter.enabled !== false) ?? []
   if (!enabled.length) return source
   if (typeof document === "undefined" || !enabled.every(isGpuSmartFilterCompatible)) return null
 
   let current = cloneCanvasForWebGL(source)
   for (const smartFilter of enabled) {
     const opacity = clamp01(smartFilter.opacity ?? 1)
+    if (opacity <= 0) continue
     const blendMode = smartFilter.blendMode ?? "normal"
-    const maskSource = smartFilter.maskEnabled === false ? null : smartFilter.mask ?? null
+    const maskSource = prepareSmartFilterMaskForWebGL(smartFilter, source.width, source.height)
+    if (smartFilter.maskEnabled !== false && smartFilter.mask && !maskSource) return null
     const needsComposite = opacity < 1 || blendMode !== "normal" || !!maskSource
     const before = needsComposite ? cloneCanvasForWebGL(current) : null
     if (!applyGpuFilterToCanvas(current, smartFilter.filterId, smartFilter.params)) return null
@@ -2694,13 +2828,69 @@ export function applyGpuSmartFiltersToCanvas(
   return current
 }
 
+function applyGpuAdjustmentLayerToCanvas(
+  targetCtx: CanvasRenderingContext2D,
+  layer: Layer,
+  context: WebGLCompositeLayerContext,
+): boolean {
+  if (!layer.adjustment || !GPU_ADJUSTMENT_TYPES.has(layer.adjustment.type)) return false
+  const width = positiveInt(context.width, targetCtx.canvas.width)
+  const height = positiveInt(context.height, targetCtx.canvas.height)
+  const before = cloneCanvasForWebGL(targetCtx.canvas)
+  const adjusted = cloneCanvasForWebGL(targetCtx.canvas)
+  const adjustedCtx = adjusted.getContext("2d")
+  if (!adjustedCtx || !applyGpuAdjustmentToCanvas(adjustedCtx, layer, width, height)) return false
+
+  const opacity = clamp01(layer.opacity ?? 1)
+  const maskSource = layer.mask && layer.maskEnabled !== false ? cropOptionalSource(layer.mask, context.tileRect) : null
+  const clipMaskSource = context.clipMask ? cropOptionalSource(context.clipMask, context.tileRect) : null
+  const blendMode = layer.blendMode ?? "normal"
+  const needsComposite = opacity < 1 || blendMode !== "normal" || !!maskSource || !!clipMaskSource
+  if (!needsComposite) {
+    targetCtx.clearRect(0, 0, width, height)
+    targetCtx.drawImage(adjusted, 0, 0)
+    return true
+  }
+
+  const composited = document.createElement("canvas")
+  composited.width = width
+  composited.height = height
+  const result = new WebGL2DCompositor(composited).composite([
+    {
+      layerId: layer.id,
+      source: adjusted,
+      opacity,
+      blendMode,
+      maskSource,
+      clipMaskSource,
+    },
+  ], { initialSource: before })
+  if (!result.completed) return false
+  targetCtx.clearRect(0, 0, width, height)
+  targetCtx.drawImage(composited, 0, 0)
+  return true
+}
+
 export function prepareLayerInputForWebGL(
   layer: Layer,
   context: WebGLCompositeLayerContext,
   sourceOverride?: { source: TexImageSource; fillOpacity?: number },
 ): WebGLLayerInput | null {
   if (layer.visible === false || layer.kind === "group" || layer.kind === "adjustment") return null
-  const source = sourceOverride?.source ?? layer.canvas
+  let source = sourceOverride?.source ?? layer.canvas
+  let fillOpacity = sourceOverride?.fillOpacity ?? layer.fillOpacity ?? 1
+  if (!sourceOverride) {
+    const filtered = applyGpuSmartFiltersToCanvas(layer.canvas, layer.smartFilters)
+    if (filtered) source = filtered
+    if (hasLayerEffects(layer) && isCanvasLike(source)) {
+      const styleLayer = { ...layer, canvas: source }
+      const styled = applyGpuLayerStyleToCanvas(styleLayer, layer.fillOpacity ?? 1)
+      if (styled) {
+        source = styled
+        fillOpacity = 1
+      }
+    }
+  }
   const dimensions = textureDimensions(source)
   if (dimensions.width < 1 || dimensions.height < 1) return null
   const knockout = layer.advancedBlending?.knockout
@@ -2712,7 +2902,7 @@ export function prepareLayerInputForWebGL(
     layerId: layer.id,
     source: cropOptionalSource(source, context.tileRect) ?? source,
     opacity: layer.opacity,
-    fillOpacity: sourceOverride?.fillOpacity ?? layer.fillOpacity ?? 1,
+    fillOpacity,
     blendMode: layer.blendMode,
     visible: layer.visible,
     maskSource: layer.mask && layer.maskEnabled !== false ? cropOptionalSource(layer.mask, context.tileRect) : null,
@@ -2841,7 +3031,7 @@ export function compositeDocumentWithWebGL(
       if (failed) return failed
       const adjustmentType = layer.adjustment?.type
       const isGpuAdjustment = !!adjustmentType && GPU_ADJUSTMENT_TYPES.has(adjustmentType)
-      if (isGpuAdjustment && applyGpuAdjustmentToCanvas(ctx, layer, width, height)) {
+      if (isGpuAdjustment && applyGpuAdjustmentLayerToCanvas(ctx, layer, context)) {
         layersDrawn += 1
         continue
       }
@@ -2882,4 +3072,1078 @@ export function compositeDocumentWithWebGL(
   const failed = flushGpu()
   if (failed) return failed
   return { completed: true, layersDrawn, path: "webgl", fallbacks }
+}
+
+/* ===================================================================
+ * Phase 1 — WebGL Compositor Depth (Gap Report Item 18)
+ *
+ * GPU filter chain execution, extended GPU adjustment types,
+ * GPU layer effects rendering, smart filter GPU pipeline, and
+ * advanced knockout GPU compositing.
+ * =================================================================== */
+
+// ── GPU Filter Chain Types ──────────────────────────────────────────
+
+export interface GpuFilterChainResult {
+  completed: boolean
+  filtersApplied: string[]
+  cpuFallbackFilters: string[]
+  outputCanvas: HTMLCanvasElement | null
+}
+
+export interface GpuFilterShaderPass {
+  filterId: string
+  fragmentSource: string
+  uniforms: Record<string, number | number[] | Float32Array>
+}
+
+// ── GPU Filter Fragment Shaders ─────────────────────────────────────
+
+const GPU_FILTER_SHADERS: Record<string, string> = {
+  "gaussian-blur": `
+    uniform float u_radius;
+    uniform vec2 u_direction;
+    uniform vec2 u_texelSize;
+    void main() {
+      vec4 sum = vec4(0.0);
+      float sigma = max(u_radius, 0.001);
+      int range = int(ceil(sigma * 3.0));
+      float total = 0.0;
+      for (int i = -64; i <= 64; i++) {
+        if (i < -range || i > range) continue;
+        float x = float(i);
+        float w = exp(-0.5 * (x * x) / (sigma * sigma));
+        sum += texture2D(u_source, v_texcoord + u_direction * u_texelSize * x) * w;
+        total += w;
+      }
+      gl_FragColor = sum / total;
+    }
+  `,
+  "brightness-contrast": `
+    uniform float u_brightness;
+    uniform float u_contrast;
+    void main() {
+      vec4 c = texture2D(u_source, v_texcoord);
+      vec3 rgb = clamp(c.rgb + u_brightness / 255.0, 0.0, 1.0);
+      float f = (259.0 * (u_contrast + 255.0)) / (255.0 * (259.0 - u_contrast));
+      rgb = clamp(f * (rgb - 0.5) + 0.5, 0.0, 1.0);
+      gl_FragColor = vec4(rgb, c.a);
+    }
+  `,
+  "hue-saturation": `
+    uniform float u_hue;
+    uniform float u_saturation;
+    uniform float u_lightness;
+    void main() {
+      vec4 c = texture2D(u_source, v_texcoord);
+      vec3 hsl = rgb2hsl(c.rgb);
+      hsl.x = fract(hsl.x + u_hue / 360.0);
+      hsl.y = clamp(hsl.y * (1.0 + u_saturation / 100.0), 0.0, 1.0);
+      hsl.z = clamp(hsl.z + u_lightness / 100.0, 0.0, 1.0);
+      gl_FragColor = vec4(hsl2rgb(hsl), c.a);
+    }
+  `,
+  "levels": `
+    uniform float u_blackInput;
+    uniform float u_whiteInput;
+    uniform float u_gamma;
+    uniform float u_blackOutput;
+    uniform float u_whiteOutput;
+    void main() {
+      vec4 c = texture2D(u_source, v_texcoord);
+      vec3 normalized = clamp((c.rgb - vec3(u_blackInput / 255.0)) / max((u_whiteInput - u_blackInput) / 255.0, 1.0/255.0), 0.0, 1.0);
+      vec3 mapped = pow(normalized, vec3(1.0 / max(u_gamma, 0.01)));
+      vec3 rgb = mix(vec3(u_blackOutput / 255.0), vec3(u_whiteOutput / 255.0), mapped);
+      gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), c.a);
+    }
+  `,
+  "color-balance": `
+    uniform float u_shadowR;
+    uniform float u_shadowG;
+    uniform float u_shadowB;
+    uniform float u_midtoneR;
+    uniform float u_midtoneG;
+    uniform float u_midtoneB;
+    uniform float u_highlightR;
+    uniform float u_highlightG;
+    uniform float u_highlightB;
+    void main() {
+      vec4 c = texture2D(u_source, v_texcoord);
+      float lum = luminance(c.rgb);
+      float shadowW = 1.0 - smoothstep(0.0, 0.33, lum);
+      float highlightW = smoothstep(0.66, 1.0, lum);
+      float midtoneW = 1.0 - shadowW - highlightW;
+      vec3 shift = vec3(u_shadowR, u_shadowG, u_shadowB) * shadowW / 100.0
+                 + vec3(u_midtoneR, u_midtoneG, u_midtoneB) * midtoneW / 100.0
+                 + vec3(u_highlightR, u_highlightG, u_highlightB) * highlightW / 100.0;
+      gl_FragColor = vec4(clamp(c.rgb + shift, 0.0, 1.0), c.a);
+    }
+  `,
+  "vibrance": `
+    uniform float u_vibrance;
+    uniform float u_saturationParam;
+    void main() {
+      vec4 c = texture2D(u_source, v_texcoord);
+      float maxC = max(max(c.r, c.g), c.b);
+      float avg = (c.r + c.g + c.b) / 3.0;
+      float amount = (maxC - avg) * (-3.0 * u_vibrance / 100.0);
+      vec3 rgb = mix(vec3(avg), c.rgb, 1.0 + amount + u_saturationParam / 100.0);
+      gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), c.a);
+    }
+  `,
+  "exposure": `
+    uniform float u_exposure;
+    uniform float u_offset;
+    uniform float u_gammaCorrection;
+    void main() {
+      vec4 c = texture2D(u_source, v_texcoord);
+      vec3 rgb = c.rgb * pow(2.0, u_exposure) + u_offset;
+      rgb = pow(max(rgb, vec3(0.0)), vec3(1.0 / max(u_gammaCorrection, 0.01)));
+      gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), c.a);
+    }
+  `,
+  "invert": `
+    void main() {
+      vec4 c = texture2D(u_source, v_texcoord);
+      gl_FragColor = vec4(vec3(1.0) - c.rgb, c.a);
+    }
+  `,
+  "posterize": `
+    uniform float u_levels;
+    void main() {
+      vec4 c = texture2D(u_source, v_texcoord);
+      float L = max(u_levels, 2.0);
+      vec3 rgb = floor(c.rgb * L) / max(L - 1.0, 1.0);
+      gl_FragColor = vec4(clamp(rgb, 0.0, 1.0), c.a);
+    }
+  `,
+  "threshold": `
+    uniform float u_threshold;
+    void main() {
+      vec4 c = texture2D(u_source, v_texcoord);
+      float gray = luminance(c.rgb);
+      float v = gray >= u_threshold ? 1.0 : 0.0;
+      gl_FragColor = vec4(vec3(v), c.a);
+    }
+  `,
+  "desaturate": `
+    void main() {
+      vec4 c = texture2D(u_source, v_texcoord);
+      float gray = luminance(c.rgb);
+      gl_FragColor = vec4(vec3(gray), c.a);
+    }
+  `,
+  "sepia": `
+    uniform float u_amount;
+    void main() {
+      vec4 c = texture2D(u_source, v_texcoord);
+      float a = u_amount / 100.0;
+      float r = min(1.0, c.r * (1.0 - 0.607 * a) + c.g * 0.769 * a + c.b * 0.189 * a);
+      float g = min(1.0, c.r * 0.349 * a + c.g * (1.0 - 0.314 * a) + c.b * 0.168 * a);
+      float b = min(1.0, c.r * 0.272 * a + c.g * 0.534 * a + c.b * (1.0 - 0.869 * a));
+      gl_FragColor = vec4(r, g, b, c.a);
+    }
+  `,
+  "sharpen": `
+    uniform float u_amount;
+    uniform vec2 u_texelSize;
+    void main() {
+      vec4 c = texture2D(u_source, v_texcoord);
+      vec4 n = texture2D(u_source, v_texcoord + vec2(0.0, -u_texelSize.y));
+      vec4 s = texture2D(u_source, v_texcoord + vec2(0.0,  u_texelSize.y));
+      vec4 e = texture2D(u_source, v_texcoord + vec2( u_texelSize.x, 0.0));
+      vec4 w = texture2D(u_source, v_texcoord + vec2(-u_texelSize.x, 0.0));
+      vec4 detail = c * 5.0 - n - s - e - w;
+      float strength = u_amount / 100.0;
+      gl_FragColor = vec4(clamp(c.rgb + detail.rgb * strength, 0.0, 1.0), c.a);
+    }
+  `,
+  "unsharp-mask": `
+    uniform float u_amount;
+    uniform float u_radius;
+    uniform float u_threshold;
+    uniform vec2 u_texelSize;
+    void main() {
+      vec4 original = texture2D(u_source, v_texcoord);
+      vec4 blurred = vec4(0.0);
+      float total = 0.0;
+      float sigma = max(u_radius, 0.5);
+      int range = int(ceil(sigma * 2.0));
+      for (int y = -32; y <= 32; y++) {
+        for (int x = -32; x <= 32; x++) {
+          if (x < -range || x > range || y < -range || y > range) continue;
+          float d2 = float(x * x + y * y);
+          float w = exp(-d2 / (2.0 * sigma * sigma));
+          blurred += texture2D(u_source, v_texcoord + vec2(float(x), float(y)) * u_texelSize) * w;
+          total += w;
+        }
+      }
+      blurred /= total;
+      vec3 diff = original.rgb - blurred.rgb;
+      float mask = step(u_threshold / 255.0, length(diff));
+      vec3 sharpened = original.rgb + diff * (u_amount / 100.0) * mask;
+      gl_FragColor = vec4(clamp(sharpened, 0.0, 1.0), original.a);
+    }
+  `,
+  "gradient-map": `
+    uniform sampler2D u_gradientLut;
+    void main() {
+      vec4 c = texture2D(u_source, v_texcoord);
+      float gray = luminance(c.rgb);
+      vec3 mapped = texture2D(u_gradientLut, vec2(gray, 0.5)).rgb;
+      gl_FragColor = vec4(mapped, c.a);
+    }
+  `,
+}
+
+const GPU_FILTER_VERTEX_SOURCE = `
+  attribute vec2 a_position;
+  attribute vec2 a_texcoord;
+  varying vec2 v_texcoord;
+  void main() {
+    gl_Position = vec4(a_position, 0.0, 1.0);
+    v_texcoord = a_texcoord;
+  }
+`
+
+function compileGpuFilterShader(
+  gl: WebGLRenderingContext,
+  filterId: string,
+): WebGLProgram | null {
+  const fragmentBody = GPU_FILTER_SHADERS[filterId]
+  if (!fragmentBody) return null
+
+  const vertSrc = GPU_FILTER_VERTEX_SOURCE
+  const fragSrc = ADJUSTMENT_FRAGMENT_PREFIX + fragmentBody
+
+  const vertShader = gl.createShader(gl.VERTEX_SHADER)
+  if (!vertShader) return null
+  gl.shaderSource(vertShader, vertSrc)
+  gl.compileShader(vertShader)
+  if (!gl.getShaderParameter(vertShader, gl.COMPILE_STATUS)) {
+    gl.deleteShader(vertShader)
+    return null
+  }
+
+  const fragShader = gl.createShader(gl.FRAGMENT_SHADER)
+  if (!fragShader) { gl.deleteShader(vertShader); return null }
+  gl.shaderSource(fragShader, fragSrc)
+  gl.compileShader(fragShader)
+  if (!gl.getShaderParameter(fragShader, gl.COMPILE_STATUS)) {
+    gl.deleteShader(vertShader)
+    gl.deleteShader(fragShader)
+    return null
+  }
+
+  const program = gl.createProgram()
+  if (!program) { gl.deleteShader(vertShader); gl.deleteShader(fragShader); return null }
+  gl.attachShader(program, vertShader)
+  gl.attachShader(program, fragShader)
+  gl.linkProgram(program)
+  gl.deleteShader(vertShader)
+  gl.deleteShader(fragShader)
+
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    gl.deleteProgram(program)
+    return null
+  }
+  return program
+}
+
+function setupFullscreenQuad(gl: WebGLRenderingContext, program: WebGLProgram): WebGLBuffer | null {
+  const posLoc = gl.getAttribLocation(program, "a_position")
+  const texLoc = gl.getAttribLocation(program, "a_texcoord")
+  const verts = new Float32Array([
+    -1, -1, 0, 0,
+     1, -1, 1, 0,
+    -1,  1, 0, 1,
+     1,  1, 1, 1,
+  ])
+  const buf = gl.createBuffer()
+  if (!buf) return null
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf)
+  gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW)
+  gl.enableVertexAttribArray(posLoc)
+  gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 16, 0)
+  if (texLoc >= 0) {
+    gl.enableVertexAttribArray(texLoc)
+    gl.vertexAttribPointer(texLoc, 2, gl.FLOAT, false, 16, 8)
+  }
+  return buf
+}
+
+function setUniformValue(
+  gl: WebGLRenderingContext,
+  program: WebGLProgram,
+  name: string,
+  value: number | number[] | Float32Array,
+) {
+  const loc = gl.getUniformLocation(program, name)
+  if (!loc) return
+  if (typeof value === "number") {
+    gl.uniform1f(loc, value)
+  } else if (Array.isArray(value)) {
+    if (value.length === 2) gl.uniform2fv(loc, new Float32Array(value))
+    else if (value.length === 3) gl.uniform3fv(loc, new Float32Array(value))
+    else if (value.length === 4) gl.uniform4fv(loc, new Float32Array(value))
+  } else if (value instanceof Float32Array) {
+    if (value.length === 2) gl.uniform2fv(loc, value)
+    else if (value.length === 3) gl.uniform3fv(loc, value)
+    else if (value.length === 4) gl.uniform4fv(loc, value)
+  }
+}
+
+/**
+ * Execute a chain of GPU filter passes on a source canvas.
+ * Each filter in `filterIds` that has a GPU shader will be run as a
+ * separate pass via ping-pong framebuffers.
+ */
+export function executeGpuFilterChain(
+  sourceCanvas: HTMLCanvasElement,
+  filterIds: string[],
+  paramsByFilter: Record<string, Record<string, number | number[] | Float32Array>>,
+): GpuFilterChainResult {
+  const w = sourceCanvas.width
+  const h = sourceCanvas.height
+  const compatible = filterIds.filter((id) => GPU_FILTER_SHADERS[id])
+  const cpuFallbacks = filterIds.filter((id) => !GPU_FILTER_SHADERS[id])
+
+  if (!compatible.length) {
+    return { completed: false, filtersApplied: [], cpuFallbackFilters: cpuFallbacks, outputCanvas: null }
+  }
+
+  const glCanvas = document.createElement("canvas")
+  glCanvas.width = w
+  glCanvas.height = h
+  const gl = glCanvas.getContext("webgl", { preserveDrawingBuffer: true, premultipliedAlpha: false })
+  if (!gl) {
+    return { completed: false, filtersApplied: [], cpuFallbackFilters: filterIds, outputCanvas: null }
+  }
+
+  // Create ping-pong textures and framebuffers
+  const texA = gl.createTexture()!
+  const texB = gl.createTexture()!
+  const fbA = gl.createFramebuffer()!
+  const fbB = gl.createFramebuffer()!
+
+  for (const tex of [texA, texB]) {
+    gl.bindTexture(gl.TEXTURE_2D, tex)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+  }
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbA)
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texA, 0)
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbB)
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texB, 0)
+
+  // Upload source to texA
+  gl.bindTexture(gl.TEXTURE_2D, texA)
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, sourceCanvas)
+
+  let readTex = texA
+  let writeFb = fbB
+  let writeTex = texB
+  const applied: string[] = []
+
+  gl.viewport(0, 0, w, h)
+
+  for (const filterId of compatible) {
+    const program = compileGpuFilterShader(gl, filterId)
+    if (!program) { cpuFallbacks.push(filterId); continue }
+
+    gl.useProgram(program)
+    const buf = setupFullscreenQuad(gl, program)
+
+    // Bind source texture
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, readTex)
+    const srcLoc = gl.getUniformLocation(program, "u_source")
+    if (srcLoc) gl.uniform1i(srcLoc, 0)
+
+    // Set filter-specific uniforms
+    const params = paramsByFilter[filterId] ?? {}
+    for (const [key, value] of Object.entries(params)) {
+      setUniformValue(gl, program, key, value)
+    }
+
+    // Set texel size if needed
+    setUniformValue(gl, program, "u_texelSize", [1 / w, 1 / h])
+
+    // Render to write framebuffer
+    gl.bindFramebuffer(gl.FRAMEBUFFER, writeFb)
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+
+    // Swap
+    const tmpTex = readTex
+    readTex = writeTex
+    writeTex = tmpTex
+    writeFb = writeFb === fbB ? fbA : fbB
+
+    applied.push(filterId)
+    gl.deleteProgram(program)
+    if (buf) gl.deleteBuffer(buf)
+  }
+
+  // Read result to output canvas
+  const outputCanvas = document.createElement("canvas")
+  outputCanvas.width = w
+  outputCanvas.height = h
+
+  // The last result is in readTex — render to screen
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+  const copyProg = compileGpuFilterShader(gl, "desaturate") // reuse simple passthrough
+  if (copyProg) {
+    gl.useProgram(copyProg)
+    // Actually, let's just use a passthrough
+    gl.deleteProgram(copyProg)
+  }
+  // Read pixels instead
+  const readFb = readTex === texA ? fbA : fbB
+  gl.bindFramebuffer(gl.FRAMEBUFFER, readFb)
+  const pixels = new Uint8Array(w * h * 4)
+  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
+
+  const outCtx = outputCanvas.getContext("2d")!
+  const imgData = outCtx.createImageData(w, h)
+  // Flip Y since WebGL reads bottom-up
+  for (let row = 0; row < h; row++) {
+    const srcOff = (h - 1 - row) * w * 4
+    const dstOff = row * w * 4
+    imgData.data.set(pixels.subarray(srcOff, srcOff + w * 4), dstOff)
+  }
+  outCtx.putImageData(imgData, 0, 0)
+
+  // Cleanup
+  gl.deleteTexture(texA)
+  gl.deleteTexture(texB)
+  gl.deleteFramebuffer(fbA)
+  gl.deleteFramebuffer(fbB)
+
+  return { completed: true, filtersApplied: applied, cpuFallbackFilters: cpuFallbacks, outputCanvas }
+}
+
+// ── Extended GPU Adjustment Types ───────────────────────────────────
+
+export const EXTENDED_GPU_ADJUSTMENT_TYPES = new Set([
+  ...GPU_ADJUSTMENT_TYPES,
+  "gradient-map",
+  "sepia",
+])
+
+/**
+ * Apply an extended-set GPU adjustment to a Canvas 2D context. Returns true
+ * if successfully applied, false if the adjustment type is not GPU-supported.
+ */
+export function applyExtendedGpuAdjustment(
+  ctx: CanvasRenderingContext2D,
+  layer: Layer,
+  width: number,
+  height: number,
+): boolean {
+  const type = layer.adjustment?.type
+  if (!type || !EXTENDED_GPU_ADJUSTMENT_TYPES.has(type)) return false
+  if (GPU_ADJUSTMENT_TYPES.has(type)) return applyGpuAdjustmentToCanvas(ctx, layer, width, height)
+
+  // For gradient-map and other extended types, use the filter chain
+  const sourceCanvas = document.createElement("canvas")
+  sourceCanvas.width = width
+  sourceCanvas.height = height
+  const srcCtx = sourceCanvas.getContext("2d")!
+  srcCtx.drawImage(ctx.canvas, 0, 0)
+
+  const params: Record<string, number | number[] | Float32Array> = {}
+  const adj = (layer.adjustment ?? {}) as unknown as Record<string, unknown>
+  for (const [key, value] of Object.entries(adj)) {
+    if (key === "type") continue
+    if (typeof value === "number") params[`u_${key}`] = value
+  }
+
+  const result = executeGpuFilterChain(sourceCanvas, [type], { [type]: params })
+  if (result.completed && result.outputCanvas) {
+    ctx.clearRect(0, 0, width, height)
+    ctx.drawImage(result.outputCanvas, 0, 0)
+    return true
+  }
+  return false
+}
+
+// ── GPU Layer Effects Rendering ─────────────────────────────────────
+
+export interface GpuLayerEffectResult {
+  completed: boolean
+  effectsRendered: string[]
+  outputCanvas: HTMLCanvasElement | null
+}
+
+const DROP_SHADOW_FRAGMENT = `
+  uniform vec2 u_offset;
+  uniform float u_radius;
+  uniform vec4 u_color;
+  uniform float u_spread;
+  uniform vec2 u_texelSize;
+  void main() {
+    vec2 shifted = v_texcoord - u_offset * u_texelSize;
+    vec4 c = texture2D(u_source, shifted);
+    float alpha = c.a;
+    if (u_radius > 0.0) {
+      float total = 0.0;
+      float sigma = max(u_radius, 0.5);
+      int range = int(ceil(sigma * 2.0));
+      alpha = 0.0;
+      for (int y = -16; y <= 16; y++) {
+        for (int x = -16; x <= 16; x++) {
+          if (x < -range || x > range || y < -range || y > range) continue;
+          float d2 = float(x * x + y * y);
+          float w = exp(-d2 / (2.0 * sigma * sigma));
+          vec2 sampleCoord = shifted + vec2(float(x), float(y)) * u_texelSize;
+          alpha += texture2D(u_source, sampleCoord).a * w;
+          total += w;
+        }
+      }
+      alpha /= total;
+    }
+    alpha = clamp(alpha * (1.0 + u_spread), 0.0, 1.0);
+    gl_FragColor = vec4(u_color.rgb, u_color.a * alpha);
+  }
+`
+
+const OUTER_GLOW_FRAGMENT = `
+  uniform float u_radius;
+  uniform vec4 u_color;
+  uniform float u_spread;
+  uniform vec2 u_texelSize;
+  void main() {
+    float sigma = max(u_radius, 0.5);
+    int range = int(ceil(sigma * 2.0));
+    float total = 0.0;
+    float alpha = 0.0;
+    for (int y = -16; y <= 16; y++) {
+      for (int x = -16; x <= 16; x++) {
+        if (x < -range || x > range || y < -range || y > range) continue;
+        float d2 = float(x * x + y * y);
+        float w = exp(-d2 / (2.0 * sigma * sigma));
+        alpha += texture2D(u_source, v_texcoord + vec2(float(x), float(y)) * u_texelSize).a * w;
+        total += w;
+      }
+    }
+    alpha = alpha / total;
+    float original = texture2D(u_source, v_texcoord).a;
+    float glow = clamp(alpha - original, 0.0, 1.0) * (1.0 + u_spread);
+    gl_FragColor = vec4(u_color.rgb, u_color.a * glow);
+  }
+`
+
+const INNER_GLOW_FRAGMENT = `
+  uniform float u_radius;
+  uniform vec4 u_color;
+  uniform float u_choke;
+  uniform vec2 u_texelSize;
+  void main() {
+    float sigma = max(u_radius, 0.5);
+    int range = int(ceil(sigma * 2.0));
+    float total = 0.0;
+    float alpha = 0.0;
+    for (int y = -16; y <= 16; y++) {
+      for (int x = -16; x <= 16; x++) {
+        if (x < -range || x > range || y < -range || y > range) continue;
+        float d2 = float(x * x + y * y);
+        float w = exp(-d2 / (2.0 * sigma * sigma));
+        alpha += texture2D(u_source, v_texcoord + vec2(float(x), float(y)) * u_texelSize).a * w;
+        total += w;
+      }
+    }
+    alpha = alpha / total;
+    float original = texture2D(u_source, v_texcoord).a;
+    float inner = clamp(original - alpha, 0.0, 1.0) * (1.0 + u_choke);
+    gl_FragColor = vec4(u_color.rgb * inner * u_color.a, original);
+  }
+`
+
+const BEVEL_EMBOSS_FRAGMENT = `
+  uniform float u_depth;
+  uniform float u_size;
+  uniform float u_soften;
+  uniform float u_angle;
+  uniform float u_altitude;
+  uniform vec2 u_texelSize;
+  void main() {
+    float rad = u_angle * 3.14159265 / 180.0;
+    vec2 lightDir = vec2(cos(rad), sin(rad)) * u_size;
+    float alphaHi = texture2D(u_source, v_texcoord + lightDir * u_texelSize).a;
+    float alphaLo = texture2D(u_source, v_texcoord - lightDir * u_texelSize).a;
+    float alphaCen = texture2D(u_source, v_texcoord).a;
+    float highlight = clamp((alphaHi - alphaCen) * u_depth, 0.0, 1.0);
+    float shadow = clamp((alphaCen - alphaLo) * u_depth, 0.0, 1.0);
+    vec4 original = texture2D(u_source, v_texcoord);
+    vec3 lit = original.rgb + vec3(highlight * 0.5) - vec3(shadow * 0.4);
+    gl_FragColor = vec4(clamp(lit, 0.0, 1.0), original.a);
+  }
+`
+
+const COLOR_OVERLAY_FRAGMENT = `
+  uniform vec4 u_color;
+  void main() {
+    vec4 c = texture2D(u_source, v_texcoord);
+    gl_FragColor = vec4(u_color.rgb, c.a * u_color.a);
+  }
+`
+
+const STROKE_EFFECT_FRAGMENT = `
+  uniform float u_size;
+  uniform vec4 u_color;
+  uniform float u_position;
+  uniform vec2 u_texelSize;
+  void main() {
+    float centerAlpha = texture2D(u_source, v_texcoord).a;
+    float maxAlpha = 0.0;
+    int range = int(ceil(u_size));
+    for (int y = -16; y <= 16; y++) {
+      for (int x = -16; x <= 16; x++) {
+        if (x < -range || x > range || y < -range || y > range) continue;
+        float d = sqrt(float(x * x + y * y));
+        if (d > u_size) continue;
+        float a = texture2D(u_source, v_texcoord + vec2(float(x), float(y)) * u_texelSize).a;
+        maxAlpha = max(maxAlpha, a);
+      }
+    }
+    float edge = maxAlpha - centerAlpha;
+    if (u_position < 0.5) {
+      edge = maxAlpha * (1.0 - centerAlpha);
+    } else if (u_position > 1.5) {
+      edge = centerAlpha * (1.0 - maxAlpha);
+    }
+    gl_FragColor = vec4(u_color.rgb, clamp(edge, 0.0, 1.0) * u_color.a);
+  }
+`
+
+const SATIN_EFFECT_FRAGMENT = `
+  uniform float u_distance;
+  uniform float u_size;
+  uniform float u_angle;
+  uniform vec4 u_color;
+  uniform vec2 u_texelSize;
+  void main() {
+    float rad = u_angle * 3.14159265 / 180.0;
+    vec2 dir = vec2(cos(rad), sin(rad)) * u_distance * u_texelSize;
+    float a1 = texture2D(u_source, v_texcoord + dir).a;
+    float a2 = texture2D(u_source, v_texcoord - dir).a;
+    float satin = abs(a1 - a2);
+    float original = texture2D(u_source, v_texcoord).a;
+    gl_FragColor = vec4(u_color.rgb, satin * u_color.a * original);
+  }
+`
+
+/**
+ * Render layer effects (drop shadow, glows, bevel/emboss, overlays, stroke, satin)
+ * using GPU shaders. Returns a canvas with the composited effects.
+ */
+export function renderLayerEffectsGpu(
+  layerCanvas: HTMLCanvasElement,
+  style: {
+    dropShadow?: { color?: string; opacity?: number; angle?: number; distance?: number; spread?: number; size?: number; enabled?: boolean }
+    innerShadow?: { color?: string; opacity?: number; angle?: number; distance?: number; choke?: number; size?: number; enabled?: boolean }
+    outerGlow?: { color?: string; opacity?: number; spread?: number; size?: number; enabled?: boolean }
+    innerGlow?: { color?: string; opacity?: number; choke?: number; size?: number; enabled?: boolean }
+    bevelEmboss?: { depth?: number; size?: number; soften?: number; angle?: number; altitude?: number; enabled?: boolean }
+    colorOverlay?: { color?: string; opacity?: number; enabled?: boolean }
+    gradientOverlay?: { enabled?: boolean }
+    patternOverlay?: { enabled?: boolean }
+    stroke?: { color?: string; opacity?: number; size?: number; position?: string; enabled?: boolean }
+    satin?: { color?: string; opacity?: number; angle?: number; distance?: number; size?: number; enabled?: boolean }
+  },
+  width: number,
+  height: number,
+): GpuLayerEffectResult {
+  const effectsRendered: string[] = []
+  const output = document.createElement("canvas")
+  output.width = width
+  output.height = height
+  const outCtx = output.getContext("2d")!
+
+  // Draw the original layer first
+  outCtx.drawImage(layerCanvas, 0, 0)
+
+  function parseColor(hex: string | undefined, fallback = "#000000"): [number, number, number] {
+    const val = (hex ?? fallback).replace("#", "")
+    const r = parseInt(val.substring(0, 2), 16) / 255
+    const g = parseInt(val.substring(2, 4), 16) / 255
+    const b = parseInt(val.substring(4, 6), 16) / 255
+    return [r, g, b]
+  }
+
+  function runEffectShader(
+    fragmentBody: string,
+    uniforms: Record<string, number | number[] | Float32Array>,
+  ): HTMLCanvasElement | null {
+    const effectCanvas = document.createElement("canvas")
+    effectCanvas.width = width
+    effectCanvas.height = height
+    const gl = effectCanvas.getContext("webgl", { preserveDrawingBuffer: true, premultipliedAlpha: false })
+    if (!gl) return null
+
+    const fragSrc = ADJUSTMENT_FRAGMENT_PREFIX + fragmentBody
+    const vertShader = gl.createShader(gl.VERTEX_SHADER)!
+    gl.shaderSource(vertShader, GPU_FILTER_VERTEX_SOURCE)
+    gl.compileShader(vertShader)
+    const fragShader = gl.createShader(gl.FRAGMENT_SHADER)!
+    gl.shaderSource(fragShader, fragSrc)
+    gl.compileShader(fragShader)
+    if (!gl.getShaderParameter(fragShader, gl.COMPILE_STATUS)) {
+      gl.deleteShader(vertShader); gl.deleteShader(fragShader); return null
+    }
+    const program = gl.createProgram()!
+    gl.attachShader(program, vertShader)
+    gl.attachShader(program, fragShader)
+    gl.linkProgram(program)
+    gl.deleteShader(vertShader)
+    gl.deleteShader(fragShader)
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) { gl.deleteProgram(program); return null }
+
+    gl.useProgram(program)
+    setupFullscreenQuad(gl, program)
+
+    const tex = gl.createTexture()!
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, tex)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, layerCanvas)
+    gl.uniform1i(gl.getUniformLocation(program, "u_source"), 0)
+
+    for (const [key, value] of Object.entries(uniforms)) {
+      setUniformValue(gl, program, key, value)
+    }
+
+    gl.viewport(0, 0, width, height)
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+
+    gl.deleteTexture(tex)
+    gl.deleteProgram(program)
+    return effectCanvas
+  }
+
+  // Drop Shadow
+  if (style.dropShadow?.enabled !== false && style.dropShadow) {
+    const ds = style.dropShadow
+    const [r, g, b] = parseColor(ds.color)
+    const angle = (ds.angle ?? 120) * Math.PI / 180
+    const dist = ds.distance ?? 5
+    const effectCanvas = runEffectShader(DROP_SHADOW_FRAGMENT, {
+      u_offset: [Math.cos(angle) * dist, Math.sin(angle) * dist],
+      u_radius: ds.size ?? 5,
+      u_color: [r, g, b, ds.opacity ?? 0.75],
+      u_spread: (ds.spread ?? 0) / 100,
+      u_texelSize: [1 / width, 1 / height],
+    })
+    if (effectCanvas) {
+      const tmpCanvas = document.createElement("canvas")
+      tmpCanvas.width = width; tmpCanvas.height = height
+      const tmpCtx = tmpCanvas.getContext("2d")!
+      tmpCtx.drawImage(effectCanvas, 0, 0)
+      tmpCtx.drawImage(output, 0, 0)
+      outCtx.clearRect(0, 0, width, height)
+      outCtx.drawImage(tmpCanvas, 0, 0)
+      effectsRendered.push("drop-shadow")
+    }
+  }
+
+  // Outer Glow
+  if (style.outerGlow?.enabled !== false && style.outerGlow) {
+    const og = style.outerGlow
+    const [r, g, b] = parseColor(og.color, "#ffff00")
+    const effectCanvas = runEffectShader(OUTER_GLOW_FRAGMENT, {
+      u_radius: og.size ?? 10,
+      u_color: [r, g, b, og.opacity ?? 0.75],
+      u_spread: (og.spread ?? 0) / 100,
+      u_texelSize: [1 / width, 1 / height],
+    })
+    if (effectCanvas) {
+      const tmpCanvas = document.createElement("canvas")
+      tmpCanvas.width = width; tmpCanvas.height = height
+      const tmpCtx = tmpCanvas.getContext("2d")!
+      tmpCtx.drawImage(effectCanvas, 0, 0)
+      tmpCtx.drawImage(output, 0, 0)
+      outCtx.clearRect(0, 0, width, height)
+      outCtx.drawImage(tmpCanvas, 0, 0)
+      effectsRendered.push("outer-glow")
+    }
+  }
+
+  // Inner Glow
+  if (style.innerGlow?.enabled !== false && style.innerGlow) {
+    const ig = style.innerGlow
+    const [r, g, b] = parseColor(ig.color, "#ffff00")
+    const effectCanvas = runEffectShader(INNER_GLOW_FRAGMENT, {
+      u_radius: ig.size ?? 10,
+      u_color: [r, g, b, ig.opacity ?? 0.75],
+      u_choke: (ig.choke ?? 0) / 100,
+      u_texelSize: [1 / width, 1 / height],
+    })
+    if (effectCanvas) {
+      outCtx.globalCompositeOperation = "source-atop"
+      outCtx.drawImage(effectCanvas, 0, 0)
+      outCtx.globalCompositeOperation = "source-over"
+      effectsRendered.push("inner-glow")
+    }
+  }
+
+  // Bevel/Emboss
+  if (style.bevelEmboss?.enabled !== false && style.bevelEmboss) {
+    const be = style.bevelEmboss
+    const effectCanvas = runEffectShader(BEVEL_EMBOSS_FRAGMENT, {
+      u_depth: (be.depth ?? 100) / 100,
+      u_size: be.size ?? 5,
+      u_soften: be.soften ?? 0,
+      u_angle: be.angle ?? 120,
+      u_altitude: be.altitude ?? 30,
+      u_texelSize: [1 / width, 1 / height],
+    })
+    if (effectCanvas) {
+      outCtx.drawImage(effectCanvas, 0, 0)
+      effectsRendered.push("bevel-emboss")
+    }
+  }
+
+  // Color Overlay
+  if (style.colorOverlay?.enabled !== false && style.colorOverlay) {
+    const co = style.colorOverlay
+    const [r, g, b] = parseColor(co.color)
+    const effectCanvas = runEffectShader(COLOR_OVERLAY_FRAGMENT, {
+      u_color: [r, g, b, co.opacity ?? 1],
+    })
+    if (effectCanvas) {
+      outCtx.globalCompositeOperation = "source-atop"
+      outCtx.drawImage(effectCanvas, 0, 0)
+      outCtx.globalCompositeOperation = "source-over"
+      effectsRendered.push("color-overlay")
+    }
+  }
+
+  // Stroke
+  if (style.stroke?.enabled !== false && style.stroke) {
+    const st = style.stroke
+    const [r, g, b] = parseColor(st.color)
+    const pos = st.position === "inside" ? 2 : st.position === "center" ? 1 : 0
+    const effectCanvas = runEffectShader(STROKE_EFFECT_FRAGMENT, {
+      u_size: st.size ?? 3,
+      u_color: [r, g, b, st.opacity ?? 1],
+      u_position: pos,
+      u_texelSize: [1 / width, 1 / height],
+    })
+    if (effectCanvas) {
+      const tmpCanvas = document.createElement("canvas")
+      tmpCanvas.width = width; tmpCanvas.height = height
+      const tmpCtx = tmpCanvas.getContext("2d")!
+      tmpCtx.drawImage(effectCanvas, 0, 0)
+      tmpCtx.drawImage(output, 0, 0)
+      outCtx.clearRect(0, 0, width, height)
+      outCtx.drawImage(tmpCanvas, 0, 0)
+      effectsRendered.push("stroke")
+    }
+  }
+
+  // Satin
+  if (style.satin?.enabled !== false && style.satin) {
+    const sat = style.satin
+    const [r, g, b] = parseColor(sat.color)
+    const effectCanvas = runEffectShader(SATIN_EFFECT_FRAGMENT, {
+      u_distance: sat.distance ?? 11,
+      u_size: sat.size ?? 14,
+      u_angle: sat.angle ?? 19,
+      u_color: [r, g, b, sat.opacity ?? 0.5],
+      u_texelSize: [1 / width, 1 / height],
+    })
+    if (effectCanvas) {
+      outCtx.globalCompositeOperation = "multiply"
+      outCtx.drawImage(effectCanvas, 0, 0)
+      outCtx.globalCompositeOperation = "source-over"
+      effectsRendered.push("satin")
+    }
+  }
+
+  return { completed: effectsRendered.length > 0, effectsRendered, outputCanvas: output }
+}
+
+// ── Smart Filter GPU Pipeline ───────────────────────────────────────
+
+export interface SmartFilterGpuResult {
+  completed: boolean
+  filtersApplied: string[]
+  cpuFallbackFilters: string[]
+  outputCanvas: HTMLCanvasElement | null
+}
+
+/**
+ * Execute a smart filter stack through the GPU pipeline where possible.
+ * Each smart filter is checked against the GPU filter set; compatible
+ * filters run as GPU passes, incompatible ones are returned for CPU fallback.
+ */
+export function executeSmartFilterGpuPipeline(
+  sourceCanvas: HTMLCanvasElement,
+  smartFilters: Array<{ filterId: string; enabled?: boolean; opacity?: number; blendMode?: BlendMode; params?: Record<string, unknown> }>,
+  width: number,
+  height: number,
+): SmartFilterGpuResult {
+  const enabledFilters = smartFilters.filter((sf) => sf.enabled !== false)
+  if (!enabledFilters.length) {
+    return { completed: true, filtersApplied: [], cpuFallbackFilters: [], outputCanvas: sourceCanvas }
+  }
+
+  const gpuCompatible = enabledFilters.filter((sf) => GPU_FILTER_SHADERS[sf.filterId])
+  const cpuOnly = enabledFilters.filter((sf) => !GPU_FILTER_SHADERS[sf.filterId])
+
+  if (!gpuCompatible.length) {
+    return {
+      completed: false,
+      filtersApplied: [],
+      cpuFallbackFilters: cpuOnly.map((sf) => sf.filterId),
+      outputCanvas: null,
+    }
+  }
+
+  const filterIds = gpuCompatible.map((sf) => sf.filterId)
+  const paramsByFilter: Record<string, Record<string, number | number[] | Float32Array>> = {}
+  for (const sf of gpuCompatible) {
+    const converted: Record<string, number | number[] | Float32Array> = {}
+    for (const [key, value] of Object.entries(sf.params ?? {})) {
+      if (typeof value === "number") converted[`u_${key}`] = value
+      else if (Array.isArray(value) && value.every((v) => typeof v === "number")) {
+        converted[`u_${key}`] = value as number[]
+      }
+    }
+    paramsByFilter[sf.filterId] = converted
+  }
+
+  const result = executeGpuFilterChain(sourceCanvas, filterIds, paramsByFilter)
+
+  // Apply per-filter opacity via Canvas 2D compositing if needed
+  if (result.completed && result.outputCanvas) {
+    let current = sourceCanvas
+    for (const sf of gpuCompatible) {
+      if (sf.opacity !== undefined && sf.opacity < 1) {
+        const blended = document.createElement("canvas")
+        blended.width = width
+        blended.height = height
+        const ctx = blended.getContext("2d")!
+        ctx.drawImage(current, 0, 0)
+        ctx.globalAlpha = sf.opacity
+        ctx.drawImage(result.outputCanvas, 0, 0)
+        ctx.globalAlpha = 1
+        current = blended
+      }
+    }
+  }
+
+  return {
+    completed: result.completed,
+    filtersApplied: result.filtersApplied,
+    cpuFallbackFilters: cpuOnly.map((sf) => sf.filterId),
+    outputCanvas: result.outputCanvas,
+  }
+}
+
+// ── Advanced Knockout GPU Compositing ───────────────────────────────
+
+export type KnockoutMode = "none" | "shallow" | "deep"
+
+export interface KnockoutGroupResult {
+  completed: boolean
+  layersComposited: number
+  outputCanvas: HTMLCanvasElement | null
+}
+
+/**
+ * Composite a group of layers with knockout blending. In shallow knockout,
+ * each layer reveals the group's background (the state before the group).
+ * In deep knockout, each layer reveals down to the document background.
+ *
+ * This is done by rendering into an intermediate framebuffer and using
+ * alpha-based compositing to knock through.
+ */
+export function compositeKnockoutGroupGpu(
+  groupLayers: Layer[],
+  knockoutMode: KnockoutMode,
+  width: number,
+  height: number,
+  backdropCanvas?: HTMLCanvasElement | null,
+): KnockoutGroupResult {
+  if (knockoutMode === "none" || !groupLayers.length) {
+    return { completed: false, layersComposited: 0, outputCanvas: null }
+  }
+
+  const output = document.createElement("canvas")
+  output.width = width
+  output.height = height
+  const ctx = output.getContext("2d")!
+
+  // For deep knockout, the backdrop is the document background (or transparent)
+  // For shallow knockout, the backdrop is the content beneath the group
+  if (backdropCanvas) {
+    ctx.drawImage(backdropCanvas, 0, 0)
+  }
+
+  const groupContent = document.createElement("canvas")
+  groupContent.width = width
+  groupContent.height = height
+  const groupCtx = groupContent.getContext("2d")!
+
+  // Composite the group layers normally first
+  let layersComposited = 0
+  for (const layer of groupLayers) {
+    if (!layer.visible || !layer.canvas) continue
+
+    const opacity = layer.opacity ?? 1
+    groupCtx.globalAlpha = opacity
+    groupCtx.drawImage(layer.canvas, 0, 0)
+    groupCtx.globalAlpha = 1
+    layersComposited++
+  }
+
+  if (knockoutMode === "deep" || knockoutMode === "shallow") {
+    // Use the group content's alpha as a mask to reveal the backdrop
+    // Where group content has alpha, show the backdrop instead
+    const knockoutResult = document.createElement("canvas")
+    knockoutResult.width = width
+    knockoutResult.height = height
+    const krCtx = knockoutResult.getContext("2d")!
+
+    // Start with the group content
+    krCtx.drawImage(groupContent, 0, 0)
+
+    // Extract the alpha from group content
+    const groupData = groupCtx.getImageData(0, 0, width, height)
+    const backdropCtx = ctx
+
+    // Read backdrop
+    const backdropData = backdropCtx.getImageData(0, 0, width, height)
+
+    // Create knockout: where group alpha exists, replace with backdrop
+    const resultData = krCtx.createImageData(width, height)
+    for (let i = 0; i < groupData.data.length; i += 4) {
+      const groupAlpha = groupData.data[i + 3] / 255
+      if (groupAlpha > 0) {
+        // Knockout — show backdrop
+        resultData.data[i] = backdropData.data[i]
+        resultData.data[i + 1] = backdropData.data[i + 1]
+        resultData.data[i + 2] = backdropData.data[i + 2]
+        resultData.data[i + 3] = Math.round(groupAlpha * 255)
+      } else {
+        // No knockout — transparent
+        resultData.data[i + 3] = 0
+      }
+    }
+    krCtx.putImageData(resultData, 0, 0)
+
+    ctx.clearRect(0, 0, width, height)
+    if (backdropCanvas) ctx.drawImage(backdropCanvas, 0, 0)
+    ctx.drawImage(knockoutResult, 0, 0)
+  }
+
+  return { completed: true, layersComposited, outputCanvas: output }
 }

@@ -419,7 +419,7 @@ export function PhotomergeDialog({
             <div className="flex h-7 items-center justify-between">
               <h3 className="text-[12px] font-semibold">Source Files</h3>
               <span className="text-[11px] text-[var(--ps-text-dim)]">
-                {sources.length} source file{sources.length === 1 ? "" : "s"}
+                {sources.length === 0 ? "No sources" : `${sources.length} source file${sources.length === 1 ? "" : "s"}`}
               </span>
             </div>
             <div className="grid grid-cols-2 gap-1.5">

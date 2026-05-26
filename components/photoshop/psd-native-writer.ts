@@ -400,7 +400,7 @@ export function writeNativeCompositePsd(
 }
 
 /* -------------------------------------------------------------------------- */
-/* Layered native PSD writer (high-bit Grayscale + RGB)                        */
+/* Layered native PSD writer (high-bit and non-RGB color modes)               */
 /* -------------------------------------------------------------------------- */
 
 // ag-psd's blendMode strings as recorded by Photoshop. Mirrored locally so we
@@ -478,6 +478,54 @@ interface PreparedLayer {
   channelInfo: Array<{ id: number; length: number }>
 }
 
+function layerChannelPlan(colorMode: PsdColorModeValue, image: HighBitImage): Array<{ id: number; sample: UnitSampler }> {
+  const r = (i: number) => sampleUnit(image, i, 0)
+  const g = (i: number) => sampleUnit(image, i, 1)
+  const b = (i: number) => sampleUnit(image, i, 2)
+  const a = (i: number) => sampleUnit(image, i, 3)
+  const gray = (i: number) => r(i) * 0.2126 + g(i) * 0.7152 + b(i) * 0.0722
+
+  switch (colorMode) {
+    case PSD_COLOR_MODE.CMYK:
+      return [
+        { id: 0, sample: (i) => rgbToCmyk(r(i), g(i), b(i))[0] },
+        { id: 1, sample: (i) => rgbToCmyk(r(i), g(i), b(i))[1] },
+        { id: 2, sample: (i) => rgbToCmyk(r(i), g(i), b(i))[2] },
+        { id: 3, sample: (i) => rgbToCmyk(r(i), g(i), b(i))[3] },
+        { id: -1, sample: a },
+      ]
+    case PSD_COLOR_MODE.Lab:
+      return [
+        { id: 0, sample: (i) => rgbToLabUnits(r(i), g(i), b(i))[0] },
+        { id: 1, sample: (i) => rgbToLabUnits(r(i), g(i), b(i))[1] },
+        { id: 2, sample: (i) => rgbToLabUnits(r(i), g(i), b(i))[2] },
+        { id: -1, sample: a },
+      ]
+    case PSD_COLOR_MODE.Multichannel:
+      return [
+        { id: 0, sample: r },
+        { id: 1, sample: g },
+        { id: 2, sample: b },
+        { id: -1, sample: a },
+      ]
+    case PSD_COLOR_MODE.Grayscale:
+    case PSD_COLOR_MODE.Indexed:
+    case PSD_COLOR_MODE.Duotone:
+      return [
+        { id: 0, sample: gray },
+        { id: -1, sample: a },
+      ]
+    case PSD_COLOR_MODE.RGB:
+    default:
+      return [
+        { id: 0, sample: r },
+        { id: 1, sample: g },
+        { id: 2, sample: b },
+        { id: -1, sample: a },
+      ]
+  }
+}
+
 function prepareLayer(
   layer: NativeLayeredPsdLayerInput,
   colorMode: PsdColorModeValue,
@@ -485,29 +533,9 @@ function prepareLayer(
 ): PreparedLayer {
   const out = new GrowingWriter()
   const channelInfo: Array<{ id: number; length: number }> = []
-  const a = (i: number) => sampleUnit(layer.image, i, 3)
-  if (colorMode === PSD_COLOR_MODE.Grayscale) {
-    const gray = (i: number) =>
-      sampleUnit(layer.image, i, 0) * 0.2126 +
-      sampleUnit(layer.image, i, 1) * 0.7152 +
-      sampleUnit(layer.image, i, 2) * 0.0722
-    const grayLen = writeChannelPlaneRaw(out, layer.image, gray, bitDepth)
-    channelInfo.push({ id: 0, length: grayLen })
-    const alphaLen = writeChannelPlaneRaw(out, layer.image, a, bitDepth)
-    channelInfo.push({ id: -1, length: alphaLen })
-  } else {
-    // RGB
-    const r = (i: number) => sampleUnit(layer.image, i, 0)
-    const g = (i: number) => sampleUnit(layer.image, i, 1)
-    const b = (i: number) => sampleUnit(layer.image, i, 2)
-    const rLen = writeChannelPlaneRaw(out, layer.image, r, bitDepth)
-    channelInfo.push({ id: 0, length: rLen })
-    const gLen = writeChannelPlaneRaw(out, layer.image, g, bitDepth)
-    channelInfo.push({ id: 1, length: gLen })
-    const bLen = writeChannelPlaneRaw(out, layer.image, b, bitDepth)
-    channelInfo.push({ id: 2, length: bLen })
-    const aLen = writeChannelPlaneRaw(out, layer.image, a, bitDepth)
-    channelInfo.push({ id: -1, length: aLen })
+  for (const channel of layerChannelPlan(colorMode, layer.image)) {
+    const length = writeChannelPlaneRaw(out, layer.image, channel.sample, bitDepth)
+    channelInfo.push({ id: channel.id, length })
   }
   return {
     name: layer.name,
@@ -600,8 +628,8 @@ export function writeNativeLayeredPsd(
   doc: PsDocument,
   options: NativeLayeredPsdOptions,
 ): ArrayBuffer {
-  if (doc.colorMode !== "RGB" && doc.colorMode !== "Grayscale") {
-    throw new Error("writeNativeLayeredPsd: only RGB and Grayscale documents are supported")
+  if (doc.colorMode === "Bitmap") {
+    throw new Error("writeNativeLayeredPsd: Bitmap documents use the composite native writer")
   }
   const bitDepth: 8 | 16 | 32 = doc.bitDepth === 16 ? 16 : doc.bitDepth === 32 ? 32 : 8
   const plan = channelPlan(doc, options.composite)
@@ -699,17 +727,14 @@ export function writeNativeLayeredPsd(
 }
 
 /**
- * Returns true if a layered native PSD export is supported for `doc`. We
- * cover the common high-bit layered case (Grayscale or RGB at >=8 bits).
- * CMYK / Lab / Multichannel layered output still falls through to the
- * composite native path because per-layer color-mode conversion (with masks
- * + blend modes) is non-trivial and out of scope for a browser-local writer.
+ * Returns true if the native writer should handle layered output for `doc`.
+ * RGB/8-bit stays on ag-psd because it can already emit rich native layer
+ * metadata. Non-RGB and high-bit documents use this writer so layers remain
+ * editable instead of collapsing to a single native composite.
  */
 export function canWriteNativeLayeredPsd(doc: PsDocument): boolean {
-  if (doc.colorMode !== "RGB" && doc.colorMode !== "Grayscale") return false
-  // 1-bit Bitmap layered output is not common in the wild and ag-psd-native
-  // writers don't expose it; surface as composite.
-  if (doc.colorMode === "RGB" && doc.bitDepth === 8) return false // ag-psd handles this
-  return doc.bitDepth === 16 || doc.bitDepth === 32 || doc.colorMode === "Grayscale"
+  if (doc.colorMode === "Bitmap") return false
+  if (doc.colorMode === "RGB" && doc.bitDepth === 8) return false
+  return doc.bitDepth === 16 || doc.bitDepth === 32 || doc.colorMode !== "RGB"
 }
 

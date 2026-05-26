@@ -136,6 +136,12 @@ function positiveInt(value: unknown, fallback: number) {
   return Math.max(1, Math.round(next))
 }
 
+function nonNegativeInt(value: unknown, fallback: number) {
+  const next = typeof value === "number" ? value : Number(value)
+  if (!Number.isFinite(next)) return fallback
+  return Math.max(0, Math.round(next))
+}
+
 function fitDimensions(
   widthInput: number,
   heightInput: number,
@@ -405,8 +411,8 @@ export function createTileEditDocument(input: TileEditDocumentInput): PsDocument
       tile: {
         col,
         row,
-        x: positiveInt(input.sourceX, 0),
-        y: positiveInt(input.sourceY, 0),
+        x: nonNegativeInt(input.sourceX, 0),
+        y: nonNegativeInt(input.sourceY, 0),
         width: canvas.width,
         height: canvas.height,
       },

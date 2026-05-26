@@ -554,6 +554,26 @@ test("unsupported adjustment exports keep real layer names and avoid marker enco
   }
 })
 
+test("formerly app-only adjustments emit native descriptor presets and round-trip from them", () => {
+  const formerlyAppOnly: AdjustmentProps[] = [
+    { type: "shadows-highlights", params: { shadowAmount: 35, highlightAmount: 20, midtoneContrast: 5 } },
+    { type: "hdr-toning", params: { method: "local", radius: 30, strength: 0.7 } },
+    { type: "match-color", params: { source: "doc-a", luminance: 0.9, colorIntensity: 1.1, fadeAmount: 12 } },
+    { type: "replace-color", params: { target: "#aabbcc", replacement: "#112233", fuzziness: 40 } },
+    { type: "equalize", params: { mode: "per-channel" } },
+  ]
+
+  for (const adjustment of formerlyAppOnly) {
+    const psdFields = appAdjustmentToPsdLayer(adjustmentLayer(adjustment))
+    const native = psdFields.adjustment as { type?: string; presetFileName?: string } | undefined
+
+    expect(native?.type).toBeTruthy()
+    expect(native?.presetFileName).toContain("__psweb_adj:")
+    expect((psdFields as { name?: string }).name).toBeUndefined()
+    expect(psdLayerToAppAdjustment({ adjustment: native } as Parameters<typeof psdLayerToAppAdjustment>[0])).toEqual(adjustment)
+  }
+})
+
 test("desaturate exports as a native hue/saturation surrogate", () => {
   const psdFields = appAdjustmentToPsdLayer(adjustmentLayer({ type: "desaturate", params: {} }))
   expect(psdFields.adjustment).toMatchObject({

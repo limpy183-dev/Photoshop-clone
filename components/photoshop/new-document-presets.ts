@@ -63,9 +63,9 @@ export function pixelsToUnit(value: number, unit: NewDocumentUnit, dpi: number) 
 
 export function modeSettings(mode: DocumentModeSettings["mode"]): DocumentModeSettings {
   if (mode === "Indexed") return { mode, indexed: { colors: 256, dither: true } }
-  if (mode === "Bitmap") return { mode, bitmap: { method: "halftone", threshold: 128, frequency: 45, angle: 45 } }
+  if (mode === "Bitmap") return { mode, bitmap: { method: "halftone", threshold: 128, frequency: 45, angle: 45, shape: "round", inputResolution: 300, outputResolution: 300 } }
   if (mode === "Multichannel") return { mode, multichannel: { channels: { r: true, g: true, b: true, c: true, m: true, y: true, k: true } } }
-  if (mode === "Duotone") return { mode, duotone: { ink1: "#111111", ink2: "#4d78aa", curve: 50 } }
+  if (mode === "Duotone") return { mode, duotone: { inkCount: 2, ink1: "#111111", ink2: "#4d78aa", curve: 1, paper: "#ffffff", overprint: "normal", opacity1: 100, opacity2: 70 } }
   return { mode }
 }
 

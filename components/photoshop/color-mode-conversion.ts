@@ -330,8 +330,20 @@ function convertIndexed(source: ImageData, indexed: Partial<IndexedSettings> = {
   return new ImageData(out, source.width, source.height)
 }
 
-function applyInk(base: { r: number; g: number; b: number }, ink: { r: number; g: number; b: number }, coverage: number) {
+function applyInk(
+  base: { r: number; g: number; b: number },
+  ink: { r: number; g: number; b: number },
+  coverage: number,
+  overprint: NonNullable<DuotoneSettings["overprint"]> = "normal",
+) {
   const c = clamp01(coverage)
+  if (overprint === "multiply") {
+    return {
+      r: base.r * (1 - c) + (base.r * ink.r / 255) * c,
+      g: base.g * (1 - c) + (base.g * ink.g / 255) * c,
+      b: base.b * (1 - c) + (base.b * ink.b / 255) * c,
+    }
+  }
   return {
     r: base.r * (1 - c) + ink.r * c,
     g: base.g * (1 - c) + ink.g * c,
@@ -355,7 +367,9 @@ export function defaultDuotoneCurve(): number[] {
 }
 
 function convertDuotone(source: ImageData, duotone: Partial<DuotoneSettings> = {}) {
-  const inkCount: 1 | 2 | 3 | 4 = (duotone.inkCount ?? 2)
+  const inkCount = Math.max(1, Math.min(4, Math.round(duotone.inkCount ?? 2))) as 1 | 2 | 3 | 4
+  const paperColor = parseColor(duotone.paper, "#ffffff")
+  const overprint = duotone.overprint ?? "normal"
   const inks = [
     parseColor(duotone.ink1, "#111111"),
     parseColor(duotone.ink2, "#1f80ff"),
@@ -379,14 +393,14 @@ function convertDuotone(source: ImageData, duotone: Partial<DuotoneSettings> = {
   const out = new Uint8ClampedArray(source.data)
   for (let i = 0; i < out.length; i += 4) {
     const coverage = 1 - luminance(source.data[i], source.data[i + 1], source.data[i + 2]) / 255
-    let paper = { r: 255, g: 255, b: 255 }
+    let paper = { ...paperColor }
     for (let k = 0; k < inkCount; k++) {
       const curveCoverage = perInkCurves[k]
         ? sampleDuotoneCurve(perInkCurves[k], coverage)
         : k === 1
           ? Math.pow(coverage, legacyCurve) * balance
           : coverage
-      paper = applyInk(paper, inks[k], curveCoverage * opacities[k])
+      paper = applyInk(paper, inks[k], curveCoverage * opacities[k], overprint)
     }
     out[i] = clamp8(paper.r)
     out[i + 1] = clamp8(paper.g)
@@ -464,6 +478,41 @@ export const DUOTONE_PRESETS: Record<string, NonNullable<DocumentModeSettings["d
   },
 }
 
+function positiveModulo(value: number, divisor: number) {
+  return ((value % divisor) + divisor) % divisor
+}
+
+export function resolveBitmapScreenCellSize(bitmap: Partial<BitmapSettings> = {}) {
+  const frequency = Math.max(1, bitmap.frequency ?? 10)
+  const resolution = bitmap.outputResolution ?? bitmap.inputResolution
+  if (!resolution || !Number.isFinite(resolution)) return Math.max(1, Math.round(frequency))
+  return Math.max(1, Math.round(Math.max(1, resolution) / frequency))
+}
+
+function halftoneDistance(dx: number, dy: number, shape: BitmapSettings["shape"]) {
+  const ax = Math.abs(dx)
+  const ay = Math.abs(dy)
+  if (shape === "line") return ax * 2
+  if (shape === "diamond") return ax + ay
+  if (shape === "ellipse") return Math.hypot(dx / 0.5, dy / 0.35) / Math.SQRT2
+  if (shape === "square") return Math.max(ax, ay) * 2
+  if (shape === "cross") return Math.min(ax, ay) * 2
+  return Math.hypot(dx, dy) * Math.SQRT2
+}
+
+function halftoneValue(lum: number, x: number, y: number, bitmap: Partial<BitmapSettings>) {
+  const threshold = bitmap.threshold ?? 128
+  const adjusted = clamp(lum + (128 - threshold))
+  const darkness = clamp01((255 - adjusted) / 255)
+  const cell = resolveBitmapScreenCellSize(bitmap)
+  const angle = ((bitmap.angle ?? 45) * Math.PI) / 180
+  const u = x * Math.cos(angle) + y * Math.sin(angle)
+  const v = -x * Math.sin(angle) + y * Math.cos(angle)
+  const dx = positiveModulo(u, cell) / cell - 0.5
+  const dy = positiveModulo(v, cell) / cell - 0.5
+  return halftoneDistance(dx, dy, bitmap.shape ?? "round") <= darkness ? 0 : 255
+}
+
 function bitmapValue(lum: number, x: number, y: number, bitmap: Partial<BitmapSettings>) {
   const threshold = bitmap.threshold ?? 128
   const method = bitmap.method ?? "threshold"
@@ -472,20 +521,7 @@ function bitmapValue(lum: number, x: number, y: number, bitmap: Partial<BitmapSe
     return lum >= threshold + ((bayer / 15) - 0.5) * 96 ? 255 : 0
   }
   if (method === "halftone") {
-    const frequency = Math.max(1, bitmap.frequency ?? 10)
-    const angle = ((bitmap.angle ?? 45) * Math.PI) / 180
-    const u = x * Math.cos(angle) + y * Math.sin(angle)
-    const v = -x * Math.sin(angle) + y * Math.cos(angle)
-    const shape = bitmap.shape ?? "round"
-    const pattern =
-      shape === "line"
-        ? Math.sin(u / frequency)
-        : shape === "diamond"
-          ? 1 - Math.min(1, (Math.abs((u % frequency) - frequency / 2) + Math.abs((v % frequency) - frequency / 2)) / frequency)
-          : shape === "ellipse"
-            ? Math.sin(u / frequency) * 0.7 + Math.cos(v / (frequency * 1.4)) * 0.3
-            : (Math.sin(u / frequency) + Math.sin(v / frequency)) / 2
-    return lum >= threshold + pattern * 64 ? 255 : 0
+    return halftoneValue(lum, x, y, bitmap)
   }
   return clamp8(lum) >= threshold ? 255 : 0
 }

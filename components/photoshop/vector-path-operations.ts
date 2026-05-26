@@ -6,6 +6,7 @@ import type {
   ShapeBooleanOperation,
   ShapeProps,
 } from "./types"
+import { resolveBezierBooleanFallback } from "./vector-bezier-boolean"
 
 export interface AnchorEditResult {
   path: PathProps
@@ -385,6 +386,12 @@ export function selectAllPathAnchors(path: PathProps): PathAnchorRef[] {
   ))
 }
 
+export function selectPathSubpathAnchors(path: PathProps, subpathIndex: number): PathAnchorRef[] {
+  const entry = pathEntries(path).find((candidate) => candidate.subpathIndex === subpathIndex)
+  if (!entry) return []
+  return normalizePathAnchorSelection(entry.path.points.map((_, pointIndex) => ({ subpathIndex, pointIndex })))
+}
+
 export function togglePathAnchorSelection(selection: readonly PathAnchorRef[], anchor: PathAnchorRef): PathAnchorRef[] {
   const normalized = normalizePathAnchorSelection(selection)
   const key = pathAnchorKey(anchor)
@@ -442,6 +449,38 @@ export function deleteSelectedPathAnchors(path: PathProps, selection: readonly P
   return {
     ...deleteSingle(path, -1),
     subpaths: path.subpaths?.map((subpath, index) => deleteSingle(subpath, index)),
+  }
+}
+
+export function duplicatePathSubpath(
+  path: PathProps,
+  subpathIndex: number,
+  offset: { dx: number; dy: number } = { dx: 0, dy: 0 },
+): { path: PathProps; insertedSubpathIndex: number; selection: PathAnchorRef[] } {
+  const sourceEntry = pathEntries(path).find((entry) => entry.subpathIndex === subpathIndex)
+  if (!sourceEntry?.path.points.length) {
+    return { path: clonePath(path), insertedSubpathIndex: -1, selection: [] }
+  }
+  const duplicate: PathProps = {
+    ...sourceEntry.path,
+    points: sourceEntry.path.points.map((point) => translatePathPoint(point, offset.dx, offset.dy)),
+    subpaths: undefined,
+  }
+  const subpaths = [...(path.subpaths?.map(clonePath) ?? []), duplicate]
+  const nextPath = {
+    ...path,
+    points: path.points.map((point) => ({
+      ...point,
+      cp1: point.cp1 ? { ...point.cp1 } : undefined,
+      cp2: point.cp2 ? { ...point.cp2 } : undefined,
+    })),
+    subpaths,
+  }
+  const insertedSubpathIndex = subpaths.length - 1
+  return {
+    path: nextPath,
+    insertedSubpathIndex,
+    selection: selectPathSubpathAnchors(nextPath, insertedSubpathIndex),
   }
 }
 
@@ -1198,6 +1237,12 @@ export function resolveShapeBooleanPath(shape: ShapeProps, options: BooleanResol
 
   const bezierPath = resolveBezierBooleanPath(shape)
   if (bezierPath) return bezierPath
+
+  const builtInBezierPath = resolveBezierBooleanFallback(shape.components.map((component) => ({
+    operation: component.operation,
+    path: shapeToEditablePath(component.shape),
+  })))
+  if (builtInBezierPath) return builtInBezierPath
 
   const tolerance = Math.max(1, options.tolerance ?? 2)
   const maxGridCells = Math.max(1024, options.maxGridCells ?? 36000)

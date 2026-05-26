@@ -12,9 +12,9 @@
  * and produced by other tools.
  */
 
-import { validateDsl } from "./command-dsl"
+import { parseAutomationWorkflowImportPayload, parseSafeDslCommands, type AutomationWorkflow } from "./automation-engine"
 import type { Droplet } from "./automation-store"
-import type { MacroAction } from "./types"
+import type { AssetLibraryItem, MacroAction } from "./types"
 
 export const DROPLET_BUNDLE_FORMAT = "ps-droplet-bundle"
 export const DROPLET_BUNDLE_SCHEMA = 1
@@ -26,7 +26,10 @@ export interface DropletBundle {
   droplet: {
     id: string
     name: string
+    actionId?: string
     condition?: Droplet["condition"]
+    event?: string
+    manualOnly?: boolean
     exportFormat?: Droplet["exportFormat"]
     exportName?: string
     preScript?: string
@@ -34,6 +37,8 @@ export interface DropletBundle {
   }
   /** Optional full action snapshot so the bundle is self-contained. */
   action?: SerializedDropletAction
+  /** Browser-local workflow used by Batch Processing and manual droplet runs. */
+  workflow?: AutomationWorkflow
   createdAt: number
   generator?: string
 }
@@ -49,14 +54,21 @@ export interface SerializedDropletAction {
 
 /* --------------------------- Build & parse ----------------------------- */
 
-export function buildDropletBundle(droplet: Droplet, action: MacroAction | null): DropletBundle {
+export function buildDropletBundle(
+  droplet: Droplet,
+  action: MacroAction | null,
+  options: { workflow?: AutomationWorkflow } = {},
+): DropletBundle {
   return {
     format: DROPLET_BUNDLE_FORMAT,
     schema: DROPLET_BUNDLE_SCHEMA,
     droplet: {
       id: droplet.id.slice(0, 64),
       name: droplet.name.slice(0, 80),
+      actionId: droplet.actionId?.slice(0, 80),
       condition: droplet.condition,
+      event: droplet.event?.slice(0, 80),
+      manualOnly: droplet.manualOnly ?? true,
       exportFormat: droplet.exportFormat,
       exportName: droplet.exportName?.slice(0, 120),
       preScript: droplet.preScript?.slice(0, 8_000),
@@ -75,6 +87,7 @@ export function buildDropletBundle(droplet: Droplet, action: MacroAction | null)
           })),
         }
       : undefined,
+    workflow: options.workflow ?? droplet.workflow,
     createdAt: Date.now(),
     generator: "photoshop-web",
   }
@@ -103,30 +116,81 @@ export function parseDropletBundle(text: string): DropletBundle {
   const preScript = typeof droplet.preScript === "string" ? droplet.preScript.slice(0, 8_000) : undefined
   const postScript = typeof droplet.postScript === "string" ? droplet.postScript.slice(0, 8_000) : undefined
   if (preScript) {
-    const result = validateDsl(preScript)
-    if (!result.ok) throw new Error(`preScript invalid: ${result.error}`)
+    try {
+      parseSafeDslCommands(preScript)
+    } catch (error) {
+      throw new Error(`preScript invalid: ${error instanceof Error ? error.message : "Invalid script"}`)
+    }
   }
   if (postScript) {
-    const result = validateDsl(postScript)
-    if (!result.ok) throw new Error(`postScript invalid: ${result.error}`)
+    try {
+      parseSafeDslCommands(postScript)
+    } catch (error) {
+      throw new Error(`postScript invalid: ${error instanceof Error ? error.message : "Invalid script"}`)
+    }
   }
   const action = rec.action && typeof rec.action === "object" ? sanitizeAction(rec.action as Record<string, unknown>) : undefined
+  const workflow = rec.workflow && typeof rec.workflow === "object" ? parseAutomationWorkflowImportPayload(rec.workflow) : undefined
   return {
     format: DROPLET_BUNDLE_FORMAT,
     schema: DROPLET_BUNDLE_SCHEMA,
     droplet: {
       id,
       name,
-      condition: typeof droplet.condition === "string" ? (droplet.condition as Droplet["condition"]) : undefined,
-      exportFormat: typeof droplet.exportFormat === "string" ? (droplet.exportFormat as Droplet["exportFormat"]) : undefined,
+      actionId: typeof droplet.actionId === "string" ? droplet.actionId.slice(0, 80) : action?.id,
+      condition: cleanCondition(droplet.condition),
+      event: typeof droplet.event === "string" ? droplet.event.slice(0, 80) : undefined,
+      manualOnly: typeof droplet.manualOnly === "boolean" ? droplet.manualOnly : true,
+      exportFormat: cleanExportFormat(droplet.exportFormat),
       exportName: typeof droplet.exportName === "string" ? droplet.exportName.slice(0, 120) : undefined,
       preScript,
       postScript,
     },
     action,
+    workflow,
     createdAt: typeof rec.createdAt === "number" ? rec.createdAt : Date.now(),
     generator: typeof rec.generator === "string" ? rec.generator.slice(0, 80) : undefined,
   }
+}
+
+export function dropletBundleToAutomationAsset(
+  bundle: DropletBundle,
+  options: { makeId?: (prefix: string, index: number) => string; now?: number } = {},
+): AssetLibraryItem {
+  const makeId = options.makeId ?? ((prefix: string, index: number) => `${prefix}_${index}`)
+  const payload = {
+    type: bundle.workflow ? "workflow" : "droplet",
+    actionId: bundle.droplet.actionId,
+    condition: bundle.droplet.condition ?? "always",
+    event: bundle.droplet.event,
+    manualOnly: bundle.droplet.manualOnly ?? true,
+    format: bundle.droplet.exportFormat,
+    workflow: bundle.workflow,
+  }
+  return {
+    id: makeId("automation", 0),
+    name: bundle.droplet.name,
+    kind: "prepress",
+    group: "Automation",
+    payload,
+    createdAt: options.now ?? Date.now(),
+  }
+}
+
+function cleanCondition(value: unknown): Droplet["condition"] | undefined {
+  return value === "always" ||
+    value === "has-selection" ||
+    value === "has-active-layer" ||
+    value === "multi-layer" ||
+    value === "rgb" ||
+    value === "print-ready" ||
+    value === "document-open"
+    ? value
+    : undefined
+}
+
+function cleanExportFormat(value: unknown): Droplet["exportFormat"] | undefined {
+  return value === "none" || value === "png" || value === "jpeg" || value === "webp" ? value : undefined
 }
 
 function sanitizeAction(rec: Record<string, unknown>): SerializedDropletAction | undefined {

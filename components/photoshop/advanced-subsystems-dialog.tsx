@@ -50,7 +50,6 @@ import {
   executeCanvasWorkflow,
   parseSafeDslCommands,
   loadAutomationWorkflows,
-  parseAutomationDataRows,
   parseAutomationWorkflowImportPayload,
   renderTemplateName,
   saveAutomationWorkflows,
@@ -58,6 +57,25 @@ import {
   type AutomationOutputPreset,
   type AutomationWorkflow,
 } from "./automation-engine"
+import {
+  buildDataset,
+  buildVariableDataSetExportPayload,
+  createBinding,
+  inferVariableBindings,
+  parseDataset,
+  parseVariableDataSetImportPayload,
+  serializeDatasetRowsCsv,
+  upsertBinding,
+} from "./variables-engine"
+import {
+  DROPLET_BUNDLE_FORMAT,
+  buildDropletBundle,
+  dropletBundleFileName,
+  dropletBundleToAutomationAsset,
+  parseDropletBundle,
+  serializeDropletBundle,
+} from "./droplets-bundle"
+import type { Droplet } from "./automation-store"
 import {
   VIDEO_EXPORT_PRESETS,
   analyzeThreeDPrintReadiness,
@@ -69,17 +87,26 @@ import {
   createThreeDCrossSection,
   createVideoGroup,
   exportAdvancedThreeDScene,
+  getBakedTextureCanvas,
   getVideoPresetDiagnostics,
   importAdvancedThreeDScene,
   paintThreeDSurface,
   rayTraceScene,
+  replaceBakedTexture,
   renderAudioMixToWavBlob,
   resolveVideoExportPreset,
   splitVideoLayer,
   trimVideoClip,
   updateThreeDMaterial,
 } from "./three-d-video-engine"
-import { applyIccTransformToImageData, describeColorPipeline, supportedIccProfileNames } from "./color-pipeline"
+import {
+  applyIccTransformToImageData,
+  describeColorPipeline,
+  planProfileAssignment,
+  planProfileConversion,
+  supportedIccProfileNames,
+  validateProfileForDocument,
+} from "./color-pipeline"
 import { buildColorSeparationModel, summarizeSeparationPlates, type SeparationProcess } from "./color-channel-ops"
 import { decodeAdvancedRasterBufferAsync, decodedRasterToCanvas, encodeDngImageData, encodeHeifImageData, encodeJpeg2000ImageData, encodeOpenExrHighBitImage, encodeOpenExrImageData, encodeTiffHighBitImageDataAsync, encodeTiffImageDataAsync, type TiffCompression } from "./raster-codecs"
 import { getHighBitExportImage } from "./high-bit-document"
@@ -140,10 +167,13 @@ export type AdvancedSubsystemTab =
   | "formats"
   | "variables"
 
+export type ColorWorkflowMode = "assign" | "convert" | "proof"
+
 interface AdvancedSubsystemsDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   initialTab: AdvancedSubsystemTab
+  initialColorWorkflow?: ColorWorkflowMode
 }
 
 const TABS: { id: AdvancedSubsystemTab; label: string }[] = [
@@ -387,7 +417,7 @@ function createLayerFromCanvas(doc: PsDocument, name: string, canvas: HTMLCanvas
   }
 }
 
-export function AdvancedSubsystemsDialog({ open, onOpenChange, initialTab }: AdvancedSubsystemsDialogProps) {
+export function AdvancedSubsystemsDialog({ open, onOpenChange, initialTab, initialColorWorkflow = "assign" }: AdvancedSubsystemsDialogProps) {
   const [tab, setTab] = React.useState<AdvancedSubsystemTab>(initialTab)
   React.useEffect(() => {
     if (open) setTab(initialTab)
@@ -421,7 +451,7 @@ export function AdvancedSubsystemsDialog({ open, onOpenChange, initialTab }: Adv
             {tab === "provenance" && <ProvenanceWorkspace />}
             {tab === "plugins" && <PluginWorkspace />}
             {tab === "libraries" && <LibrariesWorkspace />}
-            {tab === "color" && <ColorWorkspace />}
+            {tab === "color" && <ColorWorkspace initialWorkflow={initialColorWorkflow} />}
             {tab === "formats" && <FormatsWorkspace />}
             {tab === "variables" && <VariablesWorkspace />}
           </div>
@@ -525,7 +555,56 @@ function ThreeDWorkspace() {
   const paintSurface = () => {
     if (!object) return
     setScene(paintThreeDSurface(assignPlanarUvs(scene, object.id), object.id, { u: 0.5, v: 0.5, radius: 0.15, color: material?.color ?? "#5ec8ff", opacity: 1 }))
-    toast.success("Paint stroke stored on 3D surface texture")
+    toast.success("Paint stroke baked into editable 3D texture atlas")
+  }
+
+  const importTextureAtlas = async (file: File) => {
+    if (!material) return
+    try {
+      assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.rasterBytes, "3D texture atlas")
+      const raster = await loadRasterCanvasFromFile(file)
+      const ctx = raster.canvas.getContext("2d")
+      if (!ctx) throw new Error("Could not read texture atlas pixels.")
+      const image = ctx.getImageData(0, 0, raster.canvas.width, raster.canvas.height)
+      setScene(replaceBakedTexture(scene, material.id, image))
+      toast.success(`Baked ${file.name} into ${material.name}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not import texture atlas")
+    }
+  }
+
+  const exportTextureAtlas = () => {
+    if (!material) return
+    const atlas = getBakedTextureCanvas(scene, material.id)
+    if (!atlas) {
+      toast.info("Paint or import a texture atlas before exporting.")
+      return
+    }
+    downloadCanvas(atlas, `${activeDoc.name}-${material.name}-texture-atlas.png`)
+  }
+
+  const addTextureAtlasLayer = () => {
+    if (!material) return
+    const atlas = getBakedTextureCanvas(scene, material.id)
+    if (!atlas) {
+      toast.info("Paint or import a texture atlas before creating a layer.")
+      return
+    }
+    const layer = createLayerFromCanvas(activeDoc, `${material.name} Texture Atlas`, atlas)
+    dispatch({ type: "add-layer", layer })
+    window.setTimeout(() => commit("Extract 3D Texture Atlas", "all"), 0)
+  }
+
+  const bakeActiveLayerAsTexture = () => {
+    if (!material || !activeLayer?.canvas) return
+    const ctx = activeLayer.canvas.getContext("2d")
+    if (!ctx) {
+      toast.error("Active layer pixels are not available.")
+      return
+    }
+    const image = ctx.getImageData(0, 0, activeLayer.canvas.width, activeLayer.canvas.height)
+    setScene(replaceBakedTexture(scene, material.id, image))
+    toast.success(`Baked active layer into ${material.name}`)
   }
 
   const rayTracePreview = () => {
@@ -614,6 +693,10 @@ function ThreeDWorkspace() {
           <div className="grid grid-cols-2 gap-1">
             <Button size="sm" variant="secondary" onClick={assignUvs}>Assign UVs</Button>
             <Button size="sm" variant="secondary" onClick={paintSurface}>Paint Surface</Button>
+            <FileButton accept="image/*" label="Import Atlas" onFile={importTextureAtlas} />
+            <Button size="sm" variant="secondary" onClick={exportTextureAtlas}>Export Atlas</Button>
+            <Button size="sm" variant="secondary" onClick={addTextureAtlasLayer}>Atlas Layer</Button>
+            <Button size="sm" variant="secondary" onClick={bakeActiveLayerAsTexture} disabled={!activeLayer?.canvas}>Bake Layer</Button>
             <Button size="sm" variant="secondary" onClick={crossSection}>Cross Section</Button>
             <Button size="sm" variant="secondary" onClick={runPrintCheck}>3D Print Check</Button>
             <Button size="sm" variant="secondary" onClick={exportPrintPlan}>Slice / Handoff</Button>
@@ -1110,7 +1193,9 @@ type AutomationPayload = {
   event?: string
   condition?: string
   falseActionId?: string
-  format?: "png" | "webp" | "jpeg"
+  preScript?: string
+  postScript?: string
+  format?: AutomationOutputPreset["format"]
   manualOnly?: boolean
   workflow?: AutomationWorkflow
 }
@@ -1121,6 +1206,7 @@ function conditionPasses(doc: PsDocument, condition = "always") {
   if (condition === "multi-layer") return doc.layers.filter((layer) => layer.kind !== "group").length > 1
   if (condition === "rgb") return doc.colorMode === "RGB"
   if (condition === "print-ready") return !!doc.printSettings?.cropMarks || !!doc.printSettings?.registrationMarks
+  if (condition === "document-open") return true
   return true
 }
 
@@ -1137,7 +1223,10 @@ function AutomationWorkspace() {
   const [condition, setCondition] = React.useState("always")
   const [event, setEvent] = React.useState("Document Open")
   const [operation, setOperation] = React.useState<AutomationOperation>("auto-tone")
+  const [manualOnly, setManualOnly] = React.useState(true)
+  const [preScript, setPreScript] = React.useState("")
   const [scriptSource, setScriptSource] = React.useState('report("Droplet run")')
+  const [postScript, setPostScript] = React.useState("")
   const [outputFormat, setOutputFormat] = React.useState<AutomationOutputPreset["format"]>("png")
   const [quality, setQuality] = React.useState(0.92)
   const [filenameTemplate, setFilenameTemplate] = React.useState(DEFAULT_AUTOMATION_OUTPUT.filenameTemplate)
@@ -1163,8 +1252,10 @@ function AutomationWorkspace() {
       falseActionId: falseActionId || undefined,
       condition,
       event,
+      preScript: preScript.trim() || undefined,
+      postScript: postScript.trim() || undefined,
       format: "png",
-      manualOnly: true,
+      manualOnly,
     }
     setAssets([{ id: uid("auto"), name: name || type, kind: "prepress", group: "Automation", payload, createdAt: Date.now() }, ...assets])
   }
@@ -1181,7 +1272,16 @@ function AutomationWorkspace() {
       matte: "#ffffff",
       filenameTemplate,
     })
-    const payload: AutomationPayload = { type: "workflow", workflow, condition, event, actionId: firstActionId || undefined, manualOnly: true }
+    const payload: AutomationPayload = {
+      type: "workflow",
+      workflow,
+      condition,
+      event,
+      actionId: firstActionId || undefined,
+      preScript: preScript.trim() || undefined,
+      postScript: postScript.trim() || undefined,
+      manualOnly,
+    }
     setAssets([{ id: uid("auto"), name: workflow.name, kind: "prepress", group: "Automation", payload, createdAt: Date.now() }, ...assets])
     setWorkflowStore([workflow, ...savedWorkflows.filter((item) => item.id !== workflow.id)])
     toast.success("Workflow droplet saved")
@@ -1193,10 +1293,15 @@ function AutomationWorkspace() {
       return
     }
     if (payload.workflow) {
+      const workflowSteps = [
+        ...(payload.preScript ? [{ id: uid("step"), type: "script" as const, source: payload.preScript }] : []),
+        ...payload.workflow.steps,
+        ...(payload.postScript ? [{ id: uid("step"), type: "script" as const, source: payload.postScript }] : []),
+      ]
       for (const step of payload.workflow.steps) {
         if (step.type === "action" && step.actionId) playAction(step.actionId)
       }
-      const rasterSteps = payload.workflow.steps.filter((step) => step.type !== "action")
+      const rasterSteps = workflowSteps.filter((step) => step.type !== "action")
       if (rasterSteps.length) {
         const flat = renderDocumentComposite(activeDoc, { transparent: true })
         const output = await executeCanvasWorkflow(flat, { ...payload.workflow, steps: rasterSteps }, { makeCanvas })
@@ -1208,13 +1313,38 @@ function AutomationWorkspace() {
     if (payload.actionId) playAction(payload.actionId)
   }
   const exportAsset = (asset: AssetLibraryItem) => {
-    downloadText(JSON.stringify({ app: "Photoshop Web", format: "psdroplet", version: 1, asset }, null, 2), `${asset.name}.psdroplet.json`, "application/json")
+    const payload = automationAssetPayload(asset)
+    if (!payload) return
+    const action = actions.find((item) => item.id === payload.actionId) ?? null
+    const payloadFormat = payload.workflow?.output.format ?? payload.format
+    const dropletFormat = payloadFormat === "jpeg" || payloadFormat === "png" || payloadFormat === "webp" ? payloadFormat : undefined
+    const droplet: Droplet = {
+      id: asset.id,
+      name: asset.name,
+      actionId: payload.actionId,
+      preScript: payload.preScript,
+      postScript: payload.postScript,
+      condition: payload.condition as Droplet["condition"],
+      event: payload.event,
+      manualOnly: payload.manualOnly ?? true,
+      workflow: payload.workflow,
+      exportFormat: dropletFormat,
+      exportName: payload.workflow?.output.filenameTemplate,
+      createdAt: asset.createdAt,
+      updatedAt: Date.now(),
+    }
+    const bundle = buildDropletBundle(droplet, action, { workflow: payload.workflow })
+    downloadText(serializeDropletBundle(bundle), dropletBundleFileName(bundle), "application/json")
   }
   const importDroplet = async (file: File) => {
     assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.jsonBytes, "Droplet file")
     const parsed: unknown = JSON.parse(await file.text())
     let asset: AssetLibraryItem
-    if (isImportRecord(parsed) && parsed.workflow !== undefined) {
+    if (isImportRecord(parsed) && parsed.format === DROPLET_BUNDLE_FORMAT) {
+      asset = dropletBundleToAutomationAsset(parseDropletBundle(JSON.stringify(parsed)), { makeId: () => uid("auto") })
+      const payload = automationAssetPayload(asset)
+      if (payload?.workflow) setWorkflowStore([payload.workflow, ...savedWorkflows.filter((item) => item.id !== payload.workflow!.id)])
+    } else if (isImportRecord(parsed) && parsed.workflow !== undefined) {
       const workflow = parseAutomationWorkflowImportPayload(parsed)
       asset = { id: uid("auto"), name: workflow.name, kind: "prepress", group: "Automation", payload: { type: "workflow", workflow, condition: "always", manualOnly: true }, createdAt: Date.now() }
       setWorkflowStore([workflow, ...savedWorkflows.filter((item) => item.id !== workflow.id)])
@@ -1234,11 +1364,17 @@ function AutomationWorkspace() {
         </CapabilityNotice>
         <Input value={name} onChange={(event) => setName(event.target.value)} className="h-8" />
         <SelectField label="Action" value={firstActionId} options={actions.length ? actions.map((action) => action.id) : [""]} onChange={setActionId} />
-        <SelectField label="If" value={condition} options={["always", "has-selection", "has-active-layer", "multi-layer", "rgb", "print-ready"]} onChange={setCondition} />
+        <SelectField label="If" value={condition} options={["always", "has-selection", "has-active-layer", "multi-layer", "rgb", "print-ready", "document-open"]} onChange={setCondition} />
         <SelectField label="Else" value={falseActionId} options={["", ...actions.map((action) => action.id)]} onChange={setFalseActionId} />
         <SelectField label="Event" value={event} options={["Document Open", "Before Export", "After Save", "Layer Changed", "History Commit"]} onChange={setEvent} />
+        <label className="flex items-center gap-2 text-[11px]">
+          <input type="checkbox" checked={!manualOnly} onChange={(event) => setManualOnly(!event.target.checked)} />
+          Event routed
+        </label>
         <SelectField label="Raster Step" value={operation} options={["none", "auto-tone", "auto-contrast", "auto-color", "equalize", "hdr-toning", "invert", "grayscale", "desaturate"]} onChange={(value) => setOperation(value as AutomationOperation)} />
+        <Textarea value={preScript} onChange={(event) => setPreScript(event.target.value)} placeholder="Pre-script (optional)" className="h-16 resize-none font-mono text-[11px]" spellCheck={false} />
         <Textarea value={scriptSource} onChange={(event) => setScriptSource(event.target.value)} className="h-20 resize-none font-mono text-[11px]" spellCheck={false} />
+        <Textarea value={postScript} onChange={(event) => setPostScript(event.target.value)} placeholder="Post-script (optional)" className="h-16 resize-none font-mono text-[11px]" spellCheck={false} />
         <div className="grid grid-cols-2 gap-2">
           <SelectField label="Output" value={outputFormat} options={["png", "jpeg", "webp", "gif", "avif"]} onChange={(value) => setOutputFormat(value as AutomationOutputPreset["format"])} />
           <NumberField label="Quality" value={quality} min={0.1} max={1} step={0.01} onChange={setQuality} />
@@ -2656,15 +2792,17 @@ function LibrariesWorkspace() {
   )
 }
 
-function ColorWorkspace() {
+function ColorWorkspace({ initialWorkflow }: { initialWorkflow: ColorWorkflowMode }) {
   const { activeDoc, activeLayer, dispatch, commit, requestRender } = useEditor()
   const [settings, setSettings] = React.useState<DocumentModeSettings>({ mode: "RGB" })
   const [allowDestructiveApply, setAllowDestructiveApply] = React.useState(false)
+  const [workflow, setWorkflow] = React.useState<ColorWorkflowMode>(initialWorkflow)
+  const [assignTarget, setAssignTarget] = React.useState<ColorManagementSettings["assignedProfile"]>("sRGB IEC61966-2.1")
+  const [convertTarget, setConvertTarget] = React.useState<ColorManagementSettings["workingSpace"]>("sRGB IEC61966-2.1")
   React.useEffect(() => {
     if (activeDoc) setSettings(activeDoc.modeSettings ?? { mode: activeDoc.colorMode })
   }, [activeDoc])
-  if (!activeDoc) return <EmptyState text="Open a document before changing color management." />
-  const color = activeDoc.colorManagement ?? {
+  const color = activeDoc?.colorManagement ?? {
     assignedProfile: "sRGB IEC61966-2.1" as const,
     workingSpace: "sRGB IEC61966-2.1" as const,
     renderingIntent: "relative-colorimetric" as const,
@@ -2675,14 +2813,30 @@ function ColorWorkspace() {
     proofChannels: [],
     proofPlateView: "composite" as const,
   }
+  React.useEffect(() => {
+    if (!activeDoc) return
+    setWorkflow(initialWorkflow)
+    setAssignTarget(color.assignedProfile)
+    setConvertTarget(color.workingSpace)
+  }, [activeDoc, color.assignedProfile, color.workingSpace, initialWorkflow])
+  if (!activeDoc) return <EmptyState text="Open a document before changing color management." />
   const pipeline = describeColorPipeline({
     bitDepth: activeDoc.bitDepth === 32 ? 32 : activeDoc.bitDepth === 16 ? 16 : 8,
     colorMode: activeDoc.colorMode,
     profile: color.assignedProfile,
   })
-  const updateColor = (patch: Partial<typeof color>) => {
+  const updateColor = (patch: Partial<typeof color>, label?: string) => {
     dispatch({ type: "set-color-management", settings: { ...color, ...patch } })
     requestRender()
+    if (label) window.setTimeout(() => commit(label, "all"), 0)
+  }
+  const bitDepth = activeDoc.bitDepth === 32 ? 32 : activeDoc.bitDepth === 16 ? 16 : 8
+  const assignmentPlan = planProfileAssignment(color.assignedProfile, assignTarget)
+  const assignmentValidation = validateProfileForDocument(assignTarget, activeDoc.colorMode, bitDepth)
+  const conversionPlan = planProfileConversion(color.assignedProfile, convertTarget, color.renderingIntent)
+  const conversionValidation = validateProfileForDocument(convertTarget, activeDoc.colorMode, bitDepth)
+  const assignProfile = () => {
+    updateColor({ assignedProfile: assignTarget }, `Assign Profile: ${assignTarget}`)
   }
   const proofChannels = color.proofChannels ?? []
   const proofChannelOptions: NonNullable<ColorManagementSettings["proofChannels"]> = activeDoc.colorMode === "CMYK"
@@ -2724,16 +2878,16 @@ function ColorWorkspace() {
     return true
   }
   const convertProfile = (scope: "active" | "all") => {
-    if (color.assignedProfile === color.workingSpace) return
+    if (color.assignedProfile === convertTarget) return
     const layers = scope === "active" && activeLayer ? [activeLayer] : activeDoc.layers.filter((layer) => layer.kind !== "group")
     const changedIds: string[] = []
     for (const layer of layers) {
       if (layer.kind === "group" || typeof layer.canvas?.getContext !== "function") continue
-      if (convertCanvasProfile(layer.canvas, color.assignedProfile, color.workingSpace)) changedIds.push(layer.id)
+      if (convertCanvasProfile(layer.canvas, color.assignedProfile, convertTarget)) changedIds.push(layer.id)
     }
-    dispatch({ type: "set-color-management", settings: { ...color, assignedProfile: color.workingSpace } })
+    dispatch({ type: "set-color-management", settings: { ...color, assignedProfile: convertTarget, workingSpace: convertTarget } })
     requestRender()
-    window.setTimeout(() => commit(`Convert Profile: ${color.workingSpace}`, changedIds.length ? changedIds : "all"), 0)
+    window.setTimeout(() => commit(`Convert Profile: ${convertTarget}`, changedIds.length ? changedIds : "all"), 0)
   }
   const setMode = (mode: DocumentModeSettings["mode"], patch: Partial<DocumentModeSettings> = {}) => {
     const next = { ...settings, ...patch, mode }
@@ -2766,13 +2920,59 @@ function ColorWorkspace() {
         <CapabilityNotice>
           Profile assignment, conversion, proof preview, gamut warning, and raster export conversion use the browser-local ICC transform engine for supported profiles. High-bit documents keep typed-array sources where supported; canvas display remains an 8-bit RGBA preview.
         </CapabilityNotice>
-        <SelectField label="Assign Profile" value={color.assignedProfile} options={supportedIccProfileNames()} onChange={(value) => updateColor({ assignedProfile: value as typeof color.assignedProfile })} />
-        <SelectField label="Working / Export Profile" value={color.workingSpace} options={supportedIccProfileNames()} onChange={(value) => updateColor({ workingSpace: value as typeof color.workingSpace })} />
-        <SelectField label="Rendering Intent" value={color.renderingIntent} options={["perceptual", "relative-colorimetric", "saturation", "absolute-colorimetric"]} onChange={(value) => updateColor({ renderingIntent: value as typeof color.renderingIntent })} />
-        <SelectField label="Proof Profile" value={color.proofProfile} options={["None", ...supportedIccProfileNames()]} onChange={(value) => updateColor({ proofProfile: value as typeof color.proofProfile })} />
-        <CheckField label="Proof colors in canvas and exports" checked={color.proofColors} onChange={(checked) => updateColor({ proofColors: checked })} />
-        <CheckField label="Gamut warning overlay" checked={color.gamutWarning} onChange={(checked) => updateColor({ gamutWarning: checked })} />
-        <SelectField label="Plate View" value={color.proofPlateView ?? "composite"} options={["composite", "ink", "mask"]} onChange={(value) => updateColor({ proofPlateView: value as NonNullable<ColorManagementSettings["proofPlateView"]> })} />
+        <div className="grid grid-cols-3 gap-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-1">
+          {(["assign", "convert", "proof"] as const).map((item) => (
+            <button
+              key={item}
+              type="button"
+              aria-pressed={workflow === item}
+              onClick={() => setWorkflow(item)}
+              className={`h-7 rounded-sm text-[11px] capitalize ${workflow === item ? "bg-[var(--ps-accent)] text-white" : "hover:bg-[var(--ps-tool-hover)]"}`}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+        {workflow === "assign" ? (
+          <div className="grid gap-2">
+            <SelectField label="Assign Profile" value={assignTarget} options={supportedIccProfileNames()} onChange={(value) => setAssignTarget(value as typeof assignTarget)} />
+            <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2 text-[11px] text-[var(--ps-text-dim)]">
+              <div>Current {assignmentPlan.currentProfile}; new {assignmentPlan.newProfile}; expected shift {assignmentPlan.expectedShift}.</div>
+              <div>{assignmentPlan.gamutMappingNote}</div>
+              {[...assignmentPlan.warnings, ...assignmentValidation.warnings].map((warning) => (
+                <div key={warning} className="text-amber-200">{warning}</div>
+              ))}
+            </div>
+            <Button size="sm" variant="secondary" disabled={!assignmentValidation.valid} onClick={assignProfile}>Assign Profile</Button>
+          </div>
+        ) : null}
+        {workflow === "convert" ? (
+          <div className="grid gap-2">
+            <SelectField label="Convert To Profile" value={convertTarget} options={supportedIccProfileNames()} onChange={(value) => setConvertTarget(value as typeof convertTarget)} />
+            <SelectField label="Rendering Intent" value={color.renderingIntent} options={["perceptual", "relative-colorimetric", "saturation", "absolute-colorimetric"]} onChange={(value) => updateColor({ renderingIntent: value as typeof color.renderingIntent })} />
+            <CheckField label="Black point compensation" checked={color.blackPointCompensation} onChange={(checked) => updateColor({ blackPointCompensation: checked })} />
+            <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2 text-[11px] text-[var(--ps-text-dim)]">
+              <div>Current {conversionPlan.currentProfile}; target {conversionPlan.newProfile}; expected shift {conversionPlan.expectedShift}.</div>
+              <div>{conversionPlan.gamutMappingNote}</div>
+              {[...conversionPlan.warnings, ...conversionValidation.warnings].map((warning) => (
+                <div key={warning} className="text-amber-200">{warning}</div>
+              ))}
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Button size="sm" variant="secondary" disabled={!activeLayer || !conversionValidation.valid || color.assignedProfile === convertTarget} onClick={() => convertProfile("active")}>Convert Layer</Button>
+              <Button size="sm" variant="secondary" disabled={!conversionValidation.valid || color.assignedProfile === convertTarget} onClick={() => convertProfile("all")}>Convert Document</Button>
+            </div>
+          </div>
+        ) : null}
+        {workflow === "proof" ? (
+          <div className="grid gap-2">
+            <SelectField label="Working / Export Profile" value={color.workingSpace} options={supportedIccProfileNames()} onChange={(value) => updateColor({ workingSpace: value as typeof color.workingSpace })} />
+            <SelectField label="Proof Profile" value={color.proofProfile} options={["None", ...supportedIccProfileNames()]} onChange={(value) => updateColor({ proofProfile: value as typeof color.proofProfile })} />
+            <CheckField label="Proof colors in canvas and exports" checked={color.proofColors} onChange={(checked) => updateColor({ proofColors: checked })} />
+            <CheckField label="Gamut warning overlay" checked={color.gamutWarning} onChange={(checked) => updateColor({ gamutWarning: checked })} />
+            <SelectField label="Plate View" value={color.proofPlateView ?? "composite"} options={["composite", "ink", "mask"]} onChange={(value) => updateColor({ proofPlateView: value as NonNullable<ColorManagementSettings["proofPlateView"]> })} />
+          </div>
+        ) : null}
         <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
           <div className="mb-2 text-[10px] uppercase tracking-wide text-[var(--ps-text-dim)]">Preview plates</div>
           <div className="grid grid-cols-2 gap-2">
@@ -2795,10 +2995,6 @@ function ColorWorkspace() {
               ))}
             </div>
           ) : null}
-        </div>
-        <div className="grid grid-cols-2 gap-2 pt-2">
-          <Button size="sm" variant="secondary" disabled={!activeLayer || color.assignedProfile === color.workingSpace} onClick={() => convertProfile("active")}>Convert Layer</Button>
-          <Button size="sm" variant="secondary" disabled={color.assignedProfile === color.workingSpace} onClick={() => convertProfile("all")}>Convert Document</Button>
         </div>
       </Panel>
       <Panel title="Color Modes & Prepress">
@@ -3209,26 +3405,32 @@ function VariablesWorkspace() {
   const dataSets = activeDoc.variableDataSets ?? []
   const selected = dataSets.find((set) => set.id === selectedId) ?? dataSets[0]
   const setDataSets = (next: VariableDataSet[]) => dispatch({ type: "set-variable-data-sets", dataSets: next })
-  const columns = Object.keys(selected?.rows[0] ?? {})
+  const columns = selected ? Array.from(new Set(selected.rows.flatMap((row) => Object.keys(row)))) : []
+  const activeRow = selected?.rows[rowIndex] ?? null
   const importData = async (file: File) => {
     assertAdvancedFileSize(file, file.name.toLowerCase().endsWith(".json") ? ADVANCED_FILE_LIMITS.jsonBytes : ADVANCED_FILE_LIMITS.csvBytes, "Data set file")
-    const rows = parseAutomationDataRows(await file.text(), file.name)
-    const headers = Object.keys(rows[0] ?? {})
-    const bindings: VariableBinding[] = []
-    for (const layer of activeDoc.layers) {
-      if (layer.text) {
-        const exact = headers.find((header) => header.toLowerCase() === layer.name.toLowerCase()) ?? headers.find((header) => header.toLowerCase() === "text") ?? headers[0]
-        if (exact) bindings.push({ id: uid("bind"), layerId: layer.id, property: "text", column: exact })
+    const text = await file.text()
+    let imported: VariableDataSet[] = []
+    if (file.name.toLowerCase().endsWith(".json")) {
+      try {
+        const parsed: unknown = JSON.parse(text)
+        if (isImportRecord(parsed) && parsed.format === "ps-variable-data-sets") {
+          imported = parseVariableDataSetImportPayload(parsed, { doc: activeDoc, makeId: (prefix) => uid(prefix) })
+        }
+      } catch {
+        imported = []
       }
-      const visible = headers.find((header) => header.toLowerCase() === `show_${layer.name.toLowerCase()}`)
-      if (visible) bindings.push({ id: uid("bind"), layerId: layer.id, property: "visibility", column: visible })
     }
-    const dataSet: VariableDataSet = { id: uid("data"), name: file.name, rows, bindings, activeRow: 0 }
-    setDataSets([dataSet, ...dataSets])
-    setSelectedId(dataSet.id)
+    if (!imported.length) {
+      const parsed = parseDataset(text, file.name)
+      const dataSet = buildDataset(file.name, parsed)
+      imported = [{ ...dataSet, bindings: inferVariableBindings(activeDoc, parsed.columns) }]
+    }
+    setDataSets([...imported, ...dataSets])
+    setSelectedId(imported[0]?.id ?? "")
     setRowIndex(0)
     setBindingLayerId(activeDoc.layers[0]?.id ?? "")
-    setBindingColumn(headers[0] ?? "")
+    setBindingColumn(Object.keys(imported[0]?.rows[0] ?? {})[0] ?? "")
   }
   const canvasForImageValue = async (value: string) => {
     const trimmed = value.trim()
@@ -3249,18 +3451,41 @@ function VariablesWorkspace() {
   }
   const addBinding = () => {
     if (!selected || !bindingLayerId || !bindingColumn) return
+    const next = upsertBinding(selected, createBinding(bindingLayerId, bindingProperty, bindingColumn))
+    setDataSets(dataSets.map((set) => set.id === selected.id ? next : set))
+  }
+  const updateBinding = (id: string, patch: Partial<VariableBinding>) => {
+    if (!selected) return
     const next: VariableDataSet = {
       ...selected,
-      bindings: [
-        ...selected.bindings,
-        { id: uid("bind"), layerId: bindingLayerId, property: bindingProperty, column: bindingColumn },
-      ],
+      bindings: selected.bindings.map((binding) => binding.id === id ? { ...binding, ...patch } : binding),
     }
     setDataSets(dataSets.map((set) => set.id === selected.id ? next : set))
   }
   const removeBinding = (id: string) => {
     if (!selected) return
     setDataSets(dataSets.map((set) => set.id === selected.id ? { ...set, bindings: set.bindings.filter((binding) => binding.id !== id) } : set))
+  }
+  const setActiveRow = (index: number) => {
+    if (!selected) return
+    const nextIndex = Math.max(0, Math.min(selected.rows.length - 1, Math.round(index)))
+    setRowIndex(nextIndex)
+    setDataSets(dataSets.map((set) => set.id === selected.id ? { ...set, activeRow: nextIndex } : set))
+  }
+  const exportSelectedSet = () => {
+    if (!selected) return
+    downloadText(JSON.stringify(buildVariableDataSetExportPayload([selected]), null, 2), `${selected.name}.psvars.json`, "application/json")
+  }
+  const exportSelectedRows = () => {
+    if (!selected) return
+    downloadText(serializeDatasetRowsCsv(selected.rows, columns), `${selected.name}.csv`, "text/csv")
+  }
+  const deleteSelectedSet = () => {
+    if (!selected) return
+    const next = dataSets.filter((set) => set.id !== selected.id)
+    setDataSets(next)
+    setSelectedId(next[0]?.id ?? "")
+    setRowIndex(0)
   }
   const applyRow = async (row = selected?.rows[rowIndex]) => {
     if (!selected || !row) return
@@ -3273,7 +3498,9 @@ function VariablesWorkspace() {
       } else if (binding.property === "visibility") {
         dispatch({ type: "set-layer-visibility", id: layer.id, visible: !/^(false|0|no|off)$/i.test(value.trim()) })
       } else if (binding.property === "opacity") {
-        dispatch({ type: "set-layer-opacity", id: layer.id, opacity: Math.max(0, Math.min(1, Number(value) / 100)) })
+        const opacity = Number(value)
+        const normalized = Number.isFinite(opacity) && opacity <= 1 ? opacity : opacity / 100
+        dispatch({ type: "set-layer-opacity", id: layer.id, opacity: Math.max(0, Math.min(1, normalized || 0)) })
       } else if (binding.property === "image") {
         const canvas = await canvasForImageValue(value)
         if (canvas) dispatch({ type: "replace-smart-object-contents", id: layer.id, canvas, source: { fileName: value.trim() || binding.column } })
@@ -3295,24 +3522,31 @@ function VariablesWorkspace() {
   return (
     <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
       <Panel title="Data Sets">
-        <FileButton accept=".csv,.json,text/csv,application/json" label="Import CSV / JSON" onFile={importData} />
+        <FileButton accept=".csv,.json,.psvars,.psvars.json,text/csv,application/json" label="Import CSV / JSON / Set" onFile={importData} />
         <label className="flex cursor-pointer items-center justify-between rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-3 py-2 text-[11px]">
           <span>{imageFiles.length ? `${imageFiles.length} image assets selected` : "Choose image assets"}</span>
           <input type="file" multiple accept="image/*" className="hidden" onChange={(event) => setImageFiles(Array.from(event.target.files ?? []))} />
         </label>
         <div className="mt-3 max-h-80 overflow-y-auto rounded-sm border border-[var(--ps-divider)]">
           {dataSets.map((set) => (
-            <button key={set.id} type="button" onClick={() => setSelectedId(set.id)} className={`grid w-full grid-cols-[1fr_auto] border-b border-[var(--ps-divider)] p-2 text-left text-[11px] ${selected?.id === set.id ? "bg-[var(--ps-tool-active)]" : "hover:bg-[var(--ps-tool-hover)]"}`}>
+            <button key={set.id} type="button" onClick={() => { setSelectedId(set.id); setRowIndex(set.activeRow ?? 0) }} className={`grid w-full grid-cols-[1fr_auto] border-b border-[var(--ps-divider)] p-2 text-left text-[11px] ${selected?.id === set.id ? "bg-[var(--ps-tool-active)]" : "hover:bg-[var(--ps-tool-hover)]"}`}>
               <span>{set.name}</span>
               <span className="text-[var(--ps-text-dim)]">{set.rows.length} rows</span>
             </button>
           ))}
         </div>
+        {selected ? (
+          <div className="grid grid-cols-3 gap-2">
+            <Button size="sm" variant="secondary" onClick={exportSelectedSet}>Export Set</Button>
+            <Button size="sm" variant="secondary" onClick={exportSelectedRows}>Export CSV</Button>
+            <Button size="sm" variant="ghost" onClick={deleteSelectedSet}>Delete</Button>
+          </div>
+        ) : null}
       </Panel>
       <Panel title="Bindings & Output">
         {selected ? (
           <>
-            <NumberField label="Row" value={rowIndex + 1} min={1} max={Math.max(1, selected.rows.length)} onChange={(value) => setRowIndex(Math.max(0, Math.min(selected.rows.length - 1, Math.round(value) - 1)))} />
+            <NumberField label="Row" value={rowIndex + 1} min={1} max={Math.max(1, selected.rows.length)} onChange={(value) => setActiveRow(value - 1)} />
             <div className="grid grid-cols-[1fr_120px_1fr_auto] gap-2">
               <SelectField label="Layer" value={bindingLayerId || activeDoc.layers[0]?.id || ""} options={activeDoc.layers.map((layer) => layer.id)} onChange={setBindingLayerId} />
               <SelectField label="Property" value={bindingProperty} options={["text", "visibility", "opacity", "image"]} onChange={(value) => setBindingProperty(value as VariableBinding["property"])} />
@@ -3322,8 +3556,29 @@ function VariablesWorkspace() {
             <div className="max-h-56 overflow-y-auto rounded-sm border border-[var(--ps-divider)]">
               {selected.bindings.map((binding) => {
                 const layer = activeDoc.layers.find((item) => item.id === binding.layerId)
-                return <div key={binding.id} className="grid grid-cols-[1fr_auto_auto_auto] gap-2 border-b border-[var(--ps-divider)] p-2 text-[11px]"><span>{layer?.name ?? "Missing layer"}</span><span>{binding.property}</span><span className="text-[var(--ps-text-dim)]">{binding.column}</span><Button size="sm" variant="ghost" onClick={() => removeBinding(binding.id)}>Remove</Button></div>
+                return (
+                  <div key={binding.id} className="grid grid-cols-[1fr_108px_1fr_auto] gap-2 border-b border-[var(--ps-divider)] p-2 text-[11px]">
+                    <select value={binding.layerId} onChange={(event) => updateBinding(binding.id, { layerId: event.target.value })} className="h-7 min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1">
+                      {activeDoc.layers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                    </select>
+                    <select value={binding.property} onChange={(event) => updateBinding(binding.id, { property: event.target.value as VariableBinding["property"] })} className="h-7 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1">
+                      {["text", "visibility", "opacity", "image"].map((property) => <option key={property} value={property}>{property}</option>)}
+                    </select>
+                    <select value={binding.column} onChange={(event) => updateBinding(binding.id, { column: event.target.value })} className="h-7 min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1">
+                      {columns.map((column) => <option key={column} value={column}>{column}</option>)}
+                    </select>
+                    <Button size="sm" variant="ghost" onClick={() => removeBinding(binding.id)}>{layer ? "Remove" : "Drop"}</Button>
+                  </div>
+                )
               })}
+            </div>
+            <div className="max-h-28 overflow-y-auto rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2 text-[10px]">
+              {activeRow ? columns.map((column) => (
+                <div key={column} className="grid grid-cols-[96px_1fr] gap-2 border-b border-[var(--ps-divider)]/40 py-0.5">
+                  <span className="truncate text-[var(--ps-text-dim)]">{column}</span>
+                  <span className="truncate">{activeRow[column]}</span>
+                </div>
+              )) : <span className="text-[var(--ps-text-dim)]">No row selected.</span>}
             </div>
             <div className="grid grid-cols-[1fr_80px] gap-2">
               <SelectField label="Format" value={outputFormat} options={["png", "jpeg", "webp", "gif", "avif"]} onChange={(value) => setOutputFormat(value as AutomationOutputPreset["format"])} />

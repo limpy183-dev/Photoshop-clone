@@ -42,6 +42,21 @@ export function easingProgress(t: number, easing: FrameEasing = "linear"): numbe
   return clamped
 }
 
+export function transitionDurationForFrame(frame: TimelineFrame): number {
+  if (!frame.transition || frame.transition === "hold") return 0
+  const frameDuration = Math.max(1, Math.round(frame.durationMs))
+  return clamp(Math.round(frame.transitionDurationMs ?? frameDuration), 1, frameDuration)
+}
+
+export function transitionProgressAtFrameTime(frame: TimelineFrame, elapsedMs: number): number {
+  const duration = transitionDurationForFrame(frame)
+  if (duration <= 0) return 0
+  const frameDuration = Math.max(1, Math.round(frame.durationMs))
+  const transitionStartMs = Math.max(0, frameDuration - duration)
+  const local = (clamp(Math.round(elapsedMs), 0, frameDuration) - transitionStartMs) / duration
+  return easingProgress(local, frame.easing ?? "linear")
+}
+
 export function lerp(a: number, b: number, t: number) {
   return a + (b - a) * t
 }

@@ -30,7 +30,7 @@ import { useEditor, makeDocument, makeCanvas, type DocumentLifecycleState, type 
 import { compositeLayer } from "./blend-modes"
 import { FILTER_META, getFilterName } from "./filters-meta"
 import { renderThreeDScene } from "./advanced-subsystems"
-import type { AdvancedSubsystemTab } from "./advanced-subsystems-dialog"
+import type { AdvancedSubsystemTab, ColorWorkflowMode } from "./advanced-subsystems-dialog"
 import type { GapWorkflowKind } from "./gap-workflow-dialog"
 import type { SelectionOperation } from "./management-dialogs"
 import { lazyDialog } from "./lazy-dialog"
@@ -138,11 +138,13 @@ const AdvancedSubsystemsDialog = lazyDialog<{
   open: boolean
   onOpenChange: (open: boolean) => void
   initialTab?: AdvancedSubsystemTab
+  initialColorWorkflow?: ColorWorkflowMode
 }>(
   () => import("./advanced-subsystems-dialog").then((m) => ({ default: m.AdvancedSubsystemsDialog as unknown as React.ComponentType<{
     open: boolean
     onOpenChange: (open: boolean) => void
     initialTab?: AdvancedSubsystemTab
+    initialColorWorkflow?: ColorWorkflowMode
   }> })),
 )
 const AlgorithmicOperationsDialog = lazyDialog<{
@@ -495,6 +497,7 @@ export function MenuBar({
   const [revealSourceDocId, setRevealSourceDocId] = React.useState<string | null>(null)
   const [advancedOpen, setAdvancedOpen] = React.useState(false)
   const [advancedTab, setAdvancedTab] = React.useState<AdvancedSubsystemTab>("3d")
+  const [advancedColorWorkflow, setAdvancedColorWorkflow] = React.useState<ColorWorkflowMode>("assign")
   const [algorithmOpen, setAlgorithmOpen] = React.useState(false)
   const [gapWorkflow, setGapWorkflow] = React.useState<GapWorkflowKind | null>(null)
   const [colorModeTarget, setColorModeTarget] = React.useState<import("./color-mode-dialog").ColorModeDialogTarget | null>(null)
@@ -633,7 +636,8 @@ export function MenuBar({
     const workspaceManagerHandler = () => setWorkspaceManagerOpen(true)
     const fileInfoHandler = () => setFileInfoOpen(true)
     const algorithmHandler = () => setAlgorithmOpen(true)
-    const advancedHandler = (tab: AdvancedSubsystemTab) => {
+    const advancedHandler = (tab: AdvancedSubsystemTab, colorWorkflow: ColorWorkflowMode = "assign") => {
+      if (tab === "color") setAdvancedColorWorkflow(colorWorkflow)
       setAdvancedTab(tab)
       setAdvancedOpen(true)
     }
@@ -645,7 +649,10 @@ export function MenuBar({
     const provenanceHandler = () => advancedHandler("provenance")
     const pluginsHandler = () => advancedHandler("plugins")
     const librariesHandler = () => advancedHandler("libraries")
-    const colorWorkflowHandler = () => advancedHandler("color")
+    const colorWorkflowHandler = (event?: Event) => {
+      const mode = (event as CustomEvent<{ mode?: ColorWorkflowMode }> | undefined)?.detail?.mode
+      advancedHandler("color", mode ?? "assign")
+    }
     const colorModeHandler = (event: Event) => {
       const detail = (event as CustomEvent<import("./color-mode-dialog").ColorModeDialogTarget>).detail
       if (detail) setColorModeTarget(detail)
@@ -772,7 +779,8 @@ export function MenuBar({
     return () => window.removeEventListener("ps-purge-request", handler as EventListener)
   }, [runPurge])
   const pendingPurgeCommand = pendingPurge ? PURGE_COMMANDS.find((c) => c.target === pendingPurge) : null
-  const openAdvancedTab = (tab: AdvancedSubsystemTab) => {
+  const openAdvancedTab = (tab: AdvancedSubsystemTab, colorWorkflow: ColorWorkflowMode = "assign") => {
+    if (tab === "color") setAdvancedColorWorkflow(colorWorkflow)
     setAdvancedTab(tab)
     setAdvancedOpen(true)
   }
@@ -786,8 +794,8 @@ export function MenuBar({
     requestRender()
     window.setTimeout(() => commit(label, "all"), 0)
   }
-  const openColorWorkflow = (_mode: "assign" | "convert" | "proof" = "assign") => {
-    openAdvancedTab("color")
+  const openColorWorkflow = (mode: ColorWorkflowMode = "assign") => {
+    openAdvancedTab("color", mode)
   }
   const toggleProofChannel = (channel: NonNullable<ColorManagementSettings["proofChannels"]>[number]) => {
     const channels = colorSettings.proofChannels ?? []
@@ -4121,7 +4129,7 @@ export function MenuBar({
         initialAlgorithm={autoOptions?.algorithm}
         label={autoOptions?.label}
       />
-      <AdvancedSubsystemsDialog open={advancedOpen} onOpenChange={setAdvancedOpen} initialTab={advancedTab} />
+      <AdvancedSubsystemsDialog open={advancedOpen} onOpenChange={setAdvancedOpen} initialTab={advancedTab} initialColorWorkflow={advancedColorWorkflow} />
       <AlgorithmicOperationsDialog open={algorithmOpen} onOpenChange={setAlgorithmOpen} />
       <GapWorkflowDialog workflow={gapWorkflow} onOpenChange={(open) => !open && setGapWorkflow(null)} />
       <ColorModeDialog target={colorModeTarget} onOpenChange={(open) => !open && setColorModeTarget(null)} />

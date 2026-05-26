@@ -46,7 +46,6 @@ import type {
   BlendMode as PsdBlendMode,
   ImageResources,
   Layer as PsdLayer,
-  LayerEffectsInfo,
   LayerColor,
   PixelData,
   Psd,
@@ -157,7 +156,6 @@ import {
 } from "./psd-compatibility"
 import {
   deserializeHighBitImagePayload,
-  ensureLayerHighBitImage,
   getHighBitExportImage,
   getLayerHighBitImage,
   renderDocumentHighBitPreviewCanvas,
@@ -205,12 +203,21 @@ export interface RasterExportOptions {
   webpNearLossless?: number
   webpMethod?: number
   webpExactAlpha?: boolean
+  webpAlphaQuality?: number
+  webpAlphaFilter?: "none" | "fast" | "best"
   avifLossless?: boolean
   avifSpeed?: number
   avifBitDepth?: number
   avifChromaSubsampling?: string
   avifTileRowsLog2?: number
   avifTileColsLog2?: number
+  tgaJobName?: string
+  tgaSoftwareId?: string
+  tgaAspectRatioNumerator?: number
+  tgaAspectRatioDenominator?: number
+  tgaGamma?: number
+  netpbmComments?: string[]
+  netpbmSourceMaxValue?: number
   includeMetadata?: boolean
   metadata?: RasterExportMetadata
 }
@@ -741,16 +748,6 @@ function parseHexColor(hex: string) {
     b: parseInt(value.slice(4, 6), 16) || 0,
   }
 }
-
-function colorToHex(color: Record<string, unknown> | undefined, fallback = "#000000") {
-  if (!color || typeof color !== "object") return fallback
-  const r = "r" in color ? Number(color.r) || 0 : 0
-  const g = "g" in color ? Number(color.g) || 0 : 0
-  const b = "b" in color ? Number(color.b) || 0 : 0
-  const toHex = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0")
-  return `#${toHex(r)}${toHex(g)}${toHex(b)}`
-}
-
 
 export function makeIoCanvas(w: number, h: number, fill?: string) {
   const size = assertCanvasSize(w, h)
@@ -1486,6 +1483,8 @@ export function buildRasterExportMetadata(doc: PsDocument, options: RasterExport
           nearLossless: options.webpNearLossless,
           method: options.webpMethod,
           exactAlpha: options.webpExactAlpha,
+          alphaQuality: options.webpAlphaQuality,
+          alphaFilter: options.webpAlphaFilter,
           ...metadata.webp,
         }
       : metadata.webp,
@@ -1501,7 +1500,27 @@ export function buildRasterExportMetadata(doc: PsDocument, options: RasterExport
           ...metadata.avif,
         }
       : metadata.avif,
-    netpbm: includeMetadata ? metadata.netpbm : undefined,
+    tga: includeMetadata
+      ? options.format === "tga"
+        ? {
+            jobName: options.tgaJobName,
+            softwareId: options.tgaSoftwareId,
+            aspectRatioNumerator: options.tgaAspectRatioNumerator,
+            aspectRatioDenominator: options.tgaAspectRatioDenominator,
+            gamma: options.tgaGamma,
+            ...metadata.tga,
+          }
+        : metadata.tga
+      : undefined,
+    netpbm: includeMetadata
+      ? options.format === "ppm" || options.format === "pgm" || options.format === "pbm"
+        ? {
+            comments: options.netpbmComments,
+            sourceMaxValue: options.netpbmSourceMaxValue,
+            ...metadata.netpbm,
+          }
+        : metadata.netpbm
+      : undefined,
     xmp: includeMetadata ? metadata.xmp : undefined,
   }
 }
@@ -3839,6 +3858,53 @@ export interface PsdSerializeOptions {
   preserveNativeSource?: boolean
 }
 
+function canvasForNativeLayer(doc: PsDocument, layer: Layer): HTMLCanvasElement {
+  if (layer.canvas?.width === doc.width && layer.canvas.height === doc.height) return layer.canvas
+  const canvas = makeIoCanvas(doc.width, doc.height)
+  const ctx = canvas.getContext("2d")
+  if (ctx && layer.canvas) {
+    ctx.drawImage(layer.canvas, 0, 0)
+  }
+  return canvas
+}
+
+function nativeLayerImageInput(
+  doc: PsDocument,
+  layer: Layer,
+  bitDepth: 1 | 8 | 16 | 32,
+): NativeLayeredPsdLayerInput | null {
+  if (layer.kind === "group") return null
+  const source = getLayerHighBitImage(layer, doc)
+  const image = source && source.width === doc.width && source.height === doc.height
+    ? source
+    : createHighBitImageFromImageData(
+        canvasImageData(canvasForNativeLayer(doc, layer)),
+        {
+          bitDepth: bitDepth === 1 ? 8 : bitDepth,
+          colorMode: doc.colorMode,
+          profile: doc.colorManagement?.assignedProfile,
+        },
+      )
+  return {
+    name: layer.name.slice(0, MAX_LAYER_NAME_LENGTH),
+    image,
+    blendMode: layer.blendMode,
+    opacity: layer.opacity,
+    hidden: !layer.visible,
+    hasHighBitSource: !!source,
+  }
+}
+
+function nativeLayerInputsFromDocument(
+  doc: PsDocument,
+  bitDepth: 1 | 8 | 16 | 32,
+): NativeLayeredPsdLayerInput[] {
+  return [...doc.layers]
+    .reverse()
+    .map((layer) => nativeLayerImageInput(doc, layer, bitDepth))
+    .filter((layer): layer is NativeLayeredPsdLayerInput => !!layer)
+}
+
 export async function serializePsd(doc: PsDocument, options: PsdSerializeOptions = {}): Promise<Blob> {
   if (options.preserveNativeSource) {
     const sourceBytes = restorePsdNativeSourceSnapshot(doc.metadata?.psdNativeSource)
@@ -3901,6 +3967,19 @@ export async function serializePsd(doc: PsDocument, options: PsdSerializeOptions
             profile: doc.colorManagement?.assignedProfile,
           },
         )
+    if (canWriteNativeLayeredPsd(doc)) {
+      const nativeLayers = nativeLayerInputsFromDocument(doc, bitsPerChannel)
+      if (nativeLayers.length) {
+        const buffer = writeNativeLayeredPsd(doc, {
+          psb: options.psb,
+          xmpMetadata,
+          colorModeData: colorModeExport.colorModeData,
+          composite,
+          layers: nativeLayers,
+        })
+        return new Blob([buffer], { type: "image/vnd.adobe.photoshop" })
+      }
+    }
     const buffer = writeNativeCompositePsd(doc, composite, {
       psb: options.psb,
       xmpMetadata,

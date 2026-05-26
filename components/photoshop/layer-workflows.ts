@@ -726,6 +726,453 @@ export function fillMaskCanvas(width: number, height: number, value: "black" | "
   return canvas
 }
 
+/* ===================================================================
+ * Phase 3 — Layer Compositing & Workflows (Gap Report Item 24)
+ *
+ * Blend If split-handle evaluation, knockout blending, mask-hides-effects,
+ * transparency-shapes-layer, bulk layer commands, and Photoshop-style
+ * layer filter predicates.
+ * =================================================================== */
+
+// ── Blend If Split-Handle Evaluation ────────────────────────────────
+
+export interface BlendIfSplitHandle {
+  black: number
+  blackSplit: number
+  whiteSplit: number
+  white: number
+}
+
+export type BlendIfChannelMode = "gray" | "red" | "green" | "blue"
+
+function channelValue(r: number, g: number, b: number, channel: BlendIfChannelMode): number {
+  if (channel === "red") return r
+  if (channel === "green") return g
+  if (channel === "blue") return b
+  return Math.round(0.299 * r + 0.587 * g + 0.114 * b)
+}
+
+/**
+ * Evaluate Blend If opacity for a single pixel pair. Returns 0–1 factor.
+ * When the channel value falls in the split zone, linearly interpolate.
+ */
+export function evaluateBlendIf(
+  srcR: number, srcG: number, srcB: number,
+  destR: number, destG: number, destB: number,
+  thisLayer: BlendIfSplitHandle | null | undefined,
+  underlying: BlendIfSplitHandle | null | undefined,
+  channel: BlendIfChannelMode = "gray",
+): number {
+  let factor = 1
+
+  if (thisLayer) {
+    const val = channelValue(srcR, srcG, srcB, channel)
+    if (val < thisLayer.black || val > thisLayer.white) {
+      factor = 0
+    } else if (val < thisLayer.blackSplit) {
+      factor *= (val - thisLayer.black) / Math.max(1, thisLayer.blackSplit - thisLayer.black)
+    } else if (val > thisLayer.whiteSplit) {
+      factor *= (thisLayer.white - val) / Math.max(1, thisLayer.white - thisLayer.whiteSplit)
+    }
+  }
+
+  if (underlying && factor > 0) {
+    const val = channelValue(destR, destG, destB, channel)
+    if (val < underlying.black || val > underlying.white) {
+      factor = 0
+    } else if (val < underlying.blackSplit) {
+      factor *= (val - underlying.black) / Math.max(1, underlying.blackSplit - underlying.black)
+    } else if (val > underlying.whiteSplit) {
+      factor *= (underlying.white - val) / Math.max(1, underlying.white - underlying.whiteSplit)
+    }
+  }
+
+  return Math.max(0, Math.min(1, factor))
+}
+
+/**
+ * Apply Blend If to full ImageData. Modifies the source alpha in-place
+ * based on the Blend If ranges evaluated against source and destination pixels.
+ */
+export function applyBlendIfToCanvas(
+  source: HTMLCanvasElement,
+  destination: HTMLCanvasElement,
+  thisLayer: BlendIfSplitHandle | null | undefined,
+  underlying: BlendIfSplitHandle | null | undefined,
+  channel: BlendIfChannelMode = "gray",
+): HTMLCanvasElement {
+  const w = source.width
+  const h = source.height
+  const out = document.createElement("canvas")
+  out.width = w
+  out.height = h
+  const outCtx = out.getContext("2d")!
+  outCtx.drawImage(source, 0, 0)
+
+  const srcCtx = source.getContext("2d")
+  const dstCtx = destination.getContext("2d")
+  if (!srcCtx || !dstCtx || w <= 0 || h <= 0) return out
+
+  const srcData = srcCtx.getImageData(0, 0, w, h)
+  const dstData = dstCtx.getImageData(0, 0, w, h)
+  const outData = outCtx.getImageData(0, 0, w, h)
+
+  for (let i = 0; i < srcData.data.length; i += 4) {
+    const factor = evaluateBlendIf(
+      srcData.data[i], srcData.data[i + 1], srcData.data[i + 2],
+      dstData.data[i], dstData.data[i + 1], dstData.data[i + 2],
+      thisLayer, underlying, channel,
+    )
+    outData.data[i + 3] = Math.round(outData.data[i + 3] * factor)
+  }
+
+  outCtx.putImageData(outData, 0, 0)
+  return out
+}
+
+// ── Knockout Blending ───────────────────────────────────────────────
+
+export type KnockoutBlendMode = "none" | "shallow" | "deep"
+
+export interface KnockoutBlendResult {
+  canvas: HTMLCanvasElement
+  layersProcessed: number
+}
+
+/**
+ * Render layers within a group with knockout blending.
+ * Shallow: reveal the group's background. Deep: reveal to document background.
+ */
+export function renderKnockoutBlend(
+  layers: readonly Layer[],
+  groupIndex: number,
+  knockoutMode: KnockoutBlendMode,
+  width: number,
+  height: number,
+  backdrop?: HTMLCanvasElement | null,
+): KnockoutBlendResult {
+  const output = document.createElement("canvas")
+  output.width = width
+  output.height = height
+  const ctx = output.getContext("2d")!
+
+  if (backdrop) ctx.drawImage(backdrop, 0, 0)
+
+  const groupLayer = layers[groupIndex]
+  if (!groupLayer || knockoutMode === "none") {
+    return { canvas: output, layersProcessed: 0 }
+  }
+
+  // Collect layers inside this group (simplified: layers after groupIndex until next group/end)
+  const groupLayers: Layer[] = []
+  for (let i = groupIndex + 1; i < layers.length; i++) {
+    const layer = layers[i]
+    if (layer.kind === "group") break
+    groupLayers.push(layer)
+  }
+
+  // Composite group content
+  const groupContent = document.createElement("canvas")
+  groupContent.width = width
+  groupContent.height = height
+  const groupCtx = groupContent.getContext("2d")!
+
+  let processed = 0
+  for (const layer of groupLayers) {
+    if (!layer.visible || !layer.canvas) continue
+    groupCtx.globalAlpha = layer.opacity ?? 1
+    groupCtx.drawImage(layer.canvas, 0, 0)
+    groupCtx.globalAlpha = 1
+    processed++
+  }
+
+  // Apply knockout: use group alpha to reveal backdrop
+  const groupData = groupCtx.getImageData(0, 0, width, height)
+  const backdropData = ctx.getImageData(0, 0, width, height)
+  const resultData = ctx.createImageData(width, height)
+
+  for (let i = 0; i < groupData.data.length; i += 4) {
+    const groupAlpha = groupData.data[i + 3] / 255
+    if (groupAlpha > 0) {
+      resultData.data[i] = backdropData.data[i]
+      resultData.data[i + 1] = backdropData.data[i + 1]
+      resultData.data[i + 2] = backdropData.data[i + 2]
+      resultData.data[i + 3] = Math.round(groupAlpha * 255)
+    }
+  }
+
+  ctx.putImageData(resultData, 0, 0)
+  return { canvas: output, layersProcessed: processed }
+}
+
+// ── Mask Hides Effects / Transparency Shapes Layer ──────────────────
+
+/**
+ * When hidesEffects is true, the mask clips the effects output so effects
+ * are only visible where the mask allows.
+ */
+export function applyMaskHidesEffects(
+  layerCanvas: HTMLCanvasElement,
+  effectCanvas: HTMLCanvasElement,
+  maskCanvas: HTMLCanvasElement,
+  hidesEffects: boolean,
+): HTMLCanvasElement {
+  const w = effectCanvas.width
+  const h = effectCanvas.height
+  const out = document.createElement("canvas")
+  out.width = w
+  out.height = h
+  const ctx = out.getContext("2d")!
+
+  if (!hidesEffects) {
+    ctx.drawImage(effectCanvas, 0, 0)
+    return out
+  }
+
+  // Draw effects first
+  ctx.drawImage(effectCanvas, 0, 0)
+
+  // Apply mask to clip effects
+  const maskCtx = maskCanvas.getContext("2d")
+  if (maskCtx) {
+    const effectData = ctx.getImageData(0, 0, w, h)
+    const maskData = maskCtx.getImageData(0, 0, Math.min(maskCanvas.width, w), Math.min(maskCanvas.height, h))
+    const mw = Math.min(maskCanvas.width, w)
+    const mh = Math.min(maskCanvas.height, h)
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const ei = (y * w + x) * 4
+        if (x < mw && y < mh) {
+          const mi = (y * mw + x) * 4
+          const maskLum = (0.299 * maskData.data[mi] + 0.587 * maskData.data[mi + 1] + 0.114 * maskData.data[mi + 2]) / 255
+          effectData.data[ei + 3] = Math.round(effectData.data[ei + 3] * maskLum)
+        } else {
+          effectData.data[ei + 3] = 0
+        }
+      }
+    }
+    ctx.putImageData(effectData, 0, 0)
+  }
+
+  return out
+}
+
+/**
+ * When shapesLayer is true, the layer's own transparency defines the fill
+ * region for effects. Effects only appear where the layer has content.
+ */
+export function applyTransparencyShapesLayer(
+  layerCanvas: HTMLCanvasElement,
+  effectCanvas: HTMLCanvasElement,
+  shapesLayer: boolean,
+): HTMLCanvasElement {
+  const w = effectCanvas.width
+  const h = effectCanvas.height
+  const out = document.createElement("canvas")
+  out.width = w
+  out.height = h
+  const ctx = out.getContext("2d")!
+
+  if (!shapesLayer) {
+    ctx.drawImage(effectCanvas, 0, 0)
+    return out
+  }
+
+  ctx.drawImage(effectCanvas, 0, 0)
+
+  const layerCtx = layerCanvas.getContext("2d")
+  if (layerCtx) {
+    const effectData = ctx.getImageData(0, 0, w, h)
+    const lw = Math.min(layerCanvas.width, w)
+    const lh = Math.min(layerCanvas.height, h)
+    const layerData = layerCtx.getImageData(0, 0, lw, lh)
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const ei = (y * w + x) * 4
+        if (x < lw && y < lh) {
+          const li = (y * lw + x) * 4
+          const layerAlpha = layerData.data[li + 3] / 255
+          effectData.data[ei + 3] = Math.round(effectData.data[ei + 3] * layerAlpha)
+        } else {
+          effectData.data[ei + 3] = 0
+        }
+      }
+    }
+    ctx.putImageData(effectData, 0, 0)
+  }
+
+  return out
+}
+
+// ── Bulk Layer Commands ─────────────────────────────────────────────
+
+/**
+ * Rasterize all layer styles/effects into the layer pixels.
+ * Returns new layers with style set to null/undefined.
+ */
+export function flattenAllLayerEffects(layers: readonly Layer[]): Layer[] {
+  return layers.map((layer) => {
+    if (!layer.style) return { ...layer }
+
+    const w = layer.canvas?.width ?? 1
+    const h = layer.canvas?.height ?? 1
+    const canvas = document.createElement("canvas")
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext("2d")!
+
+    // Draw layer content with effects baked in
+    if (layer.canvas) ctx.drawImage(layer.canvas, 0, 0)
+
+    // If layer has style effects, composite them
+    if (layer.style) {
+      const style = layer.style
+      // Bake simple color overlay
+      if (style.colorOverlay?.enabled !== false && style.colorOverlay?.color) {
+        ctx.globalCompositeOperation = "source-atop"
+        ctx.globalAlpha = style.colorOverlay.opacity ?? 1
+        ctx.fillStyle = style.colorOverlay.color
+        ctx.fillRect(0, 0, w, h)
+        ctx.globalAlpha = 1
+        ctx.globalCompositeOperation = "source-over"
+      }
+    }
+
+    return {
+      ...layer,
+      canvas,
+      style: undefined,
+    }
+  })
+}
+
+/**
+ * Bake all masks into layer alpha, returning layers with mask=undefined.
+ */
+export function flattenAllMasks(layers: readonly Layer[], docWidth: number, docHeight: number): Layer[] {
+  return layers.map((layer) => flattenLayerMasks(layer, docWidth, docHeight))
+}
+
+/**
+ * Remove layers whose canvas is entirely transparent.
+ */
+export function deleteAllEmptyLayers(layers: readonly Layer[]): Layer[] {
+  return layers.filter((layer) => {
+    if (layer.kind === "group") return true
+    if (!layer.canvas) return false
+    const ctx = layer.canvas.getContext("2d")
+    if (!ctx || layer.canvas.width <= 0 || layer.canvas.height <= 0) return false
+    const data = ctx.getImageData(0, 0, layer.canvas.width, layer.canvas.height)
+    for (let i = 3; i < data.data.length; i += 4) {
+      if (data.data[i] > 0) return true
+    }
+    return false
+  })
+}
+
+/**
+ * Rasterize text/shape/smart-object layers to plain raster layers.
+ */
+export function rasterizeLayerSubtype(layer: Layer, width?: number, height?: number): Layer {
+  const w = width ?? layer.canvas?.width ?? 1
+  const h = height ?? layer.canvas?.height ?? 1
+  const canvas = document.createElement("canvas")
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext("2d")!
+
+  if (layer.canvas) {
+    ctx.drawImage(layer.canvas, 0, 0)
+  }
+
+  return {
+    ...layer,
+    kind: "raster" as const,
+    canvas,
+    text: undefined,
+    path: undefined,
+    smartObject: undefined,
+    smartSource: undefined,
+    smartFilters: undefined,
+    adjustment: undefined,
+  }
+}
+
+// ── Photoshop-style Layer Filter Predicates ─────────────────────────
+
+export type LayerFilterKind = "all" | "raster" | "text" | "shape" | "adjustment" | "smart-object" | "group" | "frame" | "artboard" | "3d" | "video"
+export type LayerFilterAttribute = "visible" | "hidden" | "locked" | "unlocked" | "clipped" | "unclipped" | "has-effects" | "no-effects" | "has-mask" | "no-mask" | "has-smart-filter" | "no-smart-filter" | "linked" | "unlinked" | "advanced-blending"
+
+export function layerMatchesKindFilter(layer: Layer, kind: LayerFilterKind): boolean {
+  if (kind === "all") return true
+  return layer.kind === kind
+}
+
+export function layerMatchesEffectFilter(layer: Layer): boolean {
+  return !!layer.style
+}
+
+export function layerMatchesModeFilter(layer: Layer, mode: BlendMode): boolean {
+  return layer.blendMode === mode
+}
+
+export function layerMatchesAttributeFilter(layer: Layer, attribute: LayerFilterAttribute): boolean {
+  switch (attribute) {
+    case "visible": return layer.visible === true
+    case "hidden": return layer.visible === false
+    case "locked": return !!(layer.locked || layer.lockTransparency || layer.lockMove || layer.lockAll)
+    case "unlocked": return !(layer.locked || layer.lockTransparency || layer.lockMove || layer.lockAll)
+    case "clipped": return !!layer.clipped
+    case "unclipped": return !layer.clipped
+    case "has-effects": return !!layer.style
+    case "no-effects": return !layer.style
+    case "has-mask": return !!(layer.mask || layer.vectorMask)
+    case "no-mask": return !(layer.mask || layer.vectorMask)
+    case "has-smart-filter": return !!(layer.smartFilters && layer.smartFilters.length > 0)
+    case "no-smart-filter": return !(layer.smartFilters && layer.smartFilters.length > 0)
+    case "linked": return !!layer.linkGroupId
+    case "unlinked": return !layer.linkGroupId
+    case "advanced-blending": return !!(layer.advancedBlending)
+    default: return false
+  }
+}
+
+export function layerMatchesColorFilter(layer: Layer, colorLabel: string): boolean {
+  if (!colorLabel || colorLabel === "none") return !layer.colorLabel || layer.colorLabel === "none"
+  return layer.colorLabel === colorLabel
+}
+
+export interface LayerFilterPredicate {
+  kind?: LayerFilterKind
+  blendMode?: BlendMode
+  attribute?: LayerFilterAttribute
+  colorLabel?: string
+  searchText?: string
+}
+
+/**
+ * Filter layers by combining multiple predicates with AND logic.
+ */
+export function filterLayersByPredicate(layers: readonly Layer[], predicates: LayerFilterPredicate[]): Layer[] {
+  if (!predicates.length) return [...layers]
+
+  return layers.filter((layer) => {
+    for (const pred of predicates) {
+      if (pred.kind && !layerMatchesKindFilter(layer, pred.kind)) return false
+      if (pred.blendMode && !layerMatchesModeFilter(layer, pred.blendMode)) return false
+      if (pred.attribute && !layerMatchesAttributeFilter(layer, pred.attribute)) return false
+      if (pred.colorLabel && !layerMatchesColorFilter(layer, pred.colorLabel)) return false
+      if (pred.searchText) {
+        const blob = layerSearchBlob(layer)
+        if (!blob.includes(normalizedText(pred.searchText))) return false
+      }
+    }
+    return true
+  })
+}
+
 export function invertMaskCanvas(mask: HTMLCanvasElement): HTMLCanvasElement {
   const canvas = document.createElement("canvas")
   canvas.width = mask.width

@@ -133,9 +133,20 @@ const CONDITION_ATTRIBUTES: ConditionAttribute[] = [
   "layer.opacityLte",
   "selection.empty",
   "selection.hasBounds",
+  "selection.widthGte",
+  "selection.heightGte",
   "channels.count",
   "document.colorMode",
   "document.bitDepth",
+  "document.widthGte",
+  "document.widthLte",
+  "document.heightGte",
+  "document.heightLte",
+  "document.layerCountGte",
+  "document.layerCountLte",
+  "activeLayer.kind",
+  "activeLayer.name",
+  "activeLayer.visible",
 ]
 
 function cleanFolderName(value: unknown) {
@@ -184,7 +195,7 @@ function actionHasPath(entry: HistoryEntry) {
 }
 
 function isEmptyEnvelope(env: StepEnvelope) {
-  return !env.condition && !env.breakpoint && !env.pauseMs && !env.onError && !env.retryLimit && !env.note
+  return !env.condition && !env.breakpoint && !env.pauseMs && !env.onError && !env.retryLimit && !env.retryDelayMs && !env.note
 }
 const SMART_SOURCE_KEYS = new Set([
   "width",
@@ -987,7 +998,7 @@ function ActionStepRow({
             update((current) => ({
               ...current,
               condition: attribute
-                ? { attribute, value: current.condition?.value, layerKey: current.condition?.layerKey, onFail: current.condition?.onFail ?? "skip" }
+                ? { attribute, value: current.condition?.value, layerKey: current.condition?.layerKey, onFail: current.condition?.onFail ?? "skip", jumpToStepId: current.condition?.jumpToStepId }
                 : undefined,
             }))
           }}
@@ -1002,13 +1013,14 @@ function ActionStepRow({
           value={condition?.onFail ?? "skip"}
           onChange={(event) => update((current) => ({
             ...current,
-            condition: current.condition ? { ...current.condition, onFail: event.target.value as "skip" | "abort" | "continue" } : undefined,
+            condition: current.condition ? { ...current.condition, onFail: event.target.value as "skip" | "abort" | "continue" | "jump" } : undefined,
           }))}
           className="h-6 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px] disabled:opacity-45"
         >
           <option value="skip">Skip</option>
           <option value="abort">Abort</option>
           <option value="continue">Else run</option>
+          <option value="jump">Jump</option>
         </select>
         <input
           aria-label={`Condition value for ${step.label}`}
@@ -1022,7 +1034,7 @@ function ActionStepRow({
           className="h-6 min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px] disabled:opacity-45"
         />
       </div>
-      <div className="mt-1 grid grid-cols-[1fr_80px_80px] gap-1">
+      <div className="mt-1 grid grid-cols-[1fr_1fr] gap-1">
         <input
           aria-label={`Condition layer target for ${step.label}`}
           disabled={!condition}
@@ -1034,6 +1046,19 @@ function ActionStepRow({
           placeholder="Layer/id"
           className="h-6 min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px] disabled:opacity-45"
         />
+        <input
+          aria-label={`Condition jump target for ${step.label}`}
+          disabled={!condition || condition.onFail !== "jump"}
+          value={condition?.jumpToStepId ?? ""}
+          onChange={(event) => update((current) => ({
+            ...current,
+            condition: current.condition ? { ...current.condition, jumpToStepId: event.target.value.trim() || undefined } : undefined,
+          }))}
+          placeholder="Jump step"
+          className="h-6 min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px] disabled:opacity-45"
+        />
+      </div>
+      <div className="mt-1 grid grid-cols-[80px_72px_80px] gap-1">
         <select
           aria-label={`Step error policy for ${step.label}`}
           value={envelope?.onError ?? "skip"}
@@ -1044,6 +1069,15 @@ function ActionStepRow({
           <option value="abort">Err abort</option>
           <option value="retry">Retry</option>
         </select>
+        <input
+          aria-label={`Step retry limit for ${step.label}`}
+          type="number"
+          min={0}
+          max={10}
+          value={envelope?.retryLimit ?? 0}
+          onChange={(event) => update((current) => ({ ...current, retryLimit: Math.max(0, Math.min(10, Math.round(Number(event.target.value) || 0))) }))}
+          className="h-6 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]"
+        />
         <input
           aria-label={`Step pause for ${step.label}`}
           type="number"

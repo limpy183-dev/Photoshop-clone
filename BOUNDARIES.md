@@ -97,6 +97,20 @@ Out of scope to "fix" (these are user-agent constraints, not bugs):
 
 ---
 
+## 7. Production GPU path tracing and native 3D engines
+
+Out of scope:
+
+- Production WebGPU / WebGL path tracing as the stable 3D renderer
+- Vendor-grade physically based 3D rendering parity
+- Native 3D driver, printer, or interchange runtimes
+
+**Why:** browser GPU APIs are optional, driver-dependent, and expose different capabilities across devices. A production path tracer would require a separate rendering engine, shader pipeline, acceleration structure, material system, and fallback QA matrix beyond this editor's browser-local Photoshop-style scope.
+
+**What does work:** deterministic CPU ray-traced previews, tiled CPU rendering for large 3D layers, editable mesh/material/UV metadata, texture-atlas baking, smart-object re-rendering, and an opt-in WebGPU path-tracing technology-preview flag for experiments when a browser exposes WebGPU. The tech preview must keep CPU ray tracing as the production fallback.
+
+---
+
 ## Items that *are* in scope and tracked elsewhere
 
 Anything in `implementation-status-report.md` under "Partially Implemented" with a concrete browser-achievable next step. The "Highest-Value Remaining Work" section near the bottom of that report is the live backlog. This file (`BOUNDARIES.md`) is the inverse — the items that are intentionally *not* on that backlog.

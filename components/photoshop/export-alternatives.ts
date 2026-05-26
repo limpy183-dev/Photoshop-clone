@@ -29,6 +29,17 @@ export interface ExportAlternative {
   reason: string
 }
 
+function pushAlternative(
+  out: ExportAlternative[],
+  currentFormat: string,
+  format: string,
+  label: string,
+  reason: string,
+) {
+  if (currentFormat === format) return
+  out.push({ format, label, reason })
+}
+
 /**
  * Returns the alternatives to suggest given the active format and a single
  * limitation/warning record. Returns an empty array when the warning
@@ -41,6 +52,27 @@ export function alternativesForLimitation(
 ): ExportAlternative[] {
   const text = `${item.label} ${item.detail}`.toLowerCase()
   const out: ExportAlternative[] = []
+
+  // ---- Flattened Photoshop structure ----
+  if (
+    /layer structure/i.test(item.label) ||
+    /are composited into the exported/i.test(text)
+  ) {
+    pushAlternative(
+      out,
+      currentFormat,
+      "metadata-json",
+      "Use Sidecar",
+      "The sidecar preserves layer descriptors and compatibility reports instead of pretending the image file is still layered.",
+    )
+    pushAlternative(
+      out,
+      currentFormat,
+      "svg",
+      "Use SVG",
+      "SVG keeps browser-safe shape and text descriptors alongside the rendered preview where possible.",
+    )
+  }
 
   // ---- Alpha / transparency loss ----
   if (
@@ -104,6 +136,38 @@ export function alternativesForLimitation(
       })
     }
   }
+  if (/apng optimization/i.test(item.label)) {
+    pushAlternative(
+      out,
+      currentFormat,
+      "animated-webp",
+      "Use Anim WebP",
+      "Animated WebP is the other browser-local full-color animation path and may produce smaller timeline exports.",
+    )
+    pushAlternative(
+      out,
+      currentFormat,
+      "gif",
+      "Use GIF",
+      "GIF provides broad playback compatibility when palette quantization is acceptable.",
+    )
+  }
+  if (/animated webp encoder/i.test(item.label)) {
+    pushAlternative(
+      out,
+      currentFormat,
+      "apng",
+      "Use APNG",
+      "APNG keeps PNG-style RGBA frames without relying on the browser static WebP encoder.",
+    )
+    pushAlternative(
+      out,
+      currentFormat,
+      "gif",
+      "Use GIF",
+      "GIF avoids WebP playback support concerns when palette quantization is acceptable.",
+    )
+  }
 
   // ---- High-bit precision loss ----
   if (
@@ -128,6 +192,29 @@ export function alternativesForLimitation(
         reason: "Netpbm PPM/PGM encodes 16-bit samples without browser canvas downcasting.",
       })
     }
+  }
+
+  // ---- RGB conversion / source channel limitations ----
+  if (
+    /rgba export conversion/i.test(item.label) ||
+    /spot and extra channels/i.test(item.label) ||
+    /multichannel data/i.test(text) ||
+    /source color-model channels/i.test(text)
+  ) {
+    pushAlternative(
+      out,
+      currentFormat,
+      "metadata-json",
+      "Use Sidecar",
+      "The sidecar preserves the source color-mode, channel descriptors, and limitation report next to the rendered pixels.",
+    )
+    pushAlternative(
+      out,
+      currentFormat,
+      "tiff",
+      "Use TIFF",
+      "TIFF is the strongest browser-local raster handoff for high-bit sample data and embedded color/profile metadata.",
+    )
   }
 
   // ---- Color mode / ICC related: keep noisy items quiet, only suggest TIFF
@@ -155,8 +242,17 @@ export function alternativesForLimitation(
   // ---- Metadata embedding unsupported in current format ----
   if (
     /metadata embedding/i.test(item.label) &&
-    (item.status === "unsupported" || /this format does not carry the app's export metadata fields/i.test(text))
+    (item.status === "unsupported" ||
+      item.status === "approximated" ||
+      /this format does not carry the app's export metadata fields/i.test(text))
   ) {
+    if (currentFormat !== "metadata-json") {
+      out.push({
+        format: "metadata-json",
+        label: "Use Sidecar",
+        reason: "The sidecar keeps the full app metadata/report payload without depending on image-container metadata support.",
+      })
+    }
     if (currentFormat !== "png") {
       out.push({
         format: "png",
@@ -176,7 +272,6 @@ export function alternativesForLimitation(
   // ---- Editable vector flatten when current format is raster, except SVG ----
   if (
     /editable vector/i.test(item.label) &&
-    item.status === "flattened" &&
     currentFormat !== "svg"
   ) {
     out.push({
@@ -185,12 +280,18 @@ export function alternativesForLimitation(
       reason: "SVG preserves editable vector structure where browser-safe geometry is available.",
     })
   }
+  if (/editable vector/i.test(item.label) && currentFormat !== "metadata-json") {
+    out.push({
+      format: "metadata-json",
+      label: "Use Sidecar",
+      reason: "The sidecar keeps vector descriptors and the limitation manifest alongside the visual export.",
+    })
+  }
 
   // ---- Editable text flatten ----
   if (
     /editable text/i.test(item.label) &&
     item.status === "flattened" &&
-    currentFormat !== "svg" &&
     currentFormat !== "metadata-json"
   ) {
     out.push({
@@ -198,6 +299,38 @@ export function alternativesForLimitation(
       label: "Use Sidecar",
       reason: "The metadata sidecar JSON preserves editable text layer descriptors next to the raster file.",
     })
+  }
+
+  // ---- Lossy or browser-defined encoder controls ----
+  if (
+    /jpeg quality/i.test(item.label) ||
+    /webp encoder controls/i.test(item.label) ||
+    /avif encoder controls/i.test(item.label) ||
+    /quality is below/i.test(text) ||
+    /encoder-defined/i.test(text) ||
+    /limited quality intent/i.test(text)
+  ) {
+    pushAlternative(
+      out,
+      currentFormat,
+      "png",
+      "Use PNG",
+      "PNG avoids lossy quantization and browser-defined quality controls.",
+    )
+    pushAlternative(
+      out,
+      currentFormat,
+      "tiff",
+      "Use TIFF",
+      "TIFF provides deterministic app-authored raster encoding with high-bit and metadata support.",
+    )
+    pushAlternative(
+      out,
+      currentFormat,
+      "metadata-json",
+      "Use Sidecar",
+      "The sidecar records the requested encoder-control intent for downstream tooling.",
+    )
   }
 
   // Deduplicate by format.
@@ -229,10 +362,7 @@ export function batchAlternativesForLimitation(
   currentFormat: BrowserRasterExportFormat,
   item: { label: string; detail: string; status?: string },
 ): ExportAlternative[] {
-  const allowed = new Set<string>(["png", "jpeg", "webp", "avif", "gif"])
-  return alternativesForLimitation(currentFormat as ExportFormat, item).filter((alt) =>
-    allowed.has(alt.format),
-  )
+  return alternativesForLimitation(currentFormat as ExportFormat, item)
 }
 
 /**

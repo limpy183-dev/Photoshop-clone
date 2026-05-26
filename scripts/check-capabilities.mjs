@@ -241,7 +241,66 @@ function buildRules(state) {
     })
   }
 
-  // Rule 4: video export capability says "MediaRecorder MP4/H.264 or WebM" —
+  // Rule 3b: browser-raster text must not drift behind the lower-level export
+  // pipeline. document-io.ts injects/records ICC and app metadata for supported
+  // raster containers, so advanced-subsystems.ts must not keep older blanket
+  // warnings such as "ICC profiles are not converted."
+  {
+    const browserRasterAdvanced = advancedById.get("browser-raster")
+    const rasterExportCapability = capabilityById.get("export.browser-raster")
+    const documentIoHasIccExport =
+      /ICC profile embedding/.test(state.documentIo) ||
+      /injectIccIntoRaster/.test(state.documentIo)
+    const documentIoHasMetadataExport =
+      /Metadata embedding/.test(state.documentIo) &&
+      /buildRasterExportMetadata/.test(state.documentIo)
+    if (browserRasterAdvanced && rasterExportCapability) {
+      const advancedText = [
+        browserRasterAdvanced.decodePath,
+        browserRasterAdvanced.metadataPath,
+        browserRasterAdvanced.exportPath,
+        browserRasterAdvanced.limitations,
+      ].join(" ")
+      if (
+        documentIoHasIccExport &&
+        /ICC/i.test(rasterExportCapability.summary) &&
+        /ICC profiles? (are )?not converted|no ICC conversion|ICC.*not.*converted/i.test(advancedText)
+      ) {
+        rules.push({
+          severity: "error",
+          ruleId: "stale-browser-raster-icc-warning",
+          message: "advanced-subsystems browser-raster text still says ICC profiles are not converted even though document-io/capabilities expose raster ICC conversion or embedding.",
+          locations: ["components/photoshop/advanced-subsystems.ts", "components/photoshop/document-io.ts", "components/photoshop/capabilities.ts"],
+        })
+      }
+      if (
+        documentIoHasIccExport &&
+        /ICC|profile/i.test(rasterExportCapability.summary) &&
+        !/ICC|profile/i.test(browserRasterAdvanced.exportPath)
+      ) {
+        rules.push({
+          severity: "error",
+          ruleId: "browser-raster-export-path-missing-icc",
+          message: "advanced-subsystems browser-raster exportPath should mention ICC/profile handling because lower-level raster export and capabilities do.",
+          locations: ["components/photoshop/advanced-subsystems.ts", "components/photoshop/document-io.ts", "components/photoshop/capabilities.ts"],
+        })
+      }
+      if (
+        documentIoHasMetadataExport &&
+        /metadata/i.test(rasterExportCapability.summary) &&
+        !/metadata/i.test(browserRasterAdvanced.exportPath)
+      ) {
+        rules.push({
+          severity: "error",
+          ruleId: "browser-raster-export-path-missing-metadata",
+          message: "advanced-subsystems browser-raster exportPath should mention metadata handling because lower-level raster export and capabilities do.",
+          locations: ["components/photoshop/advanced-subsystems.ts", "components/photoshop/document-io.ts", "components/photoshop/capabilities.ts"],
+        })
+      }
+    }
+  }
+
+  // Rule 4: video export capability says "MediaRecorder MP4/H.264 or WebM" -
   // verify that VIDEO_EXPORT_PRESETS in three-d-video-engine.ts actually lists
   // those mime types (or H.264-capable codecs).
   const videoCap = capabilityById.get("video.export-presets-frame-animation")

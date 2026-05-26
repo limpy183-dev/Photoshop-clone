@@ -14,6 +14,25 @@
  */
 
 export type PathModifierKey = "alt" | "ctrl" | "meta" | "shift"
+export type PathModifierTool = "pen" | "curvature-pen" | "freeform-pen" | "direct-select" | "path-select"
+export type PathModifierInteraction =
+  | "click-anchor"
+  | "drag-handle"
+  | "place-anchor"
+  | "click-segment"
+  | "drag-anchor"
+  | "drag-subpath"
+  | "marquee"
+export type PathModifierIntent =
+  | "toggle-smooth-corner"
+  | "break-handle-symmetry"
+  | "temp-direct-select"
+  | "constrain-45"
+  | "toggle-anchor-selection"
+  | "select-subpath"
+  | "duplicate-subpath"
+  | "marquee-select"
+  | "none"
 
 export interface PathModifierBinding {
   /** Stable id used by tests / contextual help / command registry. */
@@ -173,6 +192,54 @@ export function matchesModifier(event: ModifierEventLike, keys: readonly PathMod
  */
 export function isTempDirectSelectModifier(event: ModifierEventLike): boolean {
   return !!(event.ctrlKey || event.metaKey)
+}
+
+export function activePathToolForModifiers(tool: PathModifierTool, event: ModifierEventLike): PathModifierTool {
+  if (
+    (tool === "pen" || tool === "curvature-pen" || tool === "freeform-pen" || tool === "path-select") &&
+    isTempDirectSelectModifier(event)
+  ) {
+    return "direct-select"
+  }
+  return tool
+}
+
+export function pathModifierIntent(
+  tool: PathModifierTool,
+  interaction: PathModifierInteraction,
+  event: ModifierEventLike,
+): PathModifierIntent {
+  if (
+    (tool === "pen" || tool === "curvature-pen" || tool === "freeform-pen" || tool === "path-select") &&
+    isTempDirectSelectModifier(event)
+  ) {
+    return "temp-direct-select"
+  }
+  if ((tool === "pen" || tool === "curvature-pen") && interaction === "click-anchor" && event.altKey) {
+    return "toggle-smooth-corner"
+  }
+  if ((tool === "pen" || tool === "curvature-pen") && interaction === "place-anchor" && event.shiftKey) {
+    return "constrain-45"
+  }
+  if (tool === "direct-select" && interaction === "drag-handle" && event.altKey) {
+    return "break-handle-symmetry"
+  }
+  if (tool === "direct-select" && interaction === "click-anchor" && event.shiftKey) {
+    return "toggle-anchor-selection"
+  }
+  if (tool === "direct-select" && interaction === "drag-anchor" && event.shiftKey) {
+    return "constrain-45"
+  }
+  if (tool === "direct-select" && interaction === "click-segment" && event.altKey) {
+    return "select-subpath"
+  }
+  if (tool === "direct-select" && interaction === "marquee") {
+    return "marquee-select"
+  }
+  if (tool === "path-select" && interaction === "drag-subpath" && event.altKey) {
+    return "duplicate-subpath"
+  }
+  return "none"
 }
 
 /**

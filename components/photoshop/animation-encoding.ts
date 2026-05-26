@@ -9,7 +9,7 @@
  */
 
 import type { PsDocument, TimelineFrame, TimelineSettings } from "./types"
-import { easingProgress, renderTimelineFrameComposite, DEFAULT_TIMELINE_SETTINGS } from "./timeline-engine"
+import { renderTimelineFrameComposite, DEFAULT_TIMELINE_SETTINGS, transitionProgressAtFrameTime } from "./timeline-engine"
 
 export interface AnimatedExportFrame {
   durationMs: number
@@ -425,10 +425,10 @@ export function collectAnimationFramesAtFps(
     const frame = frames[frameIndex]
     const sampleCount = Math.max(1, Math.round(frame.durationMs / frameDuration))
     for (let sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++) {
-      const linear = sampleCount <= 1 ? 0 : sampleIndex / (sampleCount - 1)
-      const progress = frame.transition && frame.transition !== "hold"
-        ? easingProgress(linear, frame.easing ?? "linear")
-        : 0
+      const frameElapsedMs = sampleCount <= 1
+        ? Math.max(1, frame.durationMs)
+        : (sampleIndex / (sampleCount - 1)) * Math.max(1, frame.durationMs)
+      const progress = transitionProgressAtFrameTime(frame, frameElapsedMs)
       const transitioned = drawTimelineTransitionSample(
         rendered[frameIndex],
         rendered[frameIndex + 1] ?? null,

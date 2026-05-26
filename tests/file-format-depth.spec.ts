@@ -812,6 +812,31 @@ test("TIFF encoder authors IPTC, populated EXIF IFD, XMP content credentials, an
   expect(icc).toEqual(new Uint8Array([0, 1, 2, 3, 4, 5]))
 })
 
+test("TIFF encoder writes GPS EXIF directory metadata", async () => {
+  installFixtureDom()
+  const source = new ImageData(new Uint8ClampedArray([
+    12, 34, 56, 255,
+  ]), 1, 1)
+
+  const tiff = await encodeTiffImageDataAsync(source, {
+    metadata: {
+      description: "GPS fixture",
+      creationDate: "2026-05-24T12:34:56.000Z",
+      gps: {
+        latitude: 51.5074,
+        longitude: -0.1278,
+        altitude: 42.5,
+        capturedAt: "2026-05-24T12:34:56.000Z",
+      },
+    },
+  })
+  const gpsTags = tiffNestedTags(tiff, 34853)
+
+  for (const tag of [0, 1, 2, 3, 4, 5, 6, 7, 29]) {
+    expect(gpsTags.has(tag)).toBe(true)
+  }
+})
+
 test("BigTIFF and DNG export author 64-bit directories, subdirectories, RAW sidecars, and DNG metadata", () => {
   installFixtureDom()
   const source = new ImageData(new Uint8ClampedArray([
@@ -997,6 +1022,41 @@ test("TGA extension and developer metadata round-trip document fields", () => {
   expect(decoded.metadata?.contentCredentials).toEqual(expect.arrayContaining([expect.objectContaining({ id: "cred_tga" })]))
   expect(text).toContain("TRUEVISION-XFILE")
   expect(text).toContain("PSWEBMETA")
+})
+
+test("TGA export writes advanced extension controls from metadata", () => {
+  installFixtureDom()
+  const source = new ImageData(new Uint8ClampedArray([
+    10, 20, 30, 255,
+    40, 50, 60, 255,
+  ]), 2, 1)
+
+  const tga = encodeTgaImageData(source, {
+    rle: false,
+    metadata: {
+      author: "Ada",
+      description: "TGA controls",
+      tga: {
+        jobName: "Plate proof job",
+        softwareId: "PS Web Encoder",
+        aspectRatioNumerator: 16,
+        aspectRatioDenominator: 9,
+        gamma: 2.2,
+      },
+    },
+  })
+  const bytes = new Uint8Array(tga)
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const footerOffset = bytes.byteLength - 26
+  const extensionOffset = view.getUint32(footerOffset, true)
+  const text = new TextDecoder("latin1").decode(bytes)
+
+  expect(text).toContain("Plate proof job")
+  expect(text).toContain("PS Web Encoder")
+  expect(view.getUint16(extensionOffset + 474, true)).toBe(16)
+  expect(view.getUint16(extensionOffset + 476, true)).toBe(9)
+  expect(view.getUint16(extensionOffset + 478, true)).toBe(2200)
+  expect(view.getUint16(extensionOffset + 480, true)).toBe(1000)
 })
 
 test("Netpbm comments and source max value round-trip through PPM and high-bit PGM exports", () => {

@@ -17,11 +17,13 @@ import { Archive, Download, XCircle } from "lucide-react"
 import {
   canvasToGifDataUrl,
   createDocumentReport,
+  createExportLimitationReport,
   diagnoseBrowserRasterEncoders,
   downloadBlob,
   renderDocumentComposite,
   rasterMime,
   type BrowserRasterEncoderDiagnostic,
+  type CompatibilityManifestEntry,
 } from "./document-io"
 import { useEditor, makeCanvas } from "./editor-context"
 import { canvasSizeError } from "./canvas-limits"
@@ -33,6 +35,11 @@ import { batchAlternativesForLimitation, type ExportAlternative } from "./export
 
 type BatchScope = "document" | "visible-layers" | "selected-layers" | "timeline" | "slices" | "sprite-layers" | "sprite-slices" | "sprite-timeline"
 type RasterFormat = BrowserRasterExportFormat
+const BATCH_RASTER_FORMATS = new Set<string>(["png", "jpeg", "webp", "avif", "gif"])
+
+function isBatchRasterFormat(format: string): format is RasterFormat {
+  return BATCH_RASTER_FORMATS.has(format)
+}
 
 function safeName(name: string) {
   return name.replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "-").replace(/^-+|-+$/g, "") || "export"
@@ -252,6 +259,25 @@ export function BatchExportDialog({
     window.dispatchEvent(new CustomEvent("ps-active-export-format", { detail: { format: null, source: "batch-export" } }))
   }, [open])
 
+  const applyAlternative = React.useCallback((alternative: ExportAlternative) => {
+    if (isBatchRasterFormat(alternative.format)) {
+      setFormat(alternative.format)
+      return
+    }
+    window.dispatchEvent(new CustomEvent("ps-open-export-as", {
+      detail: {
+        dialog: "export-as",
+        format: alternative.format,
+        scale: Math.round(scale * 100),
+        quality: Math.round(quality * 100),
+        transparent,
+        matte,
+        includeMetadata: alternative.format === "metadata-json" ? true : undefined,
+      },
+    }))
+    onOpenChange(false)
+  }, [matte, onOpenChange, quality, scale, transparent])
+
   if (!activeDoc) return null
 
   const candidates =
@@ -270,6 +296,14 @@ export function BatchExportDialog({
 
   const browserEncoderDiagnostic = encoderDiagnostics.find((item) => item.format === format)
   const progressPercent = progress?.total ? Math.round(((progress.completed + progress.failed) / progress.total) * 100) : 0
+  const limitationReport = createExportLimitationReport(activeDoc, {
+    format,
+    transparent,
+    quality: Math.round(quality * 100),
+  })
+  const visibleLimitations = limitationReport.items.filter((item) =>
+    item.status === "flattened" || item.status === "approximated" || item.status === "unsupported",
+  )
 
   const batchItems = (): BatchCanvasItem[] => {
     const baseName = safeName(activeDoc.name)
@@ -463,6 +497,12 @@ export function BatchExportDialog({
           <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1.5 text-[10px] text-[var(--ps-text-dim)]">
             Ready to export {estimatedCount} item{estimatedCount === 1 ? "" : "s"}.
           </div>
+          <BatchLimitationsBlock
+            summary={limitationReport.summary}
+            items={visibleLimitations}
+            currentFormat={format}
+            onPick={applyAlternative}
+          />
           {(format === "webp" || format === "avif") && browserEncoderDiagnostic ? (
             <div className={`rounded-sm border px-2 py-1.5 text-[10px] ${browserEncoderDiagnostic.supported ? "border-emerald-500/35 bg-emerald-500/10 text-emerald-100" : "border-red-500/35 bg-red-500/10 text-red-100"}`}>
               <div className="font-medium">{format.toUpperCase()} browser encoder</div>
@@ -473,7 +513,7 @@ export function BatchExportDialog({
                     { format: "png", label: "Use PNG", reason: "PNG is universally supported by the browser canvas encoder." },
                     { format: "jpeg", label: "Use JPEG", reason: "JPEG is universally supported (no alpha)." },
                   ]}
-                  onPick={setFormat}
+                  onPick={applyAlternative}
                   testId="batch-export-encoder-alt"
                 />
               ) : null}
@@ -488,7 +528,7 @@ export function BatchExportDialog({
                   detail: "JPEG has no alpha channel; transparent pixels are composited against the selected matte.",
                   status: "flattened",
                 })}
-                onPick={setFormat}
+                onPick={applyAlternative}
                 testId="batch-export-jpeg-alpha-alt"
               />
             </div>
@@ -502,7 +542,7 @@ export function BatchExportDialog({
                   detail: "GIF export quantizes to a 256-color indexed palette with limited transparency.",
                   status: "approximated",
                 })}
-                onPick={setFormat}
+                onPick={applyAlternative}
                 testId="batch-export-gif-alt"
               />
             </div>
@@ -555,7 +595,7 @@ function BatchAlternativesRow({
   testId,
 }: {
   alternatives: ExportAlternative[]
-  onPick: (format: RasterFormat) => void
+  onPick: (alternative: ExportAlternative) => void
   testId?: string
 }) {
   if (!alternatives.length) return null
@@ -567,12 +607,52 @@ function BatchAlternativesRow({
           key={alt.format}
           type="button"
           title={alt.reason}
-          onClick={() => onPick(alt.format as RasterFormat)}
+          onClick={() => onPick(alt)}
           className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] px-1.5 py-0.5 text-[10px] text-[var(--ps-text)] hover:border-amber-400/60 hover:bg-amber-400/10 hover:text-amber-100"
         >
           {alt.label}
         </button>
       ))}
+    </div>
+  )
+}
+
+function BatchLimitationsBlock({
+  summary,
+  items,
+  currentFormat,
+  onPick,
+}: {
+  summary: string
+  items: CompatibilityManifestEntry[]
+  currentFormat: RasterFormat
+  onPick: (alternative: ExportAlternative) => void
+}) {
+  return (
+    <div
+      className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1.5 text-[10px] text-[var(--ps-text-dim)]"
+      data-testid="batch-export-limitations"
+    >
+      <div className="mb-1 font-medium text-[var(--ps-text)]">{summary}</div>
+      {items.length ? (
+        <div className="grid gap-1.5">
+          {items.map((item) => (
+            <div key={`${item.label}-${item.status}`} className="grid grid-cols-[82px_1fr] gap-2">
+              <span className="uppercase tracking-wide text-amber-300">{item.status}</span>
+              <div>
+                <div>{item.label}: {item.detail}</div>
+                <BatchAlternativesRow
+                  alternatives={batchAlternativesForLimitation(currentFormat, item)}
+                  onPick={onPick}
+                  testId={`batch-export-limitation-alt-${item.label.replace(/\s+/g, "-").toLowerCase()}`}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div>No destructive browser-raster limitations detected for this format.</div>
+      )}
     </div>
   )
 }
