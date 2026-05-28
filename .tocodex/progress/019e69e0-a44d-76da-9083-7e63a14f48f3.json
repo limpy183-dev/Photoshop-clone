@@ -1,0 +1,32 @@
+{
+  "taskId": "019e69e0-a44d-76da-9083-7e63a14f48f3",
+  "todos": [
+    {
+      "id": "863b792f4fc7dde35620fca9ab230295",
+      "content": "Inspect Phase 1 quick-win report items and locate corresponding implementation surfaces",
+      "status": "completed"
+    },
+    {
+      "id": "dc275e4f2341fb71cec27735189714ac",
+      "content": "Classify each scoped item as implemented, partial, or missing based on code evidence",
+      "status": "completed"
+    },
+    {
+      "id": "2b65f8bf4e07e4ab9803b69afd034e3e",
+      "content": "Map each real remaining gap to exact files that would need changes",
+      "status": "completed"
+    },
+    {
+      "id": "8d12d096c5c7677d8e58428a22ab6faa",
+      "content": "Group remaining gaps into safe independent execution batches",
+      "status": "completed"
+    },
+    {
+      "id": "2f3c17253bec6c3904126758ec0d67fb",
+      "content": "Return the verified Phase 1 quick-win audit summary via `attempt_completion`",
+      "status": "in_progress"
+    }
+  ],
+  "lastUpdated": 1779892944443,
+  "status": "active"
+}

@@ -891,7 +891,7 @@ function mmToPx(mm: number) {
 }
 
 export interface PrintPreviewMark {
-  kind: "crop" | "registration" | "center" | "bleed" | "label"
+  kind: "crop" | "registration" | "center" | "center-crop" | "color-bars" | "description" | "labels" | "bleed" | "label"
   enabled: boolean
   label: string
   description: string
@@ -934,7 +934,8 @@ export function buildPrintPreviewReport(
   const page = pageSizePx(settings)
   const bleedPx = mmToPx(settings.bleedMm)
   const marksOffset = mmToPx(settings.marksOffsetMm ?? 4)
-  const pad = settings.cropMarks || settings.registrationMarks || settings.bleedMm > 0 ? 64 + marksOffset : 24
+  const anyMarksForPad = settings.cropMarks || settings.registrationMarks || settings.centerCropMarks || settings.colorBars || settings.description || settings.labels || settings.bleedMm > 0
+  const pad = anyMarksForPad ? 64 + marksOffset : 24
   const pageX = pad
   const pageY = pad
   const printableW = Math.max(1, page.w - bleedPx * 2)
@@ -1008,6 +1009,13 @@ export function buildPrintPreviewReport(
         geometry: { x: pageX - marksOffset - 36, y: pageY - marksOffset - 36, width: page.w + marksOffset * 2 + 72, height: page.h + marksOffset * 2 + 72 },
       },
       {
+        kind: "center-crop",
+        enabled: !!settings.centerCropMarks,
+        label: "Center-crop marks",
+        description: "Tick marks at the midpoint of each page edge for trim alignment.",
+        geometry: { x: pageX, y: pageY, width: page.w, height: page.h },
+      },
+      {
         kind: "registration",
         enabled: settings.registrationMarks,
         label: "Registration marks",
@@ -1015,11 +1023,25 @@ export function buildPrintPreviewReport(
         geometry: { x: pageX - 50, y: pageY - 50, width: page.w + 100, height: page.h + 100 },
       },
       {
-        kind: "center",
-        enabled: settings.registrationMarks,
-        label: "Center marks",
-        description: "Page-center marks are represented by the midpoint registration targets.",
-        geometry: { x: pageX + page.w / 2 - 16, y: pageY + page.h / 2 - 16, width: 32, height: 32 },
+        kind: "color-bars",
+        enabled: !!settings.colorBars,
+        label: "Color bars",
+        description: "Process and tint patches drawn alongside the page for press calibration reference.",
+        geometry: { x: pageX, y: pageY - marksOffset - 12, width: page.w, height: 12 },
+      },
+      {
+        kind: "description",
+        enabled: !!settings.description,
+        label: "Description",
+        description: "Page description string drawn below the trim edge.",
+        geometry: { x: pageX, y: pageY + page.h + marksOffset, width: page.w, height: 18 },
+      },
+      {
+        kind: "labels",
+        enabled: !!settings.labels,
+        label: "Labels",
+        description: "File-name label drawn above the trim edge.",
+        geometry: { x: pageX, y: pageY - marksOffset - 22, width: page.w, height: 18 },
       },
       {
         kind: "bleed",
@@ -1055,7 +1077,10 @@ export function buildPrintPreviewCanvas(flat: HTMLCanvasElement, settings: Print
   const page = pageSizePx(settings)
   const bleed = mmToPx(settings.bleedMm)
   const marksOffset = mmToPx(settings.marksOffsetMm ?? 4)
-  const pad = settings.cropMarks || settings.registrationMarks || settings.bleedMm > 0 ? 64 + marksOffset : 24
+  const anyMarks = settings.cropMarks || settings.registrationMarks ||
+    settings.centerCropMarks || settings.colorBars || settings.description ||
+    settings.labels || settings.bleedMm > 0
+  const pad = anyMarks ? 80 + marksOffset : 24
   const canvas = createSubsystemCanvas(page.w + pad * 2, page.h + pad * 2, settings.paperColor ?? "#ffffff")
   const ctx = canvas.getContext("2d")!
   const pageX = pad
@@ -1078,7 +1103,11 @@ export function buildPrintPreviewCanvas(flat: HTMLCanvasElement, settings: Print
     ctx.setLineDash([])
   }
   if (settings.cropMarks) drawCropMarks(ctx, pageX, pageY, page.w, page.h, marksOffset)
+  if (settings.centerCropMarks) drawCenterCropMarks(ctx, pageX, pageY, page.w, page.h, marksOffset)
   if (settings.registrationMarks) drawRegistrationMarks(ctx, pageX, pageY, page.w, page.h)
+  if (settings.colorBars) drawColorBars(ctx, pageX, pageY, page.w, page.h, marksOffset)
+  if (settings.description) drawPrintDescription(ctx, pageX, pageY, page.w, page.h, settings, flat, marksOffset)
+  if (settings.labels) drawPrintLabels(ctx, pageX, pageY, page.w, page.h, docName, marksOffset)
   ctx.fillStyle = "#111827"
   ctx.font = "12px sans-serif"
   ctx.fillText(`${docName} - ${settings.paperSize} - ${settings.colorHandling === "app" ? "app color managed" : "printer color managed"}`, pageX, canvas.height - 18)
@@ -1116,6 +1145,94 @@ function drawRegistrationMarks(ctx: CanvasRenderingContext2D, x: number, y: numb
     ctx.lineTo(cx, cy + 16)
     ctx.stroke()
   }
+}
+
+function drawCenterCropMarks(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, offset: number) {
+  ctx.strokeStyle = "#111827"
+  ctx.lineWidth = 1
+  const len = 24
+  const cx = x + w / 2
+  const cy = y + h / 2
+  const segments = [
+    [cx, y - offset - len, cx, y - offset],
+    [cx, y + h + offset, cx, y + h + offset + len],
+    [x - offset - len, cy, x - offset, cy],
+    [x + w + offset, cy, x + w + offset + len, cy],
+  ]
+  for (const [x1, y1, x2, y2] of segments) {
+    ctx.beginPath()
+    ctx.moveTo(x1, y1)
+    ctx.lineTo(x2, y2)
+    ctx.stroke()
+  }
+}
+
+function drawColorBars(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, offset: number) {
+  const swatches = [
+    "#000000", "#404040", "#808080", "#c0c0c0", "#ffffff",
+    "#00ffff", "#ff00ff", "#ffff00",
+    "#ff0000", "#00ff00", "#0000ff",
+  ]
+  const swatchW = Math.max(10, Math.min(28, w / (swatches.length + 1)))
+  const swatchH = 12
+  const totalW = swatchW * swatches.length
+  const startX = x + (w - totalW) / 2
+  const barY = y + h + offset + 16
+  for (let i = 0; i < swatches.length; i++) {
+    ctx.fillStyle = swatches[i]
+    ctx.fillRect(startX + i * swatchW, barY, swatchW, swatchH)
+  }
+  ctx.strokeStyle = "#111827"
+  ctx.lineWidth = 1
+  ctx.strokeRect(startX, barY, totalW, swatchH)
+}
+
+function drawPrintDescription(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  settings: PrintSettings,
+  flat: HTMLCanvasElement,
+  offset: number,
+) {
+  const lines = [
+    `Paper: ${settings.paperSize} (${settings.orientation})`,
+    `Scale: ${settings.scale}%   Bleed: ${settings.bleedMm}mm`,
+    `Source: ${flat.width} x ${flat.height} px`,
+    `Color: ${settings.colorHandling === "app" ? "App-managed" : "Printer-managed"}${settings.proofPrint ? " - proof" : ""}`,
+  ]
+  ctx.fillStyle = "#111827"
+  ctx.font = "10px sans-serif"
+  ctx.textBaseline = "top"
+  const textX = x
+  let textY = y + h + offset + 34
+  for (const line of lines) {
+    ctx.fillText(line, textX, textY)
+    textY += 12
+  }
+  ctx.textBaseline = "alphabetic"
+}
+
+function drawPrintLabels(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  _h: number,
+  docName: string,
+  offset: number,
+) {
+  ctx.fillStyle = "#111827"
+  ctx.font = "bold 11px sans-serif"
+  ctx.textBaseline = "alphabetic"
+  const labelY = y - offset - 18
+  ctx.fillText(docName, x, labelY)
+  const stamp = new Date().toISOString().slice(0, 16).replace("T", " ")
+  const stampMetrics = ctx.measureText(stamp)
+  ctx.font = "10px sans-serif"
+  ctx.fillText(stamp, x + w - stampMetrics.width - 4, labelY)
 }
 
 export function applyPluginFilterToCanvas(canvas: HTMLCanvasElement, plugin: PluginDescriptor) {

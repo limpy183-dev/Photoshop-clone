@@ -1,0 +1,32 @@
+= : The term '=' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the 
+spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:1
++ = 'C:\Users\damia\Desktop\AI_Projects\Photoshop\Claude_code_Pohotosho ...
++ ~
+    + CategoryInfo          : ObjectNotFound: (=:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+= : The term '=' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the 
+spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:143
++ ... romopus4.7\.superpowers\brainstorm\codex-13124-1779797451'; = '127.0. ...
++                                                                 ~
+    + CategoryInfo          : ObjectNotFound: (=:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+= : The term '=' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the 
+spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:158
++ ... erpowers\brainstorm\codex-13124-1779797451'; = '127.0.0.1'; = 'localh ...
++                                                                 ~
+    + CategoryInfo          : ObjectNotFound: (=:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 
+= : The term '=' is not recognized as the name of a cmdlet, function, script file, or operable program. Check the 
+spelling of the name, or if a path was included, verify that the path is correct and try again.
+At line:1 char:173
++ ... torm\codex-13124-1779797451'; = '127.0.0.1'; = 'localhost'; = '13124' ...
++                                                                 ~
+    + CategoryInfo          : ObjectNotFound: (=:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+ 

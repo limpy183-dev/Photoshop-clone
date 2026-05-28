@@ -28,6 +28,12 @@ import { buildLearningIndex, runLearningIndexItem } from "@/components/photoshop
 import { findNewDocumentPreset } from "@/components/photoshop/new-document-presets"
 import { readRecentDocuments, rememberRecentDocument } from "@/components/photoshop/recent-documents"
 import { createDocumentFromPreset } from "@/components/photoshop/startup-documents"
+import {
+  applyScreenMode,
+  cycleScreenMode,
+  resolveScreenModeState,
+  type ScreenMode,
+} from "@/components/photoshop/screen-modes"
 import type { DocumentFileKind, DocumentStorageKind } from "@/components/photoshop/editor-context"
 
 // Heavy dialogs / overlays are rarely visible — load them lazily so their
@@ -100,6 +106,8 @@ function Workspace() {
   const [canvasSizeOpen, setCanvasSizeOpen] = React.useState(false)
   const [statusBarVisible, setStatusBarVisible] = React.useState(true)
   const [colorPicker, setColorPicker] = React.useState<ColorPickerState | null>(null)
+  const [screenMode, setScreenMode] = React.useState<ScreenMode>("standard")
+  const screenModeState = React.useMemo(() => resolveScreenModeState(screenMode), [screenMode])
   // Tracks whether the Home/Start workspace is explicitly open. The view is
   // also shown automatically whenever no documents are open, so this flag
   // only matters for "Window ▸ Home" toggling while a doc is active.
@@ -184,6 +192,43 @@ function Workspace() {
   }, [])
 
   React.useEffect(() => {
+    return addPhotoshopEventListener("ps-set-screen-mode", (detail) => {
+      const mode = detail?.mode
+      if (mode) {
+        setScreenMode(mode)
+        void applyScreenMode(mode)
+      }
+    })
+  }, [])
+
+  React.useEffect(() => {
+    return addPhotoshopEventListener("ps-cycle-screen-mode", () => {
+      setScreenMode((current) => {
+        const next = cycleScreenMode(current)
+        void applyScreenMode(next)
+        return next
+      })
+    })
+  }, [])
+
+  React.useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "F" || event.key === "f") {
+        const target = event.target as HTMLElement | null
+        if (target?.closest("input, textarea, [contenteditable=true], [role=textbox]")) return
+        event.preventDefault()
+        setScreenMode((current) => {
+          const next = cycleScreenMode(current)
+          void applyScreenMode(next)
+          return next
+        })
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [])
+
+  React.useEffect(() => {
     return addPhotoshopEventListener("ps-show-home", (detail) => {
       // Detail can specify open:true/false to set, or be undefined to toggle.
       // Falls back to a plain toggle so Window ▸ Home keeps behaving as a
@@ -251,28 +296,36 @@ function Workspace() {
   }, [activeDocId, dispatch])
 
   return (
-    <main className="h-screen w-screen flex flex-col bg-[var(--ps-chrome)] text-[var(--ps-text)]">
+    <main
+      className="h-screen w-screen flex flex-col text-[var(--ps-text)]"
+      style={{ background: screenModeState.backgroundColor }}
+      data-screen-mode={screenMode}
+    >
       <StartupRouteEffects />
-      <MenuBar
-        onOpenNew={openNew}
-        statusBarVisible={statusBarVisible}
-        onToggleStatusBar={toggleStatusBarVisibility}
-      />
-      <OptionsBar />
-      <DocumentTabs />
+      {screenModeState.hideMenuBar ? null : (
+        <MenuBar
+          onOpenNew={openNew}
+          statusBarVisible={statusBarVisible && !screenModeState.hideStatusBar}
+          onToggleStatusBar={toggleStatusBarVisibility}
+        />
+      )}
+      {screenModeState.hideMenuBar ? null : <OptionsBar />}
+      {screenModeState.hideMenuBar ? null : <DocumentTabs />}
       <ImageAssetsGeneratorRunner />
       <div className="flex-1 flex min-h-0">
-        <ToolPalette />
+        {screenModeState.hideToolPalette ? null : <ToolPalette />}
         <CanvasView />
-        <ResizeHandle
-          direction="horizontal"
-          ariaLabel="Resize right sidebar"
-          onResize={resizeDock}
-          onResizeEnd={saveDockWidth}
-        />
-        <PanelDock width={mounted ? dockWidth : 380} />
+        {screenModeState.hidePanels ? null : (
+          <ResizeHandle
+            direction="horizontal"
+            ariaLabel="Resize right sidebar"
+            onResize={resizeDock}
+            onResizeEnd={saveDockWidth}
+          />
+        )}
+        {screenModeState.hidePanels ? null : <PanelDock width={mounted ? dockWidth : 380} />}
       </div>
-      {statusBarVisible ? <StatusBar onHide={() => setStatusBarVisibility(false)} /> : null}
+      {statusBarVisible && !screenModeState.hideStatusBar ? <StatusBar onHide={() => setStatusBarVisibility(false)} /> : null}
 
       {/* Context menu lives in its own subtree so opening/closing it does
           not re-render the workspace shell. */}

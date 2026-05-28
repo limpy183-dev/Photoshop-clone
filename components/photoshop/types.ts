@@ -687,7 +687,7 @@ export interface BlurGalleryMeshResource {
     }
     mesh:
       | { kind: "field"; pins: { x: number; y: number; blur: number }[]; falloff: number; blur: number }
-      | { kind: "iris"; center: { x: number; y: number }; radius: number; feather: number; blur: number }
+      | { kind: "iris"; center: { x: number; y: number }; radius: number; ellipseWidth?: number; ellipseHeight?: number; rotation?: number; feather: number; blur: number }
       | { kind: "tilt"; center: { x: number; y: number }; angle: number; radius: number; feather: number; blur: number }
       | { kind: "path"; points: { x: number; y: number }[]; distance: number; taper: number; angle: number }
       | { kind: "spin"; center: { x: number; y: number }; radius: number; amount: number }
@@ -1749,6 +1749,10 @@ export interface PrintSettings {
   bleedMm: number
   cropMarks: boolean
   registrationMarks: boolean
+  centerCropMarks?: boolean
+  colorBars?: boolean
+  description?: boolean
+  labels?: boolean
   colorHandling: "app" | "printer"
   proofPrint: boolean
   printerProfile?: ColorManagementSettings["proofProfile"]

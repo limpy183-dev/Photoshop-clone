@@ -16,6 +16,10 @@ import {
   normalizeBlurGalleryParams,
   type BlurGalleryParams,
 } from "./blur-gallery-controls"
+import {
+  normalizeLightingEffectsParams,
+  type LightingEffectsParams,
+} from "./lighting-effects-controls"
 import type { Layer, PsDocument } from "./types"
 
 interface FilterDialogProps {
@@ -52,6 +56,7 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
   const [applying, setApplying] = React.useState(false)
   const isAdvancedAdjustment = !!filter && ADVANCED_ADJUSTMENTS.has(filter.id)
   const isBlurGallery = !!filter && isBlurGalleryFilterId(filter.id)
+  const isLightingEffects = filter?.id === "lighting-effects"
   const smartTarget =
     selectedLayers.length === 1 &&
     (selectedLayers[0].smartObject || selectedLayers[0].kind === "smart-object")
@@ -79,6 +84,16 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
   }, [filter])
 
   React.useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ params?: LightingEffectsParams }>).detail
+      if (!filter || filter.id !== "lighting-effects" || !detail?.params) return
+      setParams((cur) => ({ ...cur, ...detail.params! }))
+    }
+    window.addEventListener("ps-lighting-effects-overlay-change", handler)
+    return () => window.removeEventListener("ps-lighting-effects-overlay-change", handler)
+  }, [filter])
+
+  React.useEffect(() => {
     if (!filter || !activeDoc || !isBlurGalleryFilterId(filter.id)) {
       window.dispatchEvent(new CustomEvent("ps-blur-gallery-overlay-state", { detail: null }))
       return
@@ -96,6 +111,23 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
     }
   }, [filter, params, activeDoc])
 
+  React.useEffect(() => {
+    if (!filter || !activeDoc || filter.id !== "lighting-effects") {
+      window.dispatchEvent(new CustomEvent("ps-lighting-effects-overlay-state", { detail: null }))
+      return
+    }
+    const normalized = normalizeLightingEffectsParams(params)
+    window.dispatchEvent(new CustomEvent("ps-lighting-effects-overlay-state", {
+      detail: {
+        params: normalized,
+        docId: activeDoc.id,
+      },
+    }))
+    return () => {
+      window.dispatchEvent(new CustomEvent("ps-lighting-effects-overlay-state", { detail: null }))
+    }
+  }, [filter, params, activeDoc])
+
   const context = React.useMemo<FilterContext>(() => {
     if (!filter) return {}
     const ctx: FilterContext = {}
@@ -105,6 +137,14 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
     if (filter.id === "displace") {
       const ref = String(params.mapSource ?? "")
       if (ref) ctx.displacementMap = matchSourceData(ref, documents)
+    }
+    if (filter.id === "lens-blur") {
+      const ref = String(params.depthSource ?? "")
+      if (ref) ctx.lensBlurDepthSource = matchSourceData(ref, documents)
+    }
+    if (filter.id === "lighting-effects") {
+      const ref = String(params.bumpSource ?? "")
+      if (ref) ctx.lightingBumpSource = matchSourceData(ref, documents)
     }
     if (filter.id === "apply-image") {
       const ref = String(params.applySource ?? "")
@@ -164,7 +204,7 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
       }
     }
     return ctx
-  }, [filter, params.matchSource, params.mapSource, params.applySource, params.sourceA, params.sourceB, params.mode, documents, activeDoc])
+  }, [filter, params.matchSource, params.mapSource, params.depthSource, params.bumpSource, params.applySource, params.sourceA, params.sourceB, params.mode, documents, activeDoc])
 
   React.useEffect(() => {
     if (!filter || !activeDoc) return
@@ -199,12 +239,12 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
         setFilterPreview(layer.id, tmp)
       }
     }
-    const id = window.setTimeout(() => void run(), interactiveBlurGallery ? 24 : 80)
+    const id = window.setTimeout(() => void run(), interactiveBlurGallery || isLightingEffects ? 24 : 80)
     return () => {
       controller.abort()
       window.clearTimeout(id)
     }
-  }, [filter, params, context, activeDoc, setFilterPreview, smartTarget, isBlurGallery])
+  }, [filter, params, context, activeDoc, setFilterPreview, smartTarget, isBlurGallery, isLightingEffects])
 
   React.useEffect(() => {
     if (!filter || !activeDoc) return
@@ -391,6 +431,7 @@ function defaultParams(filter: FilterDef, activeDoc: PsDocument, selectedLayers:
   if (filter.id === "gradient-map") out.gradient = "0,#000000;1,#ffffff"
   if (filter.id === "match-color") out.matchSource = defaultMatchSource(activeDoc, selectedLayers, documents)
   if (isBlurGalleryFilterId(filter.id)) return normalizeBlurGalleryParams(filter.id, out)
+  if (filter.id === "lighting-effects") return normalizeLightingEffectsParams(out)
   return out
 }
 

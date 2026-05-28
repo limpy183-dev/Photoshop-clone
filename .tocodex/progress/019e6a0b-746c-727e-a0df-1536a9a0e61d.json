@@ -1,0 +1,42 @@
+{
+  "taskId": "019e6a0b-746c-727e-a0df-1536a9a0e61d",
+  "todos": [
+    {
+      "id": "b053efd2310bc3755b90a785c798e195",
+      "content": "Read implementation plan",
+      "status": "completed"
+    },
+    {
+      "id": "d27051ad8898308ce3a3161c1775ef1c",
+      "content": "Wave 1 — Quick Wins (items 1-10)",
+      "status": "in_progress"
+    },
+    {
+      "id": "80c702ddaa7fabc28f01a7da83398a3f",
+      "content": "Wave 2 — High-Impact UX (items 11-16)",
+      "status": "pending"
+    },
+    {
+      "id": "9b7e534ba0baaed7b781cfee347a7011",
+      "content": "Wave 3 — Panel & Editor Polish (items 17-22)",
+      "status": "pending"
+    },
+    {
+      "id": "a8ec223f6df8309b737b83b2a2b49a84",
+      "content": "Wave 4 — Workflow & Export Depth (items 23-28)",
+      "status": "pending"
+    },
+    {
+      "id": "380c42335a068ddeddead906558a127c",
+      "content": "Wave 5 — Advanced & Long-Tail (items 29-35)",
+      "status": "pending"
+    },
+    {
+      "id": "11c771d2c41bdae1df8c5690c7b19241",
+      "content": "Wave 6 — Polish & Infrastructure (items 36-45)",
+      "status": "pending"
+    }
+  ],
+  "lastUpdated": 1779895628069,
+  "status": "active"
+}

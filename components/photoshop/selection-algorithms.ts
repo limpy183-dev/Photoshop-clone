@@ -35,7 +35,11 @@ export interface MagneticLassoTraceResult {
 
 export interface TransformMaskOptions {
   scale?: number
+  scaleX?: number
+  scaleY?: number
   rotationDeg?: number
+  translateX?: number
+  translateY?: number
   previewZoom?: number
   smoothing?: boolean
 }
@@ -390,10 +394,14 @@ export function transformSelectionMaskData(
   bounds: { x: number; y: number; w: number; h: number },
   options: TransformMaskOptions = {},
 ) {
-  const scale = Math.max(0.0001, options.scale ?? 1)
+  const uniform = Math.max(0.0001, options.scale ?? 1)
+  const scaleX = Math.max(0.0001, options.scaleX ?? uniform)
+  const scaleY = Math.max(0.0001, options.scaleY ?? uniform)
   const angle = ((options.rotationDeg ?? 0) * Math.PI) / 180
   const cos = Math.cos(-angle)
   const sin = Math.sin(-angle)
+  const tx = options.translateX ?? 0
+  const ty = options.translateY ?? 0
   const cx = bounds.x + bounds.w / 2
   const cy = bounds.y + bounds.h / 2
   const out = new Uint8ClampedArray(width * height)
@@ -401,10 +409,12 @@ export function transformSelectionMaskData(
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      const dx = (x + 0.5 - cx) / scale
-      const dy = (y + 0.5 - cy) / scale
-      const sx = cx + dx * cos - dy * sin - 0.5
-      const sy = cy + dx * sin + dy * cos - 0.5
+      const dxw = x + 0.5 - cx - tx
+      const dyw = y + 0.5 - cy - ty
+      const rx = dxw * cos - dyw * sin
+      const ry = dxw * sin + dyw * cos
+      const sx = cx + rx / scaleX - 0.5
+      const sy = cy + ry / scaleY - 0.5
       out[y * width + x] = sampler(data, width, height, sx, sy)
     }
   }

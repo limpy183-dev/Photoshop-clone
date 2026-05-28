@@ -19,6 +19,117 @@ import { makeCanvas, makeDocument, useEditor } from "./editor-context"
 import { canvasToGifDataUrl, downloadBlob, downloadDataUrl, loadRasterCanvasFromFile, rasterMime, renderDocumentComposite } from "./document-io"
 import type { BrowserRasterExportFormat } from "./document-io"
 import {
+  encodeJpegImageData,
+  encodePngImageData,
+  injectAvifXmpMetadata,
+  injectWebpXmpMetadata,
+  type RasterExportMetadata,
+} from "./raster-codecs"
+
+type WatermarkPosition = "top-left" | "top-center" | "top-right" | "middle-left" | "center" | "middle-right" | "bottom-left" | "bottom-center" | "bottom-right"
+
+interface WatermarkOptions {
+  enabled: boolean
+  text: string
+  position: WatermarkPosition
+  opacity: number
+  fontSize: number
+  color: string
+  shadow: boolean
+}
+
+interface MetadataOptions {
+  copyright: string
+  author: string
+  title: string
+}
+
+const WATERMARK_POSITIONS: { id: WatermarkPosition; label: string }[] = [
+  { id: "top-left", label: "Top Left" },
+  { id: "top-center", label: "Top Center" },
+  { id: "top-right", label: "Top Right" },
+  { id: "middle-left", label: "Middle Left" },
+  { id: "center", label: "Center" },
+  { id: "middle-right", label: "Middle Right" },
+  { id: "bottom-left", label: "Bottom Left" },
+  { id: "bottom-center", label: "Bottom Center" },
+  { id: "bottom-right", label: "Bottom Right" },
+]
+
+function drawWatermark(canvas: HTMLCanvasElement, options: WatermarkOptions) {
+  if (!options.enabled || !options.text.trim()) return
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return
+  const fontSize = Math.max(8, Math.round(options.fontSize))
+  ctx.save()
+  ctx.globalAlpha = Math.max(0, Math.min(1, options.opacity))
+  ctx.font = `${fontSize}px sans-serif`
+  ctx.fillStyle = options.color
+  const padding = Math.round(fontSize * 0.6)
+  const metrics = ctx.measureText(options.text)
+  const textWidth = metrics.width
+  const textHeight = fontSize
+  let x = padding
+  let y = padding + textHeight
+  ctx.textAlign = "left"
+  ctx.textBaseline = "alphabetic"
+  if (options.position.includes("right")) x = canvas.width - padding - textWidth
+  else if (options.position.includes("center")) x = (canvas.width - textWidth) / 2
+  if (options.position.startsWith("middle")) y = (canvas.height + textHeight) / 2
+  else if (options.position.startsWith("bottom")) y = canvas.height - padding
+  if (options.shadow) {
+    ctx.shadowColor = "rgba(0,0,0,0.55)"
+    ctx.shadowBlur = Math.max(2, Math.round(fontSize * 0.18))
+    ctx.shadowOffsetX = 1
+    ctx.shadowOffsetY = 1
+  }
+  ctx.fillText(options.text, x, y)
+  ctx.restore()
+}
+
+function metadataFromOptions(options: MetadataOptions): RasterExportMetadata | undefined {
+  const copyright = options.copyright.trim()
+  const author = options.author.trim()
+  const title = options.title.trim()
+  if (!copyright && !author && !title) return undefined
+  return {
+    ...(title ? { title } : {}),
+    ...(author ? { author } : {}),
+    ...(copyright ? { copyright } : {}),
+  }
+}
+
+async function blobFromArrayBuffer(buffer: ArrayBuffer, mime: string) {
+  return new Blob([buffer], { type: mime })
+}
+
+async function encodeWithMetadata(
+  canvas: HTMLCanvasElement,
+  format: RasterFormat,
+  quality: number,
+  metadata: RasterExportMetadata,
+): Promise<Blob | null> {
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return null
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+  if (format === "jpeg") {
+    const buffer = await encodeJpegImageData(imageData, { quality, progressive: true, metadata })
+    return blobFromArrayBuffer(buffer, "image/jpeg")
+  }
+  if (format === "png") {
+    const buffer = await encodePngImageData(imageData, { metadata })
+    return blobFromArrayBuffer(buffer, "image/png")
+  }
+  if (format === "webp" || format === "avif") {
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, rasterMime(format), quality))
+    if (!blob) return null
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    const injected = format === "webp" ? injectWebpXmpMetadata(bytes, metadata) : injectAvifXmpMetadata(bytes, metadata)
+    return new Blob([injected], { type: blob.type })
+  }
+  return null
+}
+import {
   DEFAULT_AUTOMATION_OUTPUT,
   createAutomationWorkflow,
   executeCanvasWorkflow,
@@ -99,7 +210,7 @@ function sourceToCanvas(source: CanvasImageSource, sourceWidth: number, sourceHe
 async function exportCanvas(
   canvas: HTMLCanvasElement,
   filename: string,
-  options: { format: RasterFormat; quality: number; transparent: boolean; matte: string },
+  options: { format: RasterFormat; quality: number; transparent: boolean; matte: string; watermark?: WatermarkOptions; metadata?: RasterExportMetadata },
 ) {
   const capability = getRasterFormatCapability(options.format)
   if (!capability.supported) {
@@ -108,9 +219,17 @@ async function exportCanvas(
   const needsMatte = options.format === "jpeg" || !options.transparent
   const out = needsMatte ? makeCanvas(canvas.width, canvas.height, options.matte) : makeCanvas(canvas.width, canvas.height)
   out.getContext("2d")!.drawImage(canvas, 0, 0)
+  if (options.watermark) drawWatermark(out, options.watermark)
   if (options.format === "gif") {
     downloadDataUrl(canvasToGifDataUrl(out, options.transparent), `${filename}.gif`)
     return
+  }
+  if (options.metadata && (options.format === "jpeg" || options.format === "png" || options.format === "webp" || options.format === "avif")) {
+    const metaBlob = await encodeWithMetadata(out, options.format, options.quality, options.metadata)
+    if (metaBlob) {
+      downloadBlob(metaBlob, `${filename}.${options.format === "jpeg" ? "jpg" : options.format}`)
+      return
+    }
   }
   const blob = await new Promise<Blob | null>((resolve) => out.toBlob(resolve, rasterMime(options.format), options.quality))
   if (!blob) throw new Error(`Could not export ${filename} as ${FORMAT_LABELS[options.format]}`)
@@ -295,18 +414,40 @@ export function ImageProcessorDialog({ open, onOpenChange }: { open: boolean; on
   const [matte, setMatte] = React.useState("#ffffff")
   const [openFirst, setOpenFirst] = React.useState(false)
   const [busy, setBusy] = React.useState(false)
+  const [watermark, setWatermark] = React.useState<WatermarkOptions>({
+    enabled: false,
+    text: "© Copyright",
+    position: "bottom-right",
+    opacity: 0.6,
+    fontSize: 24,
+    color: "#ffffff",
+    shadow: true,
+  })
+  const [metadata, setMetadata] = React.useState<MetadataOptions>({
+    copyright: "",
+    author: "",
+    title: "",
+  })
 
   const process = async () => {
     if (!files.length) return
     setBusy(true)
     try {
       let firstCanvas: HTMLCanvasElement | null = null
+      const meta = metadataFromOptions(metadata)
       for (const file of files) {
         try {
           const raster = await loadRasterCanvasFromFile(file, { mode: "reduced-scale" })
           const canvas = sourceToCanvas(raster.canvas, raster.canvas.width, raster.canvas.height, maxWidth, maxHeight, resize)
           if (!firstCanvas) firstCanvas = canvas
-          await exportCanvas(canvas, `${safeName(file.name)}-processed`, { format, quality, transparent, matte })
+          await exportCanvas(canvas, `${safeName(file.name)}-processed`, {
+            format,
+            quality,
+            transparent,
+            matte,
+            watermark: watermark.enabled ? watermark : undefined,
+            metadata: meta,
+          })
         } catch (error) {
           throw new Error(`${file.name}: ${error instanceof Error ? error.message : "Processing failed"}`)
         }
@@ -314,7 +455,10 @@ export function ImageProcessorDialog({ open, onOpenChange }: { open: boolean; on
       if (openFirst && firstCanvas) {
         const doc = makeDocument("Image Processor Result", firstCanvas.width, firstCanvas.height, "transparent")
         const layer = doc.layers.find((candidate) => candidate.id === doc.activeLayerId)
-        if (layer) layer.canvas.getContext("2d")!.drawImage(firstCanvas, 0, 0)
+        if (layer) {
+          layer.canvas.getContext("2d")!.drawImage(firstCanvas, 0, 0)
+          if (watermark.enabled) drawWatermark(layer.canvas, watermark)
+        }
         createDocument(doc, "Image Processor")
       }
       toast.success(`Processed ${files.length} image${files.length === 1 ? "" : "s"}`)
@@ -331,6 +475,8 @@ export function ImageProcessorDialog({ open, onOpenChange }: { open: boolean; on
       <FilePicker files={files} setFiles={setFiles} />
       <ExportControls format={format} setFormat={setFormat} quality={quality} setQuality={setQuality} transparent={transparent} setTransparent={setTransparent} matte={matte} setMatte={setMatte} />
       <ResizeControls resize={resize} setResize={setResize} maxWidth={maxWidth} setMaxWidth={setMaxWidth} maxHeight={maxHeight} setMaxHeight={setMaxHeight} />
+      <WatermarkControls watermark={watermark} setWatermark={setWatermark} />
+      <MetadataControls metadata={metadata} setMetadata={setMetadata} />
       <label className="flex items-center gap-2 text-[11px]">
         <Checkbox checked={openFirst} onCheckedChange={(value) => setOpenFirst(value === true)} />
         Open first processed file as a document
@@ -340,6 +486,78 @@ export function ImageProcessorDialog({ open, onOpenChange }: { open: boolean; on
         <Button disabled={!files.length || busy} onClick={process}>{busy ? "Processing..." : "Process Images"}</Button>
       </DialogFooter>
     </ProcessingShell>
+  )
+}
+
+function WatermarkControls({
+  watermark,
+  setWatermark,
+}: {
+  watermark: WatermarkOptions
+  setWatermark: React.Dispatch<React.SetStateAction<WatermarkOptions>>
+}) {
+  const update = <K extends keyof WatermarkOptions>(key: K, value: WatermarkOptions[K]) =>
+    setWatermark((current) => ({ ...current, [key]: value }))
+  return (
+    <div className="space-y-2 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-3" data-testid="image-processor-watermark">
+      <label className="flex items-center gap-2 text-[11px] font-semibold">
+        <Checkbox checked={watermark.enabled} onCheckedChange={(value) => update("enabled", value === true)} />
+        Watermark
+      </label>
+      {watermark.enabled ? (
+        <div className="grid grid-cols-2 gap-2">
+          <Field label="Text">
+            <Input value={watermark.text} onChange={(event) => update("text", event.target.value)} className="h-8 bg-[var(--ps-panel)] text-[11px]" />
+          </Field>
+          <Field label="Position">
+            <select value={watermark.position} onChange={(event) => update("position", event.target.value as WatermarkPosition)} className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] px-2 text-[11px]">
+              {WATERMARK_POSITIONS.map((position) => (
+                <option key={position.id} value={position.id}>{position.label}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Font size (px)">
+            <Input type="number" min={8} max={400} value={watermark.fontSize} onChange={(event) => update("fontSize", Math.max(8, Math.min(400, Math.round(Number(event.target.value) || 24))))} className="h-8 bg-[var(--ps-panel)] text-[11px]" />
+          </Field>
+          <Field label="Color">
+            <Input type="color" value={watermark.color} onChange={(event) => update("color", event.target.value)} className="h-8 w-20 p-1" />
+          </Field>
+          <Field label={`Opacity: ${Math.round(watermark.opacity * 100)}%`}>
+            <input type="range" min={0.05} max={1} step={0.01} value={watermark.opacity} onChange={(event) => update("opacity", Math.max(0.05, Math.min(1, Number(event.target.value) || 0.6)))} className="h-2 w-full accent-[var(--ps-accent)]" aria-label="Watermark opacity" />
+          </Field>
+          <label className="flex items-center gap-2 pt-5 text-[11px]">
+            <Checkbox checked={watermark.shadow} onCheckedChange={(value) => update("shadow", value === true)} />
+            Drop shadow
+          </label>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function MetadataControls({
+  metadata,
+  setMetadata,
+}: {
+  metadata: MetadataOptions
+  setMetadata: React.Dispatch<React.SetStateAction<MetadataOptions>>
+}) {
+  return (
+    <div className="space-y-2 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-3" data-testid="image-processor-metadata">
+      <div className="text-[11px] font-semibold">Copyright &amp; Metadata</div>
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="Copyright">
+          <Input value={metadata.copyright} onChange={(event) => setMetadata((current) => ({ ...current, copyright: event.target.value }))} className="h-8 bg-[var(--ps-panel)] text-[11px]" placeholder="© 2026 Owner" />
+        </Field>
+        <Field label="Author">
+          <Input value={metadata.author} onChange={(event) => setMetadata((current) => ({ ...current, author: event.target.value }))} className="h-8 bg-[var(--ps-panel)] text-[11px]" />
+        </Field>
+        <Field label="Title">
+          <Input value={metadata.title} onChange={(event) => setMetadata((current) => ({ ...current, title: event.target.value }))} className="h-8 bg-[var(--ps-panel)] text-[11px]" />
+        </Field>
+      </div>
+      <p className="text-[10px] text-[var(--ps-text-dim)]">Embedded as XMP for JPEG, PNG, WebP, and AVIF outputs.</p>
+    </div>
   )
 }
 
@@ -470,5 +688,166 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <Label className="text-[11px] text-[var(--ps-text-dim)]">{label}</Label>
       {children}
     </div>
+  )
+}
+
+export function CropAndStraightenDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const { createDocument } = useEditor()
+  const [files, setFiles] = React.useState<File[]>([])
+  const [minSize, setMinSize] = React.useState(120)
+  const [edgeThreshold, setEdgeThreshold] = React.useState(30)
+  const [outputAs, setOutputAs] = React.useState<"documents" | "layers">("documents")
+  const [busy, setBusy] = React.useState(false)
+  const [results, setResults] = React.useState<string>("")
+
+  const process = async () => {
+    if (!files.length) return
+    setBusy(true)
+    try {
+      const { cropAndStraightenPhotos } = await import("./automation-commands")
+      let totalCrops = 0
+      for (const file of files) {
+        try {
+          const raster = await loadRasterCanvasFromFile(file, { mode: "reduced-scale" })
+          const ctx = raster.canvas.getContext("2d")
+          if (!ctx) continue
+          const imgData = ctx.getImageData(0, 0, raster.canvas.width, raster.canvas.height)
+          const result = cropAndStraightenPhotos(imgData, {
+            minPhotoSize: minSize,
+            edgeThreshold,
+          })
+          totalCrops += result.crops.length
+
+          if (outputAs === "documents") {
+            for (let i = 0; i < result.crops.length; i++) {
+              const crop = result.crops[i]
+              const doc = makeDocument(
+                `${safeName(file.name)} (${i + 1})`,
+                crop.imageData.width,
+                crop.imageData.height,
+                "transparent",
+              )
+              const layer = doc.layers.find((l) => l.id === doc.activeLayerId)
+              if (layer) {
+                const layerCtx = layer.canvas.getContext("2d")
+                if (layerCtx) layerCtx.putImageData(crop.imageData, 0, 0)
+              }
+              createDocument(doc, "Crop and Straighten")
+            }
+          } else {
+            // Output as layers in a single document
+            const maxW = Math.max(...result.crops.map((c) => c.imageData.width))
+            const maxH = Math.max(...result.crops.map((c) => c.imageData.height))
+            const doc = makeDocument(`${safeName(file.name)} (split)`, maxW, maxH, "transparent")
+            for (let i = 0; i < result.crops.length; i++) {
+              const crop = result.crops[i]
+              const c = makeCanvas(maxW, maxH)
+              const cctx = c.getContext("2d")
+              if (cctx) cctx.putImageData(crop.imageData, 0, 0)
+              if (i === 0) {
+                const layer = doc.layers.find((l) => l.id === doc.activeLayerId)
+                if (layer) {
+                  const lctx = layer.canvas.getContext("2d")
+                  if (lctx) lctx.drawImage(c, 0, 0)
+                  layer.name = `Crop ${i + 1}`
+                }
+              }
+            }
+            createDocument(doc, "Crop and Straighten")
+          }
+        } catch (error) {
+          throw new Error(`${file.name}: ${error instanceof Error ? error.message : "Detection failed"}`)
+        }
+      }
+      setResults(`Detected ${totalCrops} photo${totalCrops === 1 ? "" : "s"} across ${files.length} image${files.length === 1 ? "" : "s"}`)
+      toast.success(`Detected ${totalCrops} photo${totalCrops === 1 ? "" : "s"}`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Crop and Straighten failed")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md bg-[var(--ps-panel)] text-[var(--ps-text)] border-[var(--ps-divider)]">
+        <DialogHeader>
+          <DialogTitle className="text-sm">Crop and Straighten Photos</DialogTitle>
+          <DialogDescription className="text-[11px] text-[var(--ps-text-dim)]">
+            Detects individual photos in a scanned image, auto-crops and straightens each one.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <Field label="Source images (one or more scans)">
+            <Input
+              type="file"
+              multiple
+              accept="image/*"
+              onChange={(e) => setFiles(Array.from(e.target.files || []))}
+              className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
+            />
+          </Field>
+          {files.length > 0 ? (
+            <div className="text-[11px] text-[var(--ps-text-dim)]">
+              {files.length} file{files.length === 1 ? "" : "s"} selected
+            </div>
+          ) : null}
+          <Field label="Minimum photo size (px)">
+            <Input
+              type="number"
+              min={20}
+              max={4000}
+              value={minSize}
+              onChange={(e) => setMinSize(Math.max(20, Number(e.target.value) || 120))}
+              className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
+            />
+          </Field>
+          <Field label="Edge threshold (0–255)">
+            <Input
+              type="number"
+              min={1}
+              max={255}
+              value={edgeThreshold}
+              onChange={(e) => setEdgeThreshold(Math.max(1, Math.min(255, Number(e.target.value) || 30)))}
+              className="h-8 bg-[var(--ps-panel-2)] text-[11px]"
+            />
+          </Field>
+          <Field label="Output">
+            <select
+              value={outputAs}
+              onChange={(e) => setOutputAs(e.target.value as "documents" | "layers")}
+              className="h-8 bg-[var(--ps-panel-2)] border border-[var(--ps-divider)] text-[11px] px-2"
+            >
+              <option value="documents">Each photo as a new document</option>
+              <option value="layers">First photo as a new document</option>
+            </select>
+          </Field>
+          {results ? (
+            <div className="rounded border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-3 py-2 text-[11px]">
+              {results}
+            </div>
+          ) : null}
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)} className="text-[11px]">
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            onClick={process}
+            disabled={!files.length || busy}
+            className="text-[11px] bg-[var(--ps-accent)] hover:bg-[var(--ps-accent)]/90"
+          >
+            {busy ? "Detecting..." : "Detect Photos"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

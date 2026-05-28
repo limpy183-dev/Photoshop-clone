@@ -1,0 +1,186 @@
+================================================================================
+REMAINING GAPS REPORT — Browser-Based Photoshop Clone
+================================================================================
+Generated: 2026-05-28
+Scope: Pure browser-side features only (HTML5 Canvas, WebGL, Web Workers, OPFS,
+       Web Audio). No Adobe services, no server connections, no native binaries.
+
+This report reflects an independent fresh audit of the codebase after completing
+the six waves of work from the VERIFIED_IMPLEMENTATION_PLAN. Most items from the
+original 45-gap list are now confirmed implemented. What follows is the short
+list of items that remain *visibly weak or missing* to a user.
+
+--------------------------------------------------------------------------------
+LEGEND
+--------------------------------------------------------------------------------
+  HIGH      Visible in every session; users will notice on common workflows.
+  MEDIUM    Visible when the specific feature is used; users hit it eventually.
+  LOW       Edge case, niche workflow, or already partially-functional.
+
+--------------------------------------------------------------------------------
+CONCRETE REMAINING GAPS
+--------------------------------------------------------------------------------
+
+[MEDIUM] 1. Photomerge — Boundary Warp slider missing
+    File:  components/photoshop/photomerge-dialog.tsx
+    Detail: Cylindrical + spherical projection and lens distortion correction
+            are wired up (geometricCorrection, lensModel, vignetteRemoval).
+            However, the "Boundary Warp" parameter — which lets users pull
+            transparent edges inward to fill a rectangular crop — is not
+            exposed as a UI slider. The seam-search budget constant
+            (`boundaryCandidateBudget`) is internal-only.
+    Effort: ~80 lines (add slider 0–100, pipe into composition stage).
+
+[MEDIUM] 2. Image Processor — no watermark / copyright overlay
+    File:  components/photoshop/processing-dialogs.tsx (ImageProcessorDialog)
+    Detail: Resize + format-convert + matte are wired. Missing: text/image
+            watermark overlay (e.g., © string in corner), and IPTC/XMP
+            copyright metadata embedding on output. `grep watermark|copyright`
+            returns no hits in this file.
+    Effort: ~120 lines (watermark text input + position selector + canvas
+            draw + IPTC metadata write).
+
+[MEDIUM] 3. Print dialog exposes only 2 of 6 mark types
+    Files: components/photoshop/print-engine.ts — defines six PrintMarkType
+           values: registration, corner-crop, center-crop, description,
+           labels, color-bars (all rendered correctly in renderPrintMarks).
+           components/photoshop/advanced-subsystems-dialog.tsx
+           (PrintWorkspace) — UI exposes only `cropMarks` and
+           `registrationMarks` checkboxes.
+    Detail: Center-crop marks, color bars, page description text, and labels
+            are implemented in the engine but unreachable from the UI.
+    Effort: ~60 lines (add four checkboxes + propagate to settings).
+
+[MEDIUM] 4. Transform Selection — no on-canvas drag handles
+    Files: components/photoshop/canvas-view.tsx (transformHandles ~line 8543)
+           components/photoshop/editor-context.tsx (line ~3553)
+           components/photoshop/management-dialogs.tsx (line ~346)
+    Detail: Free-transform on layers has full 8-handle + rotate-handle drag
+            support. Select ▸ Transform Selection is currently parameter-driven
+            (scale + rotation entered via a dialog). It needs the same eight
+            corner/edge handles drawn on the marquee outline that scale/rotate
+            the boundary independently of the underlying pixels.
+    Effort: ~250 lines (handle hit testing + drag math + matrix application
+            to selection mask only).
+
+--------------------------------------------------------------------------------
+SUGGESTED POLISH (LOW PRIORITY, OPTIONAL)
+--------------------------------------------------------------------------------
+
+[LOW] 5. Menu Customization Dialog — drag-to-reorder
+    File: components/photoshop/menu-customization-dialog.tsx
+    Detail: Reorder currently uses ↑/↓ buttons. A native HTML5 drag-and-drop
+            handle would feel more familiar. Functionality is otherwise
+            complete (hide/show + presets + reset).
+    Effort: ~40 lines.
+
+[LOW] 6. PDF Import — page range selector
+    File: components/photoshop/pdf-import-dialog.tsx
+    Detail: The dialog currently shows all pages (up to 100) and uses
+            per-page checkboxes. A "pages 5–12" range entry would help when
+            importing from very large documents.
+    Effort: ~30 lines.
+
+[LOW] 7. Color Picker HUD (Alt+Shift+RightClick)
+    Files: components/photoshop/canvas-view.tsx
+    Detail: Full color picker dialog exists. A floating mini hue-strip +
+            brightness-square popup that appears at cursor on
+            Alt+Shift+RightClick (dismisses on release) is a niche
+            power-user accelerator and is not yet implemented.
+    Effort: ~150 lines.
+
+[LOW] 8. Variables panel — visual data-set preview thumbnails
+    File: components/photoshop/advanced-subsystems-dialog.tsx
+          (VariablesWorkspace)
+    Detail: Variables/data-sets are fully functional (CSV import/export,
+            binding model, active-row switching). A small thumbnail grid
+            showing what each data row renders would help users pick the
+            right row before applying.
+    Effort: ~80 lines.
+
+--------------------------------------------------------------------------------
+CONFIRMED DONE (no action needed)
+--------------------------------------------------------------------------------
+
+  - Blur Gallery overlays — all 5 (Field/Iris/Tilt/Path/Spin) have draggable
+    handles, pin/center/radius/ellipse interactions in canvas-view.tsx.
+  - Custom canvas cursors with brush-size circle, crosshair, and two-letter
+    tool badge in cursor-overlay.ts:92-173.
+  - Layers panel filtering (kind/effect/mode/attribute/color-label) via
+    LAYER_FILTER_TOKENS in panels/layers-panel.tsx:713-745.
+  - Color label badges painted on layer thumbnails in
+    panels/layers-panel.tsx:884-885.
+  - Smart filter mask thumbnails in layers panel:1710-1717.
+  - Recent doc thumbnails in start-workspace.tsx:402 and
+    home-workspace.tsx:565.
+  - Template category browsing on home screen (Photo/Print/Art/Web/
+    Mobile/Film) in home-workspace.tsx:73-80.
+  - Video transition cross-dissolve / fade rendered on canvas during
+    playback (timeline-engine.ts:180-207 → ps-timeline-transition-overlay
+    in canvas-view.tsx:3036-3064).
+  - Audio mixer panel with per-track VU meters and volume sliders in
+    panels/timeline-panel.tsx:1267,2269-2531.
+  - PSD/PSB layered high-bit export via writeNativeLayeredPsd
+    (document-io.ts:3970-3988).
+  - RAF coalescer with high/medium/low priority queues + frame budget
+    (raf-coalescer.ts:41-105).
+  - Per-layer dirty-rect tracking with scissor clip (render-bus.ts:19,
+    layer-tile-renderer.ts:574-580, canvas-view.tsx:686-693).
+  - Multi-page PDF import dialog with page selection
+    (pdf-import-dialog.tsx, this session).
+  - Menu Customization Dialog with hide/show, reorder, named presets
+    (menu-customization-dialog.tsx, this session).
+  - Crop and Straighten Photos dialog (processing-dialogs.tsx, this
+    session).
+  - Tool Presets organization (search, drag-to-reorder, filter to
+    current tool) in panels/tool-presets-panel.tsx.
+  - Layer Comps thumbnails + PDF export + update warnings
+    (panels/layer-comps-panel.tsx).
+  - Gradients panel freeform editor with drag-to-add color stops,
+    noise gradients, dither toggle (panels/gradients-panel.tsx).
+  - Histogram panel with per-channel R/G/B/Luminosity + live updating
+    + high-bit aware stats (panels/inspection-panels.tsx).
+  - Filter Gallery preset stack save/load/import/export
+    (filter-gallery.tsx:113-355).
+  - Proof Colors wired through View ▸ Proof Setup menu
+    (menu-bar.tsx:3852-3906).
+  - Bit-depth status indicator in status-bar.tsx:60-65,202-210.
+  - Screen modes Standard/Full Screen with Menu Bar/Full Screen
+    cycled with F key (screen-modes.ts + editor-app.tsx:109-210).
+  - Fit Image dialog (fit-image-dialog.tsx).
+  - TIFF LZW + Deflate compression (raster-codecs.ts).
+  - Tool-info readouts in Info Panel (marquee/line/transform)
+    via ps-tool-info event (panels/inspection-panels.tsx).
+  - Navigator panel drag-to-pan (panels/inspection-panels.tsx).
+
+--------------------------------------------------------------------------------
+INTENTIONAL NON-GOALS (per BOUNDARIES.md, not gaps)
+--------------------------------------------------------------------------------
+
+The following will not be implemented and should not appear in any gap report:
+  - Adobe Firefly / Sensei AI services
+  - Native plugin runtimes (.8bf format)
+  - CMM-certified ICC color management
+  - MP4 / H.264 video export (only MediaRecorder formats)
+  - 16/32-bit display preview (browser canvas is 8-bit RGBA only)
+  - Server-side state / cloud sync / Creative Cloud
+  - Exact native-Photoshop algorithm parity at pixel level
+
+--------------------------------------------------------------------------------
+SUMMARY
+--------------------------------------------------------------------------------
+
+Total visible remaining items:   4 medium + 4 low = 8 items
+Estimated total effort:          ~810 lines (4 medium: ~510; 4 low: ~300)
+
+Of the 45 items in the original VERIFIED_IMPLEMENTATION_PLAN, 41 are now fully
+implemented and 4 remain as medium-severity polish items (boundary warp,
+watermark, full print marks, transform-selection on-canvas handles). The
+codebase is at a state where every major Photoshop workflow is reachable from
+the menu bar and produces a usable result.
+
+The remaining four medium items are all *enhancements to existing features*
+rather than missing capabilities — each one improves a workflow that currently
+works through a less interactive UI path.
+
+================================================================================

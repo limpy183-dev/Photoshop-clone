@@ -202,13 +202,33 @@ export function NavigatorPanel() {
       <div className="ps-checker border border-[var(--ps-divider)] rounded-sm overflow-hidden inline-block">
         <canvas
           ref={canvasRef}
-          className="block cursor-crosshair"
+          className="block cursor-crosshair touch-none"
           onPointerDown={(e) => {
+            const c = e.currentTarget
+            c.setPointerCapture(e.pointerId)
+            const rect = c.getBoundingClientRect()
+            const dispatchPan = (clientX: number, clientY: number) => {
+              const x = ((clientX - rect.left) / rect.width) * activeDoc.width
+              const y = ((clientY - rect.top) / rect.height) * activeDoc.height
+              window.dispatchEvent(new CustomEvent("ps-navigator-pan", { detail: { x, y } }))
+            }
+            dispatchPan(e.clientX, e.clientY)
+          }}
+          onPointerMove={(e) => {
+            if (!(e.buttons & 1)) return
             const c = e.currentTarget
             const rect = c.getBoundingClientRect()
             const x = ((e.clientX - rect.left) / rect.width) * activeDoc.width
             const y = ((e.clientY - rect.top) / rect.height) * activeDoc.height
             window.dispatchEvent(new CustomEvent("ps-navigator-pan", { detail: { x, y } }))
+          }}
+          onPointerUp={(e) => {
+            const c = e.currentTarget
+            try {
+              c.releasePointerCapture(e.pointerId)
+            } catch {
+              /* no-op */
+            }
           }}
         />
       </div>
@@ -515,6 +535,12 @@ export function InfoPanel() {
   const [highBitReadout, setHighBitReadout] = React.useState<HighBitPixelReadout | null>(null)
   const [highBitComparison, setHighBitComparison] = React.useState<HighBitPreviewComparison | null>(null)
   const [highBitSourceLabel, setHighBitSourceLabel] = React.useState("-")
+  const [toolInfo, setToolInfo] = React.useState<
+    | { kind: "marquee"; width: number; height: number; x: number; y: number }
+    | { kind: "line"; length: number; angle: number; dx: number; dy: number }
+    | { kind: "transform"; scaleX: number; scaleY: number; rotation: number; translateX: number; translateY: number }
+    | null
+  >(null)
 
   const rebuildNow = React.useCallback(() => {
     if (!activeDoc) {
@@ -597,6 +623,20 @@ export function InfoPanel() {
     return () => window.removeEventListener("ps-mousemove", handler)
   }, [])
 
+  React.useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ kind: string } & Record<string, number>>).detail
+      if (!detail) return
+      if (detail.kind === "clear") {
+        setToolInfo(null)
+        return
+      }
+      setToolInfo(detail as never)
+    }
+    window.addEventListener("ps-tool-info", handler)
+    return () => window.removeEventListener("ps-tool-info", handler)
+  }, [])
+
   const hsb = rgbToHsb(rgba[0], rgba[1], rgba[2])
   const lab = rgbToLab(rgba[0], rgba[1], rgba[2])
   const measurement = activeDoc?.measurement
@@ -627,6 +667,30 @@ export function InfoPanel() {
         <InfoRow label="Length" value={measurement ? `${length.toFixed(1)} px` : "None"} />
         <InfoRow label="Angle" value={measurement ? `${angle.toFixed(1)} deg` : "-"} />
       </InfoSection>
+      {toolInfo ? (
+        <InfoSection title="Tool">
+          {toolInfo.kind === "marquee" ? (
+            <>
+              <InfoRow label="W x H" value={`${Math.round(toolInfo.width)} x ${Math.round(toolInfo.height)} px`} />
+              <InfoRow label="X/Y" value={`${Math.round(toolInfo.x)}, ${Math.round(toolInfo.y)} px`} />
+            </>
+          ) : null}
+          {toolInfo.kind === "line" ? (
+            <>
+              <InfoRow label="Length" value={`${toolInfo.length.toFixed(1)} px`} />
+              <InfoRow label="Angle" value={`${toolInfo.angle.toFixed(1)} deg`} />
+              <InfoRow label="Delta" value={`${toolInfo.dx.toFixed(1)}, ${toolInfo.dy.toFixed(1)}`} />
+            </>
+          ) : null}
+          {toolInfo.kind === "transform" ? (
+            <>
+              <InfoRow label="Scale" value={`${(toolInfo.scaleX * 100).toFixed(1)}% x ${(toolInfo.scaleY * 100).toFixed(1)}%`} />
+              <InfoRow label="Rotate" value={`${toolInfo.rotation.toFixed(1)} deg`} />
+              <InfoRow label="Move" value={`${toolInfo.translateX.toFixed(1)}, ${toolInfo.translateY.toFixed(1)} px`} />
+            </>
+          ) : null}
+        </InfoSection>
+      ) : null}
       <InfoSection title="Samplers">
         {activeDoc?.colorSamplers?.length ? (
           activeDoc.colorSamplers.map((sampler) => (

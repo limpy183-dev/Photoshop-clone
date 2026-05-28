@@ -6,7 +6,7 @@ import { planExpensiveFilterTiling } from "./filter-worker"
 import { renderLayerContentTile, type TileCanvasRect } from "./layer-tile-renderer"
 import { planTileGrid } from "./performance-engine"
 import { smartFilterMaskAmountAt, smartFilterMaskToImageData } from "./smart-filter-masks"
-import type { BlendMode, Layer, LayerKind, PsDocument } from "./types"
+import type { BlendMode, Layer, LayerKind, PsDocument, ToolId } from "./types"
 import { rasterizeVectorMaskForWebGL } from "./webgl-compositor"
 
 export interface TileOnlyTile {
@@ -139,6 +139,55 @@ export interface TileOnlyExportPlan {
 export interface ComposeDocumentTileOptions {
   transparent?: boolean
   matte?: string
+}
+
+export interface TileOnlyDefaultCompositorInput {
+  documentWidth: number
+  documentHeight: number
+  tileSize?: number
+  viewport: DirtyRect
+  prefetchPadding?: number
+  dirtyRects?: readonly DirtyRect[]
+  cachedTileKeys?: readonly string[]
+  spilledTileKeys?: readonly string[]
+  layers: readonly TileOnlyExportLayerDescriptor[]
+  explicitTileOnly?: boolean
+  colorMode?: string
+  bitDepth?: number
+  quickMask?: boolean
+  filterPreviewCount?: number
+  canvasBudgetPixels?: number
+}
+
+export interface TileOnlyDefaultCompositorPlan {
+  strategy: "tile-local" | "fallback-full"
+  viewportPlan: TileOnlyViewportComposePlan
+  materializesFullDocument: boolean
+  unsupportedLayerIds: string[]
+  reasons: string[]
+}
+
+export interface TileOnlyViewportRenderedTile extends TileOnlyViewportTile {
+  canvas: HTMLCanvasElement
+}
+
+export interface TileOnlyViewportRenderResult {
+  viewport: DirtyRect
+  viewportUnion: DirtyRect
+  tiles: TileOnlyViewportRenderedTile[]
+  materializesFullDocument: false
+}
+
+export interface TileOnlyInteractiveToolInput {
+  documentWidth: number
+  documentHeight: number
+  tileSize?: number
+  tool: ToolId
+  layerId: string
+  bounds: DirtyRect
+  radius?: number
+  sourceBounds?: DirtyRect
+  sampleAllLayers?: boolean
 }
 
 const DEFAULT_TILE_SIZE = 512
@@ -689,6 +738,143 @@ export function planTileOnlyViewportCompose(input: TileOnlyViewportComposeInput)
     materializesFullDocument: false,
     reasons,
   }
+}
+
+export function planTileOnlyDefaultCompositor(input: TileOnlyDefaultCompositorInput): TileOnlyDefaultCompositorPlan {
+  const width = positiveInt(input.documentWidth, 1)
+  const height = positiveInt(input.documentHeight, 1)
+  const tileSize = positiveInt(input.tileSize, DEFAULT_TILE_SIZE)
+  const unsupportedLayerIds = input.layers
+    .filter((layer) => !supportsTileOnlyLayer(layer))
+    .map((layer) => layer.id)
+  const viewportPlan = planTileOnlyViewportCompose({
+    documentWidth: width,
+    documentHeight: height,
+    tileSize,
+    viewport: input.viewport,
+    prefetchPadding: input.prefetchPadding ?? 0,
+    dirtyRects: input.dirtyRects,
+    cachedTileKeys: input.cachedTileKeys,
+    spilledTileKeys: input.spilledTileKeys,
+  })
+  const reasons: string[] = []
+  const pixels = width * height
+  const budget = Math.max(1, Math.floor(Number(input.canvasBudgetPixels ?? 10000 * 10000)))
+  if (input.explicitTileOnly) reasons.push("explicit-tile-only")
+  if (pixels > budget) reasons.push("huge-document")
+  if (input.colorMode && input.colorMode !== "RGB") reasons.push("unsupported-color-mode")
+  if ((input.bitDepth ?? 8) > 8) reasons.push("high-bit-fallback")
+  if (input.quickMask) reasons.push("quick-mask-fallback")
+  if ((input.filterPreviewCount ?? 0) > 0) reasons.push("filter-preview-fallback")
+  if (unsupportedLayerIds.length) reasons.push("unsupported-layers")
+  const compatible =
+    unsupportedLayerIds.length === 0 &&
+    (input.colorMode ?? "RGB") === "RGB" &&
+    (input.bitDepth ?? 8) <= 8 &&
+    !input.quickMask &&
+    (input.filterPreviewCount ?? 0) === 0
+  const shouldTile = compatible && (input.explicitTileOnly || pixels > budget)
+  return {
+    strategy: shouldTile ? "tile-local" : "fallback-full",
+    viewportPlan,
+    materializesFullDocument: !shouldTile,
+    unsupportedLayerIds,
+    reasons: reasons.length ? reasons : ["fits-full-frame"],
+  }
+}
+
+export function renderTileOnlyViewportComposite(
+  doc: Pick<PsDocument, "width" | "height" | "layers" | "background">,
+  plan: Pick<TileOnlyDefaultCompositorPlan, "strategy" | "viewportPlan">,
+  options: ComposeDocumentTileOptions = {},
+): TileOnlyViewportRenderResult {
+  const tiles = plan.viewportPlan.materializeTiles
+    .filter((tile) => tile.viewport)
+    .map((tile) => ({
+      ...tile,
+      canvas: composeDocumentTile(doc, {
+        ...tile.rect,
+        transparent: options.transparent ?? false,
+        matte: options.matte,
+      }),
+    }))
+  return {
+    viewport: plan.viewportPlan.viewport,
+    viewportUnion: plan.viewportPlan.viewportUnion,
+    tiles,
+    materializesFullDocument: false,
+  }
+}
+
+function tileOnlyOperationKindForTool(tool: ToolId): TileOnlyOperation["kind"] | null {
+  switch (tool) {
+    case "brush":
+    case "pencil":
+    case "mixer-brush":
+    case "pattern-stamp":
+    case "color-replace":
+      return "paint"
+    case "eraser":
+    case "background-eraser":
+    case "magic-eraser":
+      return "erase"
+    case "clone-stamp":
+    case "history-brush":
+    case "art-history-brush":
+      return "clone"
+    case "healing-brush":
+    case "spot-healing":
+    case "patch-tool":
+    case "remove-tool":
+    case "red-eye":
+      return "heal"
+    case "blur":
+      return "blur"
+    case "sharpen":
+      return "sharpen"
+    case "smudge":
+      return "smudge"
+    case "dodge":
+    case "burn":
+    case "sponge":
+      return "dodge-burn-sponge"
+    default:
+      return null
+  }
+}
+
+export function planTileOnlyInteractiveTool(input: TileOnlyInteractiveToolInput): TileOnlyEditPlan {
+  const kind = tileOnlyOperationKindForTool(input.tool)
+  if (!kind) {
+    const width = positiveInt(input.documentWidth, 1)
+    const height = positiveInt(input.documentHeight, 1)
+    const writeRect = normalizeRect(input.bounds, width, height)
+    return {
+      strategy: "unsupported",
+      layerId: input.layerId,
+      operationKind: "paint",
+      readRect: writeRect,
+      writeRect,
+      readTiles: [],
+      writeTiles: [],
+      materializesFullDocument: false,
+      reasons: [`tool:${input.tool}`],
+      unsupportedReasons: ["unsupported-tool"],
+    }
+  }
+  return planTileOnlyEdit({
+    documentWidth: input.documentWidth,
+    documentHeight: input.documentHeight,
+    tileSize: input.tileSize,
+    operation: {
+      kind,
+      tool: input.tool,
+      layerId: input.layerId,
+      bounds: input.bounds,
+      radius: input.radius,
+      sourceBounds: input.sourceBounds,
+    },
+  })
 }
 
 /* ------------------------------------------------------------------------- *

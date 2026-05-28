@@ -57,6 +57,12 @@ workerScope.onmessage = (event: MessageEvent<FilterRegistryWorkerRequest>) => {
       }
     } else if (request.filterId) {
       current = applyOne(request.filterId, current, request.params ?? {})
+      workerScope.postMessage({
+        id: request.id,
+        width: current.width,
+        height: current.height,
+        progress: { completed: 1, total: 1, filterId: request.filterId },
+      })
     } else {
       throw new Error("Worker request did not include a filter id or operation batch")
     }

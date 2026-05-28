@@ -2533,10 +2533,15 @@ export function transformSelectionMask(
   scale: number,
   rotationDeg: number,
   smoothing = true,
+  extras?: { scaleX?: number; scaleY?: number; translateX?: number; translateY?: number },
 ): HTMLCanvasElement {
   return alphaDataToMask(
     transformSelectionMaskDataPure(maskToAlphaData(mask), mask.width, mask.height, bounds, {
       scale,
+      scaleX: extras?.scaleX,
+      scaleY: extras?.scaleY,
+      translateX: extras?.translateX,
+      translateY: extras?.translateY,
       rotationDeg,
       smoothing,
     }),

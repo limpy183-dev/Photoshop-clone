@@ -55,6 +55,7 @@ test("photomerge workspace helpers normalize engine options and transparent fill
     lensModel: "phone",
     focalLengthPx: 420,
     contentAwareFillTransparent: true,
+    boundaryWarp: 0,
   }
 
   const options = buildPhotomergeEngineOptions(settings, 96)

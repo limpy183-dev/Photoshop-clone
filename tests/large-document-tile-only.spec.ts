@@ -2,10 +2,13 @@ import { expect, test } from "@playwright/test"
 
 import {
   composeDocumentTile,
+  planTileOnlyDefaultCompositor,
   planTileOnlyEdit,
   planTileOnlyExport,
   planTileOnlyFilter,
+  planTileOnlyInteractiveTool,
   planTileOnlySelection,
+  renderTileOnlyViewportComposite,
   supportsTileOnlyLayer,
 } from "../components/photoshop/tile-only-pipeline"
 import { exportRasterTileSequenceBlob } from "../components/photoshop/document-io"
@@ -235,6 +238,111 @@ test("tile-only raster export writes a tile sequence package with manifest metad
   expect(text).toContain("manifest.json")
   expect(text).toContain("\"tileCount\": 4")
   expect(text).toContain("tiles/0_0.png")
+})
+
+test("default compositor switches huge and explicit tile-only documents to viewport tiles", () => {
+  const explicit = planTileOnlyDefaultCompositor({
+    documentWidth: 12000,
+    documentHeight: 9000,
+    tileSize: 1024,
+    viewport: { x: 2048, y: 1024, w: 1100, h: 900 },
+    layers: [{ id: "photo", kind: "raster" }],
+    explicitTileOnly: true,
+    colorMode: "RGB",
+    bitDepth: 8,
+  })
+
+  expect(explicit.strategy).toBe("tile-local")
+  expect(explicit.materializesFullDocument).toBe(false)
+  expect(explicit.viewportPlan.materializeTiles.map((tile) => tile.key)).toEqual([
+    "2:1",
+    "3:1",
+  ])
+
+  const huge = planTileOnlyDefaultCompositor({
+    documentWidth: 20000,
+    documentHeight: 12000,
+    tileSize: 1024,
+    viewport: { x: 0, y: 0, w: 1200, h: 900 },
+    layers: [{ id: "photo", kind: "raster" }],
+    explicitTileOnly: false,
+    colorMode: "RGB",
+    bitDepth: 8,
+    canvasBudgetPixels: 10000 * 10000,
+  })
+
+  expect(huge.strategy).toBe("tile-local")
+  expect(huge.reasons).toEqual(expect.arrayContaining(["huge-document"]))
+  expect(huge.materializesFullDocument).toBe(false)
+
+  const normal = planTileOnlyDefaultCompositor({
+    documentWidth: 2000,
+    documentHeight: 1200,
+    viewport: { x: 0, y: 0, w: 2000, h: 1200 },
+    layers: [{ id: "photo", kind: "raster" }],
+    explicitTileOnly: false,
+    colorMode: "RGB",
+    bitDepth: 8,
+    canvasBudgetPixels: 10000 * 10000,
+  })
+
+  expect(normal.strategy).toBe("fallback-full")
+  expect(normal.materializesFullDocument).toBe(true)
+})
+
+test("tile-only viewport renderer draws only visible tiles", () => {
+  installFixtureDom()
+  const sourceDoc = doc([layer("base", fixtureCanvas(128, 96, "#224466"))], {
+    width: 128,
+    height: 96,
+  })
+  const plan = planTileOnlyDefaultCompositor({
+    documentWidth: 128,
+    documentHeight: 96,
+    tileSize: 32,
+    viewport: { x: 48, y: 16, w: 40, h: 40 },
+    layers: sourceDoc.layers,
+    explicitTileOnly: true,
+    colorMode: "RGB",
+    bitDepth: 8,
+  })
+
+  const rendered = renderTileOnlyViewportComposite(sourceDoc, plan)
+
+  expect(rendered.materializesFullDocument).toBe(false)
+  expect(rendered.tiles.map((tile) => tile.key)).toEqual(["1:0", "2:0", "1:1", "2:1"])
+  expect(rendered.tiles.every((tile) => tile.canvas.width <= 32 && tile.canvas.height <= 32)).toBe(true)
+})
+
+test("interactive paint and retouch tools plan tile-local read and write bounds", () => {
+  const paint = planTileOnlyInteractiveTool({
+    documentWidth: 8192,
+    documentHeight: 8192,
+    tileSize: 512,
+    tool: "brush",
+    layerId: "paint",
+    bounds: { x: 480, y: 490, w: 120, h: 90 },
+    radius: 40,
+  })
+
+  expect(paint.strategy).toBe("tile-local")
+  expect(paint.materializesFullDocument).toBe(false)
+  expect(paint.writeTiles.map((tile) => tile.key)).toEqual(["0:0", "1:0", "0:1", "1:1"])
+
+  const clone = planTileOnlyInteractiveTool({
+    documentWidth: 8192,
+    documentHeight: 8192,
+    tileSize: 512,
+    tool: "healing-brush",
+    layerId: "paint",
+    bounds: { x: 2040, y: 2040, w: 80, h: 80 },
+    sourceBounds: { x: 1000, y: 1000, w: 80, h: 80 },
+    radius: 32,
+  })
+
+  expect(clone.strategy).toBe("tile-local")
+  expect(clone.readTiles.map((tile) => tile.key)).toEqual(expect.arrayContaining(["1:1", "2:2", "3:3", "4:4"]))
+  expect(clone.reasons).toEqual(expect.arrayContaining(["tool:healing-brush", "operation:heal"]))
 })
 
 test("PSB tile view opens and commits one full-resolution tile without materializing the document", async () => {

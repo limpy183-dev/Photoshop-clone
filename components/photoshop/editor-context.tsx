@@ -1575,7 +1575,7 @@ export type Action =
   | { type: "contract-selection"; amount: number }
   | { type: "grow-similar-selection"; tolerance: number; iterations?: number }
   | { type: "similar-selection"; tolerance: number }
-  | { type: "transform-selection"; scale: number; rotationDeg: number; smoothing?: boolean }
+  | { type: "transform-selection"; scale: number; rotationDeg: number; smoothing?: boolean; scaleX?: number; scaleY?: number; translateX?: number; translateY?: number }
   | { type: "stamp-visible" }
   | { type: "toggle-layer-lock-transparency"; id: string }
   | { type: "toggle-layer-lock-draw"; id: string }
@@ -3555,12 +3555,19 @@ export function reducer(state: EditorState, action: Action): EditorState {
         if (!d.selection.bounds) return d
         const base = selectionToMaskCanvas(d.width, d.height, d.selection)
         if (!base) return d
+        const clampedScale = Math.max(0.01, Math.min(20, action.scale))
         const next = transformSelectionMask(
           base,
           d.selection.bounds,
-          Math.max(0.01, Math.min(20, action.scale)),
+          clampedScale,
           Math.max(-360, Math.min(360, action.rotationDeg)),
           action.smoothing ?? true,
+          {
+            scaleX: action.scaleX !== undefined ? Math.max(0.01, Math.min(20, action.scaleX)) : undefined,
+            scaleY: action.scaleY !== undefined ? Math.max(0.01, Math.min(20, action.scaleY)) : undefined,
+            translateX: action.translateX,
+            translateY: action.translateY,
+          },
         )
         return { ...d, selection: selectionFromMask(next, "freehand", d.selection.feather) }
       })

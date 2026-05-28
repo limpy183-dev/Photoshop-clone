@@ -1,0 +1,32 @@
+{
+  "taskId": "019e69d5-2a77-755c-8d68-4b277c761573",
+  "todos": [
+    {
+      "id": "1d5474ac3992c440a61e3f3e4cfd1916",
+      "content": "Audit `comprehensive-implementation-gaps.txt` against the current codebase and identify stale items",
+      "status": "in_progress"
+    },
+    {
+      "id": "140cf224e9c2ff76fe1a91b5a4851123",
+      "content": "Group the remaining real gaps into execution batches by subsystem and dependency",
+      "status": "pending"
+    },
+    {
+      "id": "f40d8050a404c6d81cf150d71b509561",
+      "content": "Delegate implementation batches to specialized subtasks",
+      "status": "pending"
+    },
+    {
+      "id": "7ae50a7ba9ba850c69f7e50cf1a70115",
+      "content": "Integrate and verify completed batches in the main workspace",
+      "status": "pending"
+    },
+    {
+      "id": "28d9a3c74cd567a2085bf6c5dc9bb987",
+      "content": "Write task memo in `tocodex-docs/` and present the completed result",
+      "status": "pending"
+    }
+  ],
+  "lastUpdated": 1779892260840,
+  "status": "active"
+}

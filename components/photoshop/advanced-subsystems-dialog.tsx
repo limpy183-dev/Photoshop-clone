@@ -1031,6 +1031,10 @@ function PrintWorkspace() {
       bleedMm: 0,
       cropMarks: false,
       registrationMarks: false,
+      centerCropMarks: false,
+      colorBars: false,
+      description: false,
+      labels: false,
       colorHandling: "app",
       proofPrint: false,
       printerProfile: "Working CMYK",
@@ -1091,7 +1095,11 @@ function PrintWorkspace() {
         <SelectField label="Color handling" value={settings.colorHandling} options={["app", "printer"]} onChange={(value) => update({ colorHandling: value as PrintSettings["colorHandling"] })} />
         <SelectField label="Printer profile" value={settings.printerProfile ?? "Working CMYK"} options={["Working CMYK", "U.S. Web Coated SWOP v2", "Japan Color 2001 Coated", "Display P3", "Dot Gain 20%"]} onChange={(value) => update({ printerProfile: value as PrintSettings["printerProfile"] })} />
         <CheckField label="Crop marks" checked={settings.cropMarks} onChange={(checked) => update({ cropMarks: checked })} />
+        <CheckField label="Center-crop marks" checked={settings.centerCropMarks ?? false} onChange={(checked) => update({ centerCropMarks: checked })} />
         <CheckField label="Registration marks" checked={settings.registrationMarks} onChange={(checked) => update({ registrationMarks: checked })} />
+        <CheckField label="Color bars" checked={settings.colorBars ?? false} onChange={(checked) => update({ colorBars: checked })} />
+        <CheckField label="Description" checked={settings.description ?? false} onChange={(checked) => update({ description: checked })} />
+        <CheckField label="Labels" checked={settings.labels ?? false} onChange={(checked) => update({ labels: checked })} />
         <CheckField label="Proof print" checked={settings.proofPrint} onChange={(checked) => update({ proofPrint: checked })} />
         <div className="grid grid-cols-2 gap-2 pt-2">
           <Button size="sm" variant="secondary" onClick={save}>Save Setup</Button>
@@ -3401,6 +3409,8 @@ function VariablesWorkspace() {
   const [outputFormat, setOutputFormat] = React.useState<AutomationOutputPreset["format"]>("png")
   const [quality, setQuality] = React.useState(0.92)
   const [filenameTemplate, setFilenameTemplate] = React.useState("{{name}}-{{dataset}}-{{index}}")
+  const [previewThumbnails, setPreviewThumbnails] = React.useState<{ index: number; dataUrl: string; label: string }[]>([])
+  const [generatingPreviews, setGeneratingPreviews] = React.useState(false)
   if (!activeDoc) return <EmptyState text="Open a document before using variable data sets." />
   const dataSets = activeDoc.variableDataSets ?? []
   const selected = dataSets.find((set) => set.id === selectedId) ?? dataSets[0]
@@ -3480,6 +3490,49 @@ function VariablesWorkspace() {
     if (!selected) return
     downloadText(serializeDatasetRowsCsv(selected.rows, columns), `${selected.name}.csv`, "text/csv")
   }
+  const generatePreviewThumbnails = async () => {
+    if (!selected || !selected.bindings.length) {
+      toast.error("Add bindings before generating previews")
+      return
+    }
+    setGeneratingPreviews(true)
+    const maxPreviews = Math.min(selected.rows.length, 24)
+    const thumbSize = 96
+    const results: { index: number; dataUrl: string; label: string }[] = []
+    try {
+      for (let i = 0; i < maxPreviews; i++) {
+        const row = selected.rows[i]
+        const variant = await createVariableDocumentVariantAsync(
+          activeDoc,
+          row,
+          selected.bindings,
+          (value) => canvasForImageValue(value),
+        )
+        const flat = renderDocumentComposite(variant, { transparent: true })
+        const scale = Math.min(thumbSize / flat.width, thumbSize / flat.height, 1)
+        const tw = Math.max(1, Math.round(flat.width * scale))
+        const th = Math.max(1, Math.round(flat.height * scale))
+        const thumb = makeCanvas(tw, th)
+        const tctx = thumb.getContext("2d")
+        if (tctx) {
+          tctx.imageSmoothingEnabled = true
+          tctx.imageSmoothingQuality = "high"
+          tctx.drawImage(flat, 0, 0, tw, th)
+        }
+        const firstCol = columns[0]
+        const label = firstCol && row[firstCol] ? `${i + 1}: ${String(row[firstCol]).slice(0, 20)}` : `Row ${i + 1}`
+        results.push({ index: i, dataUrl: thumb.toDataURL("image/png"), label })
+      }
+      setPreviewThumbnails(results)
+      if (maxPreviews < selected.rows.length) {
+        toast.info(`Showing previews for ${maxPreviews} of ${selected.rows.length} rows`)
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Preview generation failed")
+    } finally {
+      setGeneratingPreviews(false)
+    }
+  }
   const deleteSelectedSet = () => {
     if (!selected) return
     const next = dataSets.filter((set) => set.id !== selected.id)
@@ -3540,6 +3593,42 @@ function VariablesWorkspace() {
             <Button size="sm" variant="secondary" onClick={exportSelectedSet}>Export Set</Button>
             <Button size="sm" variant="secondary" onClick={exportSelectedRows}>Export CSV</Button>
             <Button size="sm" variant="ghost" onClick={deleteSelectedSet}>Delete</Button>
+          </div>
+        ) : null}
+        {selected && selected.bindings.length > 0 ? (
+          <div className="mt-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold text-[var(--ps-text)]">Row Previews</span>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => void generatePreviewThumbnails()}
+                disabled={generatingPreviews}
+                data-testid="variable-generate-previews"
+              >
+                {generatingPreviews ? "Generating…" : previewThumbnails.length ? "Refresh" : "Generate"}
+              </Button>
+            </div>
+            {previewThumbnails.length > 0 ? (
+              <div className="grid max-h-64 grid-cols-3 gap-1.5 overflow-y-auto rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-chrome)] p-2" data-testid="variable-preview-grid">
+                {previewThumbnails.map((thumb) => (
+                  <button
+                    key={thumb.index}
+                    type="button"
+                    onClick={() => setActiveRow(thumb.index)}
+                    className={`flex flex-col items-center gap-1 rounded-sm border p-1 text-[9px] transition-colors ${
+                      rowIndex === thumb.index
+                        ? "border-[var(--ps-accent)] bg-[var(--ps-tool-active)]"
+                        : "border-[var(--ps-divider)] hover:border-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)]"
+                    }`}
+                    title={thumb.label}
+                  >
+                    <img src={thumb.dataUrl} alt={thumb.label} className="h-16 w-16 rounded-sm object-contain" />
+                    <span className="w-full truncate text-center text-[var(--ps-text-dim)]">{thumb.label}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
         ) : null}
       </Panel>

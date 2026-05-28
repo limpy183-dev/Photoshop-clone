@@ -74,6 +74,74 @@ test("iris, tilt-shift, path, and spin controls update normalized filter params"
   expect(spin.radius).toBe(70)
 })
 
+test("iris blur supports full ellipse width height and rotation handles", () => {
+  const base = normalizeBlurGalleryParams("iris-blur", {
+    centerX: 50,
+    centerY: 50,
+    radius: 40,
+    ellipseWidth: 40,
+    ellipseHeight: 24,
+    rotation: 0,
+    feather: 25,
+  })
+
+  const width = updateBlurGalleryInteraction(
+    "iris-blur",
+    base,
+    { kind: "iris-width" },
+    { x: 85, y: 50 },
+    100,
+    100,
+  )
+  expect(width.ellipseWidth).toBe(70)
+  expect(width.radius).toBe(70)
+
+  const height = updateBlurGalleryInteraction(
+    "iris-blur",
+    width,
+    { kind: "iris-height" },
+    { x: 50, y: 78 },
+    100,
+    100,
+  )
+  expect(height.ellipseHeight).toBe(56)
+
+  const rotated = updateBlurGalleryInteraction(
+    "iris-blur",
+    height,
+    { kind: "iris-rotation" },
+    { x: 50, y: 20 },
+    100,
+    100,
+  )
+  expect(rotated.rotation).toBe(-90)
+
+  const widthHit = beginBlurGalleryInteraction("iris-blur", rotated, { x: 50, y: 15 }, 100, 100)
+  expect(widthHit.drag?.kind).toBe("iris-width")
+})
+
+test("spin blur exposes an on-canvas amount control in addition to radius", () => {
+  const base = normalizeBlurGalleryParams("spin-blur", {
+    centerX: 50,
+    centerY: 50,
+    radius: 60,
+    amount: 20,
+  })
+
+  const amount = updateBlurGalleryInteraction(
+    "spin-blur",
+    base,
+    { kind: "spin-amount" },
+    { x: 50, y: 5 },
+    100,
+    100,
+  )
+  expect(amount.amount).toBe(75)
+
+  const hit = beginBlurGalleryInteraction("spin-blur", amount, { x: 50, y: 14 }, 100, 100)
+  expect(hit.drag?.kind).toBe("spin-amount")
+})
+
 test("blur gallery serializers clamp values to stable percent-space strings", () => {
   expect(formatFieldBlurPins([{ x: -5, y: 120, blur: 120 }])).toBe("0,100,80")
   expect(formatPathBlurPoints([{ x: 12.345, y: 67.891 }])).toBe("12.35,67.89")

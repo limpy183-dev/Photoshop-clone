@@ -1,0 +1,52 @@
+{
+  "taskId": "019e6f51-7596-76fb-9a2c-ae0771255bae",
+  "todos": [
+    {
+      "id": "54c31fed7e51835803bd0da7f941d4c2",
+      "content": "Read REMAINING_GAPS_REPORT.txt to identify all items",
+      "status": "completed"
+    },
+    {
+      "id": "963cb4c026ef5602592180f4a80b2a0c",
+      "content": "Implement Gap 1: Photomerge Boundary Warp slider (already implemented)",
+      "status": "completed"
+    },
+    {
+      "id": "63611c8072662b18195f5094de35b914",
+      "content": "Implement Gap 2: Image Processor watermark/copyright overlay (already implemented)",
+      "status": "completed"
+    },
+    {
+      "id": "8d8502eba02fb375b1bb3db7c18a7d06",
+      "content": "Implement Gap 3: Print dialog expose all 6 mark types (already implemented)",
+      "status": "completed"
+    },
+    {
+      "id": "830ec79322c4c5e2c7b8b8feae42a16f",
+      "content": "Implement Gap 4: Transform Selection on-canvas drag handles (already implemented)",
+      "status": "completed"
+    },
+    {
+      "id": "92537547e4684c454e2d4b53ab3a55ae",
+      "content": "Implement Gap 5: Menu Customization drag-to-reorder (already implemented)",
+      "status": "completed"
+    },
+    {
+      "id": "c5ef0e1e19721be91f23962027f8b5f8",
+      "content": "Implement Gap 6: PDF Import page range selector (already implemented)",
+      "status": "completed"
+    },
+    {
+      "id": "f35366d086bb752a109fa960ebdf9f43",
+      "content": "Implement Gap 7: Color Picker HUD (already implemented)",
+      "status": "completed"
+    },
+    {
+      "id": "c46e4f6f68e1d502081127aebf9c322b",
+      "content": "Implement Gap 8: Variables panel data-set preview thumbnails (advanced-subsystems-dialog.tsx)",
+      "status": "in_progress"
+    }
+  ],
+  "lastUpdated": 1779984235697,
+  "status": "active"
+}

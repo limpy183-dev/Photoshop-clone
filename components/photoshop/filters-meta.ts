@@ -46,6 +46,8 @@ export const FILTER_META: Record<string, FilterMeta> = {
   "glowing-edges": { id: "glowing-edges", name: "Glowing Edges", category: "Stylize" },
   wind: { id: "wind", name: "Wind", category: "Stylize" },
   extrude: { id: "extrude", name: "Extrude", category: "Stylize" },
+  diffuse: { id: "diffuse", name: "Diffuse", category: "Stylize" },
+  tiles: { id: "tiles", name: "Tiles", category: "Stylize" },
   "oil-paint": { id: "oil-paint", name: "Oil Paint", category: "Stylize" },
 
   // Noise
@@ -87,6 +89,7 @@ export const FILTER_META: Record<string, FilterMeta> = {
 
   // Distort
   displace: { id: "displace", name: "Displace", category: "Distort" },
+  shear: { id: "shear", name: "Shear", category: "Distort" },
   "diffuse-glow": { id: "diffuse-glow", name: "Diffuse Glow", category: "Distort" },
   "ocean-ripple": { id: "ocean-ripple", name: "Ocean Ripple", category: "Distort" },
   "adaptive-wide-angle": { id: "adaptive-wide-angle", name: "Adaptive Wide Angle", category: "Distort" },
@@ -117,8 +120,12 @@ export const FILTER_META: Record<string, FilterMeta> = {
   maximum: { id: "maximum", name: "Maximum", category: "Other" },
   minimum: { id: "minimum", name: "Minimum", category: "Other" },
   "custom-convolution": { id: "custom-convolution", name: "Custom Convolution", category: "Other" },
+  "custom-filter": { id: "custom-filter", name: "Custom Filter", category: "Other" },
 
   // Pixelate
+  fragment: { id: "fragment", name: "Fragment", category: "Pixelate" },
+  facet: { id: "facet", name: "Facet", category: "Pixelate" },
+  pointillize: { id: "pointillize", name: "Pointillize", category: "Pixelate" },
   "color-halftone": { id: "color-halftone", name: "Color Halftone", category: "Pixelate" },
   mezzotint: { id: "mezzotint", name: "Mezzotint", category: "Pixelate" },
 

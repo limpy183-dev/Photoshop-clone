@@ -1,0 +1,52 @@
+{
+  "taskId": "019e6f49-480d-748a-9b93-50b019bdef37",
+  "todos": [
+    {
+      "id": "dd5c9d4bdd2338329795dfc3c5de757f",
+      "content": "Read REMAINING_GAPS_REPORT.txt to identify all gaps",
+      "status": "completed"
+    },
+    {
+      "id": "1b1529f5d166cb24a78a512dcc63ac29",
+      "content": "Gap 1: Photomerge Boundary Warp slider - ALREADY IMPLEMENTED (line 723)",
+      "status": "completed"
+    },
+    {
+      "id": "646a76ae949645192a08555c69ef88b4",
+      "content": "Gap 2: Image Processor watermark/copyright - ALREADY IMPLEMENTED (WatermarkControls + MetadataControls)",
+      "status": "completed"
+    },
+    {
+      "id": "c6a380cf733bb667539d1626cbb48853",
+      "content": "Gap 3: Print dialog 6 mark types - ALREADY IMPLEMENTED (lines 1097-1102)",
+      "status": "completed"
+    },
+    {
+      "id": "44865d0c3da439c07c2d612c35ee6591",
+      "content": "Gap 4: Transform Selection drag handles - ALREADY IMPLEMENTED (SelectionTransformOverlay with 8 handles + rotate)",
+      "status": "completed"
+    },
+    {
+      "id": "d5706dbd085650d0e058324a7abfe3f4",
+      "content": "Gap 5: Menu Customization drag-to-reorder (menu-customization-dialog.tsx) - needs HTML5 drag-and-drop",
+      "status": "in_progress"
+    },
+    {
+      "id": "7b758ada7697ffe548cbba51c8132dd2",
+      "content": "Gap 6: PDF Import page range selector (pdf-import-dialog.tsx) - needs range entry field",
+      "status": "pending"
+    },
+    {
+      "id": "654c8bc7d279d54af177caba78e1922d",
+      "content": "Gap 7: Color Picker HUD (canvas-view.tsx) - needs Alt+Shift+RightClick popup",
+      "status": "pending"
+    },
+    {
+      "id": "b748549134ef0cb99e6395bcb1114dc8",
+      "content": "Gap 8: Variables panel data-set preview thumbnails (advanced-subsystems-dialog.tsx) - needs thumbnail grid",
+      "status": "pending"
+    }
+  ],
+  "lastUpdated": 1779983642199,
+  "status": "active"
+}

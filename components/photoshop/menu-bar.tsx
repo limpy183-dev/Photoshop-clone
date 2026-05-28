@@ -81,6 +81,9 @@ const LayerCompsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolea
 const ColorLabelsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
   () => import("./color-labels-dialog").then((m) => ({ default: m.ColorLabelsDialog })),
 )
+const FitImageDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./fit-image-dialog").then((m) => ({ default: m.FitImageDialog })),
+)
 const ExportAsDialog = lazyDialog<{
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -108,6 +111,12 @@ const BatchProcessingDialog = lazyDialog<{ open: boolean; onOpenChange: (open: b
 )
 const ImageProcessorDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
   () => import("./processing-dialogs").then((m) => ({ default: m.ImageProcessorDialog })),
+)
+const CropAndStraightenDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./processing-dialogs").then((m) => ({ default: m.CropAndStraightenDialog })),
+)
+const PdfImportDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./pdf-import-dialog").then((m) => ({ default: m.PdfImportDialog })),
 )
 const DocumentReportDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
   () => import("./document-report-dialog").then((m) => ({ default: m.DocumentReportDialog })),
@@ -178,6 +187,9 @@ const PreferencesDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boole
 )
 const KeyboardShortcutsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
   () => import("./keyboard-shortcuts-dialog").then((m) => ({ default: m.KeyboardShortcutsDialog })),
+)
+const MenuCustomizationDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
+  () => import("./menu-customization-dialog").then((m) => ({ default: m.MenuCustomizationDialog })),
 )
 const PresetManagerDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
   () => import("./preset-manager-dialog").then((m) => ({ default: m.PresetManagerDialog })),
@@ -476,12 +488,15 @@ export function MenuBar({
   const [warpTextOpen, setWarpTextOpen] = React.useState(false)
   const [layerCompsOpen, setLayerCompsOpen] = React.useState(false)
   const [colorLabelsOpen, setColorLabelsOpen] = React.useState(false)
+  const [fitImageOpen, setFitImageOpen] = React.useState(false)
   const [exportAsOpen, setExportAsOpen] = React.useState(false)
   const [exportAsInitial, setExportAsInitial] = React.useState<any>(undefined)
   const [batchExportOpen, setBatchExportOpen] = React.useState(false)
   const [batchExportInitial, setBatchExportInitial] = React.useState<any>(undefined)
   const [batchProcessingOpen, setBatchProcessingOpen] = React.useState(false)
   const [imageProcessorOpen, setImageProcessorOpen] = React.useState(false)
+  const [cropAndStraightenOpen, setCropAndStraightenOpen] = React.useState(false)
+  const [pdfImportOpen, setPdfImportOpen] = React.useState(false)
   const [documentReportOpen, setDocumentReportOpen] = React.useState(false)
   const [preflightOpen, setPreflightOpen] = React.useState(false)
   const [filterGalleryOpen, setFilterGalleryOpen] = React.useState(false)
@@ -503,6 +518,7 @@ export function MenuBar({
   const [colorModeTarget, setColorModeTarget] = React.useState<import("./color-mode-dialog").ColorModeDialogTarget | null>(null)
   const [preferencesOpen, setPreferencesOpen] = React.useState(false)
   const [shortcutsOpen, setShortcutsOpen] = React.useState(false)
+  const [menuCustomizationOpen, setMenuCustomizationOpen] = React.useState(false)
   const [presetManagerOpen, setPresetManagerOpen] = React.useState(false)
   const [aboutOpen, setAboutOpen] = React.useState(false)
   const [recentManagerOpen, setRecentManagerOpen] = React.useState(false)
@@ -2300,7 +2316,9 @@ export function MenuBar({
                 <DropdownMenuItem onSelect={() => setGapWorkflow("focus-stack")}>Focus Stack...</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => setGapWorkflow("stack-statistics")}>Statistics...</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => setGapWorkflow("pdf-presentation")}>PDF Presentation...</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setPdfImportOpen(true)}>Import PDF...</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => setGapWorkflow("image-assets")}>Generate Image Assets...</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setCropAndStraightenOpen(true)}>Crop and Straighten Photos...</DropdownMenuItem>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
             <DropdownMenuSub>
@@ -2659,6 +2677,7 @@ export function MenuBar({
               Preferences
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => setShortcutsOpen(true)}>Keyboard Shortcuts…</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setMenuCustomizationOpen(true)}>Menus…</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -2917,6 +2936,9 @@ export function MenuBar({
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={revealAll} disabled={!activeDoc}>
               Reveal All
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setFitImageOpen(true)} disabled={!activeDoc}>
+              Fit Image…
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -3661,6 +3683,12 @@ export function MenuBar({
                 <DropdownMenuItem onSelect={() => openFilterDialog("extrude")}>
                   Extrude…
                 </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openFilterDialog("diffuse")}>
+                  Diffuse...
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openFilterDialog("tiles")}>
+                  Tiles...
+                </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openFilterDialog("emboss")}>
                   Emboss…
                 </DropdownMenuItem>
@@ -3674,6 +3702,21 @@ export function MenuBar({
               <DropdownMenuSubContent>
                 <DropdownMenuItem onSelect={() => openFilterDialog("pixelate")}>
                   Mosaic…
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openFilterDialog("color-halftone")}>
+                  Color Halftone...
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openFilterDialog("mezzotint")}>
+                  Mezzotint...
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openFilterDialog("pointillize")}>
+                  Pointillize...
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => applyInstant("fragment")}>
+                  Fragment
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openFilterDialog("facet")}>
+                  Facet...
                 </DropdownMenuItem>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
@@ -3730,9 +3773,11 @@ export function MenuBar({
               <DropdownMenuSubTrigger>Distort</DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
                 <DropdownMenuItem onSelect={() => openFilterDialog("adaptive-wide-angle")}>Adaptive Wide Angle...</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openFilterDialog("lens-correction")}>Lens Correction...</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openFilterDialog("vanishing-point")}>Vanishing Point...</DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => openFilterDialog("displace")}>Displace…</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openFilterDialog("shear")}>Shear...</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openFilterDialog("diffuse-glow")}>Diffuse Glow…</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openFilterDialog("ocean-ripple")}>Ocean Ripple…</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openFilterDialog("twirl")}>Twirl…</DropdownMenuItem>
@@ -3749,6 +3794,7 @@ export function MenuBar({
               <DropdownMenuSubContent>
                 <DropdownMenuItem onSelect={() => openFilterDialog("clouds")}>Clouds…</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openFilterDialog("difference-clouds")}>Difference Clouds…</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openFilterDialog("lighting-effects")}>Lighting Effects...</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openFilterDialog("fibers")}>Fibers…</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openFilterDialog("lens-flare")}>Lens Flare…</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openFilterDialog("flame")}>Flame…</DropdownMenuItem>
@@ -3763,6 +3809,7 @@ export function MenuBar({
                 <DropdownMenuItem onSelect={() => openFilterDialog("offset")}>Offset…</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openFilterDialog("maximum")}>Maximum…</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openFilterDialog("minimum")}>Minimum…</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openFilterDialog("custom-filter")}>Custom Filter...</DropdownMenuItem>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
             <DropdownMenuSub>
@@ -3911,6 +3958,25 @@ export function MenuBar({
             <DropdownMenuItem onSelect={toggleQuickMask}>
               {activeDoc?.quickMask ? "✓ " : ""}Edit in Quick Mask <DropdownMenuShortcut>Q</DropdownMenuShortcut>
             </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>Screen Mode</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-set-screen-mode", { mode: "standard" })}>
+                  Standard Screen Mode
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-set-screen-mode", { mode: "full-screen-with-menu" })}>
+                  Full Screen Mode with Menu Bar
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-set-screen-mode", { mode: "full-screen" })}>
+                  Full Screen Mode
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-cycle-screen-mode")}>
+                  Cycle Screen Mode <DropdownMenuShortcut>F</DropdownMenuShortcut>
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -3928,6 +3994,9 @@ export function MenuBar({
         <DropdownMenu>
           <DropdownMenuTrigger className={menuClass}>Video</DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-64">
+            <DropdownMenuItem onSelect={() => openFilterDialog("de-interlace")} disabled={!activeDoc}>De-Interlace...</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => applyInstant("ntsc-colors")} disabled={!activeDoc}>NTSC Colors</DropdownMenuItem>
+            <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => openAdvancedTab("video")} disabled={!activeDoc}>Video Timeline...</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => openAdvancedTab("video")} disabled={!activeDoc}>Import Video Layer...</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => openAdvancedTab("video")} disabled={!activeDoc}>Render Video...</DropdownMenuItem>
@@ -4098,10 +4167,13 @@ export function MenuBar({
       <WarpTextDialog open={warpTextOpen} onOpenChange={setWarpTextOpen} />
       <LayerCompsDialog open={layerCompsOpen} onOpenChange={setLayerCompsOpen} />
       <ColorLabelsDialog open={colorLabelsOpen} onOpenChange={setColorLabelsOpen} />
+      <FitImageDialog open={fitImageOpen} onOpenChange={setFitImageOpen} />
       <ExportAsDialog open={exportAsOpen} onOpenChange={setExportAsOpen} initial={exportAsInitial} />
       <BatchExportDialog open={batchExportOpen} onOpenChange={setBatchExportOpen} initial={batchExportInitial} />
       <BatchProcessingDialog open={batchProcessingOpen} onOpenChange={setBatchProcessingOpen} />
       <ImageProcessorDialog open={imageProcessorOpen} onOpenChange={setImageProcessorOpen} />
+      <CropAndStraightenDialog open={cropAndStraightenOpen} onOpenChange={setCropAndStraightenOpen} />
+      <PdfImportDialog open={pdfImportOpen} onOpenChange={setPdfImportOpen} />
       <DocumentReportDialog open={documentReportOpen} onOpenChange={setDocumentReportOpen} />
       <PreflightDialog open={preflightOpen} onOpenChange={setPreflightOpen} />
       <GridSettingsDialog open={gridSettingsOpen} onOpenChange={setGridSettingsOpen} />
@@ -4135,6 +4207,7 @@ export function MenuBar({
       <ColorModeDialog target={colorModeTarget} onOpenChange={(open) => !open && setColorModeTarget(null)} />
       <PreferencesDialog open={preferencesOpen} onOpenChange={setPreferencesOpen} />
       <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+      <MenuCustomizationDialog open={menuCustomizationOpen} onOpenChange={setMenuCustomizationOpen} />
       <PresetManagerDialog open={presetManagerOpen} onOpenChange={setPresetManagerOpen} />
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
       <LargeDocumentRecoveryDialog

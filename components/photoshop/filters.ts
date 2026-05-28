@@ -3061,13 +3061,70 @@ function filterMaxMin(src: ImageData, radius: number, isMax: boolean): ImageData
 
 /* --------- SMART SHARPEN --------- */
 
-function smartSharpen(src: ImageData, amount: number, radius: number, threshold: number, shadowFade: number, highlightFade: number): ImageData {
-  const blurred = gaussianBlur(src, Math.max(0.5, radius))
+interface SmartSharpenExtras {
+  remove?: "gaussian" | "lens" | "motion"
+  motionAngle?: number
+  moreAccurate?: boolean
+  shadowTonalWidth?: number
+  shadowRadius?: number
+  highlightTonalWidth?: number
+  highlightRadius?: number
+}
+
+function smartSharpenBlurSource(src: ImageData, radius: number, extras: SmartSharpenExtras) {
+  const r = Math.max(0.5, radius)
+  const remove = extras.remove ?? "gaussian"
+  if (remove === "motion") {
+    return motionBlur(src, Math.max(1, r * (extras.moreAccurate ? 4 : 2)), extras.motionAngle ?? 0)
+  }
+  if (remove === "lens") {
+    return lensBlur(src, Math.max(1, r), 6, 0, 0, 255, 0, true, { shape: "circle" })
+  }
+  return extras.moreAccurate ? gaussianBlur(gaussianBlur(src, r), Math.max(0.5, r * 0.35)) : gaussianBlur(src, r)
+}
+
+function tonalFadeForSmartSharpen(
+  lum: number,
+  shadowFade: number,
+  highlightFade: number,
+  extras: SmartSharpenExtras,
+) {
+  let fade = 1
+  const shadowAmount = Math.max(0, Math.min(100, shadowFade)) / 100
+  const highlightAmount = Math.max(0, Math.min(100, highlightFade)) / 100
+
+  if (shadowAmount > 0) {
+    const tonalWidth = Math.max(1, Math.min(100, extras.shadowTonalWidth ?? 25)) / 100
+    const tonalLimit = Math.max(1, 255 * tonalWidth)
+    const radiusBoost = 1 + Math.max(0, Math.min(250, extras.shadowRadius ?? 0)) / 250
+    const influence = Math.min(1, Math.max(0, 1 - lum / tonalLimit) * radiusBoost)
+    fade *= 1 - shadowAmount * influence
+  }
+
+  if (highlightAmount > 0) {
+    const tonalWidth = Math.max(1, Math.min(100, extras.highlightTonalWidth ?? 25)) / 100
+    const tonalLimit = Math.max(1, 255 * tonalWidth)
+    const radiusBoost = 1 + Math.max(0, Math.min(250, extras.highlightRadius ?? 0)) / 250
+    const influence = Math.min(1, Math.max(0, 1 - (255 - lum) / tonalLimit) * radiusBoost)
+    fade *= 1 - highlightAmount * influence
+  }
+
+  return Math.max(0, Math.min(1, fade))
+}
+
+function smartSharpen(
+  src: ImageData,
+  amount: number,
+  radius: number,
+  threshold: number,
+  shadowFade: number,
+  highlightFade: number,
+  extras: SmartSharpenExtras = {},
+): ImageData {
+  const blurred = smartSharpenBlurSource(src, radius, extras)
   const w = src.width, h = src.height
   const out = new Uint8ClampedArray(src.data.length)
   const k = amount / 100
-  const shadowK = 1 - shadowFade / 100
-  const highlightK = 1 - highlightFade / 100
 
   for (let i = 0; i < src.data.length; i += 4) {
     const lum = 0.299 * src.data[i] + 0.587 * src.data[i + 1] + 0.114 * src.data[i + 2]
@@ -3082,10 +3139,7 @@ function smartSharpen(src: ImageData, amount: number, radius: number, threshold:
       continue
     }
 
-    // Fade factor based on luminosity (shadow/highlight protection)
-    let fade = 1
-    if (lum < 64) fade *= shadowK + (1 - shadowK) * (lum / 64)
-    else if (lum > 192) fade *= highlightK + (1 - highlightK) * ((255 - lum) / 63)
+    const fade = tonalFadeForSmartSharpen(lum, shadowFade, highlightFade, extras)
 
     const effectiveK = k * fade
     for (let c = 0; c < 3; c++) {
@@ -3597,15 +3651,32 @@ function fieldBlur(src: ImageData, blur: number, centerX: number, centerY: numbe
   })
 }
 
-function irisBlur(src: ImageData, blur: number, centerX: number, centerY: number, radius: number, feather: number) {
+function irisBlur(
+  src: ImageData,
+  blur: number,
+  centerX: number,
+  centerY: number,
+  radius: number,
+  feather: number,
+  ellipseWidth = radius,
+  ellipseHeight = radius,
+  rotation = 0,
+) {
   const blurred = boxBlur(src, Math.max(1, blur))
   const cx = (centerX / 100) * Math.max(1, src.width - 1)
   const cy = (centerY / 100) * Math.max(1, src.height - 1)
-  const rx = Math.max(1, src.width * (radius / 100) * 0.5)
-  const ry = Math.max(1, src.height * (radius / 100) * 0.5)
+  const rx = Math.max(1, src.width * (ellipseWidth / 100) * 0.5)
+  const ry = Math.max(1, src.height * (ellipseHeight / 100) * 0.5)
+  const radians = -rotation * Math.PI / 180
+  const cos = Math.cos(radians)
+  const sin = Math.sin(radians)
   const featherWidth = Math.max(0.01, feather / 100)
   return mixBlurredByWeight(src, blurred, (x, y) => {
-    const d = Math.hypot((x - cx) / rx, (y - cy) / ry)
+    const dx = x - cx
+    const dy = y - cy
+    const localX = dx * cos - dy * sin
+    const localY = dx * sin + dy * cos
+    const d = Math.hypot(localX / rx, localY / ry)
     return (d - 1) / featherWidth
   })
 }
@@ -5709,9 +5780,22 @@ export const FILTERS: Record<string, FilterDef> = {
       { type: "slider", key: "centerX", label: "Center X", min: 0, max: 100, step: 1, default: 50, suffix: "%" },
       { type: "slider", key: "centerY", label: "Center Y", min: 0, max: 100, step: 1, default: 50, suffix: "%" },
       { type: "slider", key: "radius", label: "Iris Radius", min: 5, max: 100, step: 1, default: 42, suffix: "%" },
+      { type: "slider", key: "ellipseWidth", label: "Ellipse Width", min: 5, max: 100, step: 1, default: 42, suffix: "%" },
+      { type: "slider", key: "ellipseHeight", label: "Ellipse Height", min: 5, max: 100, step: 1, default: 42, suffix: "%" },
+      { type: "slider", key: "rotation", label: "Ellipse Rotation", min: -180, max: 180, step: 1, default: 0, suffix: "deg" },
       { type: "slider", key: "feather", label: "Feather", min: 1, max: 100, step: 1, default: 30, suffix: "%" },
     ],
-    apply: (src, p) => irisBlur(src, Number(p.blur), Number(p.centerX), Number(p.centerY), Number(p.radius), Number(p.feather)),
+    apply: (src, p) => irisBlur(
+      src,
+      Number(p.blur),
+      Number(p.centerX),
+      Number(p.centerY),
+      Number(p.radius),
+      Number(p.feather),
+      Number(p.ellipseWidth ?? p.radius),
+      Number(p.ellipseHeight ?? p.radius),
+      Number(p.rotation ?? 0),
+    ),
   },
   "tilt-shift": {
     id: "tilt-shift",
@@ -6743,10 +6827,32 @@ export const FILTERS: Record<string, FilterDef> = {
         { value: "lens", label: "Lens Blur" },
         { value: "motion", label: "Motion Blur" },
       ], default: "gaussian" },
+      { type: "slider", key: "motionAngle", label: "Motion Angle", min: -180, max: 180, step: 1, default: 0, suffix: "deg" },
+      { type: "checkbox", key: "moreAccurate", label: "More Accurate", default: false },
       { type: "slider", key: "shadowAmount", label: "Shadow Fade", min: 0, max: 100, step: 1, default: 0, suffix: "%" },
+      { type: "slider", key: "shadowTonalWidth", label: "Shadow Tonal Width", min: 1, max: 100, step: 1, default: 50, suffix: "%" },
+      { type: "slider", key: "shadowRadius", label: "Shadow Radius", min: 0, max: 250, step: 1, default: 1, suffix: "px" },
       { type: "slider", key: "highlightAmount", label: "Highlight Fade", min: 0, max: 100, step: 1, default: 0, suffix: "%" },
+      { type: "slider", key: "highlightTonalWidth", label: "Highlight Tonal Width", min: 1, max: 100, step: 1, default: 50, suffix: "%" },
+      { type: "slider", key: "highlightRadius", label: "Highlight Radius", min: 0, max: 250, step: 1, default: 1, suffix: "px" },
     ],
-    apply: (src, p) => smartSharpen(src, Number(p.amount), Number(p.radius), Number(p.threshold), Number(p.shadowAmount), Number(p.highlightAmount)),
+    apply: (src, p) => smartSharpen(
+      src,
+      Number(p.amount),
+      Number(p.radius),
+      Number(p.threshold),
+      Number(p.shadowAmount),
+      Number(p.highlightAmount),
+      {
+        remove: String(p.remove ?? "gaussian") as SmartSharpenExtras["remove"],
+        motionAngle: Number(p.motionAngle ?? 0),
+        moreAccurate: parseBool(p.moreAccurate),
+        shadowTonalWidth: Number(p.shadowTonalWidth ?? 50),
+        shadowRadius: Number(p.shadowRadius ?? 1),
+        highlightTonalWidth: Number(p.highlightTonalWidth ?? 50),
+        highlightRadius: Number(p.highlightRadius ?? 1),
+      },
+    ),
   },
 
   "lens-blur": {
@@ -6769,6 +6875,7 @@ export const FILTERS: Record<string, FilterDef> = {
       { type: "slider", key: "threshold", label: "Specular Threshold", min: 0, max: 255, step: 1, default: 255 },
       { type: "slider", key: "noiseAmount", label: "Noise Amount", min: 0, max: 25, step: 1, default: 0 },
       { type: "checkbox", key: "noiseMono", label: "Monochromatic Noise", default: true },
+      { type: "text", key: "depthSource", label: "Depth Source (doc:layer)", default: "", placeholder: "layer:<docId>:<layerId> or doc:<docId>" },
       { type: "select", key: "depthChannel", label: "Depth Source Channel", options: [
         { value: "luminance", label: "Luminance" },
         { value: "red", label: "Red" },
@@ -6973,6 +7080,7 @@ export const FILTERS: Record<string, FilterDef> = {
       { type: "slider", key: "gloss", label: "Gloss", min: 0, max: 100, step: 1, default: 50, suffix: "%" },
       { type: "slider", key: "shine", label: "Shine", min: 0, max: 100, step: 1, default: 60, suffix: "%" },
       { type: "slider", key: "exposure", label: "Exposure", min: -200, max: 200, step: 1, default: 0, suffix: "/100 EV" },
+      { type: "text", key: "bumpSource", label: "Bump Source (doc:layer)", default: "", placeholder: "layer:<docId>:<layerId> or doc:<docId>" },
       { type: "select", key: "bumpChannel", label: "Bump Source Channel", options: [
         { value: "luminance", label: "Luminance (default)" },
         { value: "red", label: "Red" },
@@ -7007,6 +7115,26 @@ export const FILTERS: Record<string, FilterDef> = {
   "custom-convolution": {
     id: "custom-convolution",
     name: "Custom Convolution",
+    category: "Other",
+    params: [
+      { type: "select", key: "preset", label: "Kernel", options: [
+        { value: "sharpen-more", label: "Sharpen More" },
+        { value: "edge-enhance", label: "Edge Enhance" },
+        { value: "outline", label: "Outline" },
+        { value: "laplacian", label: "Laplacian" },
+        { value: "sobel-x", label: "Sobel X" },
+        { value: "sobel-y", label: "Sobel Y" },
+      ], default: "sharpen-more" },
+      { type: "slider", key: "strength", label: "Strength", min: 0, max: 200, step: 1, default: 100, suffix: "%" },
+      { type: "slider", key: "bias", label: "Bias", min: -255, max: 255, step: 1, default: 0 },
+      { type: "slider", key: "divisor", label: "Scale/Divisor", min: -64, max: 64, step: 1, default: 0 },
+      { type: "text", key: "matrix", label: "Kernel Matrix", default: "", multiline: true, placeholder: "0 0 0\n0 1 0\n0 0 0" },
+    ],
+    apply: (src, p) => customConvolution(src, String(p.preset), Number(p.strength), Number(p.bias), String(p.matrix ?? ""), Number(p.divisor ?? 0)),
+  },
+  "custom-filter": {
+    id: "custom-filter",
+    name: "Custom Filter",
     category: "Other",
     params: [
       { type: "select", key: "preset", label: "Kernel", options: [

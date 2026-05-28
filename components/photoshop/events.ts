@@ -16,6 +16,32 @@ export type PhotoshopEventMap = {
   "ps-open-learn": { topic: string }
   "ps-show-home": { open?: boolean } | undefined
   "ps-open-file": undefined
+  "ps-set-screen-mode": { mode: import("./screen-modes").ScreenMode }
+  "ps-cycle-screen-mode": undefined
+  "ps-tool-info":
+    | {
+        kind: "marquee"
+        width: number
+        height: number
+        x: number
+        y: number
+      }
+    | {
+        kind: "line"
+        length: number
+        angle: number
+        dx: number
+        dy: number
+      }
+    | {
+        kind: "transform"
+        scaleX: number
+        scaleY: number
+        rotation: number
+        translateX: number
+        translateY: number
+      }
+    | { kind: "clear" }
 }
 
 type PhotoshopEventName = keyof PhotoshopEventMap

@@ -1,0 +1,52 @@
+{
+  "taskId": "019e6a41-fe9d-72e1-9576-a5aa5c7da66c",
+  "todos": [
+    {
+      "id": "cfd436e5f65a7f6c121896438658f3d5",
+      "content": "Read the implementation plan",
+      "status": "completed"
+    },
+    {
+      "id": "1a581c898b9e041c753ae008753eb108",
+      "content": "Audit the codebase against the plan - inspect key files",
+      "status": "completed"
+    },
+    {
+      "id": "c3c5d7da28076856c84f8def63da7866",
+      "content": "Produce verified gap ledger (24 genuine gaps remain)",
+      "status": "completed"
+    },
+    {
+      "id": "c1d3245fa287ca65fae706978ff9f3af",
+      "content": "Implement Wave 1: Navigator drag-to-pan, Info panel readouts, Histogram per-channel",
+      "status": "in_progress"
+    },
+    {
+      "id": "346e3fb5e768cede6f86878a66338fed",
+      "content": "Implement Wave 2: Gradients freeform, Filter Gallery presets, CAF workspace",
+      "status": "pending"
+    },
+    {
+      "id": "ff9c8853475519c993d88c332dbbcd7e",
+      "content": "Implement Wave 3: TIFF deflate, Video transitions, Audio mixer, Swatches groups",
+      "status": "pending"
+    },
+    {
+      "id": "e3998546dfeb9505a7d35b678df64833",
+      "content": "Implement Wave 4: High-bit pipeline, Actions playback, Variables UI, PDF presentation",
+      "status": "pending"
+    },
+    {
+      "id": "503b8a6a6fc5ba3d04ba5709595a6f36",
+      "content": "Implement Wave 5: Menu customization, Workspace persistence, Performance infra, Layer Comps, Tool Presets",
+      "status": "pending"
+    },
+    {
+      "id": "c15e35d2674a15ee4ca4b82fff146e9b",
+      "content": "Verify builds pass",
+      "status": "pending"
+    }
+  ],
+  "lastUpdated": 1779899494838,
+  "status": "active"
+}

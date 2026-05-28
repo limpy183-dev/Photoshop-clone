@@ -47,7 +47,12 @@ import { planProgressiveRender } from "./progressive-renderer"
 import { createRafCoalescer, type RafCoalescer } from "./raf-coalescer"
 import { isEmptyDirtyRect } from "./dirty-rect"
 import { planDocumentTileRecomposition } from "./layer-tile-renderer"
-import { composeDocumentTile } from "./tile-only-pipeline"
+import {
+  composeDocumentTile,
+  planTileOnlyDefaultCompositor,
+  planTileOnlyInteractiveTool,
+  renderTileOnlyViewportComposite,
+} from "./tile-only-pipeline"
 import {
   applyGpuLayerStyleToCanvas,
   applyGpuSmartFiltersToCanvas,
@@ -61,7 +66,7 @@ import {
 import { acquirePooledCanvas, releasePooledCanvas } from "./canvas-utils"
 import { containsSelectionPoint, createSelectionHitTester, type SelectionHitTester } from "./selection-hit-testing"
 import { isAdjustmentNoop } from "./adjustment-layers"
-import { addPhotoshopEventListener } from "./events"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
 import {
   applyBlurGalleryKeyboardCommand,
   beginBlurGalleryInteraction,
@@ -77,6 +82,16 @@ import {
   type BlurGalleryFilterId,
   type BlurGalleryParams,
 } from "./blur-gallery-controls"
+import {
+  beginLightingEffectsInteraction,
+  finishLightingEffectsInteraction,
+  getLightingEffectsControlState,
+  normalizeLightingEffectsParams,
+  parseLightingEffectsLights,
+  updateLightingEffectsInteraction,
+  type LightingEffectsDrag,
+  type LightingEffectsParams,
+} from "./lighting-effects-controls"
 import { smartFilterMaskAmountAt, smartFilterMaskToImageData } from "./smart-filter-masks"
 import { applyLuminanceMaskToCanvas, normalizeAdvancedBlending } from "./layer-workflows"
 import {
@@ -178,6 +193,7 @@ import {
 } from "./tool-helpers"
 import { perspectiveCropImageData } from "./photo-workflow-engine"
 import { hexToRgba } from "./color-utils"
+import { ColorPickerHud, hexToHsv, hsvToHex, pickFromHud, type ColorPickerHudHsv } from "./color-picker-hud"
 import { applyThreeDMaterialDrop } from "./three-d-video-engine"
 import type { BlendMode, CustomShapeId, GradientStop, Layer, PathHandleMode, PathPoint, PathProps, PsDocument, Selection, ShapeProps } from "./types"
 
@@ -421,6 +437,11 @@ export function CanvasView() {
     docId?: string
   } | null>(null)
   const blurGalleryDragRef = React.useRef<BlurGalleryDrag | null>(null)
+  const [lightingEffectsOverlay, setLightingEffectsOverlay] = React.useState<{
+    params: LightingEffectsParams
+    docId?: string
+  } | null>(null)
+  const lightingEffectsDragRef = React.useRef<LightingEffectsDrag | null>(null)
   const layoutZoomRef = React.useRef(activeDoc?.zoom ?? 1)
   const visualZoomRef = React.useRef(activeDoc?.zoom ?? 1)
   const pendingZoomRef = React.useRef<number | null>(null)
@@ -598,6 +619,35 @@ export function CanvasView() {
   const progressiveFrameRef = React.useRef<number | null>(null)
   const progressiveFullPassRef = React.useRef(false)
 
+  const visibleDocumentViewport = React.useCallback((): DirtyRect => {
+    if (!activeDoc) return { x: 0, y: 0, w: 1, h: 1 }
+    const container = containerRef.current
+    const stage = stageRef.current
+    if (!container || !stage) return { x: 0, y: 0, w: activeDoc.width, h: activeDoc.height }
+    const containerRect = container.getBoundingClientRect()
+    const stageRect = stage.getBoundingClientRect()
+    if (stageRect.width <= 0 || stageRect.height <= 0) return { x: 0, y: 0, w: activeDoc.width, h: activeDoc.height }
+    const x0 = ((containerRect.left - stageRect.left) / stageRect.width) * activeDoc.width
+    const y0 = ((containerRect.top - stageRect.top) / stageRect.height) * activeDoc.height
+    const x1 = ((containerRect.right - stageRect.left) / stageRect.width) * activeDoc.width
+    const y1 = ((containerRect.bottom - stageRect.top) / stageRect.height) * activeDoc.height
+    return {
+      x: Math.max(0, Math.floor(Math.min(x0, x1))),
+      y: Math.max(0, Math.floor(Math.min(y0, y1))),
+      w: Math.max(1, Math.min(activeDoc.width, Math.ceil(Math.max(x0, x1))) - Math.max(0, Math.floor(Math.min(x0, x1)))),
+      h: Math.max(1, Math.min(activeDoc.height, Math.ceil(Math.max(y0, y1))) - Math.max(0, Math.floor(Math.min(y0, y1)))),
+    }
+  }, [activeDoc])
+
+  const resetCompositeCanvasPlacement = React.useCallback((cv: HTMLCanvasElement) => {
+    cv.style.left = "0px"
+    cv.style.top = "0px"
+    cv.style.right = "0px"
+    cv.style.bottom = "0px"
+    cv.style.width = "100%"
+    cv.style.height = "100%"
+  }, [])
+
   const compose = React.useCallback((force = false, change?: {
     layerIds: "all" | string[]
     reasons: string[]
@@ -606,8 +656,6 @@ export function CanvasView() {
   }) => {
     const cv = compositeRef.current
     if (!cv || !activeDoc) return
-    if (cv.width !== activeDoc.width) cv.width = activeDoc.width
-    if (cv.height !== activeDoc.height) cv.height = activeDoc.height
 
     // Forced renders happen when underlying pixels mutated without a fingerprint
     // change (brush strokes on canvases or masks). Drop the mask alpha cache so
@@ -635,6 +683,50 @@ export function CanvasView() {
         `${layer.maskEnabled === false ? 0 : 1}:${layer.opacity}:${layer.fillOpacity ?? 1}:` +
         `${layer.blendMode}:${layer.clipped ? 1 : 0}:${advancedFp}:${adjFp}:${styleFp}:${smartFilterFp}:${previewId}|`
     }
+
+    const dirtyRects = change?.dirtyByLayer ? Object.values(change.dirtyByLayer).flatMap((rects) => rects) : undefined
+    const defaultTilePlan = planTileOnlyDefaultCompositor({
+      documentWidth: activeDoc.width,
+      documentHeight: activeDoc.height,
+      tileSize: 512,
+      viewport: visibleDocumentViewport(),
+      prefetchPadding: 0,
+      dirtyRects,
+      layers: activeDoc.layers,
+      explicitTileOnly: !!activeDoc.metadata?.largeDocumentTileView,
+      colorMode: activeDoc.colorMode,
+      bitDepth: activeDoc.bitDepth,
+      quickMask: activeDoc.quickMask,
+      filterPreviewCount: Object.keys(filterPreviews).length,
+    })
+    if (defaultTilePlan.strategy === "tile-local") {
+      const rendered = renderTileOnlyViewportComposite(activeDoc, defaultTilePlan, {
+        transparent: false,
+        matte: activeDoc.background,
+      })
+      const rect = rendered.viewportUnion.w > 0 && rendered.viewportUnion.h > 0
+        ? rendered.viewportUnion
+        : defaultTilePlan.viewportPlan.viewport
+      if (cv.width !== rect.w) cv.width = rect.w
+      if (cv.height !== rect.h) cv.height = rect.h
+      cv.style.left = `${rect.x * viewZoom}px`
+      cv.style.top = `${rect.y * viewZoom}px`
+      cv.style.right = "auto"
+      cv.style.bottom = "auto"
+      cv.style.width = `${rect.w * viewZoom}px`
+      cv.style.height = `${rect.h * viewZoom}px`
+      const ctx = cv.getContext("2d")!
+      ctx.clearRect(0, 0, cv.width, cv.height)
+      for (const tile of rendered.tiles) {
+        ctx.drawImage(tile.canvas, tile.rect.x - rect.x, tile.rect.y - rect.y)
+      }
+      compositeCacheRef.current = { fingerprint: "", drawnFingerprint: fp, width: cv.width, height: cv.height, canvas: null }
+      return
+    }
+
+    resetCompositeCanvasPlacement(cv)
+    if (cv.width !== activeDoc.width) cv.width = activeDoc.width
+    if (cv.height !== activeDoc.height) cv.height = activeDoc.height
 
     const cache = compositeCacheRef.current
     if (!force && cache.drawnFingerprint === fp && cache.width === cv.width && cache.height === cv.height) {
@@ -917,7 +1009,7 @@ export function CanvasView() {
     } else {
       compositeCacheRef.current = { fingerprint: "", drawnFingerprint: fp, width: cv.width, height: cv.height, canvas: null }
     }
-  }, [activeDoc, filterPreviews])
+  }, [activeDoc, filterPreviews, resetCompositeCanvasPlacement, viewZoom, visibleDocumentViewport])
 
   React.useEffect(() => {
     compose()
@@ -1232,7 +1324,7 @@ export function CanvasView() {
     }
     ctx.restore()
     enforceTransparencyLock(ctx)
-    requestRender()
+    requestTileAwareStrokeRender()
     return true
   }
 
@@ -2418,7 +2510,7 @@ export function CanvasView() {
         }
       }
     }
-    if (!renderBufferedStroke()) requestRender()
+    if (!renderBufferedStroke()) requestTileAwareStrokeRender()
   }
 
   function spongeStamp(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, strength: number) {
@@ -2915,6 +3007,32 @@ export function CanvasView() {
     drawBlurGalleryOverlay(blurGalleryOverlay)
   }, [blurGalleryOverlay, activeDoc?.id, activeDoc?.width, activeDoc?.height])
 
+  React.useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        params?: LightingEffectsParams
+        docId?: string
+      } | null>).detail
+      if (!detail?.params) {
+        lightingEffectsDragRef.current = null
+        setLightingEffectsOverlay(null)
+        const ov = overlayRef.current
+        if (ov && !blurGalleryOverlay) ov.getContext("2d")?.clearRect(0, 0, ov.width, ov.height)
+        return
+      }
+      setLightingEffectsOverlay({
+        params: normalizeLightingEffectsParams(detail.params),
+        docId: detail.docId,
+      })
+    }
+    window.addEventListener("ps-lighting-effects-overlay-state", handler)
+    return () => window.removeEventListener("ps-lighting-effects-overlay-state", handler)
+  }, [blurGalleryOverlay])
+
+  React.useEffect(() => {
+    if (!blurGalleryOverlay) drawLightingEffectsOverlay(lightingEffectsOverlay)
+  }, [lightingEffectsOverlay, blurGalleryOverlay, activeDoc?.id, activeDoc?.width, activeDoc?.height])
+
   /**
    * Timeline transition overlay: during playback the timeline panel emits a
    * baked transition canvas via "ps-timeline-transition-overlay". We draw it
@@ -2961,6 +3079,19 @@ export function CanvasView() {
     emitBlurGalleryParams(filterId, next.params)
   }, [activeDoc?.id, emitBlurGalleryParams])
 
+  const emitLightingEffectsParams = React.useCallback((params: LightingEffectsParams) => {
+    window.dispatchEvent(new CustomEvent("ps-lighting-effects-overlay-change", { detail: { params } }))
+  }, [])
+
+  const setLightingEffectsParams = React.useCallback((params: LightingEffectsParams) => {
+    const next = {
+      params: normalizeLightingEffectsParams(params),
+      docId: activeDoc?.id,
+    }
+    setLightingEffectsOverlay(next)
+    emitLightingEffectsParams(next.params)
+  }, [activeDoc?.id, emitLightingEffectsParams])
+
   function handleBlurGalleryPointerDown(pt: { x: number; y: number }, event: React.PointerEvent<HTMLDivElement>) {
     if (!activeDoc || !blurGalleryOverlay) return false
     const result = beginBlurGalleryInteraction(
@@ -3002,6 +3133,44 @@ export function CanvasView() {
     } else {
       drawBlurGalleryOverlay(overlay)
     }
+    return true
+  }
+
+  function handleLightingEffectsPointerDown(pt: { x: number; y: number }, event: React.PointerEvent<HTMLDivElement>) {
+    if (!activeDoc || !lightingEffectsOverlay || lightingEffectsOverlay.docId !== activeDoc.id) return false
+    const result = beginLightingEffectsInteraction(
+      lightingEffectsOverlay.params,
+      pt,
+      activeDoc.width,
+      activeDoc.height,
+      Math.max(8, 10 / Math.max(0.25, visualZoomRef.current)),
+    )
+    if (!result.drag) return false
+    lightingEffectsDragRef.current = result.drag
+    setLightingEffectsParams(result.params)
+    event.preventDefault()
+    return true
+  }
+
+  function handleLightingEffectsPointerMove(pt: { x: number; y: number }) {
+    const drag = lightingEffectsDragRef.current
+    if (!activeDoc || !lightingEffectsOverlay || lightingEffectsOverlay.docId !== activeDoc.id || !drag) return false
+    const next = updateLightingEffectsInteraction(
+      lightingEffectsOverlay.params,
+      drag,
+      pt,
+      activeDoc.width,
+      activeDoc.height,
+    )
+    setLightingEffectsParams(next)
+    return true
+  }
+
+  function handleLightingEffectsPointerUp() {
+    if (!lightingEffectsDragRef.current) return false
+    const overlay = lightingEffectsOverlay
+    lightingEffectsDragRef.current = null
+    if (overlay) setLightingEffectsParams(finishLightingEffectsInteraction(overlay.params))
     return true
   }
 
@@ -3091,33 +3260,48 @@ export function CanvasView() {
       }
     } else if (state.filterId === "iris-blur") {
       const center = percentToCanvasPoint({ x: numOverlay(state.params.centerX, 50), y: numOverlay(state.params.centerY, 50) }, activeDoc.width, activeDoc.height)
-      const rx = activeDoc.width * numOverlay(state.params.radius, 42) / 100 * 0.5
-      const ry = activeDoc.height * numOverlay(state.params.radius, 42) / 100 * 0.5
+      const rotation = numOverlay(state.params.rotation, 0)
+      const radians = rotation * Math.PI / 180
+      const axisX = { x: Math.cos(radians), y: Math.sin(radians) }
+      const axisY = { x: -Math.sin(radians), y: Math.cos(radians) }
+      const rx = activeDoc.width * numOverlay(state.params.ellipseWidth, numOverlay(state.params.radius, 42)) / 100 * 0.5
+      const ry = activeDoc.height * numOverlay(state.params.ellipseHeight, numOverlay(state.params.radius, 42)) / 100 * 0.5
       const feather = 1 + numOverlay(state.params.feather, 30) / 100
+      const widthHandle = { x: center.x + axisX.x * rx, y: center.y + axisX.y * rx }
+      const heightHandle = { x: center.x + axisY.x * ry, y: center.y + axisY.y * ry }
+      const featherHandle = { x: center.x + axisX.x * rx * feather, y: center.y + axisX.y * rx * feather }
+      const rotationHandle = { x: center.x + axisX.x * (rx + 18 / zoom), y: center.y + axisX.y * (rx + 18 / zoom) }
       ctx.fillStyle = "rgba(56,189,248,0.07)"
       ctx.beginPath()
-      ctx.ellipse(center.x, center.y, Math.max(1, rx * feather), Math.max(1, ry * feather), 0, 0, Math.PI * 2)
+      ctx.ellipse(center.x, center.y, Math.max(1, rx * feather), Math.max(1, ry * feather), radians, 0, Math.PI * 2)
       ctx.fill()
       ctx.fillStyle = "rgba(16,185,129,0.11)"
       ctx.beginPath()
-      ctx.ellipse(center.x, center.y, Math.max(1, rx), Math.max(1, ry), 0, 0, Math.PI * 2)
+      ctx.ellipse(center.x, center.y, Math.max(1, rx), Math.max(1, ry), radians, 0, Math.PI * 2)
       ctx.fill()
       ctx.setLineDash([])
       ctx.strokeStyle = "#22c55e"
       ctx.beginPath()
-      ctx.ellipse(center.x, center.y, Math.max(1, rx), Math.max(1, ry), 0, 0, Math.PI * 2)
+      ctx.ellipse(center.x, center.y, Math.max(1, rx), Math.max(1, ry), radians, 0, Math.PI * 2)
       ctx.stroke()
       ctx.strokeStyle = accent
       ctx.setLineDash([5 / zoom, 4 / zoom])
       ctx.beginPath()
-      ctx.ellipse(center.x, center.y, Math.max(1, rx * feather), Math.max(1, ry * feather), 0, 0, Math.PI * 2)
+      ctx.ellipse(center.x, center.y, Math.max(1, rx * feather), Math.max(1, ry * feather), radians, 0, Math.PI * 2)
       ctx.stroke()
       ctx.setLineDash([])
+      ctx.strokeStyle = selectedAccent
+      ctx.beginPath()
+      ctx.moveTo(center.x, center.y)
+      ctx.lineTo(rotationHandle.x, rotationHandle.y)
+      ctx.stroke()
       drawRoundHandle(ctx, center.x, center.y, 5, controlState.activeControl === "iris-center" ? selectedAccent : accent, controlState.activeControl === "iris-center")
-      drawRoundHandle(ctx, center.x + rx, center.y, 4, "#ffffff", controlState.activeControl === "iris-radius")
-      drawRoundHandle(ctx, center.x + rx * feather, center.y, 4, "#ffffff", controlState.activeControl === "iris-feather")
-      drawOverlayLabel(ctx, "focus", center.x - rx, center.y - ry - 8 / zoom)
-      drawOverlayLabel(ctx, "feather", center.x + rx * feather + 8 / zoom, center.y)
+      drawRoundHandle(ctx, widthHandle.x, widthHandle.y, 4, "#ffffff", controlState.activeControl === "iris-width" || controlState.activeControl === "iris-radius")
+      drawRoundHandle(ctx, heightHandle.x, heightHandle.y, 4, "#ffffff", controlState.activeControl === "iris-height")
+      drawRoundHandle(ctx, featherHandle.x, featherHandle.y, 4, "#ffffff", controlState.activeControl === "iris-feather")
+      drawRoundHandle(ctx, rotationHandle.x, rotationHandle.y, 4, "#ffffff", controlState.activeControl === "iris-rotation")
+      drawOverlayLabel(ctx, "focus", center.x - axisX.x * rx - axisY.x * ry - 8 / zoom, center.y - axisX.y * rx - axisY.y * ry - 8 / zoom)
+      drawOverlayLabel(ctx, "feather", featherHandle.x + 8 / zoom, featherHandle.y)
     } else if (state.filterId === "tilt-shift") {
       const center = percentToCanvasPoint({ x: numOverlay(state.params.centerX, 50), y: numOverlay(state.params.centerY, 50) }, activeDoc.width, activeDoc.height)
       const angle = numOverlay(state.params.angle, 0) * Math.PI / 180
@@ -3193,11 +3377,85 @@ export function CanvasView() {
       ctx.stroke()
       ctx.setLineDash([])
       drawSpinSpokes(ctx, center, Math.max(1, radius))
+      const amount = numOverlay(state.params.amount, 28)
+      const amountHandle = {
+        x: center.x,
+        y: center.y - radius * Math.max(0.2, amount / 50),
+      }
+      ctx.strokeStyle = selectedAccent
+      ctx.beginPath()
+      ctx.moveTo(center.x, center.y)
+      ctx.lineTo(amountHandle.x, amountHandle.y)
+      ctx.stroke()
       drawRoundHandle(ctx, center.x, center.y, 5, controlState.activeControl === "spin-center" ? selectedAccent : accent, controlState.activeControl === "spin-center")
       drawRoundHandle(ctx, center.x + radius, center.y, 4, "#ffffff", controlState.activeControl === "spin-radius")
+      drawRoundHandle(ctx, amountHandle.x, amountHandle.y, 4, "#ffffff", controlState.activeControl === "spin-amount")
       drawOverlayLabel(ctx, "radius", center.x + radius + 8 / zoom, center.y - 8 / zoom)
+      drawOverlayLabel(ctx, `${Math.round(amount)}deg`, amountHandle.x + 8 / zoom, amountHandle.y)
     }
 
+    ctx.restore()
+  }
+
+  function drawLightingEffectsOverlay(state = lightingEffectsOverlay) {
+    const ov = overlayRef.current
+    if (!ov || !activeDoc) return
+    const ctx = ov.getContext("2d")
+    if (!ctx) return
+    ctx.clearRect(0, 0, ov.width, ov.height)
+    if (!state || state.docId !== activeDoc.id) return
+
+    const lights = parseLightingEffectsLights(String(state.params.lights ?? ""))
+    const controlState = getLightingEffectsControlState(state.params)
+    const zoom = Math.max(0.5, visualZoomRef.current)
+    const minDim = Math.max(1, Math.min(activeDoc.width, activeDoc.height))
+    const accent = "#fbbf24"
+    const secondary = "#38bdf8"
+
+    ctx.save()
+    ctx.lineWidth = Math.max(1, 1.5 / zoom)
+    ctx.shadowColor = "rgba(0,0,0,0.45)"
+    ctx.shadowBlur = 2 / zoom
+    for (let index = 0; index < lights.length; index++) {
+      const light = lights[index]
+      const selected = controlState.selectedLightIndex === index
+      const center = { x: light.x * activeDoc.width, y: light.y * activeDoc.height }
+      const radius = Math.max(1, light.radius * minDim)
+      const focusRadius = radius * 0.5 * light.focus
+      const amountHandle = { x: center.x, y: center.y - radius * Math.max(0.2, light.intensity * 0.5) }
+      const focusHandle = { x: center.x + focusRadius, y: center.y }
+      const radiusHandle = { x: center.x + radius, y: center.y }
+
+      ctx.save()
+      ctx.fillStyle = selected ? "rgba(251,191,36,0.08)" : "rgba(56,189,248,0.06)"
+      ctx.strokeStyle = selected ? accent : secondary
+      ctx.setLineDash([5 / zoom, 4 / zoom])
+      ctx.beginPath()
+      ctx.arc(center.x, center.y, radius, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.stroke()
+      ctx.setLineDash([])
+      if (light.type === "spot") {
+        ctx.strokeStyle = "rgba(248,250,252,0.46)"
+        ctx.beginPath()
+        ctx.arc(center.x, center.y, Math.max(1, focusRadius), 0, Math.PI * 2)
+        ctx.stroke()
+      }
+      ctx.strokeStyle = "rgba(248,250,252,0.58)"
+      ctx.beginPath()
+      ctx.moveTo(center.x, center.y)
+      ctx.lineTo(amountHandle.x, amountHandle.y)
+      ctx.moveTo(center.x, center.y)
+      ctx.lineTo(radiusHandle.x, radiusHandle.y)
+      ctx.stroke()
+      ctx.restore()
+
+      drawRoundHandle(ctx, center.x, center.y, 5, selected ? accent : secondary, selected)
+      drawRoundHandle(ctx, radiusHandle.x, radiusHandle.y, 4, "#ffffff", controlState.activeControl === `light-radius:${index}`)
+      drawRoundHandle(ctx, focusHandle.x, focusHandle.y, 4, "#ffffff", controlState.activeControl === `light-focus:${index}`)
+      drawRoundHandle(ctx, amountHandle.x, amountHandle.y, 4, "#ffffff", controlState.activeControl === `light-intensity:${index}`)
+      drawOverlayLabel(ctx, `${light.type} ${Math.round(light.intensity * 100)}%`, center.x + 8 / zoom, center.y - 10 / zoom)
+    }
     ctx.restore()
   }
 
@@ -3682,12 +3940,53 @@ export function CanvasView() {
     if (dirty) drag.dirty = mergeDirtyRect(drag.dirty, dirty)
   }
 
+  function requestTileAwareStrokeRender(reason = "tile-only-tool") {
+    const drag = drawingRef.current
+    const dirty = drag.type === "stroke" ? drag.dirty : undefined
+    if (!activeDoc || !activeLayer || !dirty || activeDoc.quickMask || activeSmartFilterMaskCanvas()) {
+      requestRender()
+      return
+    }
+    const plan = planTileOnlyInteractiveTool({
+      documentWidth: activeDoc.width,
+      documentHeight: activeDoc.height,
+      tileSize: 512,
+      tool,
+      layerId: activeLayer.id,
+      bounds: dirty,
+      radius: strokeDirtyPadding(),
+    })
+    if (plan.strategy !== "tile-local") {
+      requestRender()
+      return
+    }
+    requestRender({
+      layerIds: [activeLayer.id],
+      reason,
+      dirtyByLayer: { [activeLayer.id]: [plan.writeRect] },
+    })
+  }
+
   /* ---- pointer down ---- */
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!activeDoc) return
       ; (e.target as Element).setPointerCapture?.(e.pointerId)
     const pt = getCanvasPoint(e.clientX, e.clientY)
+
+    // Alt+Shift+RightClick: open the floating color picker HUD at the cursor.
+    // Drag selects a color; release applies it to the foreground swatch.
+    if (e.button === 2 && e.altKey && e.shiftKey) {
+      e.preventDefault()
+      e.stopPropagation()
+      setColorHud({
+        screenX: e.clientX,
+        screenY: e.clientY,
+        hsv: hexToHsv(foreground),
+        pointerId: e.pointerId,
+      })
+      return
+    }
 
     // Alt+right-drag is a brush-size gesture, not a context-menu gesture.
     // Plain right-click still falls through to the global custom context menu.
@@ -3701,6 +4000,11 @@ export function CanvasView() {
     if (e.button === 2) return
 
     if (handleBlurGalleryPointerDown(pt, e)) {
+      e.preventDefault()
+      return
+    }
+
+    if (handleLightingEffectsPointerDown(pt, e)) {
       e.preventDefault()
       return
     }
@@ -4429,6 +4733,11 @@ export function CanvasView() {
       return
     }
 
+    if (handleLightingEffectsPointerMove(pt)) {
+      e.preventDefault()
+      return
+    }
+
     const drag = drawingRef.current
     if (drag.type === null) {
       // Polygonal lasso live-preview
@@ -4478,12 +4787,26 @@ export function CanvasView() {
     if (drag.type === "marquee" && drag.start) {
       drawMarqueePreview(drag.start, pt)
       drag.last = pt
+      dispatchPhotoshopEvent("ps-tool-info", {
+        kind: "marquee",
+        width: Math.abs(pt.x - drag.start.x),
+        height: Math.abs(pt.y - drag.start.y),
+        x: Math.min(drag.start.x, pt.x),
+        y: Math.min(drag.start.y, pt.y),
+      })
       return
     }
 
     if (drag.type === "object-select" && drag.start) {
       drawMarqueePreview(drag.start, pt)
       drag.last = pt
+      dispatchPhotoshopEvent("ps-tool-info", {
+        kind: "marquee",
+        width: Math.abs(pt.x - drag.start.x),
+        height: Math.abs(pt.y - drag.start.y),
+        x: Math.min(drag.start.x, pt.x),
+        y: Math.min(drag.start.y, pt.y),
+      })
       return
     }
 
@@ -4505,6 +4828,13 @@ export function CanvasView() {
     if (drag.type === "crop" && drag.start) {
       drawMarqueePreview(drag.start, pt)
       drag.last = pt
+      dispatchPhotoshopEvent("ps-tool-info", {
+        kind: "marquee",
+        width: Math.abs(pt.x - drag.start.x),
+        height: Math.abs(pt.y - drag.start.y),
+        x: Math.min(drag.start.x, pt.x),
+        y: Math.min(drag.start.y, pt.y),
+      })
       return
     }
 
@@ -4512,6 +4842,15 @@ export function CanvasView() {
       drawRulerPreview(drag.start, pt)
       drag.last = pt
       dispatch({ type: "set-measurement", m: { x1: drag.start.x, y1: drag.start.y, x2: pt.x, y2: pt.y } })
+      const dx = pt.x - drag.start.x
+      const dy = pt.y - drag.start.y
+      dispatchPhotoshopEvent("ps-tool-info", {
+        kind: "line",
+        length: Math.hypot(dx, dy),
+        angle: (Math.atan2(dy, dx) * 180) / Math.PI,
+        dx,
+        dy,
+      })
       return
     }
 
@@ -4595,6 +4934,15 @@ export function CanvasView() {
         ctx.moveTo(drag.start.x, drag.start.y)
         ctx.lineTo(pt.x, pt.y)
         ctx.stroke()
+        const dx = pt.x - drag.start.x
+        const dy = pt.y - drag.start.y
+        dispatchPhotoshopEvent("ps-tool-info", {
+          kind: "line",
+          length: Math.hypot(dx, dy),
+          angle: (Math.atan2(dy, dx) * 180) / Math.PI,
+          dx,
+          dy,
+        })
       } else if (tool === "shape-ellipse") {
         ctx.fillStyle = foreground
         ctx.beginPath()
@@ -4707,10 +5055,16 @@ export function CanvasView() {
     } catch {
       /* no-op: some browsers throw if the capture was already released */
     }
+    dispatchPhotoshopEvent("ps-tool-info", { kind: "clear" })
     const drag = drawingRef.current
     const pt = getCanvasPoint(e.clientX, e.clientY)
 
     if (handleBlurGalleryPointerUp()) {
+      e.preventDefault()
+      return
+    }
+
+    if (handleLightingEffectsPointerUp()) {
       e.preventDefault()
       return
     }
@@ -5344,6 +5698,74 @@ export function CanvasView() {
     window.addEventListener("ps-edit-text", handler)
     return () => window.removeEventListener("ps-edit-text", handler)
   }, [activeDoc])
+
+  /* ---- color picker HUD (Alt+Shift+RightClick) ---- */
+
+  const [colorHud, setColorHud] = React.useState<{
+    screenX: number
+    screenY: number
+    hsv: ColorPickerHudHsv
+    pointerId: number
+  } | null>(null)
+  const colorHudRef = React.useRef<typeof colorHud>(null)
+  React.useEffect(() => {
+    colorHudRef.current = colorHud
+  }, [colorHud])
+  React.useEffect(() => {
+    if (!colorHud) return
+    function move(e: PointerEvent) {
+      const hud = colorHudRef.current
+      if (!hud || e.pointerId !== hud.pointerId) return
+      const result = pickFromHud(hud, e.clientX, e.clientY)
+      if (result.changed) {
+        setColorHud((prev) => (prev ? { ...prev, hsv: result.hsv } : prev))
+      }
+    }
+    function commitColor(e: PointerEvent) {
+      const hud = colorHudRef.current
+      if (!hud || e.pointerId !== hud.pointerId) return
+      const hex = hsvToHex(hud.hsv.h, hud.hsv.s, hud.hsv.v)
+      dispatch({ type: "set-foreground", color: hex })
+      setColorHud(null)
+    }
+    function cancelOnEsc(e: KeyboardEvent) {
+      if (e.key === "Escape") setColorHud(null)
+    }
+    window.addEventListener("pointermove", move)
+    window.addEventListener("pointerup", commitColor)
+    window.addEventListener("pointercancel", commitColor)
+    window.addEventListener("keydown", cancelOnEsc)
+    return () => {
+      window.removeEventListener("pointermove", move)
+      window.removeEventListener("pointerup", commitColor)
+      window.removeEventListener("pointercancel", commitColor)
+      window.removeEventListener("keydown", cancelOnEsc)
+    }
+  }, [colorHud, dispatch])
+
+  /* ---- on-canvas selection-transform overlay ---- */
+
+  const [selectionTransformActive, setSelectionTransformActive] = React.useState(false)
+  React.useEffect(() => {
+    function begin() {
+      if (!activeDoc?.selection.bounds) return
+      setSelectionTransformActive(true)
+    }
+    function cancel() {
+      setSelectionTransformActive(false)
+    }
+    window.addEventListener("ps-transform-selection-begin", begin)
+    window.addEventListener("ps-transform-selection-cancel", cancel)
+    return () => {
+      window.removeEventListener("ps-transform-selection-begin", begin)
+      window.removeEventListener("ps-transform-selection-cancel", cancel)
+    }
+  }, [activeDoc])
+  React.useEffect(() => {
+    if (selectionTransformActive && !activeDoc?.selection.bounds) {
+      setSelectionTransformActive(false)
+    }
+  }, [activeDoc, selectionTransformActive])
 
   // Free Transform / flip / rotate triggers from menu
   React.useEffect(() => {
@@ -6510,6 +6932,7 @@ export function CanvasView() {
 
   const displayW = activeDoc.width * viewZoom
   const displayH = activeDoc.height * viewZoom
+  const tileOnlyDefaultCanvas = !!activeDoc.metadata?.largeDocumentTileView || activeDoc.width * activeDoc.height > 10000 * 10000
 
   return (
     <div
@@ -6586,8 +7009,8 @@ export function CanvasView() {
           <div className="absolute inset-0 ps-checker" />
           <canvas
             ref={compositeRef}
-            width={activeDoc.width}
-            height={activeDoc.height}
+            width={tileOnlyDefaultCanvas ? 1 : activeDoc.width}
+            height={tileOnlyDefaultCanvas ? 1 : activeDoc.height}
             className={cn("absolute inset-0 w-full h-full")}
             style={{ imageRendering: viewZoom >= 4 ? "pixelated" : "auto" }}
             role="img"
@@ -6619,6 +7042,28 @@ export function CanvasView() {
               shape={activeDoc.selection.shape === "ellipse" ? "ellipse" : "rect"}
               docW={activeDoc.width}
               docH={activeDoc.height}
+            />
+          ) : null}
+          {selectionTransformActive && activeDoc.selection.bounds ? (
+            <SelectionTransformOverlay
+              bounds={activeDoc.selection.bounds}
+              docW={activeDoc.width}
+              docH={activeDoc.height}
+              zoom={viewZoom}
+              onCommit={(t) => {
+                dispatch({
+                  type: "transform-selection",
+                  scale: 1,
+                  scaleX: t.scaleX,
+                  scaleY: t.scaleY,
+                  rotationDeg: t.rotationDeg,
+                  translateX: t.translateX,
+                  translateY: t.translateY,
+                  smoothing: true,
+                })
+                setSelectionTransformActive(false)
+              }}
+              onCancel={() => setSelectionTransformActive(false)}
             />
           ) : null}
           {activeDoc.guides && activeDoc.guides.length ? (
@@ -6677,6 +7122,13 @@ export function CanvasView() {
           />
         ) : null}
       </div>
+      {colorHud ? (
+        <ColorPickerHud
+          screenX={colorHud.screenX}
+          screenY={colorHud.screenY}
+          hsv={colorHud.hsv}
+        />
+      ) : null}
     </div>
   )
 }
@@ -7144,6 +7596,374 @@ function SelectionOverlay({
           shape === "ellipse" ? "rounded-[100%]" : "",
         )}
       />
+    </div>
+  )
+}
+
+type SelectionTransformHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "rotate" | "move"
+
+interface SelectionTransformState {
+  scaleX: number
+  scaleY: number
+  rotationDeg: number
+  translateX: number
+  translateY: number
+}
+
+const DEFAULT_SELECTION_TRANSFORM: SelectionTransformState = {
+  scaleX: 1,
+  scaleY: 1,
+  rotationDeg: 0,
+  translateX: 0,
+  translateY: 0,
+}
+
+function SelectionTransformOverlay({
+  bounds,
+  docW,
+  docH,
+  zoom,
+  onCommit,
+  onCancel,
+}: {
+  bounds: { x: number; y: number; w: number; h: number }
+  docW: number
+  docH: number
+  zoom: number
+  onCommit: (t: SelectionTransformState) => void
+  onCancel: () => void
+}) {
+  const [state, setState] = React.useState<SelectionTransformState>(DEFAULT_SELECTION_TRANSFORM)
+  const stateRef = React.useRef(state)
+  React.useEffect(() => { stateRef.current = state }, [state])
+  const rootRef = React.useRef<HTMLDivElement | null>(null)
+  const dragRef = React.useRef<{
+    handle: SelectionTransformHandle
+    startPointer: { x: number; y: number }
+    startState: SelectionTransformState
+    shift: boolean
+  } | null>(null)
+
+  const cx = bounds.x + bounds.w / 2
+  const cy = bounds.y + bounds.h / 2
+  const docToOverlay = React.useCallback((p: { x: number; y: number }) => ({
+    x: (p.x / docW) * 100,
+    y: (p.y / docH) * 100,
+  }), [docW, docH])
+
+  const transformCorner = React.useCallback((px: number, py: number, t: SelectionTransformState) => {
+    const sx = (px - cx) * t.scaleX
+    const sy = (py - cy) * t.scaleY
+    const rad = (t.rotationDeg * Math.PI) / 180
+    return {
+      x: cx + t.translateX + sx * Math.cos(rad) - sy * Math.sin(rad),
+      y: cy + t.translateY + sx * Math.sin(rad) + sy * Math.cos(rad),
+    }
+  }, [cx, cy])
+
+  const corners = React.useMemo(() => ({
+    nw: transformCorner(bounds.x, bounds.y, state),
+    ne: transformCorner(bounds.x + bounds.w, bounds.y, state),
+    se: transformCorner(bounds.x + bounds.w, bounds.y + bounds.h, state),
+    sw: transformCorner(bounds.x, bounds.y + bounds.h, state),
+  }), [bounds, state, transformCorner])
+
+  const mid = (a: { x: number; y: number }, b: { x: number; y: number }) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })
+  const top = mid(corners.nw, corners.ne)
+  const right = mid(corners.ne, corners.se)
+  const bot = mid(corners.se, corners.sw)
+  const left = mid(corners.sw, corners.nw)
+  const rotRad = (state.rotationDeg * Math.PI) / 180
+  const rotateHandle = {
+    x: top.x + 0 * Math.cos(rotRad) - (-24 / Math.max(0.01, zoom)) * Math.sin(rotRad),
+    y: top.y + 0 * Math.sin(rotRad) + (-24 / Math.max(0.01, zoom)) * Math.cos(rotRad),
+  }
+
+  const overlayPoints = {
+    nw: docToOverlay(corners.nw),
+    n: docToOverlay(top),
+    ne: docToOverlay(corners.ne),
+    e: docToOverlay(right),
+    se: docToOverlay(corners.se),
+    s: docToOverlay(bot),
+    sw: docToOverlay(corners.sw),
+    w: docToOverlay(left),
+    rotate: docToOverlay(rotateHandle),
+  }
+
+  function localToDoc(e: PointerEvent | React.PointerEvent): { x: number; y: number } | null {
+    const root = rootRef.current
+    if (!root) return null
+    const rect = root.getBoundingClientRect()
+    return {
+      x: ((e.clientX - rect.left) / Math.max(1, rect.width)) * docW,
+      y: ((e.clientY - rect.top) / Math.max(1, rect.height)) * docH,
+    }
+  }
+
+  function onPointerDownHandle(e: React.PointerEvent, handle: SelectionTransformHandle) {
+    e.stopPropagation()
+    e.preventDefault()
+    const p = localToDoc(e)
+    if (!p) return
+    ;(e.target as Element).setPointerCapture?.(e.pointerId)
+    dragRef.current = {
+      handle,
+      startPointer: p,
+      startState: { ...stateRef.current },
+      shift: e.shiftKey,
+    }
+  }
+
+  function onPointerMoveHandle(e: React.PointerEvent) {
+    const drag = dragRef.current
+    if (!drag) return
+    const p = localToDoc(e)
+    if (!p) return
+    const dx = p.x - drag.startPointer.x
+    const dy = p.y - drag.startPointer.y
+    const shift = e.shiftKey
+    const start = drag.startState
+    if (drag.handle === "move") {
+      setState({ ...start, translateX: start.translateX + dx, translateY: start.translateY + dy })
+      return
+    }
+    if (drag.handle === "rotate") {
+      const a0 = Math.atan2(drag.startPointer.y - (cy + start.translateY), drag.startPointer.x - (cx + start.translateX))
+      const a1 = Math.atan2(p.y - (cy + start.translateY), p.x - (cx + start.translateX))
+      let deg = ((a1 - a0) * 180) / Math.PI + start.rotationDeg
+      if (shift) deg = Math.round(deg / 15) * 15
+      setState({ ...start, rotationDeg: deg })
+      return
+    }
+    const rad = (start.rotationDeg * Math.PI) / 180
+    const cos = Math.cos(rad)
+    const sin = Math.sin(rad)
+    const localDx = dx * cos + dy * sin
+    const localDy = -dx * sin + dy * cos
+    const halfW = bounds.w / 2 || 1
+    const halfH = bounds.h / 2 || 1
+    let scaleX = start.scaleX
+    let scaleY = start.scaleY
+    let signX = 1
+    let signY = 1
+    if (drag.handle.includes("e")) signX = 1
+    if (drag.handle.includes("w")) signX = -1
+    if (drag.handle.includes("s")) signY = 1
+    if (drag.handle.includes("n")) signY = -1
+    if (drag.handle.includes("e") || drag.handle.includes("w")) {
+      scaleX = start.scaleX + (signX * localDx) / halfW
+    }
+    if (drag.handle.includes("n") || drag.handle.includes("s")) {
+      scaleY = start.scaleY + (signY * localDy) / halfH
+    }
+    if (drag.handle === "e" || drag.handle === "w") scaleY = start.scaleY
+    if (drag.handle === "n" || drag.handle === "s") scaleX = start.scaleX
+    if (shift) {
+      const sxAbs = Math.abs(scaleX)
+      const syAbs = Math.abs(scaleY)
+      if (drag.handle === "nw" || drag.handle === "ne" || drag.handle === "se" || drag.handle === "sw") {
+        const r = Math.max(sxAbs, syAbs)
+        scaleX = Math.sign(scaleX || 1) * r
+        scaleY = Math.sign(scaleY || 1) * r
+      }
+    }
+    if (Math.abs(scaleX) < 0.01) scaleX = 0.01 * Math.sign(scaleX || 1)
+    if (Math.abs(scaleY) < 0.01) scaleY = 0.01 * Math.sign(scaleY || 1)
+    setState({ ...start, scaleX, scaleY })
+  }
+
+  function onPointerUpHandle(e: React.PointerEvent) {
+    if (!dragRef.current) return
+    ;(e.target as Element).releasePointerCapture?.(e.pointerId)
+    dragRef.current = null
+  }
+
+  React.useEffect(() => {
+    function keyHandler(e: KeyboardEvent) {
+      if (e.key === "Enter") {
+        e.preventDefault()
+        onCommit(stateRef.current)
+      } else if (e.key === "Escape") {
+        e.preventDefault()
+        onCancel()
+      }
+    }
+    window.addEventListener("keydown", keyHandler)
+    return () => window.removeEventListener("keydown", keyHandler)
+  }, [onCommit, onCancel])
+
+  const handleStyle = (p: { x: number; y: number }, cursor: string): React.CSSProperties => ({
+    position: "absolute",
+    left: `${p.x}%`,
+    top: `${p.y}%`,
+    width: 10,
+    height: 10,
+    transform: "translate(-50%, -50%)",
+    background: "white",
+    border: "1px solid #0a84ff",
+    cursor,
+    pointerEvents: "auto",
+  })
+
+  const polyPoints = `${overlayPoints.nw.x},${overlayPoints.nw.y} ${overlayPoints.ne.x},${overlayPoints.ne.y} ${overlayPoints.se.x},${overlayPoints.se.y} ${overlayPoints.sw.x},${overlayPoints.sw.y}`
+
+  return (
+    <div
+      ref={rootRef}
+      className="absolute inset-0"
+      style={{ pointerEvents: "none", zIndex: 20 }}
+      data-testid="selection-transform-overlay"
+    >
+      <svg
+        className="absolute inset-0"
+        viewBox="0 0 100 100"
+        preserveAspectRatio="none"
+        style={{ width: "100%", height: "100%", overflow: "visible", pointerEvents: "none" }}
+      >
+        <polygon
+          points={polyPoints}
+          fill="rgba(10,132,255,0.06)"
+          stroke="#0a84ff"
+          strokeWidth={0.18}
+          vectorEffect="non-scaling-stroke"
+          strokeDasharray="2 2"
+        />
+        <line
+          x1={overlayPoints.n.x}
+          y1={overlayPoints.n.y}
+          x2={overlayPoints.rotate.x}
+          y2={overlayPoints.rotate.y}
+          stroke="#0a84ff"
+          strokeWidth={0.18}
+          vectorEffect="non-scaling-stroke"
+        />
+      </svg>
+      <div
+        style={{
+          position: "absolute",
+          left: `${overlayPoints.nw.x}%`,
+          top: `${overlayPoints.nw.y}%`,
+          width: 0,
+          height: 0,
+          pointerEvents: "auto",
+        }}
+        onPointerDown={(e) => onPointerDownHandle(e, "move")}
+        onPointerMove={onPointerMoveHandle}
+        onPointerUp={onPointerUpHandle}
+      >
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            width: `${Math.abs(overlayPoints.se.x - overlayPoints.nw.x)}vw`,
+            height: `${Math.abs(overlayPoints.se.y - overlayPoints.nw.y)}vh`,
+            pointerEvents: "none",
+          }}
+        />
+      </div>
+      <div
+        style={handleStyle(overlayPoints.nw, "nwse-resize")}
+        onPointerDown={(e) => onPointerDownHandle(e, "nw")}
+        onPointerMove={onPointerMoveHandle}
+        onPointerUp={onPointerUpHandle}
+        data-testid="selection-transform-handle-nw"
+      />
+      <div
+        style={handleStyle(overlayPoints.n, "ns-resize")}
+        onPointerDown={(e) => onPointerDownHandle(e, "n")}
+        onPointerMove={onPointerMoveHandle}
+        onPointerUp={onPointerUpHandle}
+        data-testid="selection-transform-handle-n"
+      />
+      <div
+        style={handleStyle(overlayPoints.ne, "nesw-resize")}
+        onPointerDown={(e) => onPointerDownHandle(e, "ne")}
+        onPointerMove={onPointerMoveHandle}
+        onPointerUp={onPointerUpHandle}
+        data-testid="selection-transform-handle-ne"
+      />
+      <div
+        style={handleStyle(overlayPoints.e, "ew-resize")}
+        onPointerDown={(e) => onPointerDownHandle(e, "e")}
+        onPointerMove={onPointerMoveHandle}
+        onPointerUp={onPointerUpHandle}
+        data-testid="selection-transform-handle-e"
+      />
+      <div
+        style={handleStyle(overlayPoints.se, "nwse-resize")}
+        onPointerDown={(e) => onPointerDownHandle(e, "se")}
+        onPointerMove={onPointerMoveHandle}
+        onPointerUp={onPointerUpHandle}
+        data-testid="selection-transform-handle-se"
+      />
+      <div
+        style={handleStyle(overlayPoints.s, "ns-resize")}
+        onPointerDown={(e) => onPointerDownHandle(e, "s")}
+        onPointerMove={onPointerMoveHandle}
+        onPointerUp={onPointerUpHandle}
+        data-testid="selection-transform-handle-s"
+      />
+      <div
+        style={handleStyle(overlayPoints.sw, "nesw-resize")}
+        onPointerDown={(e) => onPointerDownHandle(e, "sw")}
+        onPointerMove={onPointerMoveHandle}
+        onPointerUp={onPointerUpHandle}
+        data-testid="selection-transform-handle-sw"
+      />
+      <div
+        style={handleStyle(overlayPoints.w, "ew-resize")}
+        onPointerDown={(e) => onPointerDownHandle(e, "w")}
+        onPointerMove={onPointerMoveHandle}
+        onPointerUp={onPointerUpHandle}
+        data-testid="selection-transform-handle-w"
+      />
+      <div
+        style={{ ...handleStyle(overlayPoints.rotate, "grab"), borderRadius: "50%" }}
+        onPointerDown={(e) => onPointerDownHandle(e, "rotate")}
+        onPointerMove={onPointerMoveHandle}
+        onPointerUp={onPointerUpHandle}
+        data-testid="selection-transform-handle-rotate"
+      />
+      <div
+        style={{
+          position: "absolute",
+          left: `${overlayPoints.s.x}%`,
+          top: `${overlayPoints.s.y}%`,
+          transform: "translate(-50%, 14px)",
+          background: "rgba(0,0,0,0.78)",
+          color: "white",
+          padding: "4px 8px",
+          fontSize: 11,
+          borderRadius: 4,
+          display: "flex",
+          gap: 6,
+          pointerEvents: "auto",
+          whiteSpace: "nowrap",
+          zIndex: 21,
+        }}
+      >
+        <span>
+          {Math.round(state.scaleX * 100)}% × {Math.round(state.scaleY * 100)}% · {Math.round(state.rotationDeg)}°
+        </span>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onCommit(stateRef.current) }}
+          style={{ background: "#0a84ff", color: "white", padding: "1px 8px", borderRadius: 3 }}
+          data-testid="selection-transform-commit"
+        >
+          OK
+        </button>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onCancel() }}
+          style={{ background: "transparent", color: "white", padding: "1px 8px", borderRadius: 3, border: "1px solid rgba(255,255,255,0.4)" }}
+          data-testid="selection-transform-cancel"
+        >
+          Cancel
+        </button>
+      </div>
     </div>
   )
 }

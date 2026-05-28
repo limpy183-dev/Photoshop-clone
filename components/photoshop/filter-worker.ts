@@ -84,6 +84,7 @@ const INLINE_WORKER_SUPPORTED_FILTERS = [
   "high-pass",
   "offset",
   "custom-convolution",
+  "custom-filter",
   "lighting-effects",
   "field-blur",
   "iris-blur",
@@ -1330,6 +1331,7 @@ function applyFilter(filterId, data, params, width, height) {
       offsetFilter(data, width, height, params);
       return;
     case "custom-convolution":
+    case "custom-filter":
       customConvolution(data, width, height, params);
       return;
     case "lighting-effects":
@@ -1358,6 +1360,12 @@ self.onmessage = (event) => {
       }
     } else {
       applyFilter(request.filterId, data, request.params || {}, request.width, request.height);
+      self.postMessage({
+        id: request.id,
+        width: request.width,
+        height: request.height,
+        progress: { completed: 1, total: 1, filterId: request.filterId },
+      });
     }
     self.postMessage({ id: request.id, width: request.width, height: request.height, buffer: data.buffer }, [data.buffer]);
   } catch (err) {
@@ -1445,6 +1453,7 @@ function runFilterOnMainThread(
   filterId: string,
   src: ImageData,
   params: Record<string, number | string | boolean>,
+  onProgress?: (event: FilterProgressEvent) => void,
 ): Promise<ImageData> {
   return new Promise((resolve, reject) => {
     const schedule = typeof requestIdleCallback === "function"
@@ -1459,6 +1468,7 @@ function runFilterOnMainThread(
           return
         }
         const result = filter.apply(src, params)
+        onProgress?.({ completed: 1, total: 1, filterId })
         resolve(result)
       } catch (err) {
         reject(err instanceof Error ? err : new Error(String(err)))
@@ -1494,17 +1504,20 @@ export function applyFilterAsync(
   }
   if (isFilterWorkerSupported(filterId)) {
     if (options.workerExecutor) {
-      return options.workerExecutor(filterId, src, params).catch((err) => {
+      return options.workerExecutor(filterId, src, params).then((result) => {
+        options.onProgress?.({ completed: 1, total: 1, filterId })
+        return result
+      }).catch((err) => {
         _workerFailed = true
         if (options.fallbackOnWorkerError === false) {
           throw err instanceof Error ? err : new Error(String(err))
         }
-        return runFilterOnMainThread(filterId, src, params)
+        return runFilterOnMainThread(filterId, src, params, options.onProgress)
       })
     }
 
     return getWorker(filterId).then((worker) => {
-      if (!worker) return runFilterOnMainThread(filterId, src, params)
+      if (!worker) return runFilterOnMainThread(filterId, src, params, options.onProgress)
       const id = _nextId++
       const buffer = new ArrayBuffer(src.data.byteLength)
       new Uint8ClampedArray(buffer).set(src.data)
@@ -1535,12 +1548,12 @@ export function applyFilterAsync(
         if (options.fallbackOnWorkerError === false) {
           throw err instanceof Error ? err : new Error(String(err))
         }
-        return runFilterOnMainThread(filterId, src, params)
+        return runFilterOnMainThread(filterId, src, params, options.onProgress)
       })
     })
   }
 
-  return runFilterOnMainThread(filterId, src, params)
+  return runFilterOnMainThread(filterId, src, params, options.onProgress)
 }
 
 export interface FilterBatchOptions {

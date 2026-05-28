@@ -19,6 +19,7 @@ import { loadRasterCanvasFromFile, renderDocumentComposite } from "./document-io
 import { photomergeImageStack } from "./photo-workflow-engine"
 import { contentAwareFill } from "./tool-helpers"
 import {
+  applyPhotomergeBoundaryWarp,
   buildPhotomergeEngineOptions,
   buildPhotomergePreviewLayout,
   findTransparentFillRegion,
@@ -117,6 +118,7 @@ const DEFAULT_SETTINGS: PhotomergeWorkspaceSettings = {
   lensModel: "wide",
   focalLengthPx: 0,
   contentAwareFillTransparent: false,
+  boundaryWarp: 0,
 }
 
 function Field({
@@ -347,7 +349,10 @@ export function PhotomergeDialog({
         images,
         buildPhotomergeEngineOptions(settings, photomergeSearchRadius(sources)),
       )
-      const canvas = imageDataCanvas(result.image)
+      const warped = settings.boundaryWarp > 0
+        ? applyPhotomergeBoundaryWarp(result.image, settings.boundaryWarp)
+        : result.image
+      const canvas = imageDataCanvas(warped)
 
       if (settings.contentAwareFillTransparent) {
         const fill = findTransparentFillRegion(result.image)
@@ -382,6 +387,7 @@ export function PhotomergeDialog({
         `Blend: ${settings.blendImages ? settings.blendMode : "off"}.`,
         settings.vignetteRemoval ? "Vignette removal applied." : "",
         settings.geometricCorrection ? `Geometric correction: ${settings.lensModel}.` : "",
+        settings.boundaryWarp > 0 ? `Boundary warp: ${settings.boundaryWarp}%.` : "",
         settings.contentAwareFillTransparent ? "Transparent areas filled with content-aware synthesis." : "",
       ].filter(Boolean).join(" ")
       createDocument(doc, "Photomerge")
@@ -712,6 +718,19 @@ export function PhotomergeDialog({
                   value={settings.focalLengthPx}
                   onChange={(event) => updateSetting("focalLengthPx", Math.max(0, Math.round(Number(event.target.value) || 0)))}
                   className={inputClass}
+                />
+              </Field>
+              <Field label={`Boundary warp: ${settings.boundaryWarp}`}>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={settings.boundaryWarp}
+                  onChange={(event) => updateSetting("boundaryWarp", Math.max(0, Math.min(100, Math.round(Number(event.target.value) || 0))))}
+                  aria-label="Boundary warp"
+                  data-testid="photomerge-boundary-warp"
+                  className="h-2 w-full accent-[var(--ps-accent)]"
                 />
               </Field>
               <CheckRow

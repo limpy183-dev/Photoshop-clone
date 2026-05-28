@@ -1,0 +1,22 @@
+{
+  "taskId": "019e69d8-bff9-7745-9b95-e3081107c0e4",
+  "todos": [
+    {
+      "id": "0b8c6bc5c2ddb9d06d5a095edadb0448",
+      "content": "Inspect `components/photoshop/panel-registry.tsx`",
+      "status": "completed"
+    },
+    {
+      "id": "191f54473b8245b3400935f2e2ffb117",
+      "content": "Verify registration/wiring for the listed panels",
+      "status": "completed"
+    },
+    {
+      "id": "022f7cf2befc8bd666334a0b878802ad",
+      "content": "Summarize which report entries are stale vs still uncertain",
+      "status": "completed"
+    }
+  ],
+  "lastUpdated": 1779892326443,
+  "status": "active"
+}

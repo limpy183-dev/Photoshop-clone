@@ -208,6 +208,26 @@ test("batched filter execution runs sequentially and reports progress", async ()
   ])
 })
 
+test("single async filter execution reports completion progress", async () => {
+  const src = imageData(2, 1, [
+    40, 80, 120, 255,
+    160, 120, 80, 255,
+  ])
+  const progress: Array<{ completed: number; total: number; filterId: string }> = []
+
+  const actual = await applyFilterAsync("invert", src, {}, {
+    workerExecutor: async (filterId, input, params) => {
+      const filter = getFilter(filterId)
+      if (!filter) throw new Error(`Missing filter ${filterId}`)
+      return filter.apply(input, params)
+    },
+    onProgress: (event) => progress.push({ completed: event.completed, total: event.total, filterId: event.filterId }),
+  })
+
+  expect(Array.from(actual.data.slice(0, 4))).toEqual([215, 175, 135, 255])
+  expect(progress).toEqual([{ completed: 1, total: 1, filterId: "invert" }])
+})
+
 test("content-aware scale analysis uses an explicit fallback plan for large reductions", () => {
   const plan = analyzeContentAwareScale(500, 100, 100, 100)
 

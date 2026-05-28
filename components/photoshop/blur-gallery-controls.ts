@@ -32,6 +32,9 @@ export type BlurGalleryDrag =
   | { kind: "field-amount"; index: number }
   | { kind: "iris-center" }
   | { kind: "iris-radius" }
+  | { kind: "iris-width" }
+  | { kind: "iris-height" }
+  | { kind: "iris-rotation" }
   | { kind: "iris-feather" }
   | { kind: "tilt-center" }
   | { kind: "tilt-radius" }
@@ -40,6 +43,7 @@ export type BlurGalleryDrag =
   | { kind: "path-point"; index: number }
   | { kind: "spin-center" }
   | { kind: "spin-radius" }
+  | { kind: "spin-amount" }
 
 export interface BlurGalleryInteraction {
   params: BlurGalleryParams
@@ -105,6 +109,18 @@ export function normalizeBlurGalleryParams(
         centerY: numParam(params.centerY, 50),
       }
       break
+    case "iris-blur": {
+      const radius = numParam(params.radius, 42)
+      normalized = {
+        ...params,
+        centerX: numParam(params.centerX, 50),
+        centerY: numParam(params.centerY, 50),
+        ellipseWidth: numParam(params.ellipseWidth, radius),
+        ellipseHeight: numParam(params.ellipseHeight, radius),
+        rotation: numParam(params.rotation, 0),
+      }
+      break
+    }
     case "path-blur":
       normalized = {
         ...params,
@@ -114,7 +130,10 @@ export function normalizeBlurGalleryParams(
     case "spin-blur":
       normalized = {
         ...params,
+        centerX: numParam(params.centerX, 50),
+        centerY: numParam(params.centerY, 50),
         radius: numParam(params.radius, 55),
+        amount: numParam(params.amount, 28),
       }
       break
     default:
@@ -379,13 +398,29 @@ export function updateBlurGalleryInteraction(
       next = { ...params, centerX: round2(percent.x), centerY: round2(percent.y) }
     } else {
       const center = percentToCanvasPoint({ x: numParam(params.centerX, 50), y: numParam(params.centerY, 50) }, width, height)
-      const radiusPx = Math.max(1, Math.hypot(point.x - center.x, point.y - center.y))
-      const radius = clampPercent((radiusPx * 2 / Math.max(1, width)) * 100)
+      const rotation = numParam(params.rotation, 0)
+      const axes = ellipseAxes(rotation)
+      const dx = point.x - center.x
+      const dy = point.y - center.y
+      const alongWidth = Math.abs(dx * axes.width.x + dy * axes.width.y)
+      const alongHeight = Math.abs(dx * axes.height.x + dy * axes.height.y)
+      const radiusPx = Math.max(1, Math.hypot(dx, dy))
+      const radius = clampPercent((alongWidth * 2 / Math.max(1, width)) * 100)
       if (drag.kind === "iris-radius") {
-        next = { ...params, radius: round2(radius) }
+        next = { ...params, radius: round2(radius), ellipseWidth: round2(radius) }
+      }
+      if (drag.kind === "iris-width") {
+        const ellipseWidth = round2(clampPercent((alongWidth * 2 / Math.max(1, width)) * 100))
+        next = { ...params, ellipseWidth, radius: ellipseWidth }
+      }
+      if (drag.kind === "iris-height") {
+        next = { ...params, ellipseHeight: round2(clampPercent((alongHeight * 2 / Math.max(1, height)) * 100)) }
+      }
+      if (drag.kind === "iris-rotation") {
+        next = { ...params, rotation: round2(normalizeAngle(Math.atan2(dy, dx) * 180 / Math.PI)) }
       }
       if (drag.kind === "iris-feather") {
-        const baseRadius = Math.max(1, (Math.max(1, width) * numParam(params.radius, 42) / 100) * 0.5)
+        const baseRadius = Math.max(1, (Math.max(1, width) * numParam(params.ellipseWidth, numParam(params.radius, 42)) / 100) * 0.5)
         const feather = clampPercent(((radiusPx / baseRadius) - 1) * 100)
         next = { ...params, feather: round2(feather) }
       }
@@ -463,6 +498,12 @@ export function updateBlurGalleryInteraction(
       const center = percentToCanvasPoint({ x: numParam(params.centerX, 50), y: numParam(params.centerY, 50) }, width, height)
       const minDim = Math.max(1, Math.min(width, height))
       next = { ...params, radius: round2(clampPercent((Math.hypot(point.x - center.x, point.y - center.y) * 2 / minDim) * 100)) }
+    }
+    if (drag.kind === "spin-amount") {
+      const center = percentToCanvasPoint({ x: numParam(params.centerX, 50), y: numParam(params.centerY, 50) }, width, height)
+      const radius = Math.max(1, Math.min(width, height) * numParam(params.radius, 55) / 100 * 0.5)
+      const distanceFromTop = center.y - point.y
+      next = { ...params, amount: round2(clampBlur((distanceFromTop / radius) * 50)) }
     }
     if (next) {
       return withBlurGalleryControlState(filterId, next, {
@@ -770,10 +811,19 @@ function hitIrisBlur(
   tolerance: number,
 ): BlurGalleryDrag | null {
   const center = percentToCanvasPoint({ x: numParam(params.centerX, 50), y: numParam(params.centerY, 50) }, width, height)
-  const rx = Math.max(1, width * numParam(params.radius, 42) / 100 * 0.5)
-  const featherRx = rx * (1 + numParam(params.feather, 30) / 100)
-  if (Math.hypot(point.x - (center.x + featherRx), point.y - center.y) <= tolerance) return { kind: "iris-feather" }
-  if (Math.hypot(point.x - (center.x + rx), point.y - center.y) <= tolerance) return { kind: "iris-radius" }
+  const rotation = numParam(params.rotation, 0)
+  const axes = ellipseAxes(rotation)
+  const rx = Math.max(1, width * numParam(params.ellipseWidth, numParam(params.radius, 42)) / 100 * 0.5)
+  const ry = Math.max(1, height * numParam(params.ellipseHeight, numParam(params.radius, 42)) / 100 * 0.5)
+  const feather = 1 + numParam(params.feather, 30) / 100
+  const widthHandle = { x: center.x + axes.width.x * rx, y: center.y + axes.width.y * rx }
+  const heightHandle = { x: center.x + axes.height.x * ry, y: center.y + axes.height.y * ry }
+  const featherHandle = { x: center.x + axes.width.x * rx * feather, y: center.y + axes.width.y * rx * feather }
+  const rotationHandle = { x: center.x + axes.width.x * (rx + Math.max(12, tolerance * 1.8)), y: center.y + axes.width.y * (rx + Math.max(12, tolerance * 1.8)) }
+  if (Math.hypot(point.x - rotationHandle.x, point.y - rotationHandle.y) <= tolerance) return { kind: "iris-rotation" }
+  if (Math.hypot(point.x - widthHandle.x, point.y - widthHandle.y) <= tolerance) return { kind: "iris-width" }
+  if (Math.hypot(point.x - heightHandle.x, point.y - heightHandle.y) <= tolerance) return { kind: "iris-height" }
+  if (Math.hypot(point.x - featherHandle.x, point.y - featherHandle.y) <= tolerance) return { kind: "iris-feather" }
   if (Math.hypot(point.x - center.x, point.y - center.y) <= tolerance) return { kind: "iris-center" }
   return null
 }
@@ -828,6 +878,9 @@ function hitSpinBlur(
 ): BlurGalleryDrag | null {
   const center = percentToCanvasPoint({ x: numParam(params.centerX, 50), y: numParam(params.centerY, 50) }, width, height)
   const radius = Math.max(1, Math.min(width, height) * numParam(params.radius, 55) / 100 * 0.5)
+  const amount = clampBlur(numParam(params.amount, 28))
+  const amountHandle = { x: center.x, y: center.y - radius * Math.max(0.2, amount / 50) }
+  if (Math.hypot(point.x - amountHandle.x, point.y - amountHandle.y) <= tolerance) return { kind: "spin-amount" }
   if (Math.hypot(point.x - (center.x + radius), point.y - center.y) <= tolerance) return { kind: "spin-radius" }
   if (Math.hypot(point.x - center.x, point.y - center.y) <= tolerance) return { kind: "spin-center" }
   return null
@@ -993,6 +1046,9 @@ function buildBlurGalleryMeshDescriptor(
         kind: "iris",
         center: { x: round2(numParam(params.centerX, 50)), y: round2(numParam(params.centerY, 50)) },
         radius: round2(numParam(params.radius, 42)),
+        ellipseWidth: round2(numParam(params.ellipseWidth, numParam(params.radius, 42))),
+        ellipseHeight: round2(numParam(params.ellipseHeight, numParam(params.radius, 42))),
+        rotation: round2(numParam(params.rotation, 0)),
         feather: round2(numParam(params.feather, 30)),
         blur: round2(numParam(params.blur, 14)),
       }
@@ -1023,6 +1079,21 @@ function buildBlurGalleryMeshDescriptor(
         amount: round2(numParam(params.amount, 28)),
       }
   }
+}
+
+function ellipseAxes(rotationDeg: number) {
+  const radians = rotationDeg * Math.PI / 180
+  return {
+    width: { x: Math.cos(radians), y: Math.sin(radians) },
+    height: { x: -Math.sin(radians), y: Math.cos(radians) },
+  }
+}
+
+function normalizeAngle(value: number) {
+  let angle = value
+  while (angle > 180) angle -= 360
+  while (angle <= -180) angle += 360
+  return angle
 }
 
 function stableStringify(value: unknown): string {

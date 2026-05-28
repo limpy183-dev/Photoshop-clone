@@ -1,4 +1,6 @@
 import { expect, test } from "@playwright/test"
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
 
 import { getFilter } from "../components/photoshop/filters"
 import {
@@ -52,6 +54,120 @@ test("requested local filters are worker-backed or tiled where safe", () => {
   expect(planExpensiveFilterTiling("lens-blur", 5000, 4000, { radius: 8 }).strategy).toBe("tiled-worker-preferred")
   expect(planExpensiveFilterTiling("high-pass", 5000, 4000, { radius: 12 }).strategy).toBe("tiled-worker-preferred")
   expect(planExpensiveFilterTiling("custom-convolution", 5000, 4000, {}).strategy).toBe("tiled-worker-preferred")
+})
+
+test("remaining requested Photoshop filters are registered and reachable from menus", () => {
+  const requested = [
+    "displace",
+    "shear",
+    "polar-coordinates",
+    "zigzag",
+    "diffuse",
+    "tiles",
+    "extrude",
+    "wind",
+    "pointillize",
+    "color-halftone",
+    "mezzotint",
+    "fragment",
+    "facet",
+    "fibers",
+    "flame",
+    "picture-frame",
+    "tree",
+    "lens-flare",
+    "reduce-noise",
+    "dust-scratches",
+    "despeckle",
+    "de-interlace",
+    "ntsc-colors",
+    "custom-filter",
+    "lighting-effects",
+    "lens-correction",
+    "adaptive-wide-angle",
+  ]
+  const menuSource = readFileSync(join(process.cwd(), "components/photoshop/menu-bar.tsx"), "utf8")
+
+  for (const id of requested) {
+    expect(getFilter(id), id).toBeTruthy()
+    expect(menuSource, `menu should open ${id}`).toContain(`"${id}"`)
+  }
+})
+
+test("advanced filter dialogs expose full source and control sets", () => {
+  const lensBlurParamKeys = filter("lens-blur").params.map((param) => param.key)
+  expect(lensBlurParamKeys).toEqual(expect.arrayContaining([
+    "depthSource",
+    "depthChannel",
+    "depthFocus",
+    "depthBlurScale",
+    "depthInvert",
+  ]))
+
+  const lightingParamKeys = filter("lighting-effects").params.map((param) => param.key)
+  expect(lightingParamKeys).toEqual(expect.arrayContaining([
+    "lights",
+    "bumpSource",
+    "bumpChannel",
+    "gloss",
+    "shine",
+    "exposure",
+  ]))
+
+  const smartSharpenParamKeys = filter("smart-sharpen").params.map((param) => param.key)
+  expect(smartSharpenParamKeys).toEqual(expect.arrayContaining([
+    "remove",
+    "motionAngle",
+    "moreAccurate",
+    "shadowAmount",
+    "shadowTonalWidth",
+    "shadowRadius",
+    "highlightAmount",
+    "highlightTonalWidth",
+    "highlightRadius",
+  ]))
+})
+
+test("smart sharpen removal model and tonal controls affect the rendered pixels", () => {
+  const src = imageData(3, 3, [
+    10, 20, 30, 255, 80, 90, 100, 255, 180, 185, 190, 255,
+    20, 30, 40, 255, 140, 145, 150, 255, 210, 212, 214, 255,
+    30, 40, 50, 255, 170, 175, 180, 255, 245, 246, 247, 255,
+  ])
+
+  const gaussian = filter("smart-sharpen").apply(src, {
+    amount: 180,
+    radius: 1.4,
+    threshold: 0,
+    remove: "gaussian",
+    shadowAmount: 0,
+    highlightAmount: 0,
+  })
+  const motion = filter("smart-sharpen").apply(src, {
+    amount: 180,
+    radius: 1.4,
+    threshold: 0,
+    remove: "motion",
+    motionAngle: 0,
+    moreAccurate: true,
+    shadowAmount: 0,
+    highlightAmount: 0,
+  })
+  const protectedTones = filter("smart-sharpen").apply(src, {
+    amount: 180,
+    radius: 1.4,
+    threshold: 0,
+    remove: "gaussian",
+    shadowAmount: 90,
+    shadowTonalWidth: 90,
+    shadowRadius: 4,
+    highlightAmount: 90,
+    highlightTonalWidth: 90,
+    highlightRadius: 4,
+  })
+
+  expect(dataOf(motion)).not.toEqual(dataOf(gaussian))
+  expect(dataOf(protectedTones)).not.toEqual(dataOf(gaussian))
 })
 
 test("color lookup imports CUBE LUT data and blends it by strength", () => {
