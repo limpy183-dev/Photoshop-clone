@@ -14,7 +14,7 @@
  */
 
 import {
-  estimateImageBytes,
+  estimateImageBytes as _estimateImageBytes,
   getGlobalMemoryBudget,
   type MemoryBudgetTracker,
   type MemoryCategory,

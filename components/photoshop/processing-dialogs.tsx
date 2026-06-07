@@ -142,6 +142,7 @@ import {
   type AutomationWorkflow,
   type CommandMacro,
 } from "./automation-engine"
+import type { ImageProcessorWorkflowPreset } from "./workflow-presets"
 
 type RasterFormat = BrowserRasterExportFormat
 type BatchOperation = AutomationOperation
@@ -402,7 +403,15 @@ export function BatchProcessingDialog({ open, onOpenChange }: { open: boolean; o
   )
 }
 
-export function ImageProcessorDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function ImageProcessorDialog({
+  open,
+  onOpenChange,
+  initial,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  initial?: ImageProcessorWorkflowPreset
+}) {
   const { createDocument } = useEditor()
   const [files, setFiles] = React.useState<File[]>([])
   const [format, setFormat] = React.useState<RasterFormat>("jpeg")
@@ -428,6 +437,26 @@ export function ImageProcessorDialog({ open, onOpenChange }: { open: boolean; on
     author: "",
     title: "",
   })
+
+  React.useEffect(() => {
+    if (!open || !initial) return
+    if (initial.format && RASTER_FORMATS.includes(initial.format)) setFormat(initial.format)
+    if (typeof initial.quality === "number" && Number.isFinite(initial.quality)) {
+      setQuality(Math.max(0.1, Math.min(1, initial.quality > 1 ? initial.quality / 100 : initial.quality)))
+    }
+    if (typeof initial.resize === "boolean") setResize(initial.resize)
+    if (typeof initial.maxWidth === "number" && Number.isFinite(initial.maxWidth)) setMaxWidth(Math.max(1, Math.round(initial.maxWidth)))
+    if (typeof initial.maxHeight === "number" && Number.isFinite(initial.maxHeight)) setMaxHeight(Math.max(1, Math.round(initial.maxHeight)))
+    if (typeof initial.transparent === "boolean") setTransparent(initial.transparent)
+    if (typeof initial.matte === "string") setMatte(initial.matte)
+    if (typeof initial.openFirst === "boolean") setOpenFirst(initial.openFirst)
+    if (initial.watermark) {
+      setWatermark((current) => ({ ...current, ...initial.watermark }))
+    }
+    if (initial.metadata) {
+      setMetadata((current) => ({ ...current, ...initial.metadata }))
+    }
+  }, [initial, open])
 
   const process = async () => {
     if (!files.length) return

@@ -76,6 +76,52 @@ const EXPORT_FORMATS: Array<{ format: ExportFormat; label: string }> = [
   { format: "metadata-json", label: "Sidecar" },
 ]
 
+type ExportDecisionId = "web" | "app" | "photoshop" | "print"
+
+// Task-based export decision cards: pick the goal, get a recommended format plus
+// an honest "what's preserved vs. flattened" breakdown before committing.
+const EXPORT_DECISIONS: Array<{
+  id: ExportDecisionId
+  label: string
+  format: ExportFormat
+  blurb: string
+  preserved: string[]
+  flattened: string[]
+}> = [
+  {
+    id: "web",
+    label: "Best for web",
+    format: "webp",
+    blurb: "Small, sRGB, broadly supported.",
+    preserved: ["Flattened composite appearance", "sRGB color for browsers", "Smallest practical file size"],
+    flattened: ["Layers flattened to a single raster image", "Browser-encoded 8-bit color only"],
+  },
+  {
+    id: "app",
+    label: "Best for this app",
+    format: "metadata-json",
+    blurb: "Re-open here with the most fidelity.",
+    preserved: ["Document and layer metadata", "Layer names, blend, and opacity"],
+    flattened: ["Pixel data exported as a raster sidecar", "Browser 8-bit RGBA working space"],
+  },
+  {
+    id: "photoshop",
+    label: "Best for Photoshop handoff",
+    format: "metadata-json",
+    blurb: "Carry structure and metadata downstream.",
+    preserved: ["Layer names and metadata", "Document metadata and intent"],
+    flattened: ["Effects and smart filters rasterized", "Browser cannot write native PSD private data"],
+  },
+  {
+    id: "print",
+    label: "Best for print preview",
+    format: "png",
+    blurb: "Full-resolution, lossless raster.",
+    preserved: ["Full resolution", "Embedded export metadata"],
+    flattened: ["Flattened raster output", "Browser color management approximation only"],
+  },
+]
+
 const EXPORT_EXTENSIONS: Record<ExportFormat, string> = {
   png: "png",
   tiff: "tiff",
@@ -194,6 +240,7 @@ export function ExportAsDialog({
   const [selectedPresetId, setSelectedPresetId] = React.useState("")
   const [presetName, setPresetName] = React.useState("")
   const [encoderDiagnostics, setEncoderDiagnostics] = React.useState<BrowserRasterEncoderDiagnostic[]>([])
+  const [decisionTarget, setDecisionTarget] = React.useState<ExportDecisionId | null>(null)
 
   const scaleRatio = Math.max(0.01, scale / 100)
   const metadataPayload = React.useCallback((): RasterExportMetadata => ({
@@ -404,6 +451,8 @@ export function ExportAsDialog({
   }, [open])
 
   if (!activeDoc) return null
+
+  const selectedDecision = EXPORT_DECISIONS.find((decision) => decision.id === decisionTarget) ?? null
 
   const exportPresets = exportPresetAssets(activeDoc.assetLibrary).filter(
     (asset) => ((asset.payload as ExportPresetPayload)?.dialog ?? "export-as") === "export-as",
@@ -667,6 +716,72 @@ export function ExportAsDialog({
             Configure document export format, scale, transparency, quality, and metadata.
           </DialogDescription>
         </DialogHeader>
+        <div
+          data-testid="export-decision-wizard"
+          className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2"
+        >
+          <div className="mb-1.5 text-[11px] font-medium text-[var(--ps-text)]">What is this export for?</div>
+          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+            {EXPORT_DECISIONS.map((decision) => {
+              const isActive = decisionTarget === decision.id
+              return (
+                <button
+                  key={decision.id}
+                  type="button"
+                  aria-pressed={isActive}
+                  onClick={() => {
+                    setDecisionTarget(decision.id)
+                    setFormat(decision.format)
+                  }}
+                  className={cn(
+                    "rounded-sm border px-2 py-1.5 text-left text-[11px] leading-tight",
+                    isActive
+                      ? "border-[var(--ps-accent)] bg-[var(--ps-accent)]/15 text-[var(--ps-text)]"
+                      : "border-[var(--ps-divider)] text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]",
+                  )}
+                >
+                  {decision.label}
+                </button>
+              )
+            })}
+          </div>
+          {selectedDecision ? (
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] p-2">
+                <div className="mb-1 text-[10px] uppercase tracking-wide text-emerald-300">Preserved</div>
+                <ul data-testid="export-preserved-list" className="grid list-disc gap-0.5 pl-3.5 text-[10px] text-[var(--ps-text-dim)]">
+                  {selectedDecision.preserved.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+              <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] p-2">
+                <div className="mb-1 text-[10px] uppercase tracking-wide text-amber-300">Flattened / lost</div>
+                <ul data-testid="export-flattened-list" className="grid list-disc gap-0.5 pl-3.5 text-[10px] text-[var(--ps-text-dim)]">
+                  {selectedDecision.flattened.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+              <div className="flex items-center justify-between gap-2 sm:col-span-2">
+                <span className="min-w-0 flex-1 text-[10px] text-[var(--ps-text-dim)]">
+                  {selectedDecision.blurb} Recommended format: {selectedDecision.format.toUpperCase()}.
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 shrink-0 text-[11px]"
+                  onClick={() => {
+                    window.dispatchEvent(new CustomEvent("ps-open-preflight"))
+                    onOpenChange(false)
+                  }}
+                >
+                  Run Preflight
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </div>
         <div className="grid grid-cols-[360px_1fr] gap-4">
           <div className="space-y-3">
             <div className="ps-checker border border-[var(--ps-divider)] rounded-sm min-h-[250px] flex items-center justify-center overflow-hidden">
@@ -1270,6 +1385,74 @@ export function ExportAsDialog({
                   <ManifestCount label="Approx" value={compatibilityManifest.totals.approximated} className="text-amber-300" />
                   <ManifestCount label="Unsupported" value={compatibilityManifest.totals.unsupported} className="text-red-300" />
                   <ManifestCount label="Preserved" value={compatibilityManifest.totals.preserved} className="text-emerald-300" />
+                </div>
+                <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <span className="uppercase tracking-wide text-[var(--ps-text-dim)]">Compatibility score</span>
+                    <span className={cn(
+                      "tabular-nums",
+                      compatibilityManifest.score.overall >= 85
+                        ? "text-emerald-300"
+                        : compatibilityManifest.score.overall >= 60
+                          ? "text-amber-300"
+                          : "text-red-300",
+                    )}>
+                      {compatibilityManifest.score.overall}/100
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1">
+                    {compatibilityManifest.score.categories.map((category) => (
+                      <div key={category.id} title={category.detail} className="flex items-center justify-between gap-2 rounded-sm bg-[var(--ps-panel)] px-1.5 py-1">
+                        <span className="truncate">{category.label}</span>
+                        <span className={cn(
+                          "tabular-nums",
+                          category.status === "strong"
+                            ? "text-emerald-300"
+                            : category.status === "mixed"
+                              ? "text-amber-300"
+                              : "text-red-300",
+                        )}>
+                          {category.score}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                {compatibilityManifest.fixActions.length ? (
+                  <div className="space-y-1.5 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1.5">
+                    <div className="uppercase tracking-wide text-[var(--ps-text-dim)]">Fix before export</div>
+                    {compatibilityManifest.fixActions.slice(0, 4).map((action) => (
+                      <div key={action.id} className="grid grid-cols-[1fr_auto] items-start gap-2">
+                        <div>
+                          <div className="text-[var(--ps-text)]">{action.label}</div>
+                          <div className="text-[var(--ps-text-dim)]">{action.detail}</div>
+                        </div>
+                        {action.primaryFormat && action.primaryFormat !== format ? (
+                          <button
+                            type="button"
+                            onClick={() => setFormat(action.primaryFormat!)}
+                            className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] px-1.5 py-0.5 text-[10px] text-[var(--ps-text)] hover:border-amber-400/60 hover:bg-amber-400/10 hover:text-amber-100"
+                          >
+                            Use {action.primaryFormat.toUpperCase()}
+                          </button>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-sm border border-emerald-500/25 bg-emerald-500/5 px-2 py-1.5">
+                    <div className="mb-1 uppercase tracking-wide text-emerald-200">Preserved</div>
+                    {compatibilityManifest.preservationSummary.preserved.slice(0, 3).map((item) => (
+                      <div key={`${item.label}-${item.status}`} className="truncate text-[var(--ps-text-dim)]" title={item.detail}>{item.label}</div>
+                    ))}
+                  </div>
+                  <div className="rounded-sm border border-amber-500/25 bg-amber-500/5 px-2 py-1.5">
+                    <div className="mb-1 uppercase tracking-wide text-amber-200">Changed</div>
+                    {compatibilityManifest.preservationSummary.changed.slice(0, 3).map((item) => (
+                      <div key={`${item.label}-${item.status}`} className="truncate text-[var(--ps-text-dim)]" title={item.detail}>{item.label}</div>
+                    ))}
+                  </div>
                 </div>
                 {compatibilityManifest.warnings.length ? (
                   <div className="space-y-1.5 rounded-sm border border-amber-500/35 bg-amber-500/10 px-2 py-1.5 text-amber-100" data-testid="export-warnings">

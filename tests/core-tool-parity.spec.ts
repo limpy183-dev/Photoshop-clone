@@ -11,7 +11,7 @@ async function runToolCommand(page: Page, query: string) {
 }
 
 test("missing Photoshop toolbar tools are first-class command palette tools", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await expect(page.locator("[data-canvas-stage]")).toBeVisible()
 
   const tools = [

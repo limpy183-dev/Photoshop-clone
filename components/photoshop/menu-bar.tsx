@@ -33,6 +33,8 @@ import { renderThreeDScene } from "./advanced-subsystems"
 import type { AdvancedSubsystemTab, ColorWorkflowMode } from "./advanced-subsystems-dialog"
 import type { GapWorkflowKind } from "./gap-workflow-dialog"
 import type { SelectionOperation } from "./management-dialogs"
+import type { WorkflowPackId } from "./workflow-presets"
+import { WORKFLOW_PACKS } from "./workflow-presets"
 import { lazyDialog } from "./lazy-dialog"
 import { dispatchPhotoshopEvent } from "./events"
 import { canPluginUsePermission, permissionsForPluginActionDescriptors } from "./plugin-system"
@@ -109,8 +111,12 @@ const BatchExportDialog = lazyDialog<{
 const BatchProcessingDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
   () => import("./processing-dialogs").then((m) => ({ default: m.BatchProcessingDialog })),
 )
-const ImageProcessorDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./processing-dialogs").then((m) => ({ default: m.ImageProcessorDialog })),
+const ImageProcessorDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void; initial?: unknown }>(
+  () => import("./processing-dialogs").then((m) => ({ default: m.ImageProcessorDialog as unknown as React.ComponentType<{
+    open: boolean
+    onOpenChange: (open: boolean) => void
+    initial?: unknown
+  }> })),
 )
 const CropAndStraightenDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
   () => import("./processing-dialogs").then((m) => ({ default: m.CropAndStraightenDialog })),
@@ -171,6 +177,16 @@ const GapWorkflowDialog = lazyDialog<{
     onOpenChange: (open: boolean) => void
   }> })),
   (p) => p.workflow != null,
+)
+const WorkflowPackDialog = lazyDialog<{
+  workflowId: WorkflowPackId | null
+  onOpenChange: (open: boolean) => void
+}>(
+  () => import("./workflow-pack-dialog").then((m) => ({ default: m.WorkflowPackDialog as unknown as React.ComponentType<{
+    workflowId: WorkflowPackId | null
+    onOpenChange: (open: boolean) => void
+  }> })),
+  (p) => p.workflowId != null,
 )
 const ColorModeDialog = lazyDialog<{
   target: import("./color-mode-dialog").ColorModeDialogTarget | null
@@ -495,6 +511,7 @@ export function MenuBar({
   const [batchExportInitial, setBatchExportInitial] = React.useState<any>(undefined)
   const [batchProcessingOpen, setBatchProcessingOpen] = React.useState(false)
   const [imageProcessorOpen, setImageProcessorOpen] = React.useState(false)
+  const [imageProcessorInitial, setImageProcessorInitial] = React.useState<any>(undefined)
   const [cropAndStraightenOpen, setCropAndStraightenOpen] = React.useState(false)
   const [pdfImportOpen, setPdfImportOpen] = React.useState(false)
   const [documentReportOpen, setDocumentReportOpen] = React.useState(false)
@@ -515,6 +532,7 @@ export function MenuBar({
   const [advancedColorWorkflow, setAdvancedColorWorkflow] = React.useState<ColorWorkflowMode>("assign")
   const [algorithmOpen, setAlgorithmOpen] = React.useState(false)
   const [gapWorkflow, setGapWorkflow] = React.useState<GapWorkflowKind | null>(null)
+  const [workflowPack, setWorkflowPack] = React.useState<WorkflowPackId | null>(null)
   const [colorModeTarget, setColorModeTarget] = React.useState<import("./color-mode-dialog").ColorModeDialogTarget | null>(null)
   const [preferencesOpen, setPreferencesOpen] = React.useState(false)
   const [shortcutsOpen, setShortcutsOpen] = React.useState(false)
@@ -643,7 +661,10 @@ export function MenuBar({
       setBatchExportOpen(true)
     }
     const batchProcessingHandler = () => setBatchProcessingOpen(true)
-    const imageProcessorHandler = () => setImageProcessorOpen(true)
+    const imageProcessorHandler = (event: Event) => {
+      setImageProcessorInitial((event as CustomEvent).detail)
+      setImageProcessorOpen(true)
+    }
     const reportHandler = () => setDocumentReportOpen(true)
     const preflightHandler = () => setPreflightOpen(true)
     const layerCompsHandler = () => setLayerCompsOpen(true)
@@ -684,6 +705,11 @@ export function MenuBar({
       }
       if (detail) setGapWorkflow(detail)
     }
+    const workflowPackHandler = (event: Event) => {
+      const detail = (event as CustomEvent<{ id?: WorkflowPackId } | WorkflowPackId>).detail
+      const id = typeof detail === "string" ? detail : detail?.id
+      if (id && WORKFLOW_PACKS.some((pack) => pack.id === id)) setWorkflowPack(id)
+    }
     const selectionOperationHandler = (event: Event) => {
       const operation = (event as CustomEvent<SelectionOperation>).detail
       if (operation) setSelectionOperation(operation)
@@ -718,6 +744,7 @@ export function MenuBar({
     window.addEventListener("ps-open-variables", variablesHandler)
     window.addEventListener("ps-open-photomerge", photomergeHandler)
     window.addEventListener("ps-open-gap-workflow", gapWorkflowHandler as EventListener)
+    window.addEventListener("ps-open-workflow-pack", workflowPackHandler as EventListener)
     window.addEventListener("ps-open-selection-operation", selectionOperationHandler as EventListener)
     return () => {
       window.removeEventListener("ps-open-filter-gallery", galleryHandler)
@@ -750,6 +777,7 @@ export function MenuBar({
       window.removeEventListener("ps-open-variables", variablesHandler)
       window.removeEventListener("ps-open-photomerge", photomergeHandler)
       window.removeEventListener("ps-open-gap-workflow", gapWorkflowHandler as EventListener)
+      window.removeEventListener("ps-open-workflow-pack", workflowPackHandler as EventListener)
       window.removeEventListener("ps-open-selection-operation", selectionOperationHandler as EventListener)
     }
   }, [])
@@ -2303,6 +2331,16 @@ export function MenuBar({
               Contact Sheet II…
             </DropdownMenuItem>
             <DropdownMenuSub>
+              <DropdownMenuSubTrigger>Workflow Packs</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {WORKFLOW_PACKS.map((pack) => (
+                  <DropdownMenuItem key={pack.id} onSelect={() => setWorkflowPack(pack.id)}>
+                    {pack.title}...
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            <DropdownMenuSub>
               <DropdownMenuSubTrigger>Automate</DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
                 <DropdownMenuItem onSelect={() => openAdvancedTab("automation")} disabled={!activeDoc}>Automation Manager...</DropdownMenuItem>
@@ -2946,7 +2984,7 @@ export function MenuBar({
         {/* Layer */}
         <DropdownMenu>
           <DropdownMenuTrigger className={menuClass}>Layer</DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-72">
+          <DropdownMenuContent align="start" className="max-h-[calc(100vh-56px)] w-72 overflow-y-auto">
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>New</DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
@@ -3189,7 +3227,7 @@ export function MenuBar({
             </DropdownMenuItem>
             <DropdownMenuSub>
               <DropdownMenuSubTrigger disabled={!activeLayer}>
-                Flatten Transparency Presets
+                Flatten Transparency
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
                 <DropdownMenuItem onSelect={() => flattenTransparency("clear", background, "Background Color")}>
@@ -3508,7 +3546,7 @@ export function MenuBar({
               Similar…
             </DropdownMenuItem>
             <DropdownMenuItem
-              onSelect={() => openSelectionOperation("transform")}
+              onSelect={() => window.dispatchEvent(new CustomEvent("ps-transform-selection-begin"))}
             >
               Transform Selection...
             </DropdownMenuItem>
@@ -3546,7 +3584,9 @@ export function MenuBar({
               Save Selection…
             </DropdownMenuItem>
             <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Load Selection</DropdownMenuSubTrigger>
+              <DropdownMenuSubTrigger onClick={() => setLoadSelectionOpen(true)}>
+                Load Selection...
+              </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
                 {(activeDoc?.channels ?? []).map((ch) => (
                   <DropdownMenuSub key={ch.id}>
@@ -3576,12 +3616,6 @@ export function MenuBar({
                 )}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
-            <DropdownMenuItem
-              onSelect={() => setLoadSelectionOpen(true)}
-              disabled={!activeDoc}
-            >
-              Load Selection...
-            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -4171,7 +4205,7 @@ export function MenuBar({
       <ExportAsDialog open={exportAsOpen} onOpenChange={setExportAsOpen} initial={exportAsInitial} />
       <BatchExportDialog open={batchExportOpen} onOpenChange={setBatchExportOpen} initial={batchExportInitial} />
       <BatchProcessingDialog open={batchProcessingOpen} onOpenChange={setBatchProcessingOpen} />
-      <ImageProcessorDialog open={imageProcessorOpen} onOpenChange={setImageProcessorOpen} />
+      <ImageProcessorDialog open={imageProcessorOpen} onOpenChange={setImageProcessorOpen} initial={imageProcessorInitial} />
       <CropAndStraightenDialog open={cropAndStraightenOpen} onOpenChange={setCropAndStraightenOpen} />
       <PdfImportDialog open={pdfImportOpen} onOpenChange={setPdfImportOpen} />
       <DocumentReportDialog open={documentReportOpen} onOpenChange={setDocumentReportOpen} />
@@ -4204,6 +4238,7 @@ export function MenuBar({
       <AdvancedSubsystemsDialog open={advancedOpen} onOpenChange={setAdvancedOpen} initialTab={advancedTab} initialColorWorkflow={advancedColorWorkflow} />
       <AlgorithmicOperationsDialog open={algorithmOpen} onOpenChange={setAlgorithmOpen} />
       <GapWorkflowDialog workflow={gapWorkflow} onOpenChange={(open) => !open && setGapWorkflow(null)} />
+      <WorkflowPackDialog workflowId={workflowPack} onOpenChange={(open) => !open && setWorkflowPack(null)} />
       <ColorModeDialog target={colorModeTarget} onOpenChange={(open) => !open && setColorModeTarget(null)} />
       <PreferencesDialog open={preferencesOpen} onOpenChange={setPreferencesOpen} />
       <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />

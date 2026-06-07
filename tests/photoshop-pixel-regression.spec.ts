@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test"
 
 test("initial composite canvas has the expected document size and visible pixels", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => {
     return Array.from(document.querySelectorAll("canvas")).some((node) => {
       const canvas = node as HTMLCanvasElement
@@ -41,7 +41,7 @@ test("initial composite canvas has the expected document size and visible pixels
 })
 
 test("new feature panels are reachable from command search", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   const panels = [
@@ -67,7 +67,7 @@ test("new feature panels are reachable from command search", async ({ page }) =>
 })
 
 test("preflight check opens from command search", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
   await page.locator("body").click({ position: { x: 20, y: 20 } })
 
@@ -84,7 +84,7 @@ test("preflight check opens from command search", async ({ page }) => {
 })
 
 test("layer comps can capture the current document state", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
   await page.locator("body").click({ position: { x: 20, y: 20 } })
 
@@ -99,7 +99,7 @@ test("layer comps can capture the current document state", async ({ page }) => {
 })
 
 test("export as exposes reusable export presets", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
   await page.locator("body").click({ position: { x: 20, y: 20 } })
 
@@ -117,7 +117,7 @@ test("export as exposes reusable export presets", async ({ page }) => {
 })
 
 test("advanced Photoshop filters open from command search", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
   await page.locator("body").click({ position: { x: 20, y: 20 } })
 
@@ -136,7 +136,7 @@ test("advanced Photoshop filters open from command search", async ({ page }) => 
 })
 
 test("management dialogs open from command search", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
   await page.locator("body").click({ position: { x: 20, y: 20 } })
 
@@ -163,7 +163,7 @@ test("management dialogs open from command search", async ({ page }) => {
 })
 
 test("local-only advanced workspaces and filters open from command search", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   const openCommand = async (query: string) => {
@@ -200,7 +200,7 @@ test("local-only advanced workspaces and filters open from command search", asyn
 })
 
 test("algorithmic operations expose pure code feature groups", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
   await page.locator("body").click({ position: { x: 20, y: 20 } })
 
@@ -235,7 +235,7 @@ test("algorithmic operations expose pure code feature groups", async ({ page }) 
 })
 
 test("new document setup exposes production presets and document metadata", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
   await page.locator("body").click({ position: { x: 20, y: 20 } })
 
@@ -254,7 +254,7 @@ test("new document setup exposes production presets and document metadata", asyn
 })
 
 test("document tabs support duplicate, close others, and reopen closed", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
   await page.locator("body").click({ position: { x: 20, y: 20 } })
 
@@ -281,7 +281,7 @@ test("document tabs support duplicate, close others, and reopen closed", async (
 })
 
 test("file info edits metadata, color management, and print settings", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
   await page.locator("body").click({ position: { x: 20, y: 20 } })
 
@@ -312,7 +312,7 @@ test("file info edits metadata, color management, and print settings", async ({ 
 })
 
 test("actions and history panels create named entries without browser prompts", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
   await page.locator("body").click({ position: { x: 20, y: 20 } })
 
@@ -376,7 +376,7 @@ test("actions and history panels create named entries without browser prompts", 
 })
 
 test("timeline panel captures opacity-aware frames and inserts tweens", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
   await page.locator("body").click({ position: { x: 20, y: 20 } })
 
@@ -397,7 +397,7 @@ test("timeline panel captures opacity-aware frames and inserts tweens", async ({
 })
 
 test("layer finder focuses search and can select matched layers", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
   await page.locator("body").click({ position: { x: 20, y: 20 } })
 
@@ -414,7 +414,7 @@ test("layer finder focuses search and can select matched layers", async ({ page 
 })
 
 test("keyboard shortcut dialog exposes portable shortcut controls", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
   await page.locator("body").click({ position: { x: 20, y: 20 } })
 
@@ -430,7 +430,7 @@ test("keyboard shortcut dialog exposes portable shortcut controls", async ({ pag
 })
 
 test("scripting console runs command-only scripts without dynamic evaluation", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
   await page.locator("body").click({ position: { x: 20, y: 20 } })
 
@@ -453,7 +453,7 @@ test("autosave follows the saved preference", async ({ page }) => {
     localStorage.removeItem("ps-autosave-document-v1")
     localStorage.setItem("ps-preferences", JSON.stringify({ autoSave: false }))
   })
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   await page.waitForTimeout(4500)
@@ -475,7 +475,7 @@ test("autosave follows the saved preference", async ({ page }) => {
 })
 
 test("swatches panel exposes validated import and export controls", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   await page.getByRole("button", { name: "Swatches", exact: true }).click()
@@ -491,7 +491,7 @@ test("patterns panel validates stored patterns and exposes library controls", as
       JSON.stringify([{ id: "unsafe", name: "Unsafe", dataURL: "javascript:alert(1)", width: 8, height: 8 }]),
     )
   })
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   await page.getByLabel("Upper panel picker").selectOption("patterns")
@@ -508,7 +508,7 @@ test("patterns panel validates stored patterns and exposes library controls", as
 })
 
 test("right dock exposes overflowing panels through named browser and pickers", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   await expect(page.getByLabel("Upper panel picker")).toBeVisible()

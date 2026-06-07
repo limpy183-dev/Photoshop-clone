@@ -5,16 +5,23 @@ import { Check, Eye, Plus, RotateCcw, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useEditor } from "../editor-context"
+import { buildRetouchingFeedbackModel } from "../retouch-feedback"
 import type { CloneSourcePreset } from "../types"
 import { uid } from "../uid"
 
 export function CloneSourcePanel() {
-  const { activeDoc, activeLayer, cloneSource, dispatch, commit } = useEditor()
+  const { activeDoc, activeLayer, tool, brush, cloneSource, dispatch, commit } = useEditor()
   const [name, setName] = React.useState("")
 
   if (!activeDoc) return null
 
   const activePreset = cloneSource.presets.find((preset) => preset.id === cloneSource.activePresetId)
+  const feedback = buildRetouchingFeedbackModel({
+    tool,
+    brush,
+    cloneSource,
+    cursor: activePreset ? { x: activePreset.sourceX + cloneSource.offsetX, y: activePreset.sourceY + cloneSource.offsetY } : null,
+  })
 
   const update = (patch: Partial<typeof cloneSource>) => dispatch({ type: "set-clone-source", cloneSource: patch })
 
@@ -115,6 +122,46 @@ export function CloneSourcePanel() {
           <RotateCcw className="h-3.5 w-3.5" />
           Update Active Preset
         </Button>
+        <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="font-medium text-[var(--ps-text)]">{feedback.primaryStatus}</span>
+            <span className="text-[10px] text-[var(--ps-text-dim)]">{feedback.brushEdge.detail}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-1">
+            <InfoChip label="Radius" value={`${feedback.brushEdge.radius}px`} />
+            <InfoChip label="Hard edge" value={`${feedback.brushEdge.hardnessRadius}px`} />
+            <InfoChip label="Spacing" value={`${feedback.brushEdge.spacing}px`} />
+            <InfoChip label="Scatter" value={`${feedback.brushEdge.scatterRadius}px`} />
+          </div>
+          <div className="mt-2 flex flex-wrap gap-1">
+            {feedback.hudChips.map((chip) => (
+              <span
+                key={`${chip.value}-${chip.label}`}
+                className={`rounded-sm border px-1.5 py-0.5 text-[10px] ${
+                  chip.tone === "warning"
+                    ? "border-amber-500/40 bg-amber-500/10 text-amber-200"
+                    : chip.tone === "accent"
+                      ? "border-sky-400/35 bg-sky-400/10 text-sky-200"
+                      : "border-[var(--ps-divider)] bg-[var(--ps-panel)] text-[var(--ps-text-dim)]"
+                }`}
+                title={chip.value}
+              >
+                {chip.label}
+              </span>
+            ))}
+          </div>
+          {feedback.previewGhost.visible && feedback.previewGhost.sourcePoint && feedback.previewGhost.destinationPoint ? (
+            <div className="mt-2 rounded-sm border border-sky-400/25 bg-sky-400/10 px-2 py-1 text-[10px] text-sky-100">
+              Ghost {Math.round(feedback.previewGhost.sourcePoint.x)}, {Math.round(feedback.previewGhost.sourcePoint.y)}
+              {" -> "}
+              {Math.round(feedback.previewGhost.destinationPoint.x)}, {Math.round(feedback.previewGhost.destinationPoint.y)}
+            </div>
+          ) : feedback.healingPreview.mode === "sample-required" && feedback.hudChips.some((chip) => chip.tone === "warning") ? (
+            <div className="mt-2 rounded-sm border border-amber-500/25 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-100">
+              {feedback.healingPreview.label}
+            </div>
+          ) : null}
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-2">
         {cloneSource.presets.length ? (
@@ -142,6 +189,15 @@ export function CloneSourcePanel() {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function InfoChip({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] px-1.5 py-1">
+      <div className="uppercase text-[9px] text-[var(--ps-text-dim)]">{label}</div>
+      <div className="tabular-nums text-[var(--ps-text)]">{value}</div>
     </div>
   )
 }

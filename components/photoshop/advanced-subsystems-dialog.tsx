@@ -520,9 +520,12 @@ function ThreeDWorkspace() {
       const lower = file.name.toLowerCase()
       const isBinaryModel = lower.endsWith(".3ds") || lower.endsWith(".kmz") || lower.endsWith(".u3d")
       let next: ThreeDScene
+      let importWarnings: string[] = []
       if (isBinaryModel) {
         assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.modelBinaryBytes, "3D model file")
-        next = importAdvancedThreeDScene(await file.arrayBuffer(), file.name).scene
+        const result = importAdvancedThreeDScene(await file.arrayBuffer(), file.name)
+        next = result.scene
+        importWarnings = result.warnings
       } else if (lower.endsWith(".dae")) {
         assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.modelTextBytes, "DAE model file")
         next = parseDaeToScene(await file.text())
@@ -531,7 +534,14 @@ function ThreeDWorkspace() {
         next = parseObjToScene(await file.text())
       }
       setScene(next)
-      toast.success(`Imported ${file.name}`)
+      const placeholderWarning = importWarnings.find((w) => /placeholder/i.test(w))
+      if (placeholderWarning) {
+        toast.warning(`Imported ${file.name} as a placeholder`, { description: placeholderWarning })
+      } else if (importWarnings.length) {
+        toast.success(`Imported ${file.name}`, { description: importWarnings[0] })
+      } else {
+        toast.success(`Imported ${file.name}`)
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not import 3D model")
     }

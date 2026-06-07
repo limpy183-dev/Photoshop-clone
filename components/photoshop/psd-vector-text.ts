@@ -27,7 +27,7 @@ import type {
   Layer as PsdLayer,
   LayerTextData,
   LayerVectorMask,
-  Orientation as PsdOrientation,
+  Orientation as _PsdOrientation,
   ParagraphStyle as PsdParagraphStyle,
   Psd,
   TextStyle as PsdTextStyle,
@@ -269,7 +269,7 @@ const PSD_WARP_TO_APP: Partial<Record<PsdWarpStyle, WarpStyle>> = {
  * Text round-trip
  * ========================================================================== */
 
-const EM_TO_TRACKING = 1000 // PSD stores tracking in 1/1000 em
+const _EM_TO_TRACKING = 1000 // PSD stores tracking in 1/1000 em
 
 function buildTextStyle(text: TextProps): PsdTextStyle {
   const style: PsdTextStyle = {
@@ -336,7 +336,7 @@ function deserializeWarpHorizontalVertical(psdWarp: PsdWarp | undefined): { hori
   }
 }
 
-function styleRunsFromCharacterStyles(text: TextProps): PsdTextStyle[] | undefined {
+function _styleRunsFromCharacterStyles(text: TextProps): PsdTextStyle[] | undefined {
   if (!text.characterStyles || text.characterStyles.length === 0) return undefined
   // PSD style runs cover *every* character so we project ours over the full string.
   const totalLen = text.content.length

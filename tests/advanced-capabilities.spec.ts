@@ -9,7 +9,7 @@ async function openCommand(page: Page, query: string) {
 }
 
 test("advanced capabilities label local browser-native limits instead of native Adobe integrations", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   await openCommand(page, "RAW, DNG, DICOM, EXR, HDR, PSB, and Metadata")
@@ -36,7 +36,7 @@ test("advanced capabilities label local browser-native limits instead of native 
 })
 
 test("plugin manager installs marketplace plugins through a permission review flow", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   await openCommand(page, "Plugin Manager")
@@ -60,7 +60,7 @@ test("plugin manager installs marketplace plugins through a permission review fl
 })
 
 test("camera raw and preflight expose visible non-native limitations", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   await openCommand(page, "Camera Raw Filter")
@@ -75,7 +75,7 @@ test("camera raw and preflight expose visible non-native limitations", async ({ 
 })
 
 test("mobile matrix smoke opens the editor @matrix-smoke", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await expect(page.getByText("File")).toBeVisible()
   await expect(page.locator("canvas").first()).toBeVisible()
 })

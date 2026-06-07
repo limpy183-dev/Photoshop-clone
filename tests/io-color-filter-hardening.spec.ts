@@ -99,7 +99,7 @@ test("document color honesty warns about metadata modes versus browser canvas re
 
 test("status bar exposes color and bit-depth honesty warning for non-RGB or high-bit documents", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/")
+  await page.goto("/editor")
   await openCommand(page, "New Document")
   await expect(page.getByRole("dialog", { name: "New Document" })).toBeVisible()
   await page.getByRole("button", { name: /Photo 6 x 4 in/ }).click()

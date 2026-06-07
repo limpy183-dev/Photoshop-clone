@@ -17,7 +17,7 @@ const png1x1 = Buffer.from(
 )
 
 test("contact sheet dialog imports images, previews picture packages, and exports the composite", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   await openTopMenu(page, "File")
@@ -59,7 +59,7 @@ test("contact sheet dialog imports images, previews picture packages, and export
 })
 
 test("contact sheet dialog paginates excess images and exports page images as a zip", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   await openTopMenu(page, "File")

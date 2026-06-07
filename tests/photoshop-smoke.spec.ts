@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test"
 
 test("main editor surface renders and command palette can run a tool command", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
 
   await expect(page.getByText("File")).toBeVisible()
   await expect(page.getByRole("button", { name: "Layers", exact: true })).toBeVisible()

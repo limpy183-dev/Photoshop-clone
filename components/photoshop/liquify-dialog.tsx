@@ -108,6 +108,7 @@ export function LiquifyDialog({
   const meshRef = React.useRef<LiquifyMesh | null>(null)
   const draggingRef = React.useRef<{ x: number; y: number } | null>(null)
   const meshDraggingRef = React.useRef<{ index: number; startX: number; startY: number; baseDx: number; baseDy: number } | null>(null)
+  const drawPreviewRef = React.useRef<() => void>(() => {})
 
   const drawPreview = React.useCallback(() => {
     const cv = previewRef.current
@@ -177,6 +178,7 @@ export function LiquifyDialog({
       ctx.restore()
     }
   }, [showMesh, editMesh])
+  drawPreviewRef.current = drawPreview
 
   React.useEffect(() => {
     if (!open || !activeLayer) return
@@ -191,7 +193,7 @@ export function LiquifyDialog({
     workingRef.current = work
     meshBaseRef.current = null
     meshRef.current = createLiquifyMesh(w, h, 7, 7)
-    drawPreview()
+    drawPreviewRef.current()
   }, [open, activeLayer])
 
   React.useEffect(() => {

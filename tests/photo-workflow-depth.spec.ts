@@ -22,6 +22,7 @@ import {
   renameCameraRawSnapshot,
   serializeCameraRawSidecar,
 } from "../components/photoshop/camera-raw-engine"
+import { buildSelectAndMaskPreviewModel } from "../components/photoshop/photo-workflow-engine"
 import type { HighBitImage } from "../components/photoshop/color-pipeline"
 import { getFilter } from "../components/photoshop/filters"
 import { applyFilterTiled } from "../components/photoshop/filter-worker"
@@ -59,6 +60,42 @@ function gradientFixture(width = 5, height = 5) {
   }
   return imageData(width, height, pixels)
 }
+
+test("Select and Mask preview model exposes alpha matte edge-only and split preview modes", () => {
+  const alpha = buildSelectAndMaskPreviewModel({
+    viewMode: "alpha-matte",
+    outputTo: "new-layer-mask",
+    opacity: 64,
+    decontaminateColors: true,
+  })
+  const edge = buildSelectAndMaskPreviewModel({
+    viewMode: "edge-only",
+    outputTo: "selection",
+  })
+  const split = buildSelectAndMaskPreviewModel({
+    viewMode: "split",
+    outputTo: "new-layer",
+  })
+
+  expect(alpha).toMatchObject({
+    viewMode: "alpha-matte",
+    background: "transparent-grid",
+    showsAlphaMatte: true,
+    opacity: 64,
+    decontaminateColors: true,
+  })
+  expect(edge).toMatchObject({
+    viewMode: "edge-only",
+    showsEdgesOnly: true,
+    edgeEmphasis: "selection-transition",
+  })
+  expect(split).toMatchObject({
+    viewMode: "split",
+    showsBeforeAfterSplit: true,
+    showsComposite: true,
+  })
+  expect(split.description).toContain("before/after")
+})
 
 test("Blur Gallery filters exist as named algorithms with spatially varying output", () => {
   const src = gradientFixture()

@@ -71,7 +71,7 @@ test("File > Print uses window.open without the contradictory noopener feature s
   // navigation so the dropdown content lays out fully inside the viewport.
   await page.setViewportSize({ width: 1280, height: 1200 })
   await installWindowOpenShim(page)
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   const fileTrigger = page

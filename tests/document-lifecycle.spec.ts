@@ -8,7 +8,7 @@ async function openCommand(page: import("@playwright/test").Page, query: string)
 }
 
 test("closing a dirty document prompts before discarding changes", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   await openCommand(page, "New Layer")
@@ -28,7 +28,7 @@ test("autosave writes separate recovery entries for open documents", async ({ pa
     localStorage.setItem("ps-preferences", JSON.stringify({ autoSave: true }))
   })
 
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
   await openCommand(page, "Duplicate Document")
 
@@ -52,7 +52,7 @@ test("autosave writes separate recovery entries for open documents", async ({ pa
 })
 
 test("export dialog guards browser-only export limitations", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   await openCommand(page, "Export As")
@@ -60,9 +60,11 @@ test("export dialog guards browser-only export limitations", async ({ page }) =>
   await expect(page.getByText(/PNG export limitations/i)).toBeVisible()
   await expect(page.getByText(/Layer structure:/i)).toBeVisible()
 
-  await page.getByRole("button", { name: "svg", exact: false }).click()
+  await page.getByRole("button", { name: "SVG", exact: true }).click()
   await expect(page.getByText(/SVG export limitations/i)).toBeVisible()
-  await expect(page.getByText(/Editable vector structure:/i)).toBeVisible()
+  // Scope to the limitations block: the same label also appears in the fuller
+  // compatibility manifest section below it.
+  await expect(page.getByTestId("export-limitations").getByText(/Editable vector structure:/i)).toBeVisible()
 
   await page.getByRole("button", { name: "WebP", exact: true }).click()
   await expect(page.getByLabel("WebP near-lossless")).toBeVisible()
@@ -76,6 +78,25 @@ test("export dialog guards browser-only export limitations", async ({ page }) =>
   await expect(page.getByLabel("AVIF chroma")).toBeVisible()
   await expect(page.getByLabel("AVIF tile rows")).toBeVisible()
   await expect(page.getByLabel("AVIF tile cols")).toBeVisible()
+})
+
+test("export dialog offers task-based decision cards with preservation guidance", async ({ page }) => {
+  await page.goto("/editor", { waitUntil: "domcontentloaded" })
+  await page.waitForSelector("[data-canvas-stage]", { timeout: 30000 })
+
+  await openCommand(page, "Export As")
+  await expect(page.getByRole("dialog", { name: "Export As" })).toBeVisible()
+
+  await expect(page.getByTestId("export-decision-wizard")).toBeVisible()
+  await expect(page.getByRole("button", { name: /Best for web/i })).toBeVisible()
+  await expect(page.getByRole("button", { name: /Best for this app/i })).toBeVisible()
+  await expect(page.getByRole("button", { name: /Photoshop handoff/i })).toBeVisible()
+  await expect(page.getByRole("button", { name: /Print preview/i })).toBeVisible()
+
+  await page.getByRole("button", { name: /Photoshop handoff/i }).click()
+  await expect(page.getByTestId("export-preserved-list")).toContainText(/metadata|layers/i)
+  await expect(page.getByTestId("export-flattened-list")).toContainText(/raster|browser/i)
+  await expect(page.getByRole("button", { name: /Run Preflight/i })).toBeVisible()
 })
 
 test("file info shows browser-local source location state", async ({ page }) => {

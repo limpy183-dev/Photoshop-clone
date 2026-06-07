@@ -1,4 +1,4 @@
-import { createPrimitiveThreeDScene, exportSceneToDae, exportSceneToObj, parseDaeToScene } from "./advanced-subsystems"
+import { createPrimitiveThreeDScene, exportSceneToDae, exportSceneToObj as _exportSceneToObj, parseDaeToScene } from "./advanced-subsystems"
 import type {
   AudioTrack,
   Layer,

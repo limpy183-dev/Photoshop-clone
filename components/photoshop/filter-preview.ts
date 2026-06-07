@@ -35,6 +35,68 @@ export interface FilterPreviewOptions {
   interactive?: boolean
 }
 
+export type FilterPreviewDisplayMode = "after" | "split" | "before"
+
+export interface FilterPreviewDisplayModeOption {
+  id: FilterPreviewDisplayMode
+  label: string
+  description: string
+}
+
+export interface FilterPreviewQualityModel {
+  executionLabel: string
+  detailLabel: string
+  pathKind: FilterPreviewMode
+  destructive: boolean
+  previewScale: number
+  tileSize?: number
+}
+
+export function getFilterPreviewDisplayModes(): FilterPreviewDisplayModeOption[] {
+  return [
+    { id: "after", label: "After", description: "Show the filtered result." },
+    { id: "split", label: "Split", description: "Compare the original and filtered result side by side." },
+    { id: "before", label: "Before", description: "Show the unfiltered source." },
+  ]
+}
+
+function previewExecutionLabel(mode: FilterPreviewMode) {
+  switch (mode) {
+    case "worker":
+      return "Worker preview"
+    case "tiled-worker":
+      return "Tiled worker preview"
+    case "tiled-main":
+      return "Tiled main-thread preview"
+    case "downsample-sync":
+      return "Downsampled preview"
+    default:
+      return "Main-thread preview"
+  }
+}
+
+export function buildFilterPreviewQualityModel(
+  plan: FilterPreviewPlan,
+  options: { debounceMs?: number; selectedLayerCount?: number; smartTarget?: boolean } = {},
+): FilterPreviewQualityModel {
+  const layerCount = Math.max(1, options.selectedLayerCount ?? 1)
+  const queued = `Preview is queued after ${Math.max(0, Math.round(options.debounceMs ?? 0))} ms`
+  const target = options.smartTarget
+    ? "and will be added as a Smart Filter."
+    : `and applies to ${layerCount} layer${layerCount === 1 ? "" : "s"}.`
+  const scaleDetail = plan.previewScale < 1 ? ` Downsampled to ${Math.round(plan.previewScale * 100)}% while editing.` : ""
+  const tileDetail = plan.tileSize ? ` Tile size ${plan.tileSize}px.` : ""
+
+  return {
+    executionLabel: previewExecutionLabel(plan.mode),
+    detailLabel: `${queued} ${target}${scaleDetail}${tileDetail}`,
+    pathKind: plan.mode,
+    destructive: !options.smartTarget,
+    previewScale: plan.previewScale,
+    tileSize: plan.tileSize,
+  }
+}
+
 export function planFilterPreviewExecution(
   filterId: string,
   width: number,

@@ -53,7 +53,7 @@ function adjustmentThumb(page: Page, name = "Brightness/Contrast 1"): Locator {
 }
 
 test("Image adjustments create editable adjustment layers instead of opening destructive filters", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await openLowerPanel(page, "layers")
 
   await addBrightnessContrastAdjustmentFromImageMenu(page)
@@ -68,7 +68,7 @@ test("Image adjustments create editable adjustment layers instead of opening des
 })
 
 test("ctrl-click clips an adjustment layer to the layer below and Ctrl+I inverts its mask", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await openLowerPanel(page, "layers")
   await addBrightnessContrastAdjustmentFromImageMenu(page)
 
@@ -81,7 +81,7 @@ test("ctrl-click clips an adjustment layer to the layer below and Ctrl+I inverts
 })
 
 test("double-clicking an adjustment layer opens its settings with controls above preview", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await openLowerPanel(page, "layers")
   await openUpperPanel(page, "color")
   await addBrightnessContrastAdjustmentFromImageMenu(page)
@@ -125,7 +125,7 @@ test("adding a default adjustment layer does not run full-frame pixel adjustment
     }
   })
 
-  await page.goto("/")
+  await page.goto("/editor")
   await openLowerPanel(page, "layers")
   await page.evaluate(() => {
     ;(window as typeof window & { __psFullFrameReads?: number }).__psFullFrameReads = 0
@@ -191,7 +191,7 @@ test("rapid adjustment slider edits coalesce full-frame composite work", async (
     }
   })
 
-  await page.goto("/")
+  await page.goto("/editor")
   await openLowerPanel(page, "layers")
   await addBrightnessContrastAdjustmentFromImageMenu(page)
   await adjustmentThumb(page).dblclick()
@@ -226,7 +226,7 @@ test("rapid adjustment slider edits coalesce full-frame composite work", async (
 })
 
 test("brush strokes on an active adjustment layer paint its mask", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await openLowerPanel(page, "layers")
   await addBrightnessContrastAdjustmentFromImageMenu(page)
   await selectBrushTool(page)
@@ -242,7 +242,7 @@ test("brush strokes on an active adjustment layer paint its mask", async ({ page
 })
 
 test("alt-hover exposes a layer-link target and alt-click clips the upper layer to the one below", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await openLowerPanel(page, "layers")
   await addBrightnessContrastAdjustmentFromImageMenu(page)
 

@@ -54,7 +54,7 @@ const AutosaveRecovery = React.lazy(() =>
 // The Home/Start workspace is shown when no document is open or when the
 // user explicitly toggles it from Window ▸ Home. Lazy-load so its preset/
 // recent-thumbnail rendering only ships when actually visible.
-const HomeWorkspace = React.lazy(() =>
+const _HomeWorkspace = React.lazy(() =>
   import("@/components/photoshop/home-workspace").then((m) => ({ default: m.HomeWorkspace })),
 )
 
@@ -99,7 +99,7 @@ export default function Page() {
 // here: it lives in a sibling overlay so opening/positioning the menu
 // doesn't re-render the heavy MenuBar / Canvas / PanelDock tree.
 function Workspace() {
-  const { activeDocId, activeDoc, dispatch, documents } = useEditor()
+  const { activeDocId, activeDoc, dispatch } = useEditor()
   const [newOpen, setNewOpen] = React.useState(false)
   const [commandOpen, setCommandOpen] = React.useState(false)
   const [imageSizeOpen, setImageSizeOpen] = React.useState(false)
@@ -111,7 +111,7 @@ function Workspace() {
   // Tracks whether the Home/Start workspace is explicitly open. The view is
   // also shown automatically whenever no documents are open, so this flag
   // only matters for "Window ▸ Home" toggling while a doc is active.
-  const [homeOpen, setHomeOpen] = React.useState(false)
+  const [, setHomeOpen] = React.useState(false)
   const openNew = React.useCallback(() => setNewOpen(true), [])
   const openCommandPalette = React.useCallback(() => setCommandOpen(true), [])
   useShortcuts(openNew, openCommandPalette)

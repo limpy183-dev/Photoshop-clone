@@ -2669,8 +2669,8 @@ function adaptiveWideAngle(
     for (let x = 0; x < w; x++) {
       const nx = (x - cx) / scale
       const ny = (y - cy) / scale
-      let rx = cos * nx - sin * ny
-      let ry = sin * nx + cos * ny
+      const rx = cos * nx - sin * ny
+      const ry = sin * nx + cos * ny
       const r = Math.hypot(rx, ry) / maxR
       const barrel = 1 + strength * r * r * 0.85
       let sx = cx + rx * barrel
@@ -7128,7 +7128,7 @@ export const FILTERS: Record<string, FilterDef> = {
       { type: "slider", key: "strength", label: "Strength", min: 0, max: 200, step: 1, default: 100, suffix: "%" },
       { type: "slider", key: "bias", label: "Bias", min: -255, max: 255, step: 1, default: 0 },
       { type: "slider", key: "divisor", label: "Scale/Divisor", min: -64, max: 64, step: 1, default: 0 },
-      { type: "text", key: "matrix", label: "Kernel Matrix", default: "", multiline: true, placeholder: "0 0 0\n0 1 0\n0 0 0" },
+      { type: "text", key: "matrix", label: "Matrix", default: "", multiline: true, placeholder: "0 0 0\n0 1 0\n0 0 0" },
     ],
     apply: (src, p) => customConvolution(src, String(p.preset), Number(p.strength), Number(p.bias), String(p.matrix ?? ""), Number(p.divisor ?? 0)),
   },
@@ -7148,7 +7148,7 @@ export const FILTERS: Record<string, FilterDef> = {
       { type: "slider", key: "strength", label: "Strength", min: 0, max: 200, step: 1, default: 100, suffix: "%" },
       { type: "slider", key: "bias", label: "Bias", min: -255, max: 255, step: 1, default: 0 },
       { type: "slider", key: "divisor", label: "Scale/Divisor", min: -64, max: 64, step: 1, default: 0 },
-      { type: "text", key: "matrix", label: "Kernel Matrix", default: "", multiline: true, placeholder: "0 0 0\n0 1 0\n0 0 0" },
+      { type: "text", key: "matrix", label: "Matrix", default: "", multiline: true, placeholder: "0 0 0\n0 1 0\n0 0 0" },
     ],
     apply: (src, p) => customConvolution(src, String(p.preset), Number(p.strength), Number(p.bias), String(p.matrix ?? ""), Number(p.divisor ?? 0)),
   },

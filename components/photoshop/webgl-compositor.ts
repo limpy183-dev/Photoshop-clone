@@ -1069,7 +1069,7 @@ function applyOcioViewTransformOnGpu(source: HighBitImage, pipeline: OcioViewPip
   canvas.width = source.width
   canvas.height = source.height
   const gl = canvas.getContext("webgl2", { premultipliedAlpha: false, preserveDrawingBuffer: true }) as WebGL2RenderingContext | null
-  if (!gl) return null
+  if (!gl || typeof gl.getExtension !== "function" || typeof gl.createShader !== "function") return null
   const ext = gl.getExtension("EXT_color_buffer_half_float") || gl.getExtension("EXT_color_buffer_float")
   if (!ext) return null
 

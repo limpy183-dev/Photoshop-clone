@@ -48,7 +48,7 @@ function fuzzySubsequenceScore(haystack: string, needle: string) {
 function textScore(value: string, query: string, weight: number) {
   const text = compact(value)
   if (!query) return 0
-  if (text === query) return 1200 * weight
+  if (text === query) return 1600 * weight
   if (text.startsWith(query)) return 900 * weight
   if (text.split(/\s+/).some((part) => part === query)) return 760 * weight
   if (text.includes(query)) return 520 * weight
@@ -98,7 +98,7 @@ export function rankCommandPaletteItems<T extends RankableCommand>(
       if (b.score !== a.score) return b.score - a.score
       const groupDelta = groupPriority(b.command.group) - groupPriority(a.command.group)
       if (groupDelta) return groupDelta
-      return a.command.title.localeCompare(b.command.title) || a.index - b.index
+      return a.index - b.index
     })
     .map((item) => item.command)
 

@@ -32,7 +32,12 @@ import {
   PenTool,
   Palette,
   GripVertical,
+  AlertTriangle,
+  Sparkles,
+  Tag,
+  Download,
 } from "lucide-react"
+import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import {
   Select,
@@ -48,13 +53,16 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu"
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
-import type { AdjustmentType, BlendMode, Layer, LayerKind } from "../types"
+import type { AdjustmentType, BlendMode, Layer, LayerKind, PsDocument } from "../types"
 import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop } from "../adjustment-layers"
 import { dispatchPhotoshopEvent } from "../events"
 import type { MergedRenderChange } from "../render-bus"
@@ -216,6 +224,92 @@ function smartFilterMaskState(mask: HTMLCanvasElement | null | undefined, enable
   return "mixed"
 }
 
+// One-click filter presets surfaced as buttons above the layer list. Each maps
+// to the same query tokens the dropdown filter uses, except "empty" which is
+// resolved against the live emptiness analysis below.
+const LAYER_FILTER_PRESETS: { label: string; kind: string }[] = [
+  { label: "Visible only", kind: "visible" },
+  { label: "Has mask", kind: "masked" },
+  { label: "Has effects", kind: "styled" },
+  { label: "Smart object", kind: "smart-object" },
+  { label: "Adjustment", kind: "adjustment" },
+  { label: "Locked", kind: "locked" },
+  { label: "Empty", kind: "empty" },
+]
+
+interface LayerHealthWarning {
+  id: string
+  layerId?: string
+  message: string
+  severity: "warn" | "info"
+}
+
+/** Cheap downscaled probe — true if the canvas has any non-transparent pixel. */
+function canvasHasPixels(canvas: HTMLCanvasElement): boolean {
+  const sw = Math.max(1, Math.min(64, canvas.width))
+  const sh = Math.max(1, Math.min(64, canvas.height))
+  const probe = makeCanvas(sw, sh)
+  const ctx = probe.getContext("2d", { willReadFrequently: true })
+  if (!ctx) return true
+  try {
+    ctx.clearRect(0, 0, sw, sh)
+    ctx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, sw, sh)
+    const data = ctx.getImageData(0, 0, sw, sh).data
+    for (let i = 3; i < data.length; i += 4) if (data[i] !== 0) return true
+  } catch {
+    return true
+  }
+  return false
+}
+
+/** True if a mask is effectively all-black (fully hides its layer). */
+function maskFullyHidden(mask: HTMLCanvasElement): boolean {
+  const sw = Math.max(1, Math.min(64, mask.width))
+  const sh = Math.max(1, Math.min(64, mask.height))
+  const probe = makeCanvas(sw, sh)
+  const ctx = probe.getContext("2d", { willReadFrequently: true })
+  if (!ctx) return false
+  try {
+    ctx.drawImage(mask, 0, 0, mask.width, mask.height, 0, 0, sw, sh)
+    const data = ctx.getImageData(0, 0, sw, sh).data
+    for (let i = 0; i < data.length; i += 4) {
+      if ((data[i] + data[i + 1] + data[i + 2]) / 3 > 8) return false
+    }
+  } catch {
+    return false
+  }
+  return true
+}
+
+/** Surface non-fatal "layer health" issues a user would want flagged. */
+function analyzeLayerHealth(doc: PsDocument): { warnings: LayerHealthWarning[]; emptyIds: Set<string> } {
+  const warnings: LayerHealthWarning[] = []
+  const emptyIds = new Set<string>()
+  for (const layer of doc.layers) {
+    if (layer.kind === "group") continue
+    const isPixel = !layer.kind || layer.kind === "raster"
+    if (isPixel && !layer.smartObject && layer.kind !== "smart-object" && !canvasHasPixels(layer.canvas)) {
+      emptyIds.add(layer.id)
+      warnings.push({ id: `empty-${layer.id}`, layerId: layer.id, message: `"${layer.name}" is empty`, severity: "warn" })
+    }
+    if (layer.visible === false) {
+      warnings.push({ id: `hidden-${layer.id}`, layerId: layer.id, message: `"${layer.name}" is hidden`, severity: "info" })
+    }
+    if (layer.mask && maskFullyHidden(layer.mask)) {
+      warnings.push({ id: `masked-${layer.id}`, layerId: layer.id, message: `"${layer.name}" is fully hidden by its mask`, severity: "warn" })
+    }
+  }
+  const bytes = doc.width * doc.height * 4 * Math.max(1, doc.layers.length)
+  if (bytes > 320 * 1024 * 1024) {
+    warnings.push({
+      id: "memory",
+      message: `High memory: ~${Math.round(bytes / (1024 * 1024))} MB across ${doc.layers.length} layers`,
+      severity: "warn",
+    })
+  }
+  return { warnings, emptyIds }
+}
+
 export function LayersPanel() {
   const {
     activeDoc,
@@ -293,6 +387,11 @@ export function LayersPanel() {
     }
   }, [])
 
+  const { warnings: healthWarnings, emptyIds: emptyLayerIds } = React.useMemo(
+    () => (activeDoc ? analyzeLayerHealth(activeDoc) : { warnings: [], emptyIds: new Set<string>() }),
+    [activeDoc],
+  )
+
   if (!activeDoc) return null
 
   const active = activeDoc.layers.find((l) => l.id === activeDoc.activeLayerId)
@@ -325,6 +424,7 @@ export function LayersPanel() {
   const visibleLayers = collapseFiltered.filter((l) => {
     if (search && !layerMatchesQuery(l, search)) return false
     if (filterKind === "all") return true
+    if (filterKind === "empty") return emptyLayerIds.has(l.id)
     return layerMatchesQuery(l, LAYER_FILTER_TOKENS[filterKind] ?? filterKind)
   })
 
@@ -337,6 +437,69 @@ export function LayersPanel() {
     dispatch({ type: "set-layer-color-label", id, label })
     setContextMenu(null)
     setTimeout(() => commit("Layer Color Label", [id]), 0)
+  }
+
+  // ---- Batch operations across the current multi-selection ----
+  const batchTargets = (): Layer[] => (selectedLayers.length ? selectedLayers : active ? [active] : [])
+
+  const batchRenameSelected = () => {
+    const targets = batchTargets().filter((l) => !layerLocked(l))
+    if (!targets.length) {
+      toast.info("Select one or more unlocked layers to rename.")
+      return
+    }
+    const base = window.prompt(
+      `Rename ${targets.length} selected layer${targets.length === 1 ? "" : "s"} to:`,
+      targets[0].name,
+    )
+    if (!base?.trim()) return
+    const trimmed = base.trim()
+    targets.forEach((layer, index) => {
+      const name = targets.length === 1 ? trimmed : `${trimmed} ${index + 1}`
+      dispatch({ type: "rename-layer", id: layer.id, name })
+    })
+    setTimeout(() => commit("Rename Selected Layers", targets.map((l) => l.id)), 0)
+  }
+
+  const batchColorLabelSelected = (label: NonNullable<Layer["colorLabel"]>) => {
+    const targets = batchTargets()
+    if (!targets.length) return
+    targets.forEach((layer) => dispatch({ type: "set-layer-color-label", id: layer.id, label }))
+    setTimeout(() => commit("Color Label Selected Layers", targets.map((l) => l.id)), 0)
+  }
+
+  const batchConvertSelectedToSmartObject = () => {
+    const targets = batchTargets().filter((l) => !l.smartObject && l.kind !== "smart-object")
+    if (!targets.length) {
+      toast.info("Selected layers are already smart objects.")
+      return
+    }
+    targets.forEach((layer) => dispatch({ type: "set-layer-smart", id: layer.id, smart: true }))
+    setTimeout(() => commit("Convert Selected to Smart Object", targets.map((l) => l.id)), 0)
+  }
+
+  const batchExportSelectedLayers = () => {
+    const targets = batchTargets().filter((l) => l.kind !== "group")
+    if (!targets.length) {
+      toast.info("Select one or more pixel layers to export.")
+      return
+    }
+    let exported = 0
+    for (const layer of targets) {
+      try {
+        const url = layer.canvas.toDataURL("image/png")
+        const a = document.createElement("a")
+        a.href = url
+        a.download = `${(layer.name || "layer").replace(/[\\/:*?"<>|]/g, "_")}.png`
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        exported++
+      } catch {
+        // Ignore layers whose canvas cannot be serialized.
+      }
+    }
+    toast.success(`Exported ${exported} layer${exported === 1 ? "" : "s"} as PNG.`)
   }
 
   const addLayerNote = (layer: Layer) => {
@@ -801,6 +964,67 @@ export function LayersPanel() {
         </div>
       </div>
 
+      {/* One-click filter presets */}
+      <div className="flex flex-wrap items-center gap-1 border-b border-[var(--ps-divider)] px-2 py-1.5">
+        {LAYER_FILTER_PRESETS.map((preset) => {
+          const activePreset = filterKind === preset.kind
+          return (
+            <button
+              key={preset.kind}
+              type="button"
+              onClick={() => setFilterKind(activePreset ? "all" : preset.kind)}
+              aria-pressed={activePreset}
+              className={cn(
+                "h-5 rounded-sm border px-1.5 text-[10px] leading-none",
+                activePreset
+                  ? "border-[var(--ps-accent)] bg-[var(--ps-accent)]/20 text-[var(--ps-text)]"
+                  : "border-[var(--ps-divider)] text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]",
+              )}
+            >
+              {preset.label}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Layer health summary */}
+      <div
+        data-testid="layer-health-summary"
+        className="border-b border-[var(--ps-divider)] px-2 py-1.5 text-[10px]"
+      >
+        {healthWarnings.length ? (
+          <>
+            <div className="mb-1 flex items-center gap-1 text-[var(--ps-text-dim)]">
+              <AlertTriangle className="h-3 w-3 text-amber-300" />
+              {healthWarnings.length} layer health {healthWarnings.length === 1 ? "warning" : "warnings"}
+            </div>
+            <ul className="grid gap-0.5">
+              {healthWarnings.slice(0, 4).map((warning, index) => (
+                <li
+                  key={warning.id}
+                  data-testid={`layer-health-warning-${index}`}
+                  className={cn(
+                    "flex items-start gap-1 leading-snug",
+                    warning.severity === "warn" ? "text-amber-200" : "text-[var(--ps-text-dim)]",
+                  )}
+                >
+                  <span className="mt-[3px] h-1 w-1 shrink-0 rounded-full bg-current" />
+                  <span className="min-w-0 flex-1 truncate">{warning.message}</span>
+                </li>
+              ))}
+              {healthWarnings.length > 4 ? (
+                <li className="text-[var(--ps-text-dim)]">+{healthWarnings.length - 4} more…</li>
+              ) : null}
+            </ul>
+          </>
+        ) : (
+          <div className="flex items-center gap-1 text-emerald-300/80">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+            Layers look healthy
+          </div>
+        )}
+      </div>
+
       <div className="flex items-center gap-1 border-b border-[var(--ps-divider)] px-2 py-1 text-[10px] text-[var(--ps-text-dim)]">
         <span className="min-w-0 flex-1 truncate">
           {visibleLayers.length} of {collapseFiltered.length} visible in list
@@ -1163,7 +1387,7 @@ export function LayersPanel() {
                   className="w-3 h-3 rounded-sm bg-[var(--ps-accent)] text-[8px] text-white flex items-center justify-center font-bold"
                   title="Smart Object"
                 >
-                  S
+                  S<span className="sr-only">mart Object</span>
                 </span>
               ) : null}
               {l.smartFilters?.length ? (
@@ -1462,6 +1686,46 @@ export function LayersPanel() {
               onSelect={() => createAdjustmentLayer("equalize")}
             >
               Equalize
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              title="Batch layer operations"
+              aria-label="Batch layer operations"
+              className="w-7 h-7 rounded-sm flex items-center justify-center hover:bg-[var(--ps-tool-hover)]"
+            >
+              <ListChecks className="w-3.5 h-3.5" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuItem onSelect={batchRenameSelected}>
+              <Tag className="mr-2 h-3.5 w-3.5" /> Rename Selected...
+            </DropdownMenuItem>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Palette className="mr-2 h-3.5 w-3.5" /> Color Label Selected
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {COLOR_LABELS.map((colorLabel) => (
+                  <DropdownMenuItem key={colorLabel.id} onSelect={() => batchColorLabelSelected(colorLabel.id)}>
+                    <span
+                      className="mr-2 inline-block h-3 w-3 rounded-full border border-[var(--ps-divider)]"
+                      style={{ background: colorLabel.id === "none" ? "transparent" : colorLabel.bg }}
+                    />
+                    {colorLabel.label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            <DropdownMenuItem onSelect={batchConvertSelectedToSmartObject}>
+              <Sparkles className="mr-2 h-3.5 w-3.5" /> Convert Selected to Smart Object
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={batchExportSelectedLayers}>
+              <Download className="mr-2 h-3.5 w-3.5" /> Export Selected Layers
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

@@ -32,7 +32,7 @@ async function openTopMenu(page: Page, name: string) {
 
 async function openEditor(page: Page) {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/editor")
+  await page.goto("/editor", { waitUntil: "domcontentloaded" })
   await page.waitForSelector("[data-canvas-stage]", { timeout: 30000 })
   await expect(page.locator("[data-canvas-stage]")).toBeVisible()
 }
@@ -97,10 +97,19 @@ test("grow similar and transform selection are first-class Select menu workflows
   await expect(page.getByRole("menuitem", { name: "Transform Selection..." })).toBeVisible()
   await page.getByRole("menuitem", { name: "Transform Selection..." }).click()
 
-  await expect(page.getByRole("dialog", { name: "Transform Selection" })).toBeVisible()
-  await expect(page.getByLabel("Scale")).toBeVisible()
-  await expect(page.getByLabel("Rotate degrees")).toBeVisible()
-  await expect(page.getByLabel("Smooth transformed edge")).toBeVisible()
+  await expect(page.getByTestId("selection-transform-overlay")).toBeVisible()
+  await expect(page.getByTestId("selection-transform-mini-options")).toBeVisible()
+  await expect(page.getByLabel("Transform X")).toBeVisible()
+  await expect(page.getByLabel("Transform Y")).toBeVisible()
+  await expect(page.getByLabel("Transform width percent")).toBeVisible()
+  await expect(page.getByLabel("Transform height percent")).toBeVisible()
+  await expect(page.getByLabel("Transform rotation degrees")).toBeVisible()
+  await expect(page.getByLabel("Transform interpolation")).toBeVisible()
+  await expect(page.getByTestId("selection-transform-rotation-readout")).toContainText("0")
+  await expect(page.getByTestId("selection-transform-snap-feedback")).toContainText(/document|selection|guide|edge/i)
+
+  await page.keyboard.press("ArrowRight")
+  await expect(page.getByLabel("Transform X")).toHaveValue("1")
 })
 
 test("color range dialog supports targeted range and preview controls", async ({ page }) => {

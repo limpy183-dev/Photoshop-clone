@@ -94,7 +94,7 @@ import {
   smoothSelectionMask,
   transformSelectionMask,
 } from "./tool-helpers"
-import { assertCanvasSize } from "./canvas-limits"
+import { assertCanvasSize as _assertCanvasSize } from "./canvas-limits"
 import { makeCanvas } from "./canvas-utils"
 import { flattenTransparencyCanvas, type FlattenTransparencyAlphaMode } from "./flatten-transparency"
 import { uid } from "./uid"
@@ -550,15 +550,13 @@ function cloneCanvas(src: HTMLCanvasElement | null | undefined): HTMLCanvasEleme
   c.width = src.width
   c.height = src.height
   const ctx = c.getContext("2d")!
-  try {
-    const sourceCtx = src.getContext("2d")
-    if (sourceCtx) {
-      ctx.putImageData(sourceCtx.getImageData(0, 0, src.width, src.height), 0, 0)
-    } else {
-      ctx.drawImage(src, 0, 0)
-    }
-  } catch {
+  const isNativeCanvas = typeof HTMLCanvasElement !== "undefined" && src instanceof HTMLCanvasElement
+  if (isNativeCanvas || src.width <= 0 || src.height <= 0) {
     ctx.drawImage(src, 0, 0)
+  } else {
+    const srcCtx = src.getContext("2d")
+    if (!srcCtx) return null
+    ctx.putImageData(srcCtx.getImageData(0, 0, src.width, src.height), 0, 0)
   }
   return c
 }
@@ -1791,12 +1789,24 @@ function makeDocumentLifecycle(
   }
 }
 
+function currentHistoryIndexFromHistories(histories: EditorState["histories"], docId: string) {
+  return histories[docId]?.index ?? 0
+}
+
 function currentHistoryIndex(state: EditorState, docId: string) {
-  return state.histories[docId]?.index ?? 0
+  return currentHistoryIndexFromHistories(state.histories, docId)
+}
+
+function documentLifecycleForSlices(
+  documentLifecycle: EditorState["documentLifecycle"],
+  histories: EditorState["histories"],
+  doc: PsDocument,
+) {
+  return documentLifecycle[doc.id] ?? makeDocumentLifecycle(doc, currentHistoryIndexFromHistories(histories, doc.id))
 }
 
 function documentLifecycleFor(state: EditorState, doc: PsDocument) {
-  return state.documentLifecycle[doc.id] ?? makeDocumentLifecycle(doc, currentHistoryIndex(state, doc.id))
+  return documentLifecycleForSlices(state.documentLifecycle, state.histories, doc)
 }
 
 function isDocumentDirtyInState(state: EditorState, docId: string) {
@@ -4599,10 +4609,10 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
   const documentStatuses = React.useMemo(() => {
     const result: Record<string, DocumentLifecycleState> = {}
     for (const doc of state.documents) {
-      const lifecycle = documentLifecycleFor(state, doc)
+      const lifecycle = documentLifecycleForSlices(state.documentLifecycle, state.histories, doc)
       result[doc.id] = {
         ...lifecycle,
-        dirty: lifecycle.dirty || lifecycle.savedHistoryIndex !== currentHistoryIndex(state, doc.id),
+        dirty: lifecycle.dirty || lifecycle.savedHistoryIndex !== currentHistoryIndexFromHistories(state.histories, doc.id),
       }
     }
     return result
@@ -4613,7 +4623,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
   }, [state.documents, state.documentLifecycle, state.histories])
   const documentHistoryVersions = React.useMemo(() => {
     const result: Record<string, number> = {}
-    for (const doc of state.documents) result[doc.id] = currentHistoryIndex(state, doc.id)
+    for (const doc of state.documents) result[doc.id] = currentHistoryIndexFromHistories(state.histories, doc.id)
     return result
   }, [state.documents, state.histories])
 
@@ -4907,7 +4917,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
           {
             getContext: (step) => {
               const current = stateRef.current
-              const doc = current.documents.find((d) => d.id === current.activeDocId) ?? activeDoc ?? current.documents[0]
+              const doc = current.documents.find((d) => d.id === current.activeDocId) ?? current.documents[0]
               const activeLayer = doc?.layers.find((layer) => layer.id === doc.activeLayerId) ?? null
               const docForContext = doc ?? ({
                 id: "action-playback-context",

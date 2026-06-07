@@ -344,7 +344,7 @@ function rgbToHex(r: number, g: number, b: number) {
   return `#${[r, g, b].map((v) => clamp(Math.round(v)).toString(16).padStart(2, "0")).join("")}`
 }
 
-function mixColor(a: { r: number; g: number; b: number }, b: { r: number; g: number; b: number }, t: number) {
+function _mixColor(a: { r: number; g: number; b: number }, b: { r: number; g: number; b: number }, t: number) {
   return {
     r: a.r + (b.r - a.r) * t,
     g: a.g + (b.g - a.g) * t,
@@ -767,7 +767,7 @@ export function applyModeAndColorManagement(
       let r = image.data[i]
       let g = image.data[i + 1]
       let b = image.data[i + 2]
-      const lum = luminance(r, g, b)
+      const _lum = luminance(r, g, b)
       const mode = modeSettings.mode
       if (mode === "Multichannel") {
         const channels = modeSettings.multichannel?.channels

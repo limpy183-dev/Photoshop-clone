@@ -38,6 +38,28 @@ type PlaceMode = "smart-object" | "pixel"
 
 const ACCEPT_FILES = "image/png,image/jpeg,image/webp,image/gif,image/avif"
 
+type LocalLibraryBundle = {
+  id: string
+  name: string
+  category: string
+  items: string[]
+}
+
+const LOCAL_LIBRARY_SAMPLES: LocalLibraryBundle[] = [
+  {
+    id: "project-brand-kit",
+    name: "Project Brand Kit",
+    category: "Brand",
+    items: ["Primary logo", "Accent palette", "Social templates"],
+  },
+  {
+    id: "editorial-sans",
+    name: "Editorial Sans",
+    category: "Typography",
+    items: ["Display", "Text", "Caption"],
+  },
+]
+
 function formatBytes(bytes?: number) {
   if (!bytes || !Number.isFinite(bytes)) return "-"
   if (bytes < 1024) return `${bytes} B`
@@ -63,6 +85,8 @@ export function LibrariesPanel() {
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [placeMode, setPlaceMode] = React.useState<PlaceMode>("smart-object")
   const [status, setStatus] = React.useState<string>("")
+  const [bundles, setBundles] = React.useState<LocalLibraryBundle[]>([])
+  const [bundleQuery, setBundleQuery] = React.useState("")
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const dragAssetIdRef = React.useRef<string | null>(null)
 
@@ -99,6 +123,30 @@ export function LibrariesPanel() {
   }, [assets, query, groupFilter])
 
   const selected = React.useMemo(() => filtered.find((a) => a.id === selectedId) ?? assets.find((a) => a.id === selectedId) ?? null, [assets, filtered, selectedId])
+  const filteredBundles = React.useMemo(() => {
+    const search = bundleQuery.trim().toLowerCase()
+    if (!search) return bundles
+    return bundles.filter((bundle) =>
+      [bundle.name, bundle.category, ...bundle.items].some((value) => value.toLowerCase().includes(search)),
+    )
+  }, [bundleQuery, bundles])
+
+  const exportLibraryBundle = React.useCallback(() => {
+    if (!bundles.length) return
+    const url = URL.createObjectURL(new Blob([JSON.stringify({ format: "ps-local-library-bundles", bundles }, null, 2)], {
+      type: "application/json",
+    }))
+    try {
+      const link = document.createElement("a")
+      link.href = url
+      link.download = "photoshop-local-library-bundles.json"
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+    } finally {
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    }
+  }, [bundles])
 
   const importFiles = React.useCallback(async (files: FileList | File[]) => {
     const list = Array.from(files)
@@ -215,6 +263,47 @@ export function LibrariesPanel() {
       }}
     >
       <div className="space-y-2 border-b border-[var(--ps-divider)] p-2">
+        <div className="space-y-1.5 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
+          <div className="grid grid-cols-2 gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setBundles(LOCAL_LIBRARY_SAMPLES)}
+              className="h-7 justify-start gap-1 text-[11px]"
+            >
+              <Plus className="h-3 w-3" /> Add Local Library Samples
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={!bundles.length}
+              onClick={exportLibraryBundle}
+              className="h-7 justify-start gap-1 text-[11px]"
+            >
+              <Download className="h-3 w-3" /> Export Library Bundle
+            </Button>
+          </div>
+          <Input
+            value={bundleQuery}
+            onChange={(event) => setBundleQuery(event.target.value)}
+            placeholder="Search local libraries"
+            className="h-7 bg-[var(--ps-panel)] text-[11px]"
+          />
+          {filteredBundles.length ? (
+            <div className="space-y-1">
+              {filteredBundles.map((bundle) => (
+                <div key={bundle.id} className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] px-2 py-1.5">
+                  <div className="font-medium">{bundle.name}</div>
+                  <div className="truncate text-[10px] text-[var(--ps-text-dim)]">
+                    {bundle.category}: {bundle.items.join(", ")}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : bundles.length ? (
+            <div className="text-[10px] text-[var(--ps-text-dim)]">No matching library bundles.</div>
+          ) : null}
+        </div>
         <div className="flex items-center gap-2 text-[10px] text-[var(--ps-text-dim)]">
           <Library className="h-3.5 w-3.5" />
           <span>Local library (stored in your browser)</span>

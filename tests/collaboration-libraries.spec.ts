@@ -9,7 +9,7 @@ async function openCommand(page: Page, query: string) {
 }
 
 test("comments panel supports threaded open and resolved review states", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   await openCommand(page, "Comments Panel")
@@ -30,7 +30,7 @@ test("comments panel supports threaded open and resolved review states", async (
 })
 
 test("libraries panel provides searchable local bundles", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   await openCommand(page, "Libraries Panel")

@@ -358,7 +358,7 @@ export async function runDsl(source: string, api: DslHostApi): Promise<RunDslRes
   }
 
   for (const command of commands) {
-    const [a0, a1, a2] = command.args
+    const [a0, a1, _a2] = command.args
     try {
       switch (command.method) {
         case "report":

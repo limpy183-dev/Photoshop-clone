@@ -7,6 +7,7 @@ import { Marquee } from "@/components/marketing/marquee"
 import { Nav } from "@/components/marketing/nav"
 import { NewsletterCta } from "@/components/marketing/newsletter-cta"
 import { ToolsGrid } from "@/components/marketing/tools-grid"
+import { WorkflowDemos } from "@/components/marketing/workflow-demos"
 import { WorkflowSplit } from "@/components/marketing/workflow-split"
 
 /**
@@ -29,6 +30,7 @@ export default function MarketingPage() {
         <EditorShowcase />
         <ToolsGrid />
         <WorkflowSplit />
+        <WorkflowDemos />
         <Limitations />
         <NewsletterCta />
       </main>

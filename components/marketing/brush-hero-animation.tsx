@@ -101,8 +101,8 @@ export function BrushHeroAnimation() {
     const FADE_RATE = 1.4 // tail fade samples per frame
     const FADE_DELAY = 50 // frames after head starts before tail begins fading
     let frameCount = 0
-    let stars: Star[] = []
-    let starPool: Star[] = [] // object pool
+    const stars: Star[] = []
+    const starPool: Star[] = [] // object pool
 
     function getStar(): Star {
       return starPool.pop() || { x: 0, y: 0, size: 0, alpha: 0, decay: 0, vx: 0, vy: 0, rotation: 0, type: 0 }

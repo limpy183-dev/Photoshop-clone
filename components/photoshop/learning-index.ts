@@ -1,4 +1,5 @@
 import { TOOL_LEARNING_SOURCES, type ToolLearningSource } from "./tool-help"
+import { workflowPackLearningItems } from "./workflow-presets"
 
 export type LearningIndexType = "command" | "doc" | "filter" | "panel" | "tool" | "workflow"
 
@@ -152,7 +153,7 @@ export function buildLearningIndex(sources: LearningIndexSources = {}): Learning
     keywords: [filter.category, "filter"],
     action: { kind: "filter", target: filter.id },
   }))
-  return [...COMMAND_ITEMS, ...DOC_ITEMS, ...WORKFLOW_ITEMS, ...tools, ...panels, ...filters]
+  return [...COMMAND_ITEMS, ...DOC_ITEMS, ...workflowPackLearningItems(), ...WORKFLOW_ITEMS, ...tools, ...panels, ...filters]
 }
 
 export function searchLearningIndex(items: LearningIndexItem[], query: string, options: { limit?: number } = {}) {

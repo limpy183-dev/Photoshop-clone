@@ -82,7 +82,7 @@ export const DEFAULT_SHORTCUTS: Shortcut[] = [
   { id: "tool-hand", keys: "H", action: "Hand Tool", category: "Tools" },
   { id: "tool-rotate-view", keys: "R", action: "Rotate View Tool", category: "Tools" },
   { id: "tool-zoom", keys: "Z", action: "Zoom Tool", category: "Tools" },
-  { id: "tool-transform", keys: "F", action: "Transform Tool", category: "Tools" },
+  { id: "tool-transform", keys: "None", action: "Transform Tool", category: "Tools" },
   { id: "tool-pencil", keys: "None", action: "Pencil Tool", category: "Tools" },
   { id: "tool-slice", keys: "None", action: "Slice Tool", category: "Tools" },
   { id: "tool-slice-select", keys: "None", action: "Slice Select Tool", category: "Tools" },

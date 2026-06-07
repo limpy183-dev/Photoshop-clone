@@ -6,7 +6,14 @@ import { Slider } from "@/components/ui/slider"
 import { Button } from "@/components/ui/button"
 import { compositeLayer } from "./blend-modes"
 import { useEditor } from "./editor-context"
-import { applyPlannedFilterFinal, applyPlannedFilterPreview } from "./filter-preview"
+import {
+  applyPlannedFilterFinal,
+  applyPlannedFilterPreview,
+  buildFilterPreviewQualityModel,
+  getFilterPreviewDisplayModes,
+  planFilterPreviewExecution,
+  type FilterPreviewDisplayMode,
+} from "./filter-preview"
 import { getFilter, type FilterContext, type FilterDef } from "./filters"
 import { applyHighBitFilterToLayer, previewHighBitFilterForLayer } from "./high-bit-document"
 import {
@@ -53,6 +60,7 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
   const previewCanvasesRef = React.useRef<Record<string, HTMLCanvasElement>>({})
   const previewSequenceRef = React.useRef(0)
   const [params, setParams] = React.useState<ParamMap>({})
+  const [previewMode, setPreviewMode] = React.useState<FilterPreviewDisplayMode>("split")
   const [applying, setApplying] = React.useState(false)
   const isAdvancedAdjustment = !!filter && ADVANCED_ADJUSTMENTS.has(filter.id)
   const isBlurGallery = !!filter && isBlurGalleryFilterId(filter.id)
@@ -60,6 +68,19 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
   const smartTarget =
     selectedLayers.length === 1 &&
     (selectedLayers[0].smartObject || selectedLayers[0].kind === "smart-object")
+  const firstPreviewLayer = selectedLayers.find((layer) => typeof layer.canvas?.getContext === "function")
+  const previewPlan = filter && firstPreviewLayer
+    ? planFilterPreviewExecution(filter.id, firstPreviewLayer.canvas.width, firstPreviewLayer.canvas.height, params, {
+        interactive: isBlurGallery && getBlurGalleryControlState(params).previewQuality === "interactive",
+      })
+    : null
+  const previewQualityModel = previewPlan
+    ? buildFilterPreviewQualityModel(previewPlan, {
+        debounceMs: isBlurGallery || isLightingEffects ? 24 : 80,
+        selectedLayerCount: originalsRef.current.length || selectedLayers.length || 1,
+        smartTarget: !!smartTarget,
+      })
+    : null
 
   React.useEffect(() => {
     if (!filter || !activeDoc || selectedLayers.length === 0) return
@@ -206,6 +227,51 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
     return ctx
   }, [filter, params.matchSource, params.mapSource, params.depthSource, params.bumpSource, params.applySource, params.sourceA, params.sourceB, params.mode, documents, activeDoc])
 
+  const drawPreviewThumbnail = React.useCallback(() => {
+    if (!filter || !activeDoc) return
+    const cv = previewRef.current
+    if (!cv) return
+    const max = isAdvancedAdjustment ? 260 : 180
+    const ratio = Math.min(max / activeDoc.width, max / activeDoc.height, 1)
+    const width = Math.max(1, Math.floor(activeDoc.width * ratio))
+    const height = Math.max(1, Math.floor(activeDoc.height * ratio))
+    cv.width = width
+    cv.height = height
+    const ctx = cv.getContext("2d")!
+    const drawComposite = (usePreview: boolean) => {
+      ctx.fillStyle = activeDoc.background
+      ctx.fillRect(0, 0, width, height)
+      for (const l of activeDoc.layers) {
+        if (!l.visible || typeof l.canvas.getContext !== "function") continue
+        const source = usePreview ? previewCanvasesRef.current[l.id] ?? l.canvas : l.canvas
+        ctx.save()
+        ctx.globalAlpha = l.opacity
+        ctx.drawImage(source, 0, 0, width, height)
+        ctx.restore()
+      }
+    }
+
+    ctx.clearRect(0, 0, width, height)
+    if (previewMode === "split") {
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(0, 0, width / 2, height)
+      ctx.clip()
+      drawComposite(false)
+      ctx.restore()
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(width / 2, 0, width / 2, height)
+      ctx.clip()
+      drawComposite(true)
+      ctx.restore()
+      ctx.fillStyle = "rgba(255,255,255,0.82)"
+      ctx.fillRect(Math.floor(width / 2) - 1, 0, 2, height)
+      return
+    }
+    drawComposite(previewMode === "after")
+  }, [activeDoc, filter, isAdvancedAdjustment, previewMode])
+
   React.useEffect(() => {
     if (!filter || !activeDoc) return
     if (originalsRef.current.length === 0) return
@@ -237,6 +303,7 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
         previewCanvasesRef.current[layer.id] = tmp
         tmp.getContext("2d")!.putImageData(result, 0, 0)
         setFilterPreview(layer.id, tmp)
+        drawPreviewThumbnail()
       }
     }
     const id = window.setTimeout(() => void run(), interactiveBlurGallery || isLightingEffects ? 24 : 80)
@@ -244,27 +311,11 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
       controller.abort()
       window.clearTimeout(id)
     }
-  }, [filter, params, context, activeDoc, setFilterPreview, smartTarget, isBlurGallery, isLightingEffects])
+  }, [filter, params, context, activeDoc, setFilterPreview, smartTarget, isBlurGallery, isLightingEffects, drawPreviewThumbnail])
 
   React.useEffect(() => {
-    if (!filter || !activeDoc) return
-    const cv = previewRef.current
-    if (!cv) return
-    const max = isAdvancedAdjustment ? 260 : 180
-    const ratio = Math.min(max / activeDoc.width, max / activeDoc.height, 1)
-    cv.width = Math.max(1, Math.floor(activeDoc.width * ratio))
-    cv.height = Math.max(1, Math.floor(activeDoc.height * ratio))
-    const ctx = cv.getContext("2d")!
-    ctx.fillStyle = activeDoc.background
-    ctx.fillRect(0, 0, cv.width, cv.height)
-    for (const l of activeDoc.layers) {
-      if (!l.visible || typeof l.canvas.getContext !== "function") continue
-      ctx.save()
-      ctx.globalAlpha = l.opacity
-      ctx.drawImage(l.canvas, 0, 0, cv.width, cv.height)
-      ctx.restore()
-    }
-  }, [filter, params, activeDoc, isAdvancedAdjustment])
+    drawPreviewThumbnail()
+  }, [drawPreviewThumbnail, params])
 
   const restoreOriginals = React.useCallback(() => {
     if (!activeDoc) return
@@ -403,9 +454,32 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
           </div>
           <div className="flex flex-col items-center gap-2 min-w-0">
             <div className="text-[11px] text-muted-foreground">Preview</div>
+            <div className="grid w-full grid-cols-3 gap-1" role="group" aria-label="Filter preview mode">
+              {getFilterPreviewDisplayModes().map((mode) => (
+                <button
+                  key={mode.id}
+                  type="button"
+                  onClick={() => setPreviewMode(mode.id)}
+                  className={`h-7 rounded-sm border px-2 text-[10px] ${
+                    previewMode === mode.id
+                      ? "border-[var(--ps-accent)] bg-[var(--ps-accent)] text-white"
+                      : "border-[var(--ps-divider)] bg-[var(--ps-panel-2)] text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)]"
+                  }`}
+                  title={mode.description}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
             <div className="ps-checker rounded-sm border overflow-hidden max-w-[280px] max-h-[280px]">
               <canvas ref={previewRef} className="block max-w-full max-h-[260px] object-contain" />
             </div>
+            {previewQualityModel ? (
+              <div className="w-full rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1.5 text-[10px] leading-snug text-[var(--ps-text-dim)]">
+                <div className="font-medium text-[var(--ps-text)]">{previewQualityModel.executionLabel}</div>
+                <div>{previewQualityModel.detailLabel}</div>
+              </div>
+            ) : null}
           </div>
         </div>
         <DialogFooter>

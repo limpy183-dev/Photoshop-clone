@@ -2,6 +2,8 @@ import { expect, test } from "@playwright/test"
 
 import {
   composeDocumentTile,
+  createTileOnlyCapabilityDashboard,
+  describeTileOnlyExportDecision,
   planTileOnlyDefaultCompositor,
   planTileOnlyEdit,
   planTileOnlyExport,
@@ -238,6 +240,68 @@ test("tile-only raster export writes a tile sequence package with manifest metad
   expect(text).toContain("manifest.json")
   expect(text).toContain("\"tileCount\": 4")
   expect(text).toContain("tiles/0_0.png")
+})
+
+test("tile-only capability dashboard reports safe approximate and blocked operation paths", () => {
+  const dashboard = createTileOnlyCapabilityDashboard({
+    documentWidth: 20000,
+    documentHeight: 12000,
+    tileSize: 1024,
+    explicitTileOnly: true,
+    format: "png",
+    colorMode: "RGB",
+    bitDepth: 8,
+    layers: [
+      { id: "photo", kind: "raster" },
+      { id: "headline", kind: "text" },
+      { id: "folder", kind: "group" },
+    ],
+  })
+
+  expect(dashboard.summary).toContain("240 tiles")
+  expect(dashboard.safeCount).toBeGreaterThan(0)
+  expect(dashboard.approximateCount).toBeGreaterThan(0)
+  expect(dashboard.blockedCount).toBeGreaterThan(0)
+  expect(dashboard.rows.find((row) => row.id === "viewport-compositing")).toMatchObject({
+    status: "blocked",
+    mitigation: expect.stringContaining("unsupported layers"),
+  })
+  expect(dashboard.rows.find((row) => row.id === "vector-text-rasterization")).toMatchObject({
+    status: "approximate",
+  })
+  expect(dashboard.rows.find((row) => row.id === "raster-export")).toMatchObject({
+    status: "blocked",
+    mitigation: expect.stringContaining("unsupported layer"),
+  })
+  expect(dashboard.unflushedPaths.map((path) => path.id)).toContain("history-snapshots")
+})
+
+test("tile-only export decision explains tile sequence versus full-canvas fallback", () => {
+  const tileStream = describeTileOnlyExportDecision(planTileOnlyExport({
+    documentWidth: 20000,
+    documentHeight: 12000,
+    tileSize: 1024,
+    format: "png",
+    scale: 1,
+    layers: [{ id: "photo", kind: "raster" }],
+  }))
+
+  expect(tileStream.mode).toBe("tile-sequence")
+  expect(tileStream.status).toBe("safe")
+  expect(tileStream.detail).toContain("avoids a full-canvas allocation")
+
+  const fallback = describeTileOnlyExportDecision(planTileOnlyExport({
+    documentWidth: 20000,
+    documentHeight: 12000,
+    tileSize: 1024,
+    format: "png",
+    scale: 1,
+    layers: [{ id: "folder", kind: "group" }],
+  }))
+
+  expect(fallback.mode).toBe("full-canvas-fallback")
+  expect(fallback.status).toBe("blocked")
+  expect(fallback.detail).toContain("folder")
 })
 
 test("default compositor switches huge and explicit tile-only documents to viewport tiles", () => {

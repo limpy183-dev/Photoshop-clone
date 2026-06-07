@@ -22,7 +22,7 @@ async function openLowerPanel(page: Page, id: string) {
 }
 
 test("top menu bar switches menus on hover after a menu is open", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   await openTopMenu(page, "File")
@@ -34,7 +34,7 @@ test("top menu bar switches menus on hover after a menu is open", async ({ page 
 })
 
 test("arrow submenu commands expand into a usable flyout", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   await openTopMenu(page, "Edit")
@@ -54,7 +54,7 @@ test("arrow submenu commands expand into a usable flyout", async ({ page }) => {
 })
 
 test("selection commands stay reachable and load selection expands even without saved channels", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   await openTopMenu(page, "Select")
@@ -147,7 +147,7 @@ test("stateful layer and type commands are clickable instead of greyed out", asy
 })
 
 test("file menu close/reopen commands are clickable from the menu bar", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   await openTopMenu(page, "File")
@@ -168,7 +168,7 @@ test("file menu close/reopen commands are clickable from the menu bar", async ({
 })
 
 test("content-aware fill runs from the Edit menu once a selection exists", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
 
   await openTopMenu(page, "Select")

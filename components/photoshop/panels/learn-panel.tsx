@@ -12,17 +12,29 @@ import {
   runLearningIndexItem,
 } from "../learning-index"
 import { LEARNING_PANEL_SOURCES } from "../learning-panel-sources"
+import { WORKFLOW_PACKS } from "../workflow-presets"
 
 interface LearnGuide {
   id: string
   title: string
   category: string
   summary: string
-  relatedPanel: string
+  relatedPanel?: string
+  action?: { label: string; event: string; detail?: unknown }
   steps: string[]
 }
 
+const WORKFLOW_PACK_GUIDES: LearnGuide[] = WORKFLOW_PACKS.map((pack) => ({
+  id: `guide-${pack.id}`,
+  title: pack.shortTitle,
+  category: pack.category,
+  summary: pack.summary,
+  action: { label: "Open workflow", event: "ps-open-workflow-pack", detail: { id: pack.id } },
+  steps: pack.steps.map((step) => step.title),
+}))
+
 const LEARN_GUIDES: LearnGuide[] = [
+  ...WORKFLOW_PACK_GUIDES,
   {
     id: "glyphs-special-characters",
     title: "Insert special characters",
@@ -150,9 +162,15 @@ export function LearnPanel() {
                 size="sm"
                 variant="ghost"
                 className="mt-2 h-6 gap-1 px-2 text-[10px]"
-                onClick={() => dispatchPhotoshopEvent("ps-open-panel", activeGuide.relatedPanel)}
+                onClick={() => {
+                  if (activeGuide.action) {
+                    window.dispatchEvent(new CustomEvent(activeGuide.action.event, { detail: activeGuide.action.detail }))
+                    return
+                  }
+                  if (activeGuide.relatedPanel) dispatchPhotoshopEvent("ps-open-panel", activeGuide.relatedPanel)
+                }}
               >
-                Open {activeGuide.relatedPanel.replace(/-/g, " ")} panel <ChevronRight className="h-3 w-3" />
+                {activeGuide.action?.label ?? `Open ${activeGuide.relatedPanel?.replace(/-/g, " ") ?? "related"} panel`} <ChevronRight className="h-3 w-3" />
               </Button>
             </div>
           </Section>

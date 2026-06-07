@@ -12,6 +12,7 @@ import {
 } from "../browser-diagnostics"
 import { downloadText } from "../document-io"
 import { useEditor } from "../editor-context"
+import { createTileOnlyCapabilityDashboard, type TileOnlyCapabilityDashboard, type TileOnlyCapabilityStatus } from "../tile-only-pipeline"
 import type { PsDocument } from "../types"
 
 function documentSnapshot(doc: PsDocument | null | undefined): BrowserDiagnosticsDocumentSnapshot | null {
@@ -76,6 +77,12 @@ function StatusIcon({ status }: { status: BrowserDiagnosticRow["status"] }) {
   return <span className="h-3 w-3 rounded-full border border-[var(--ps-divider)]" />
 }
 
+function tileStatusClass(status: TileOnlyCapabilityStatus) {
+  if (status === "safe") return "text-emerald-300"
+  if (status === "approximate") return "text-amber-300"
+  return "text-red-300"
+}
+
 function ReportSection({
   title,
   rows,
@@ -96,6 +103,33 @@ function ReportSection({
             <span className={`${statusClass(row.status)} min-w-0 break-words tabular-nums`} title={row.detail ?? row.value}>
               {row.value}
             </span>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function TileOnlyDashboard({ dashboard }: { dashboard: TileOnlyCapabilityDashboard | null }) {
+  if (!dashboard) return null
+  return (
+    <section data-testid="tile-only-dashboard" className="rounded-sm border border-[var(--ps-divider)]">
+      <div className="border-b border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1 text-[10px] font-medium uppercase text-[var(--ps-text-dim)]">
+        Tile-Only Dashboard
+      </div>
+      <div className="grid grid-cols-3 gap-1 border-b border-[var(--ps-divider)] px-2 py-1.5 text-[10px]">
+        <span className="text-emerald-300">{dashboard.safeCount} safe</span>
+        <span className="text-amber-300">{dashboard.approximateCount} approximate</span>
+        <span className="text-red-300">{dashboard.blockedCount} blocked</span>
+      </div>
+      <div className="px-2 py-1 text-[10px] text-[var(--ps-text-muted)]">
+        {dashboard.tileColumns} x {dashboard.tileRows} tiles, {dashboard.tileSize}px each
+      </div>
+      <div className="divide-y divide-[var(--ps-divider)]">
+        {dashboard.rows.slice(0, 8).map((row) => (
+          <div key={row.id} className="grid grid-cols-[minmax(0,1fr)_76px] gap-2 px-2 py-1 text-[10px]" title={`${row.detail}${row.mitigation ? ` ${row.mitigation}` : ""}`}>
+            <span className="min-w-0 truncate text-[var(--ps-text-dim)]">{row.label}</span>
+            <span className={`${tileStatusClass(row.status)} text-right capitalize`}>{row.status}</span>
           </div>
         ))}
       </div>
@@ -125,6 +159,24 @@ export function BrowserDiagnosticsPanel() {
   React.useEffect(() => {
     refresh()
   }, [refresh])
+
+  const tileDashboard = React.useMemo(() => {
+    if (!activeDoc) return null
+    return createTileOnlyCapabilityDashboard({
+      documentWidth: activeDoc.width,
+      documentHeight: activeDoc.height,
+      tileSize: activeDoc.metadata?.largeDocumentTileView?.tileSize ?? activeDoc.metadata?.largeDocumentTileEdit?.tileSize ?? 512,
+      explicitTileOnly: !!activeDoc.metadata?.largeDocumentTileView || !!activeDoc.metadata?.largeDocumentTileEdit,
+      format: "png",
+      colorMode: activeDoc.colorMode,
+      bitDepth: activeDoc.bitDepth,
+      layers: activeDoc.layers.map((layer) => ({
+        id: layer.id,
+        kind: layer.kind,
+        visible: layer.visible,
+      })),
+    })
+  }, [activeDoc])
 
   const reportText = React.useMemo(() => report ? formatBrowserDiagnosticsReport(report) : "", [report])
 
@@ -193,6 +245,7 @@ export function BrowserDiagnosticsPanel() {
           <div className={report.fallbacks.length ? "rounded-sm border border-amber-400/40 bg-amber-400/10 px-2 py-1.5 text-[10px] text-amber-200" : "rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1.5 text-[10px] text-[var(--ps-text-dim)]"}>
             {report.summary}
           </div>
+          <TileOnlyDashboard dashboard={tileDashboard} />
           <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
             {report.sections.map((section) => (
               <ReportSection key={section.id} title={section.title} rows={section.rows} />

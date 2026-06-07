@@ -103,6 +103,7 @@ import {
 } from "./preferences-engine"
 import { buildRulerTickMarks } from "./ruler-calibration"
 import { paintCanvasCursorOverlay, resolveCanvasCursorState } from "./cursor-overlay"
+import { buildRetouchingFeedbackModel } from "./retouch-feedback"
 import { buildEdgeAwareQuickSelectionMaskData } from "./algorithmic-operations"
 import { getLayerHighBitImage, highBitImageToSelectionSource, renderDocumentHighBitPreviewCanvas, syncHighBitLayerFromCanvasChange } from "./high-bit-document"
 
@@ -194,6 +195,8 @@ import {
 import { perspectiveCropImageData } from "./photo-workflow-engine"
 import { hexToRgba } from "./color-utils"
 import { ColorPickerHud, hexToHsv, hsvToHex, pickFromHud, type ColorPickerHudHsv } from "./color-picker-hud"
+import { MagneticLassoIndicator, GridOverlay, PixelGridOverlay, GuidesOverlay, RetouchFeedbackOverlay } from "./canvas-overlays"
+import { SelectionTransformOverlay } from "./selection-transform-overlay"
 import { applyThreeDMaterialDrop } from "./three-d-video-engine"
 import type { BlendMode, CustomShapeId, GradientStop, Layer, PathHandleMode, PathPoint, PathProps, PsDocument, Selection, ShapeProps } from "./types"
 
@@ -219,6 +222,24 @@ interface MouseMoveDetail {
   y: number
   inside: boolean
 }
+
+const RETOUCH_FEEDBACK_TOOLS = new Set([
+  "brush",
+  "pencil",
+  "mixer-brush",
+  "clone-stamp",
+  "healing-brush",
+  "spot-healing",
+  "patch-tool",
+  "smudge",
+  "blur",
+  "sharpen",
+  "dodge",
+  "burn",
+  "sponge",
+  "history-brush",
+  "art-history-brush",
+])
 
 interface CanvasRuntimePreferences {
   cursorStyle: CursorStylePreference
@@ -425,6 +446,8 @@ export function CanvasView() {
 
   const compositeRef = React.useRef<HTMLCanvasElement>(null)
   const overlayRef = React.useRef<HTMLCanvasElement>(null)
+  const rerenderVectorLayerRef = React.useRef<(layer: Layer) => void>(() => {})
+  const drawPathSelectionPreviewRef = React.useRef<(layer: Layer) => void>(() => {})
   const containerRef = React.useRef<HTMLDivElement>(null)
   const cursorRef = React.useRef<HTMLDivElement>(null)
   const cursorCanvasRef = React.useRef<HTMLCanvasElement>(null)
@@ -437,11 +460,13 @@ export function CanvasView() {
     docId?: string
   } | null>(null)
   const blurGalleryDragRef = React.useRef<BlurGalleryDrag | null>(null)
+  const drawBlurGalleryOverlayRef = React.useRef<(state?: typeof blurGalleryOverlay) => void>(() => {})
   const [lightingEffectsOverlay, setLightingEffectsOverlay] = React.useState<{
     params: LightingEffectsParams
     docId?: string
   } | null>(null)
   const lightingEffectsDragRef = React.useRef<LightingEffectsDrag | null>(null)
+  const drawLightingEffectsOverlayRef = React.useRef<(state?: typeof lightingEffectsOverlay) => void>(() => {})
   const layoutZoomRef = React.useRef(activeDoc?.zoom ?? 1)
   const visualZoomRef = React.useRef(activeDoc?.zoom ?? 1)
   const pendingZoomRef = React.useRef<number | null>(null)
@@ -2785,6 +2810,7 @@ export function CanvasView() {
     if (!ov || !activeDoc) return
     const ctx = ov.getContext("2d")!
     ctx.clearRect(0, 0, ov.width, ov.height)
+    const feedback = buildRetouchingFeedbackModel({ tool, brush, cloneSource, cursor: center })
     ctx.save()
     ctx.strokeStyle = "#fff"
     ctx.lineWidth = 1
@@ -2792,6 +2818,36 @@ export function CanvasView() {
     ctx.beginPath()
     ctx.arc(center.x, center.y, Math.max(2, radius), 0, Math.PI * 2)
     ctx.stroke()
+    if (feedback.brushEdge.hardnessRadius > 1 && feedback.brushEdge.hardnessRadius < feedback.brushEdge.radius) {
+      ctx.setLineDash([])
+      ctx.strokeStyle = "rgba(255,255,255,0.45)"
+      ctx.beginPath()
+      ctx.arc(center.x, center.y, feedback.brushEdge.hardnessRadius, 0, Math.PI * 2)
+      ctx.stroke()
+    }
+    if (feedback.brushEdge.scatterRadius > feedback.brushEdge.radius) {
+      ctx.setLineDash([2, 6])
+      ctx.strokeStyle = "rgba(56,189,248,0.7)"
+      ctx.beginPath()
+      ctx.arc(center.x, center.y, feedback.brushEdge.scatterRadius, 0, Math.PI * 2)
+      ctx.stroke()
+    }
+    if (feedback.previewGhost.visible && feedback.previewGhost.sourcePoint) {
+      const source = feedback.previewGhost.sourcePoint
+      ctx.setLineDash([5, 4])
+      ctx.strokeStyle = `rgba(56,189,248,${feedback.previewGhost.opacity})`
+      ctx.beginPath()
+      ctx.moveTo(source.x, source.y)
+      ctx.lineTo(center.x, center.y)
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.strokeStyle = "rgba(56,189,248,0.95)"
+      ctx.fillStyle = "rgba(56,189,248,0.16)"
+      ctx.beginPath()
+      ctx.arc(source.x, source.y, Math.max(3, feedback.brushEdge.radius * 0.35), 0, Math.PI * 2)
+      ctx.fill()
+      ctx.stroke()
+    }
     ctx.restore()
   }
 
@@ -3004,7 +3060,7 @@ export function CanvasView() {
   }, [])
 
   React.useEffect(() => {
-    drawBlurGalleryOverlay(blurGalleryOverlay)
+    drawBlurGalleryOverlayRef.current(blurGalleryOverlay)
   }, [blurGalleryOverlay, activeDoc?.id, activeDoc?.width, activeDoc?.height])
 
   React.useEffect(() => {
@@ -3030,7 +3086,7 @@ export function CanvasView() {
   }, [blurGalleryOverlay])
 
   React.useEffect(() => {
-    if (!blurGalleryOverlay) drawLightingEffectsOverlay(lightingEffectsOverlay)
+    if (!blurGalleryOverlay) drawLightingEffectsOverlayRef.current(lightingEffectsOverlay)
   }, [lightingEffectsOverlay, blurGalleryOverlay, activeDoc?.id, activeDoc?.width, activeDoc?.height])
 
   /**
@@ -3459,6 +3515,9 @@ export function CanvasView() {
     ctx.restore()
   }
 
+  drawBlurGalleryOverlayRef.current = drawBlurGalleryOverlay
+  drawLightingEffectsOverlayRef.current = drawLightingEffectsOverlay
+
   function drawMagneticLassoPreview(
     ctx: CanvasRenderingContext2D,
     points: { x: number; y: number }[],
@@ -3854,7 +3913,7 @@ export function CanvasView() {
     sliceDraftId?: string
   }>({ type: null })
   const brushResizeRef = React.useRef<{ startClientX: number; startSize: number } | null>(null)
-  const [directAnchorSelection, setDirectAnchorSelectionState] = React.useState<{ layerId: string; anchors: PathAnchorRef[] } | null>(null)
+  const [, setDirectAnchorSelectionState] = React.useState<{ layerId: string; anchors: PathAnchorRef[] } | null>(null)
   const directAnchorSelectionRef = React.useRef<{ layerId: string; anchors: PathAnchorRef[] } | null>(null)
 
   const setDirectAnchorSelection = React.useCallback((selection: { layerId: string; anchors: PathAnchorRef[] } | null) => {
@@ -5629,7 +5688,7 @@ export function CanvasView() {
             e.preventDefault()
             const anchors = selectAllPathAnchors(path)
             setDirectAnchorSelection(anchors.length ? { layerId: activeLayer.id, anchors } : null)
-            drawPathSelectionPreview(activeLayer)
+            drawPathSelectionPreviewRef.current(activeLayer)
           }
         } else if ((e.key === "Delete" || e.key === "Backspace") && selected.length) {
           e.preventDefault()
@@ -5644,13 +5703,13 @@ export function CanvasView() {
             dispatch({ type: "set-layer-shape", id: activeLayer.id, shape: activeLayer.shape })
           }
           setDirectAnchorSelection(null)
-          rerenderVectorLayer(activeLayer)
-          drawPathSelectionPreview(activeLayer)
+          rerenderVectorLayerRef.current(activeLayer)
+          drawPathSelectionPreviewRef.current(activeLayer)
           requestRender()
           commit("Delete Path Anchors", [activeLayer.id])
         } else if (e.key === "Escape" && selected.length) {
           setDirectAnchorSelection(null)
-          drawPathSelectionPreview(activeLayer)
+          drawPathSelectionPreviewRef.current(activeLayer)
         }
       }
       // Free Transform
@@ -5711,11 +5770,36 @@ export function CanvasView() {
   React.useEffect(() => {
     colorHudRef.current = colorHud
   }, [colorHud])
+  // External activation: a CustomEvent path so touch UI, the command palette,
+  // or scripts can open the HUD at an arbitrary screen position. Pointer
+  // capture is skipped — the HUD then commits on the next pointer up anywhere.
+  React.useEffect(() => {
+    function open(e: Event) {
+      const detail = (e as CustomEvent<{ screenX?: number; screenY?: number }>).detail ?? {}
+      const cx = typeof detail.screenX === "number"
+        ? detail.screenX
+        : Math.round(window.innerWidth / 2)
+      const cy = typeof detail.screenY === "number"
+        ? detail.screenY
+        : Math.round(window.innerHeight / 2)
+      setColorHud({
+        screenX: cx,
+        screenY: cy,
+        hsv: hexToHsv(foreground),
+        pointerId: -1,
+      })
+    }
+    window.addEventListener("ps-open-color-picker-hud", open)
+    return () => window.removeEventListener("ps-open-color-picker-hud", open)
+  }, [foreground])
   React.useEffect(() => {
     if (!colorHud) return
     function move(e: PointerEvent) {
       const hud = colorHudRef.current
-      if (!hud || e.pointerId !== hud.pointerId) return
+      if (!hud) return
+      // pointerId -1 means the HUD was opened programmatically (no pointer
+      // capture). Any pointer movement updates it; a click commits.
+      if (hud.pointerId !== -1 && e.pointerId !== hud.pointerId) return
       const result = pickFromHud(hud, e.clientX, e.clientY)
       if (result.changed) {
         setColorHud((prev) => (prev ? { ...prev, hsv: result.hsv } : prev))
@@ -5723,7 +5807,8 @@ export function CanvasView() {
     }
     function commitColor(e: PointerEvent) {
       const hud = colorHudRef.current
-      if (!hud || e.pointerId !== hud.pointerId) return
+      if (!hud) return
+      if (hud.pointerId !== -1 && e.pointerId !== hud.pointerId) return
       const hex = hsvToHex(hud.hsv.h, hud.hsv.s, hud.hsv.v)
       dispatch({ type: "set-foreground", color: hex })
       setColorHud(null)
@@ -6552,6 +6637,9 @@ export function CanvasView() {
     }
   }
 
+  rerenderVectorLayerRef.current = rerenderVectorLayer
+  drawPathSelectionPreviewRef.current = drawPathSelectionPreview
+
   function drawSliceSelectionPreview(slice: { x: number; y: number; w: number; h: number; name: string }) {
     const ov = overlayRef.current
     if (!ov) return
@@ -7030,6 +7118,15 @@ export function CanvasView() {
               frequency={selectionOptions.magneticFrequency ?? 57}
             />
           ) : null}
+          {RETOUCH_FEEDBACK_TOOLS.has(tool) ? (
+            <RetouchFeedbackOverlay
+              tool={tool}
+              model={buildRetouchingFeedbackModel({ tool, brush, cloneSource })}
+              brushSize={brush.size}
+              opacity={brush.opacity}
+              flow={brush.flow}
+            />
+          ) : null}
           {activeDoc.selection.bounds && activeDoc.selection.mask ? (
             <MaskSelectionOverlay
               mask={activeDoc.selection.mask}
@@ -7134,164 +7231,6 @@ export function CanvasView() {
 }
 
 /* ============================== overlays ============================== */
-
-function MagneticLassoIndicator({ width, frequency }: { width: number; frequency: number }) {
-  return (
-    <div
-      data-testid="magnetic-lasso-indicator"
-      className="pointer-events-none absolute left-2 top-2 z-30 rounded-sm border border-cyan-300/50 bg-[rgba(8,13,18,0.82)] px-2 py-1 text-[10px] text-cyan-100 shadow-[0_6px_18px_rgba(0,0,0,0.35)]"
-    >
-      Width {Math.round(width)} px | Frequency {Math.round(frequency)}
-    </div>
-  )
-}
-
-function GridOverlay({
-  docW,
-  docH,
-  size,
-  color,
-  subdivisions,
-  opacity,
-}: {
-  docW: number
-  docH: number
-  size: number
-  color: string
-  subdivisions: number
-  opacity: number
-}) {
-  const ref = React.useRef<HTMLCanvasElement>(null)
-  React.useEffect(() => {
-    const cv = ref.current
-    if (!cv) return
-    cv.width = docW
-    cv.height = docH
-    const ctx = cv.getContext("2d")!
-    ctx.clearRect(0, 0, docW, docH)
-    const sub = Math.max(1, Math.round(subdivisions))
-    const subStep = size / sub
-    if (sub > 1 && subStep >= 2) {
-      ctx.strokeStyle = hexToRgba(color, opacity * 0.38)
-      ctx.lineWidth = 1
-      for (let x = subStep; x < docW; x += subStep) {
-        if (Math.abs(x / size - Math.round(x / size)) < 0.001) continue
-        ctx.beginPath()
-        ctx.moveTo(x + 0.5, 0)
-        ctx.lineTo(x + 0.5, docH)
-        ctx.stroke()
-      }
-      for (let y = subStep; y < docH; y += subStep) {
-        if (Math.abs(y / size - Math.round(y / size)) < 0.001) continue
-        ctx.beginPath()
-        ctx.moveTo(0, y + 0.5)
-        ctx.lineTo(docW, y + 0.5)
-        ctx.stroke()
-      }
-    }
-    ctx.strokeStyle = hexToRgba(color, opacity)
-    ctx.lineWidth = 1
-    for (let x = size; x < docW; x += size) {
-      ctx.beginPath()
-      ctx.moveTo(x + 0.5, 0)
-      ctx.lineTo(x + 0.5, docH)
-      ctx.stroke()
-    }
-    for (let y = size; y < docH; y += size) {
-      ctx.beginPath()
-      ctx.moveTo(0, y + 0.5)
-      ctx.lineTo(docW, y + 0.5)
-      ctx.stroke()
-    }
-  }, [docW, docH, size, color, subdivisions, opacity])
-  return <canvas ref={ref} className="absolute inset-0 w-full h-full pointer-events-none" />
-}
-
-function PixelGridOverlay({ zoom }: { zoom: number }) {
-  const opacity = Math.min(0.45, Math.max(0.16, (zoom - 5) / 18))
-  return (
-    <div
-      className="absolute inset-0 pointer-events-none"
-      style={{
-        backgroundImage: `linear-gradient(rgba(255,255,255,${opacity}) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,${opacity}) 1px, transparent 1px)`,
-        backgroundSize: `${zoom}px ${zoom}px`,
-        mixBlendMode: "difference",
-      }}
-    />
-  )
-}
-
-function GuidesOverlay({
-  guides,
-  docW,
-  docH,
-  onMove,
-  onRemove,
-}: {
-  guides: import("./types").Guide[]
-  docW: number
-  docH: number
-  onMove: (id: string, pos: number) => void
-  onRemove: (id: string) => void
-}) {
-  return (
-    <div className="absolute inset-0 pointer-events-none">
-      {guides.filter((guide) => guide.visible !== false).map((g) => (
-        <div
-          key={g.id}
-          className={`absolute pointer-events-auto ${g.locked ? "cursor-default" : "cursor-move"}`}
-          title={g.name ?? (g.locked ? "Locked guide" : "Guide")}
-          style={
-            g.orientation === "horizontal"
-              ? {
-                left: 0,
-                right: 0,
-                top: `${(g.position / docH) * 100}%`,
-                height: 4,
-                marginTop: -2,
-                background: "transparent",
-                borderTop: `1px solid ${g.color ?? "#06b6d4"}`,
-              }
-              : {
-                top: 0,
-                bottom: 0,
-                left: `${(g.position / docW) * 100}%`,
-                width: 4,
-                marginLeft: -2,
-                background: "transparent",
-                borderLeft: `1px solid ${g.color ?? "#06b6d4"}`,
-              }
-          }
-          onDoubleClick={() => {
-            if (!g.locked) onRemove(g.id)
-          }}
-          onPointerDown={(e) => {
-            e.stopPropagation()
-            if (g.locked) return
-            const target = e.currentTarget
-            target.setPointerCapture(e.pointerId)
-            const move = (ev: PointerEvent) => {
-              const rect = (target.parentElement as HTMLElement).getBoundingClientRect()
-              if (g.orientation === "horizontal") {
-                const y = ((ev.clientY - rect.top) / rect.height) * docH
-                onMove(g.id, Math.max(0, Math.min(docH, y)))
-              } else {
-                const x = ((ev.clientX - rect.left) / rect.width) * docW
-                onMove(g.id, Math.max(0, Math.min(docW, x)))
-              }
-            }
-            const up = () => {
-              window.removeEventListener("pointermove", move)
-              window.removeEventListener("pointerup", up)
-            }
-            window.addEventListener("pointermove", move)
-            window.addEventListener("pointerup", up)
-          }}
-        />
-      ))}
-    </div>
-  )
-}
 
 function SmartGuidesOverlay({
   layers,
@@ -7596,374 +7535,6 @@ function SelectionOverlay({
           shape === "ellipse" ? "rounded-[100%]" : "",
         )}
       />
-    </div>
-  )
-}
-
-type SelectionTransformHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "rotate" | "move"
-
-interface SelectionTransformState {
-  scaleX: number
-  scaleY: number
-  rotationDeg: number
-  translateX: number
-  translateY: number
-}
-
-const DEFAULT_SELECTION_TRANSFORM: SelectionTransformState = {
-  scaleX: 1,
-  scaleY: 1,
-  rotationDeg: 0,
-  translateX: 0,
-  translateY: 0,
-}
-
-function SelectionTransformOverlay({
-  bounds,
-  docW,
-  docH,
-  zoom,
-  onCommit,
-  onCancel,
-}: {
-  bounds: { x: number; y: number; w: number; h: number }
-  docW: number
-  docH: number
-  zoom: number
-  onCommit: (t: SelectionTransformState) => void
-  onCancel: () => void
-}) {
-  const [state, setState] = React.useState<SelectionTransformState>(DEFAULT_SELECTION_TRANSFORM)
-  const stateRef = React.useRef(state)
-  React.useEffect(() => { stateRef.current = state }, [state])
-  const rootRef = React.useRef<HTMLDivElement | null>(null)
-  const dragRef = React.useRef<{
-    handle: SelectionTransformHandle
-    startPointer: { x: number; y: number }
-    startState: SelectionTransformState
-    shift: boolean
-  } | null>(null)
-
-  const cx = bounds.x + bounds.w / 2
-  const cy = bounds.y + bounds.h / 2
-  const docToOverlay = React.useCallback((p: { x: number; y: number }) => ({
-    x: (p.x / docW) * 100,
-    y: (p.y / docH) * 100,
-  }), [docW, docH])
-
-  const transformCorner = React.useCallback((px: number, py: number, t: SelectionTransformState) => {
-    const sx = (px - cx) * t.scaleX
-    const sy = (py - cy) * t.scaleY
-    const rad = (t.rotationDeg * Math.PI) / 180
-    return {
-      x: cx + t.translateX + sx * Math.cos(rad) - sy * Math.sin(rad),
-      y: cy + t.translateY + sx * Math.sin(rad) + sy * Math.cos(rad),
-    }
-  }, [cx, cy])
-
-  const corners = React.useMemo(() => ({
-    nw: transformCorner(bounds.x, bounds.y, state),
-    ne: transformCorner(bounds.x + bounds.w, bounds.y, state),
-    se: transformCorner(bounds.x + bounds.w, bounds.y + bounds.h, state),
-    sw: transformCorner(bounds.x, bounds.y + bounds.h, state),
-  }), [bounds, state, transformCorner])
-
-  const mid = (a: { x: number; y: number }, b: { x: number; y: number }) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })
-  const top = mid(corners.nw, corners.ne)
-  const right = mid(corners.ne, corners.se)
-  const bot = mid(corners.se, corners.sw)
-  const left = mid(corners.sw, corners.nw)
-  const rotRad = (state.rotationDeg * Math.PI) / 180
-  const rotateHandle = {
-    x: top.x + 0 * Math.cos(rotRad) - (-24 / Math.max(0.01, zoom)) * Math.sin(rotRad),
-    y: top.y + 0 * Math.sin(rotRad) + (-24 / Math.max(0.01, zoom)) * Math.cos(rotRad),
-  }
-
-  const overlayPoints = {
-    nw: docToOverlay(corners.nw),
-    n: docToOverlay(top),
-    ne: docToOverlay(corners.ne),
-    e: docToOverlay(right),
-    se: docToOverlay(corners.se),
-    s: docToOverlay(bot),
-    sw: docToOverlay(corners.sw),
-    w: docToOverlay(left),
-    rotate: docToOverlay(rotateHandle),
-  }
-
-  function localToDoc(e: PointerEvent | React.PointerEvent): { x: number; y: number } | null {
-    const root = rootRef.current
-    if (!root) return null
-    const rect = root.getBoundingClientRect()
-    return {
-      x: ((e.clientX - rect.left) / Math.max(1, rect.width)) * docW,
-      y: ((e.clientY - rect.top) / Math.max(1, rect.height)) * docH,
-    }
-  }
-
-  function onPointerDownHandle(e: React.PointerEvent, handle: SelectionTransformHandle) {
-    e.stopPropagation()
-    e.preventDefault()
-    const p = localToDoc(e)
-    if (!p) return
-    ;(e.target as Element).setPointerCapture?.(e.pointerId)
-    dragRef.current = {
-      handle,
-      startPointer: p,
-      startState: { ...stateRef.current },
-      shift: e.shiftKey,
-    }
-  }
-
-  function onPointerMoveHandle(e: React.PointerEvent) {
-    const drag = dragRef.current
-    if (!drag) return
-    const p = localToDoc(e)
-    if (!p) return
-    const dx = p.x - drag.startPointer.x
-    const dy = p.y - drag.startPointer.y
-    const shift = e.shiftKey
-    const start = drag.startState
-    if (drag.handle === "move") {
-      setState({ ...start, translateX: start.translateX + dx, translateY: start.translateY + dy })
-      return
-    }
-    if (drag.handle === "rotate") {
-      const a0 = Math.atan2(drag.startPointer.y - (cy + start.translateY), drag.startPointer.x - (cx + start.translateX))
-      const a1 = Math.atan2(p.y - (cy + start.translateY), p.x - (cx + start.translateX))
-      let deg = ((a1 - a0) * 180) / Math.PI + start.rotationDeg
-      if (shift) deg = Math.round(deg / 15) * 15
-      setState({ ...start, rotationDeg: deg })
-      return
-    }
-    const rad = (start.rotationDeg * Math.PI) / 180
-    const cos = Math.cos(rad)
-    const sin = Math.sin(rad)
-    const localDx = dx * cos + dy * sin
-    const localDy = -dx * sin + dy * cos
-    const halfW = bounds.w / 2 || 1
-    const halfH = bounds.h / 2 || 1
-    let scaleX = start.scaleX
-    let scaleY = start.scaleY
-    let signX = 1
-    let signY = 1
-    if (drag.handle.includes("e")) signX = 1
-    if (drag.handle.includes("w")) signX = -1
-    if (drag.handle.includes("s")) signY = 1
-    if (drag.handle.includes("n")) signY = -1
-    if (drag.handle.includes("e") || drag.handle.includes("w")) {
-      scaleX = start.scaleX + (signX * localDx) / halfW
-    }
-    if (drag.handle.includes("n") || drag.handle.includes("s")) {
-      scaleY = start.scaleY + (signY * localDy) / halfH
-    }
-    if (drag.handle === "e" || drag.handle === "w") scaleY = start.scaleY
-    if (drag.handle === "n" || drag.handle === "s") scaleX = start.scaleX
-    if (shift) {
-      const sxAbs = Math.abs(scaleX)
-      const syAbs = Math.abs(scaleY)
-      if (drag.handle === "nw" || drag.handle === "ne" || drag.handle === "se" || drag.handle === "sw") {
-        const r = Math.max(sxAbs, syAbs)
-        scaleX = Math.sign(scaleX || 1) * r
-        scaleY = Math.sign(scaleY || 1) * r
-      }
-    }
-    if (Math.abs(scaleX) < 0.01) scaleX = 0.01 * Math.sign(scaleX || 1)
-    if (Math.abs(scaleY) < 0.01) scaleY = 0.01 * Math.sign(scaleY || 1)
-    setState({ ...start, scaleX, scaleY })
-  }
-
-  function onPointerUpHandle(e: React.PointerEvent) {
-    if (!dragRef.current) return
-    ;(e.target as Element).releasePointerCapture?.(e.pointerId)
-    dragRef.current = null
-  }
-
-  React.useEffect(() => {
-    function keyHandler(e: KeyboardEvent) {
-      if (e.key === "Enter") {
-        e.preventDefault()
-        onCommit(stateRef.current)
-      } else if (e.key === "Escape") {
-        e.preventDefault()
-        onCancel()
-      }
-    }
-    window.addEventListener("keydown", keyHandler)
-    return () => window.removeEventListener("keydown", keyHandler)
-  }, [onCommit, onCancel])
-
-  const handleStyle = (p: { x: number; y: number }, cursor: string): React.CSSProperties => ({
-    position: "absolute",
-    left: `${p.x}%`,
-    top: `${p.y}%`,
-    width: 10,
-    height: 10,
-    transform: "translate(-50%, -50%)",
-    background: "white",
-    border: "1px solid #0a84ff",
-    cursor,
-    pointerEvents: "auto",
-  })
-
-  const polyPoints = `${overlayPoints.nw.x},${overlayPoints.nw.y} ${overlayPoints.ne.x},${overlayPoints.ne.y} ${overlayPoints.se.x},${overlayPoints.se.y} ${overlayPoints.sw.x},${overlayPoints.sw.y}`
-
-  return (
-    <div
-      ref={rootRef}
-      className="absolute inset-0"
-      style={{ pointerEvents: "none", zIndex: 20 }}
-      data-testid="selection-transform-overlay"
-    >
-      <svg
-        className="absolute inset-0"
-        viewBox="0 0 100 100"
-        preserveAspectRatio="none"
-        style={{ width: "100%", height: "100%", overflow: "visible", pointerEvents: "none" }}
-      >
-        <polygon
-          points={polyPoints}
-          fill="rgba(10,132,255,0.06)"
-          stroke="#0a84ff"
-          strokeWidth={0.18}
-          vectorEffect="non-scaling-stroke"
-          strokeDasharray="2 2"
-        />
-        <line
-          x1={overlayPoints.n.x}
-          y1={overlayPoints.n.y}
-          x2={overlayPoints.rotate.x}
-          y2={overlayPoints.rotate.y}
-          stroke="#0a84ff"
-          strokeWidth={0.18}
-          vectorEffect="non-scaling-stroke"
-        />
-      </svg>
-      <div
-        style={{
-          position: "absolute",
-          left: `${overlayPoints.nw.x}%`,
-          top: `${overlayPoints.nw.y}%`,
-          width: 0,
-          height: 0,
-          pointerEvents: "auto",
-        }}
-        onPointerDown={(e) => onPointerDownHandle(e, "move")}
-        onPointerMove={onPointerMoveHandle}
-        onPointerUp={onPointerUpHandle}
-      >
-        <div
-          style={{
-            position: "absolute",
-            left: 0,
-            top: 0,
-            width: `${Math.abs(overlayPoints.se.x - overlayPoints.nw.x)}vw`,
-            height: `${Math.abs(overlayPoints.se.y - overlayPoints.nw.y)}vh`,
-            pointerEvents: "none",
-          }}
-        />
-      </div>
-      <div
-        style={handleStyle(overlayPoints.nw, "nwse-resize")}
-        onPointerDown={(e) => onPointerDownHandle(e, "nw")}
-        onPointerMove={onPointerMoveHandle}
-        onPointerUp={onPointerUpHandle}
-        data-testid="selection-transform-handle-nw"
-      />
-      <div
-        style={handleStyle(overlayPoints.n, "ns-resize")}
-        onPointerDown={(e) => onPointerDownHandle(e, "n")}
-        onPointerMove={onPointerMoveHandle}
-        onPointerUp={onPointerUpHandle}
-        data-testid="selection-transform-handle-n"
-      />
-      <div
-        style={handleStyle(overlayPoints.ne, "nesw-resize")}
-        onPointerDown={(e) => onPointerDownHandle(e, "ne")}
-        onPointerMove={onPointerMoveHandle}
-        onPointerUp={onPointerUpHandle}
-        data-testid="selection-transform-handle-ne"
-      />
-      <div
-        style={handleStyle(overlayPoints.e, "ew-resize")}
-        onPointerDown={(e) => onPointerDownHandle(e, "e")}
-        onPointerMove={onPointerMoveHandle}
-        onPointerUp={onPointerUpHandle}
-        data-testid="selection-transform-handle-e"
-      />
-      <div
-        style={handleStyle(overlayPoints.se, "nwse-resize")}
-        onPointerDown={(e) => onPointerDownHandle(e, "se")}
-        onPointerMove={onPointerMoveHandle}
-        onPointerUp={onPointerUpHandle}
-        data-testid="selection-transform-handle-se"
-      />
-      <div
-        style={handleStyle(overlayPoints.s, "ns-resize")}
-        onPointerDown={(e) => onPointerDownHandle(e, "s")}
-        onPointerMove={onPointerMoveHandle}
-        onPointerUp={onPointerUpHandle}
-        data-testid="selection-transform-handle-s"
-      />
-      <div
-        style={handleStyle(overlayPoints.sw, "nesw-resize")}
-        onPointerDown={(e) => onPointerDownHandle(e, "sw")}
-        onPointerMove={onPointerMoveHandle}
-        onPointerUp={onPointerUpHandle}
-        data-testid="selection-transform-handle-sw"
-      />
-      <div
-        style={handleStyle(overlayPoints.w, "ew-resize")}
-        onPointerDown={(e) => onPointerDownHandle(e, "w")}
-        onPointerMove={onPointerMoveHandle}
-        onPointerUp={onPointerUpHandle}
-        data-testid="selection-transform-handle-w"
-      />
-      <div
-        style={{ ...handleStyle(overlayPoints.rotate, "grab"), borderRadius: "50%" }}
-        onPointerDown={(e) => onPointerDownHandle(e, "rotate")}
-        onPointerMove={onPointerMoveHandle}
-        onPointerUp={onPointerUpHandle}
-        data-testid="selection-transform-handle-rotate"
-      />
-      <div
-        style={{
-          position: "absolute",
-          left: `${overlayPoints.s.x}%`,
-          top: `${overlayPoints.s.y}%`,
-          transform: "translate(-50%, 14px)",
-          background: "rgba(0,0,0,0.78)",
-          color: "white",
-          padding: "4px 8px",
-          fontSize: 11,
-          borderRadius: 4,
-          display: "flex",
-          gap: 6,
-          pointerEvents: "auto",
-          whiteSpace: "nowrap",
-          zIndex: 21,
-        }}
-      >
-        <span>
-          {Math.round(state.scaleX * 100)}% × {Math.round(state.scaleY * 100)}% · {Math.round(state.rotationDeg)}°
-        </span>
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); onCommit(stateRef.current) }}
-          style={{ background: "#0a84ff", color: "white", padding: "1px 8px", borderRadius: 3 }}
-          data-testid="selection-transform-commit"
-        >
-          OK
-        </button>
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); onCancel() }}
-          style={{ background: "transparent", color: "white", padding: "1px 8px", borderRadius: 3, border: "1px solid rgba(255,255,255,0.4)" }}
-          data-testid="selection-transform-cancel"
-        >
-          Cancel
-        </button>
-      </div>
     </div>
   )
 }

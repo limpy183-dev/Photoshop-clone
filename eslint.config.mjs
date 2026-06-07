@@ -35,11 +35,14 @@ export default tseslint.config(
   {
     ignores: [
       ".next/**",
+      ".superpowers/**",
+      ".tocodex/**",
       "artifacts/**",
       "gsap-public/**",
       "gsap-skills-main/**",
       "node_modules/**",
       "test-results/**",
+      "tocodex-docs/**",
       "tsconfig.tsbuildinfo",
     ],
   },

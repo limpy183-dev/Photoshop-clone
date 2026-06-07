@@ -40,7 +40,7 @@ import type {
   LayerEffectsOuterGlow,
   LayerEffectInnerGlow,
   LayerEffectStroke,
-  LayerEffectSatin,
+  LayerEffectSatin as _LayerEffectSatin,
   LayerEffectGradientOverlay,
   LayerEffectPatternOverlay,
   LayerEffectSolidFill,
@@ -741,7 +741,7 @@ const DESCRIPTOR_PRESET_RE = /^__psweb_adj:([a-z-]+):([A-Za-z0-9+/=]+)$/
  * Photoshop renames are still in the round-trip envelope, so the marker
  * doesn't need to be invisible.
  */
-function encodeAdjustmentMarker(type: AdjustmentType, params: Record<string, unknown>) {
+function _encodeAdjustmentMarker(type: AdjustmentType, params: Record<string, unknown>) {
   const safe = JSON.stringify(params ?? {})
   const encoded = btoa(encodeURIComponent(safe))
   return `${MARKER_PREFIX}${type}:${encoded}${MARKER_SUFFIX}`

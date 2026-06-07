@@ -138,6 +138,9 @@ export function ColorPickerHud({ screenX, screenY, hsv }: ColorPickerHudProps) {
   return (
     <div
       data-testid="color-picker-hud"
+      role="dialog"
+      aria-modal="false"
+      aria-label="Color picker"
       style={{
         position: "fixed",
         left,
@@ -149,7 +152,7 @@ export function ColorPickerHud({ screenX, screenY, hsv }: ColorPickerHudProps) {
       }}
       className="rounded-sm border border-black/70 bg-[#1d1d1d]/95 p-1.5 shadow-[0_8px_24px_rgba(0,0,0,0.6)]"
     >
-      <div className="flex gap-1.5">
+      <div className="flex gap-1.5" aria-hidden="true">
         <div className="relative" style={{ width: SQUARE, height: SQUARE }}>
           <canvas
             ref={sqRef}
@@ -192,11 +195,20 @@ export function ColorPickerHud({ screenX, screenY, hsv }: ColorPickerHudProps) {
           />
         </div>
       </div>
-      <div className="mt-1 flex items-center gap-1.5 text-[10px] text-white">
+      <div
+        className="mt-1 flex items-center gap-1.5 text-[10px] text-white"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
         <span
           style={{ background: swatch, width: 16, height: 16, display: "inline-block", border: "1px solid rgba(255,255,255,0.4)" }}
+          aria-hidden="true"
         />
-        <span className="font-mono">{swatch.toUpperCase()}</span>
+        <span className="font-mono" aria-hidden="true">{swatch.toUpperCase()}</span>
+        <span className="sr-only">
+          {`Color ${swatch.toUpperCase()}, hue ${Math.round(hsv.h)} degrees, saturation ${Math.round(hsv.s * 100)} percent, value ${Math.round(hsv.v * 100)} percent. Drag to adjust, release to apply, press Escape to cancel.`}
+        </span>
       </div>
     </div>
   )

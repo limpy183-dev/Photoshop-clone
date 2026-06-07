@@ -47,7 +47,7 @@ async function darkPixelCount(page: Page, x: number, y: number, w = 80, h = 60) 
 }
 
 test("rapid wheel zoom previews with transform scaling instead of resizing the canvas layout every frame", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   const stage = page.locator("[data-canvas-stage]")
   await expect(stage).toBeVisible()
 
@@ -74,7 +74,7 @@ test("rapid wheel zoom previews with transform scaling instead of resizing the c
 })
 
 test("coalesced zoom changes do not redraw unchanged layer pixels", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   const stage = page.locator("[data-canvas-stage]")
   await expect(stage).toBeVisible()
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
@@ -126,7 +126,7 @@ test("coalesced zoom changes do not redraw unchanged layer pixels", async ({ pag
 })
 
 test("rapid zoom bursts keep canvas layout stable until the user pauses", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   const stage = page.locator("[data-canvas-stage]")
   await expect(stage).toBeVisible()
   const beforeWidth = await stage.evaluate((element) => (element as HTMLElement).style.width)
@@ -144,7 +144,7 @@ test("rapid zoom bursts keep canvas layout stable until the user pauses", async 
 })
 
 test("right clicking the canvas with a paint tool opens the custom menu without painting", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await selectBrushTool(page)
 
   const target = { x: 180, y: 130 }
@@ -167,7 +167,7 @@ test("right clicking the canvas with a paint tool opens the custom menu without 
 })
 
 test("alt right drag with the brush resizes the brush instead of opening the context menu", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await selectBrushTool(page)
 
   const target = { x: 220, y: 170 }
@@ -200,7 +200,7 @@ test("alt right drag with the brush resizes the brush instead of opening the con
 })
 
 test("right button drag does not open the canvas context menu", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await selectBrushTool(page)
 
   const start = await canvasScreenPoint(page, 260, 190)
@@ -215,7 +215,7 @@ test("right button drag does not open the canvas context menu", async ({ page })
 
 test("rapid keyboard undo and redo step through multiple queued paint history entries", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/")
+  await page.goto("/editor")
   await expect(page.locator("[data-canvas-stage]")).toBeVisible()
   await expect.poll(async () => (await canvasPixel(page, 600, 400))[3]).toBeGreaterThan(0)
   await selectBrushTool(page)

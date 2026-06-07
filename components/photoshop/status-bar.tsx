@@ -6,8 +6,10 @@ import { describeDocumentColorHonesty } from "./color-pipeline"
 import { createExportLimitationReport, type ExportFormat } from "./document-io"
 import { useEditor } from "./editor-context"
 import { planFilterPreviewExecution } from "./filter-preview"
-import { createHeapMemoryMonitor, formatMemoryUsage, getGlobalMemoryBudget } from "./memory-budget"
+import { createHeapMemoryMonitor, formatMemoryUsage, getGlobalMemoryBudget, planRuntimeMemoryPressure, type RuntimeMemoryPressurePlan } from "./memory-budget"
 import { detectOffscreenCanvasCapabilities, diagnoseOffscreenCanvasTransfer } from "./offscreen-canvas"
+import { loadPreferencesFromStorage, summarizePerformancePolicy, type PerformancePolicySummary, type PhotoshopPreferences } from "./preferences-engine"
+import { createTileOnlyCapabilityDashboard, type TileOnlyCapabilityDashboard } from "./tile-only-pipeline"
 import { requestCanvasZoom } from "./zoom-events"
 import { diagnoseBrowserLargeDocumentLimits, type BrowserLargeDocumentDiagnostics } from "./large-document"
 
@@ -36,12 +38,57 @@ function BrowserDiagnosticsBadge({ diagnostics }: { diagnostics: BrowserLargeDoc
   )
 }
 
+function PerformanceConfidenceBadge({
+  policy,
+  pressure,
+  dashboard,
+  offscreenActive,
+  autosave,
+}: {
+  policy: PerformancePolicySummary | null
+  pressure: RuntimeMemoryPressurePlan | null
+  dashboard: TileOnlyCapabilityDashboard | null
+  offscreenActive: boolean
+  autosave: string
+}) {
+  if (!policy) return null
+  const tileState = dashboard
+    ? dashboard.blockedCount > 0
+      ? "Tile blocked"
+      : dashboard.approximateCount > 0
+        ? "Tile managed"
+        : "Tile safe"
+    : "No tile plan"
+  const memoryState = pressure?.level === "hard" ? "Memory hard" : pressure?.level === "soft" ? "Memory soft" : "Memory ok"
+  const warning = pressure?.level !== "ok" || dashboard?.blockedCount
+  const title = [
+    `Mode: ${policy.performanceModeLabel}`,
+    `Memory: ${memoryState}${pressure ? `, evict ${Math.round(pressure.recommendedEvictBytes / (1024 * 1024))} MB recommended` : ""}`,
+    `Tile mode: ${tileState}${dashboard ? ` (${dashboard.tileColumns} x ${dashboard.tileRows}, ${dashboard.tileSize}px)` : ""}`,
+    `Worker mode: ${offscreenActive && policy.workerFilters ? "worker previews active" : "main-thread fallback"}`,
+    `Render path: ${policy.gpuPath}`,
+    autosave,
+    ...policy.warnings,
+  ].join("\n")
+  return (
+    <span
+      data-testid="status-performance-confidence"
+      title={title}
+      className={`max-w-[360px] truncate rounded-[2px] border px-1 ${warning ? "border-amber-400/40 bg-amber-400/10 text-amber-200" : "border-[var(--ps-divider)] bg-[var(--ps-panel)] text-[var(--ps-text-dim)]"}`}
+    >
+      {policy.performanceModeLabel}: {memoryState} / {tileState} / {policy.workerFilters && offscreenActive ? "Worker" : "Main"} / {autosave}
+    </span>
+  )
+}
+
 export function StatusBar({ onHide }: { onHide?: () => void }) {
   const { activeDoc, tool, brush, foreground } = useEditor()
   const [zoomInput, setZoomInput] = React.useState("")
   const [memoryUsage, setMemoryUsage] = React.useState("")
+  const [runtimePressure, setRuntimePressure] = React.useState<RuntimeMemoryPressurePlan | null>(null)
   const [clientReady, setClientReady] = React.useState(false)
   const [browserDiagnostics, setBrowserDiagnostics] = React.useState<BrowserLargeDocumentDiagnostics | null>(null)
+  const [prefs, setPrefs] = React.useState<PhotoshopPreferences | null>(null)
   // Active export-target format, broadcast by the export dialogs so the
   // status bar can surface format compatibility warnings reactively when the
   // user changes their pick.
@@ -55,6 +102,23 @@ export function StatusBar({ onHide }: { onHide?: () => void }) {
       transferToImageBitmapSupported: capabilities.transferToImageBitmapSupported,
     })
   }, [])
+  const performancePolicy = React.useMemo(() => prefs ? summarizePerformancePolicy(prefs) : null, [prefs])
+  const autosaveStatus = prefs?.fileHandling.autoSave
+    ? `Autosave ${prefs.fileHandling.autosaveIntervalSec}s`
+    : "Autosave off"
+  const tileDashboard = React.useMemo(() => {
+    if (!activeDoc) return null
+    return createTileOnlyCapabilityDashboard({
+      documentWidth: activeDoc.width,
+      documentHeight: activeDoc.height,
+      tileSize: prefs?.memory.tileSize ?? activeDoc.metadata?.largeDocumentTileView?.tileSize ?? 512,
+      explicitTileOnly: !!activeDoc.metadata?.largeDocumentTileView || !!activeDoc.metadata?.largeDocumentTileEdit,
+      format: "png",
+      colorMode: activeDoc.colorMode,
+      bitDepth: activeDoc.bitDepth,
+      layers: activeDoc.layers.map((layer) => ({ id: layer.id, kind: layer.kind, visible: layer.visible })),
+    })
+  }, [activeDoc, prefs?.memory.tileSize])
   const colorHonesty = React.useMemo(
     () => activeDoc ? describeDocumentColorHonesty(activeDoc) : null,
     [activeDoc],
@@ -116,6 +180,13 @@ export function StatusBar({ onHide }: { onHide?: () => void }) {
   }, [])
 
   React.useEffect(() => {
+    const refreshPreferences = () => setPrefs(loadPreferencesFromStorage())
+    refreshPreferences()
+    window.addEventListener("ps-preferences-changed", refreshPreferences)
+    return () => window.removeEventListener("ps-preferences-changed", refreshPreferences)
+  }, [])
+
+  React.useEffect(() => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<{ format?: ExportFormat | null }>).detail ?? {}
       setActiveExportFormat(detail.format ?? null)
@@ -130,11 +201,21 @@ export function StatusBar({ onHide }: { onHide?: () => void }) {
 
   React.useEffect(() => {
     const monitor = createHeapMemoryMonitor({ tracker: getGlobalMemoryBudget() })
-    const update = () => setMemoryUsage(formatMemoryUsage(monitor.sample()))
+    const update = () => {
+      const sample = monitor.sample()
+      setMemoryUsage(formatMemoryUsage(sample))
+      setRuntimePressure(planRuntimeMemoryPressure({
+        budgetMB: performancePolicy?.ramBudgetMB,
+        declaredBytes: sample.declaredBytes,
+        usedJSHeapSize: sample.usedJSHeapSize,
+        totalJSHeapSize: sample.totalJSHeapSize,
+        jsHeapSizeLimit: sample.jsHeapSizeLimit,
+      }))
+    }
     update()
     const id = window.setInterval(update, 2500)
     return () => window.clearInterval(id)
-  }, [])
+  }, [performancePolicy?.ramBudgetMB])
 
   if (!activeDoc) {
     return (
@@ -147,6 +228,18 @@ export function StatusBar({ onHide }: { onHide?: () => void }) {
           <>
             <span className="mx-2">|</span>
             <BrowserDiagnosticsBadge diagnostics={browserDiagnostics} />
+          </>
+        ) : null}
+        {clientReady && performancePolicy ? (
+          <>
+            <span className="mx-2">|</span>
+            <PerformanceConfidenceBadge
+              policy={performancePolicy}
+              pressure={runtimePressure}
+              dashboard={tileDashboard}
+              offscreenActive={offscreenDiagnostic.active}
+              autosave={autosaveStatus}
+            />
           </>
         ) : null}
         <div className="flex-1" />
@@ -251,6 +344,18 @@ export function StatusBar({ onHide }: { onHide?: () => void }) {
         <>
           <span>|</span>
           <span title={memoryUsage}>{memoryUsage}</span>
+        </>
+      ) : null}
+      {clientReady && performancePolicy ? (
+        <>
+          <span>|</span>
+          <PerformanceConfidenceBadge
+            policy={performancePolicy}
+            pressure={runtimePressure}
+            dashboard={tileDashboard}
+            offscreenActive={offscreenDiagnostic.active}
+            autosave={autosaveStatus}
+          />
         </>
       ) : null}
       {clientReady && !offscreenDiagnostic.active ? (

@@ -24,7 +24,7 @@ function escapeXml(value: string) {
     .replace(/'/g, "&apos;")
 }
 
-function uniformCornerRadius(shape: ShapeProps): number | null {
+function _uniformCornerRadius(shape: ShapeProps): number | null {
   if (shape.type !== "rect") return null
   const radii = shape.cornerRadii ?? [shape.radius ?? 0, shape.radius ?? 0, shape.radius ?? 0, shape.radius ?? 0]
   if (radii.every((value) => value === radii[0])) return radii[0]
@@ -152,7 +152,6 @@ interface SvgEffect {
 function svgFromEffects(style?: LayerStyle): SvgEffect {
   if (!style) return { defs: "" }
   const filterParts: string[] = []
-  let filterId: string | undefined
 
   const drop = style.dropShadow
   if (drop?.enabled) {
@@ -174,7 +173,7 @@ function svgFromEffects(style?: LayerStyle): SvgEffect {
     )
   }
   if (!filterParts.length) return { defs: "" }
-  filterId = `ps-effect-${Math.random().toString(36).slice(2, 8)}`
+  const filterId = `ps-effect-${Math.random().toString(36).slice(2, 8)}`
   const defs = `<filter id="${filterId}" x="-25%" y="-25%" width="150%" height="150%">${filterParts.join("")}</filter>`
   return { filter: `url(#${filterId})`, defs: `<defs>${defs}</defs>`, filterId }
 }

@@ -1485,7 +1485,7 @@ export function TimelinePanel() {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {frames.length === 0 ? (
-          <PanelEmpty text="Capture layer visibility, opacity, transforms and styles as animation frames." />
+          <PanelEmpty text="Capture layer visibility states as animation frames. Opacity, transforms, and styles are preserved." />
         ) : (
           frames.map((frame, idx) => (
             <FrameRow

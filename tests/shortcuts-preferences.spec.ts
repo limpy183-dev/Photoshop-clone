@@ -7,7 +7,7 @@ test("custom command palette shortcut override controls the runtime handler", as
     localStorage.setItem("ps-custom-shortcuts", JSON.stringify({ "command-palette": "Ctrl+;" }))
   })
 
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
   await page.locator("body").click({ position: { x: 20, y: 20 } })
 
@@ -23,7 +23,7 @@ test("custom combo shortcut override controls image size runtime handler", async
     localStorage.setItem("ps-custom-shortcuts", JSON.stringify({ "img-imgsize": "Ctrl+Alt+;" }))
   })
 
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
   await page.locator("body").click({ position: { x: 20, y: 20 } })
 
@@ -35,7 +35,7 @@ test("custom combo shortcut override controls image size runtime handler", async
 })
 
 test("edit preferences does not advertise the command palette shortcut", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.getByRole("menuitem", { name: "Edit", exact: true }).click()
 
   const preferencesItem = page.getByRole("menuitem", { name: /^Preferences/ })
@@ -44,7 +44,7 @@ test("edit preferences does not advertise the command palette shortcut", async (
 })
 
 test("shift plus a tool shortcut cycles through grouped tools", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
   await expect(page.getByRole("button", { name: "Brush Tool" })).toBeVisible()
 
@@ -56,7 +56,7 @@ test("shift plus a tool shortcut cycles through grouped tools", async ({ page })
 })
 
 test("command palette supports active keyboard navigation, escape, and disabled commands", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
   await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
   await page.locator("body").click({ position: { x: 20, y: 20 } })
 

@@ -7,7 +7,7 @@ import {
   injectAvifXmpMetadata,
   injectWebpXmpMetadata,
 } from "../components/photoshop/raster-codecs"
-import { buildRasterExportMetadata, createExportLimitationReport, diagnoseBrowserRasterEncoderSupport, type ExportFormat } from "../components/photoshop/document-io"
+import { buildRasterExportMetadata, createExportCompatibilityManifest, createExportLimitationReport, diagnoseBrowserRasterEncoderSupport, type ExportFormat } from "../components/photoshop/document-io"
 import { alternativesForLimitation } from "../components/photoshop/export-alternatives"
 import { createEmbeddedFontFromBuffer } from "../components/photoshop/typography-engine"
 import { createStoredZipBlob, encodeStoredZip } from "../components/photoshop/zip-packaging"
@@ -250,6 +250,41 @@ test("raster export reports metadata, content credentials, and ICC embedding as 
     expect(credentials?.status).toBe("preserved")
     expect(credentials?.detail).toContain("C2PA")
   }
+})
+
+test("export compatibility manifest includes score categories and fix-before-export actions", () => {
+  const base = richFixtureDocument()
+  const doc = {
+    ...base,
+    bitDepth: 16 as const,
+    colorMode: "CMYK" as const,
+  }
+  const manifest = createExportCompatibilityManifest(doc, {
+    format: "jpeg",
+    includeMetadata: true,
+    transparent: true,
+    quality: 55,
+  })
+
+  expect(manifest.score.overall).toBeLessThan(80)
+  expect(manifest.score.categories.map((category) => category.id)).toEqual([
+    "layers",
+    "masks",
+    "text",
+    "effects",
+    "color",
+    "metadata",
+    "smart-objects",
+  ])
+  expect(manifest.preservationSummary.preserved.some((item) => item.label === "File metadata")).toBe(true)
+  expect(manifest.preservationSummary.changed.some((item) => item.label === "Alpha transparency")).toBe(true)
+  expect(manifest.fixActions.map((action) => action.id)).toEqual(expect.arrayContaining([
+    "switch-alpha-format",
+    "use-high-bit-format",
+    "rasterize-text",
+    "flatten-layer-structure",
+  ]))
+  expect(manifest.fixActions.find((action) => action.id === "switch-alpha-format")?.primaryFormat).toBe("png")
 })
 
 test("every problematic export limitation has at least one one-click alternative", () => {

@@ -21,6 +21,7 @@ import {
   saveCommandPaletteUsage,
   type CommandUsageMap,
 } from "./command-ranking"
+import { WORKFLOW_PACKS } from "./workflow-presets"
 
 interface CommandPaletteProps {
   open: boolean
@@ -270,6 +271,17 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
           close()
         },
       },
+      ...WORKFLOW_PACKS.map((pack): CommandItem => ({
+        id: `workflow-pack-${pack.id}`,
+        group: "Workflow Packs",
+        title: pack.title,
+        hint: pack.category,
+        searchText: `${pack.title} ${pack.shortTitle} ${pack.summary} ${pack.expectedOutput} ${pack.keywords.join(" ")}`,
+        run: () => {
+          window.dispatchEvent(new CustomEvent("ps-open-workflow-pack", { detail: { id: pack.id } }))
+          close()
+        },
+      })),
       {
         id: "automate-photomerge",
         group: "File",
@@ -878,10 +890,9 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
     return rankCommandPaletteItems(commands, q, usage, { limit: q ? 80 : 80 })
   }, [commands, query, usage])
 
-  React.useEffect(() => {
-    setActiveIndex(0)
-  }, [query])
-
+  // activeIndex resets on open (see the open effect) and on each query change
+  // via onChange — not in a separate [query] effect, which would race with
+  // ArrowDown/ArrowUp navigation fired before React flushes the effect.
   React.useEffect(() => {
     setActiveIndex((index) => Math.min(index, Math.max(0, filtered.length - 1)))
   }, [filtered.length])
@@ -932,7 +943,10 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
           <Input
             autoFocus
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value)
+              setActiveIndex(0)
+            }}
             onKeyDown={(e) => {
               if (e.key === "ArrowDown") {
                 e.preventDefault()

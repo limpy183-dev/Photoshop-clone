@@ -79,14 +79,22 @@ test("browser diagnostics report covers canvas webgl offscreen encoder opfs heap
   const report = createBrowserDiagnosticsReport(snapshot)
 
   expect(report.sections.map((section) => section.id)).toEqual([
+    "scale",
     "canvas",
     "webgl",
     "offscreen",
     "encoders",
     "opfs",
     "heap",
+    "tile-only",
     "fallbacks",
   ])
+  expect(report.sections.find((section) => section.id === "scale")?.rows).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ label: "Large-document strategy", value: "Tile-only or reduced-scale required" }),
+      expect.objectContaining({ label: "Worker preview path", value: "main-thread fallback" }),
+    ]),
+  )
   expect(report.sections.find((section) => section.id === "canvas")?.rows).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ label: "Safe max size", value: "8192 px per side / 33.2 MP" }),
@@ -106,6 +114,13 @@ test("browser diagnostics report covers canvas webgl offscreen encoder opfs heap
       expect.objectContaining({ label: "AVIF image", value: "unavailable" }),
     ]),
   )
+  expect(report.sections.find((section) => section.id === "tile-only")?.rows).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ label: "Viewport compositing", status: "ok" }),
+      expect.objectContaining({ label: "Raster export", status: "ok" }),
+      expect.objectContaining({ label: "History store", status: "warn" }),
+    ]),
+  )
   expect(report.fallbacks).toEqual(expect.arrayContaining([
     "Document exceeds the safe browser canvas budget; reduced-scale, tile-only, or inspection mode is required.",
     "WebGL texture limit is below the current document size; tiled WebGL or Canvas 2D fallback is active.",
@@ -120,6 +135,8 @@ test("browser diagnostics report covers canvas webgl offscreen encoder opfs heap
   expect(text).toContain("Browser Diagnostics Report")
   expect(text).toContain("Canvas")
   expect(text).toContain("WebGL")
+  expect(text).toContain("Scale Confidence")
+  expect(text).toContain("Tile-Only Dashboard")
   expect(text).toContain("EXT_color_buffer_float")
   expect(text).toContain("Fallbacks")
 })
@@ -160,4 +177,6 @@ test("browser diagnostics panel source exposes copy export and section actions",
   expect(source).toContain('aria-label="Export diagnostic report"')
   expect(source).toContain("formatBrowserDiagnosticsReport")
   expect(source).toContain("downloadText")
+  expect(source).toContain("createTileOnlyCapabilityDashboard")
+  expect(source).toContain('data-testid="tile-only-dashboard"')
 })

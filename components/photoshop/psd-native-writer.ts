@@ -2,7 +2,7 @@
 
 import type { HighBitImage } from "./color-pipeline"
 import { PSD_COLOR_MODE, type PsdColorModeValue } from "./psd-color-modes"
-import type { BlendMode, Layer, PsDocument } from "./types"
+import type { BlendMode, Layer as _Layer, PsDocument } from "./types"
 
 interface NativeCompositePsdOptions {
   psb?: boolean

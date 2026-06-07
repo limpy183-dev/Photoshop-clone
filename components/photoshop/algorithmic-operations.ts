@@ -398,7 +398,7 @@ export interface SelectionMaskRefinementOptions {
   filamentRadius?: number
 }
 
-function majoritySmoothMask(maskData: Uint8ClampedArray, width: number, height: number, radius: number) {
+function _majoritySmoothMask(maskData: Uint8ClampedArray, width: number, height: number, radius: number) {
   const out = new Uint8ClampedArray(maskData.length)
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -419,7 +419,7 @@ function majoritySmoothMask(maskData: Uint8ClampedArray, width: number, height: 
   return out
 }
 
-function shiftMaskEdge(maskData: Uint8ClampedArray, width: number, height: number, amount: number) {
+function _shiftMaskEdge(maskData: Uint8ClampedArray, width: number, height: number, amount: number) {
   const pixels = Math.round(Math.abs(amount))
   if (!pixels) return new Uint8ClampedArray(maskData)
   const expand = amount > 0
@@ -445,7 +445,7 @@ function shiftMaskEdge(maskData: Uint8ClampedArray, width: number, height: numbe
   return out
 }
 
-function featherMaskData(maskData: Uint8ClampedArray, width: number, height: number, radius: number) {
+function _featherMaskData(maskData: Uint8ClampedArray, width: number, height: number, radius: number) {
   if (radius <= 0) return new Uint8ClampedArray(maskData)
   const r = Math.max(1, Math.round(radius))
   let src = Float32Array.from(maskData, (value) => value / 255)
@@ -1050,7 +1050,7 @@ function roundedRectPathPerCorner(
   ctx.closePath()
 }
 
-function roundedRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+function _roundedRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   const radius = Math.min(Math.abs(r), Math.abs(w) / 2, Math.abs(h) / 2)
   ctx.moveTo(x + radius, y)
   ctx.lineTo(x + w - radius, y)

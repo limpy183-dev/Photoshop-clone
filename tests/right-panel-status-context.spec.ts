@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test"
 
 test("Panels header opens the all-panels browser instead of relying on the stack dots", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
 
   await page.getByRole("button", { name: "Panels", exact: true }).click()
   await expect(page.getByPlaceholder("Search all panels")).toBeVisible()
@@ -10,7 +10,7 @@ test("Panels header opens the all-panels browser instead of relying on the stack
 })
 
 test("lower panel splitter snaps to maximum and minimum layer heights", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
 
   const splitter = page.getByLabel("Resize panel stack")
   const dock = page.getByTestId("panel-dock")
@@ -37,7 +37,7 @@ test("lower panel splitter snaps to maximum and minimum layer heights", async ({
 })
 
 test("status info bar can be hidden and restored from View menu", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
 
   await expect(page.getByTestId("status-bar")).toBeVisible()
   await page.getByRole("button", { name: "Hide info bar" }).click()
@@ -49,7 +49,7 @@ test("status info bar can be hidden and restored from View menu", async ({ page 
 })
 
 test("status info bar exposes browser canvas GPU and memory diagnostics", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
 
   const diagnostics = page.getByTestId("browser-diagnostics")
   await expect(diagnostics).toBeVisible()
@@ -61,7 +61,7 @@ test("status info bar exposes browser canvas GPU and memory diagnostics", async 
 })
 
 test("upper panels can be hidden so layers take the full dock", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
 
   await page.getByRole("button", { name: "Hide pinned panels section" }).click()
   await expect(page.getByTestId("panel-dock")).toHaveAttribute("data-upper-hidden", "true")
@@ -70,7 +70,7 @@ test("upper panels can be hidden so layers take the full dock", async ({ page })
 })
 
 test("canvas toolbar is removed and app right click shows a custom context menu", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
 
   await expect(page.getByRole("button", { name: "Move contextual toolbar" })).toHaveCount(0)
   await page.locator("[data-canvas-root]").click({ button: "right", position: { x: 360, y: 260 } })

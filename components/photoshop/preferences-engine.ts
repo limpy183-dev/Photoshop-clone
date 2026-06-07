@@ -1,7 +1,7 @@
 import type { PsDocument } from "./types"
 
 export const PREFERENCES_STORAGE_KEY = "ps-preferences"
-export const PREFERENCES_SCHEMA_VERSION = 4
+export const PREFERENCES_SCHEMA_VERSION = 5
 export const MAX_PREFERENCES_IMPORT_BYTES = 1024 * 1024
 export const MAX_IMPORTED_SCRATCH_DISKS = 32
 export const MAX_IMPORTED_HISTORY_ENTRIES = 10000
@@ -17,6 +17,7 @@ export type TypeUnitPreference = "px" | "pt"
 export type ScratchDiskKind = "browser-storage" | "download-folder" | "opfs" | "custom"
 export type GpuModePreference = "auto" | "basic" | "advanced"
 export type GpuCompositingPreference = "cpu" | "worker" | "gpu-preferred"
+export type PerformanceModePreference = "quality" | "balanced" | "performance"
 export type MissingFontPolicy = "warn" | "substitute" | "rasterize"
 export type LargeFilePolicy = "ask" | "downsample-preview" | "block"
 export type HistoryLogDestination = "metadata" | "text-file" | "both"
@@ -88,6 +89,7 @@ export const PREFERENCE_SECTION_LABELS: Record<PreferenceSection, string> = {
 }
 
 export interface MemoryPreferences {
+  performanceMode: PerformanceModePreference
   ramPercent: number
   maxCacheMB: number
   cacheLevels: number
@@ -220,6 +222,9 @@ export interface PerformanceEnvironment {
 }
 
 export interface PerformancePolicySummary {
+  performanceMode: PerformanceModePreference
+  performanceModeLabel: string
+  performanceModeDetail: string
   ramBudgetMB: number
   cacheBudgetMB: number
   scratchBudgetMB: number
@@ -263,6 +268,7 @@ export const DEFAULT_PREFERENCES: PhotoshopPreferences = {
   autoSave: false,
   smoothing: 18,
   memory: {
+    performanceMode: "balanced",
     ramPercent: 70,
     maxCacheMB: 4096,
     cacheLevels: 4,
@@ -356,6 +362,7 @@ export const DEFAULT_PREFERENCES: PhotoshopPreferences = {
 }
 
 const TILE_SIZES = [64, 128, 256, 512, 1024]
+const PERFORMANCE_MODES = ["quality", "balanced", "performance"] as const
 const CURSOR_STYLES = ["standard", "precise", "brush-size"] as const
 const RULER_UNITS = ["px", "in", "cm", "mm", "pt", "pc"] as const
 const TYPE_UNITS = ["px", "pt"] as const
@@ -365,6 +372,80 @@ const GPU_COMPOSITING_MODES = ["cpu", "worker", "gpu-preferred"] as const
 const MISSING_FONT_POLICIES = ["warn", "substitute", "rasterize"] as const
 const LARGE_FILE_POLICIES = ["ask", "downsample-preview", "block"] as const
 const HISTORY_LOG_DESTINATIONS = ["metadata", "text-file", "both"] as const
+
+export interface PerformanceModePreset {
+  id: PerformanceModePreference
+  label: string
+  detail: string
+  memory: MemoryPreferences
+  gpu: Partial<GpuPreferences>
+}
+
+export const PERFORMANCE_MODE_PRESETS: Record<PerformanceModePreference, PerformanceModePreset> = {
+  quality: {
+    id: "quality",
+    label: "Quality",
+    detail: "Prioritizes full-resolution previews, larger tiles, deeper cache levels, and longer history when the browser has enough headroom.",
+    memory: {
+      performanceMode: "quality",
+      ramPercent: 80,
+      maxCacheMB: 8192,
+      cacheLevels: 6,
+      tileSize: 512,
+      historyStates: 100,
+      historyCompression: true,
+    },
+    gpu: {
+      enabled: true,
+      mode: "advanced",
+      useWebGL: true,
+      useWorkers: true,
+      compositing: "gpu-preferred",
+    },
+  },
+  balanced: {
+    id: "balanced",
+    label: "Balanced",
+    detail: "Keeps cache, tile size, worker usage, and history depth in the default middle path for mixed editing workloads.",
+    memory: {
+      performanceMode: "balanced",
+      ramPercent: 70,
+      maxCacheMB: 4096,
+      cacheLevels: 4,
+      tileSize: 256,
+      historyStates: 50,
+      historyCompression: true,
+    },
+    gpu: {
+      enabled: true,
+      mode: "auto",
+      useWebGL: true,
+      useWorkers: true,
+      compositing: "gpu-preferred",
+    },
+  },
+  performance: {
+    id: "performance",
+    label: "Performance",
+    detail: "Prioritizes responsiveness with smaller tiles, shallower caches, compressed history, and worker-preferred rendering paths.",
+    memory: {
+      performanceMode: "performance",
+      ramPercent: 55,
+      maxCacheMB: 2048,
+      cacheLevels: 2,
+      tileSize: 128,
+      historyStates: 25,
+      historyCompression: true,
+    },
+    gpu: {
+      enabled: true,
+      mode: "basic",
+      useWebGL: true,
+      useWorkers: true,
+      compositing: "worker",
+    },
+  },
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value)
@@ -467,6 +548,7 @@ function validatePreferenceImportShape(value: unknown) {
   ;["ramPercent", "maxCacheMB", "cacheLevels", "tileSize", "historyStates"].forEach((key) =>
     validateNumberField(memory, key, `memory.${key}`),
   )
+  validateEnumField(memory, "performanceMode", PERFORMANCE_MODES, "memory.performanceMode")
   validateBooleanField(memory, "historyCompression", "memory.historyCompression")
 
   if (Array.isArray(root.scratchDisks)) {
@@ -623,6 +705,7 @@ function rulerToLegacy(unit: RulerUnitPreference): LegacyUnitPreference {
 function normalizeMemory(input: Record<string, unknown>, legacyUndoLimit: unknown): MemoryPreferences {
   const defaults = DEFAULT_PREFERENCES.memory
   return {
+    performanceMode: optionValue(input.performanceMode, PERFORMANCE_MODES, defaults.performanceMode),
     ramPercent: clampNumber(input.ramPercent, defaults.ramPercent, 10, 90),
     maxCacheMB: clampNumber(input.maxCacheMB, defaults.maxCacheMB, 128, 131072),
     cacheLevels: clampNumber(input.cacheLevels, defaults.cacheLevels, 1, 8),
@@ -987,6 +1070,7 @@ function environmentWorkerAvailable(env?: PerformanceEnvironment) {
 
 export function summarizePerformancePolicy(input: unknown, env?: PerformanceEnvironment): PerformancePolicySummary {
   const prefs = normalizePreferences(input)
+  const mode = PERFORMANCE_MODE_PRESETS[prefs.memory.performanceMode]
   const memoryGB = Math.max(1, environmentMemoryGB(env))
   const ramBudgetMB = Math.round(memoryGB * 1024 * (prefs.memory.ramPercent / 100))
   const cacheBudgetMB = Math.min(prefs.memory.maxCacheMB, ramBudgetMB)
@@ -1017,6 +1101,9 @@ export function summarizePerformancePolicy(input: unknown, env?: PerformanceEnvi
   if (prefs.memory.maxCacheMB > ramBudgetMB) warnings.push("Cache budget is limited by the RAM allocation.")
 
   return {
+    performanceMode: mode.id,
+    performanceModeLabel: mode.label,
+    performanceModeDetail: mode.detail,
     ramBudgetMB,
     cacheBudgetMB,
     scratchBudgetMB,
@@ -1029,6 +1116,22 @@ export function summarizePerformancePolicy(input: unknown, env?: PerformanceEnvi
     historyCompression: prefs.memory.historyCompression,
     warnings,
   }
+}
+
+export function applyPerformanceModePreference(input: unknown, mode: PerformanceModePreference): PhotoshopPreferences {
+  const current = normalizePreferences(input)
+  const preset = PERFORMANCE_MODE_PRESETS[mode]
+  return normalizePreferences({
+    ...current,
+    memory: {
+      ...current.memory,
+      ...preset.memory,
+    },
+    gpu: {
+      ...current.gpu,
+      ...preset.gpu,
+    },
+  })
 }
 
 export function deriveFileHandlingPolicy(input: unknown, file: FileHandlingInput): FileHandlingPolicySummary {

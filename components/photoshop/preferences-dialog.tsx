@@ -32,6 +32,9 @@ import {
   type RulerGridPreferences,
   type ScratchDiskPreference,
   type ToolBehaviorPreferences,
+  PERFORMANCE_MODE_PRESETS,
+  type PerformanceModePreference,
+  applyPerformanceModePreference,
   calculateScreenDpiFromCalibration,
   deriveFileHandlingPolicy,
   exportPreferencesSet,
@@ -91,6 +94,8 @@ const TAB_SECTION: Partial<Record<PreferenceTab, Parameters<typeof resetPreferen
   units: "rulerGrid",
   technology: "technologyPreviews",
 }
+
+const PERFORMANCE_MODE_ORDER: PerformanceModePreference[] = ["quality", "balanced", "performance"]
 
 function SelectField<T extends string>({
   value,
@@ -543,6 +548,31 @@ export function PreferencesDialog({
 
               {tab === "performance" && (
                 <>
+                  <Section title="Performance Mode">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-1">
+                      {PERFORMANCE_MODE_ORDER.map((mode) => {
+                        const preset = PERFORMANCE_MODE_PRESETS[mode]
+                        const active = prefs.memory.performanceMode === mode
+                        return (
+                          <button
+                            key={mode}
+                            type="button"
+                            aria-pressed={active}
+                            onClick={() => setPrefs(applyPerformanceModePreference(prefs, mode))}
+                            className={`rounded-sm px-2 py-1.5 text-left text-[11px] transition-colors ${active ? "bg-[var(--ps-accent)] text-white" : "text-[var(--ps-text)] hover:bg-[var(--ps-tool-hover)]"}`}
+                          >
+                            <span className="block font-medium">{preset.label}</span>
+                            <span className={active ? "block text-[10px] text-white/80" : "block text-[10px] text-[var(--ps-text-muted)]"}>
+                              {mode === "quality" ? "Fidelity" : mode === "balanced" ? "Mixed work" : "Responsiveness"}
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                    <p className="text-[11px] text-[var(--ps-text-muted)]">
+                      {performancePolicy.performanceModeDetail}
+                    </p>
+                  </Section>
                   <Section title="RAM and Cache">
                     <SliderField label="RAM Allocation" value={prefs.memory.ramPercent} min={10} max={90} step={1} suffix="%" onChange={(value) => updateMemory({ ramPercent: value })} />
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -577,6 +607,7 @@ export function PreferencesDialog({
                   </Section>
                   <Section title="Effective Policy">
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[11px]">
+                      <span>Mode: {performancePolicy.performanceModeLabel}</span>
                       <span>RAM: {performancePolicy.ramBudgetMB} MB</span>
                       <span>Cache: {performancePolicy.cacheBudgetMB} MB</span>
                       <span>Tiles: {performancePolicy.estimatedTileCapacity}</span>

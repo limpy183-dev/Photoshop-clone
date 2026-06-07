@@ -7,6 +7,7 @@ import {
   TECHNOLOGY_PREVIEW_FLAGS,
   appendHistoryLog,
   applyPreferencesToDocumentSettings,
+  applyPerformanceModePreference,
   calculatePrintSizeZoom,
   calculateScreenDpiFromCalibration,
   createHistoryLogEntry,
@@ -37,7 +38,7 @@ test("normalizes legacy preference sets into the full schema", () => {
     smoothing: 123,
   })
 
-  expect(prefs.schemaVersion).toBe(4)
+  expect(prefs.schemaVersion).toBe(5)
   expect(prefs.undoLimit).toBe(500)
   expect(prefs.memory.historyStates).toBe(500)
   expect(prefs.gridSize).toBe(4)
@@ -96,6 +97,37 @@ test("summarizes RAM, cache, scratch disk, and GPU policies with browser fallbac
   expect(policy.workerFilters).toBe(true)
   expect(policy.historyCompression).toBe(false)
   expect(policy.warnings.some((warning) => warning.includes("WebGL"))).toBe(true)
+})
+
+test("performance modes apply quality balanced and performance policies", () => {
+  const performancePrefs = applyPerformanceModePreference(DEFAULT_PREFERENCES, "performance")
+  const performancePolicy = summarizePerformancePolicy(performancePrefs, {
+    deviceMemoryGB: 4,
+    webglAvailable: true,
+    workerAvailable: false,
+  })
+
+  expect(performancePrefs.memory.performanceMode).toBe("performance")
+  expect(performancePrefs.memory.tileSize).toBe(128)
+  expect(performancePrefs.memory.historyStates).toBeLessThan(DEFAULT_PREFERENCES.memory.historyStates)
+  expect(performancePrefs.gpu.compositing).toBe("worker")
+  expect(performancePolicy.performanceMode).toBe("performance")
+  expect(performancePolicy.performanceModeLabel).toBe("Performance")
+  expect(performancePolicy.performanceModeDetail).toContain("responsiveness")
+  expect(performancePolicy.warnings).toEqual(expect.arrayContaining([expect.stringContaining("Web Workers")]))
+
+  const qualityPrefs = applyPerformanceModePreference(performancePrefs, "quality")
+  const qualityPolicy = summarizePerformancePolicy(qualityPrefs, {
+    deviceMemoryGB: 16,
+    webglAvailable: true,
+    workerAvailable: true,
+  })
+
+  expect(qualityPrefs.memory.performanceMode).toBe("quality")
+  expect(qualityPrefs.memory.tileSize).toBe(512)
+  expect(qualityPrefs.memory.cacheLevels).toBeGreaterThan(performancePrefs.memory.cacheLevels)
+  expect(qualityPrefs.gpu.mode).toBe("advanced")
+  expect(qualityPolicy.performanceModeLabel).toBe("Quality")
 })
 
 test("derives file handling behavior for autosave, missing fonts, large files, and recents", () => {
@@ -327,7 +359,7 @@ test("normalizes technology preview feature flags with per-toggle help and risk 
 
   const previewFlags = summarizeTechnologyPreviewFlags(prefs)
 
-  expect(prefs.schemaVersion).toBe(4)
+  expect(prefs.schemaVersion).toBe(5)
   expect(TECHNOLOGY_PREVIEW_FLAGS.map((flag) => flag.id)).toEqual([
     "hdrCanvasCompositor",
     "webgpuAcceleration",

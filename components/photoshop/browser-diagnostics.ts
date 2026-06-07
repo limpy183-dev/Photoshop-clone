@@ -6,6 +6,8 @@ import {
 import { createHeapMemoryMonitor, getGlobalMemoryBudget } from "./memory-budget"
 import { detectOffscreenCanvasCapabilities, diagnoseOffscreenCanvasTransfer, type OffscreenCanvasCapabilities } from "./offscreen-canvas"
 import { estimateScratchQuota, isOPFSSupported, type ScratchQuotaSnapshot } from "./opfs-scratch"
+import { createTileOnlyCapabilityDashboard, type TileOnlyCapabilityStatus, type TileOnlyExportLayerDescriptor } from "./tile-only-pipeline"
+import type { LayerKind } from "./types"
 
 const MIB = 1024 * 1024
 
@@ -19,7 +21,7 @@ export interface BrowserDiagnosticRow {
 }
 
 export interface BrowserDiagnosticSection {
-  id: "canvas" | "webgl" | "offscreen" | "encoders" | "opfs" | "heap" | "fallbacks"
+  id: "scale" | "canvas" | "webgl" | "offscreen" | "encoders" | "opfs" | "heap" | "tile-only" | "fallbacks"
   title: string
   rows: BrowserDiagnosticRow[]
 }
@@ -363,6 +365,22 @@ function pathsForImageEncoder(encoder: BrowserDiagnosticsImageEncoderSnapshot) {
   ].filter(Boolean) as string[]
 }
 
+function statusForTileCapability(statusValue: TileOnlyCapabilityStatus): BrowserDiagnosticStatus {
+  if (statusValue === "safe") return "ok"
+  if (statusValue === "approximate") return "warn"
+  return "unavailable"
+}
+
+function tileLayerDescriptors(snapshot: BrowserDiagnosticsSnapshot): TileOnlyExportLayerDescriptor[] {
+  const layers = snapshot.document?.layers ?? []
+  return layers.length
+    ? layers.map((layer, index) => ({
+        id: `layer-${index + 1}`,
+        kind: layer.kind as LayerKind | undefined,
+      }))
+    : [{ id: "background", kind: "raster" }]
+}
+
 function buildFallbacks(snapshot: BrowserDiagnosticsSnapshot): string[] {
   const fallbacks: string[] = []
   if (documentExceedsCanvas(snapshot)) {
@@ -418,6 +436,24 @@ export function createBrowserDiagnosticsReport(snapshot: BrowserDiagnosticsSnaps
   const width = Number(snapshot.document?.width ?? 0)
   const height = Number(snapshot.document?.height ?? 0)
   const fallbacks = buildFallbacks(snapshot)
+  const offscreenDiagnostic = diagnoseOffscreenCanvasTransfer({
+    requestedWorker: true,
+    offscreenCanvasSupported: snapshot.offscreen.offscreenCanvasSupported,
+    workerTransferSupported: snapshot.offscreen.workerOffscreenSupported,
+    transferToImageBitmapSupported: snapshot.offscreen.transferToImageBitmapSupported,
+  })
+  const tileDashboard = width && height
+    ? createTileOnlyCapabilityDashboard({
+        documentWidth: width,
+        documentHeight: height,
+        tileSize: 512,
+        explicitTileOnly: documentExceedsCanvas(snapshot),
+        format: "png",
+        layers: tileLayerDescriptors(snapshot),
+        colorMode: snapshot.document?.colorMode,
+        bitDepth: snapshot.document?.bitDepth,
+      })
+    : null
   const extensionValue = snapshot.webgl.extensions.length
     ? snapshot.webgl.extensions.join(", ")
     : "none reported"
@@ -449,6 +485,42 @@ export function createBrowserDiagnosticsReport(snapshot: BrowserDiagnosticsSnaps
   ]
 
   const sections: BrowserDiagnosticSection[] = [
+    {
+      id: "scale",
+      title: "Scale Confidence",
+      rows: [
+        {
+          label: "Large-document strategy",
+          value: width && height
+            ? documentExceedsCanvas(snapshot)
+              ? "Tile-only or reduced-scale required"
+              : "Full-canvas editing is within guardrails"
+            : "No document open",
+          status: width && height ? (documentExceedsCanvas(snapshot) ? "warn" : "ok") : "info",
+          detail: width && height
+            ? documentExceedsCanvas(snapshot)
+              ? "The current document exceeds browser canvas guardrails; use tile-only, reduced-scale, or inspection mode before full-frame allocation."
+              : "The current document fits the editor's browser canvas guardrails."
+            : "Open a document to evaluate large-document strategy.",
+        },
+        {
+          label: "Worker preview path",
+          value: offscreenDiagnostic.active ? "worker offscreen active" : "main-thread fallback",
+          status: offscreenDiagnostic.active ? "ok" : "warn",
+          detail: offscreenDiagnostic.warning ?? offscreenDiagnostic.reason,
+        },
+        {
+          label: "WebGL/canvas path",
+          value: snapshot.webgl.webglSupported
+            ? snapshot.webgl.webgl2Supported
+              ? "WebGL2 available"
+              : "WebGL1 available"
+            : "Canvas 2D fallback",
+          status: snapshot.webgl.webglSupported ? "ok" : "warn",
+          detail: snapshot.webgl.maxTextureSize ? `${snapshot.webgl.maxTextureSize}px max texture` : "Texture limit unavailable.",
+        },
+      ],
+    },
     {
       id: "canvas",
       title: "Canvas",
@@ -578,6 +650,28 @@ export function createBrowserDiagnosticsReport(snapshot: BrowserDiagnosticsSnaps
         { label: "Heap limit", value: formatBytes(snapshot.heap.jsHeapSizeLimit), status: snapshot.heap.supported ? "ok" : "info" },
         { label: "Declared editor allocations", value: formatBytes(snapshot.heap.declaredBytes), status: "info" },
       ],
+    },
+    {
+      id: "tile-only",
+      title: "Tile-Only Dashboard",
+      rows: tileDashboard
+        ? [
+            {
+              label: "Tile grid",
+              value: `${tileDashboard.tileColumns} x ${tileDashboard.tileRows} / ${tileDashboard.tileCount} tiles`,
+              status: "info",
+              detail: `${tileDashboard.documentMegapixels} MP document with ${tileDashboard.tileSize}px tiles.`,
+            },
+            ...tileDashboard.rows.map((row): BrowserDiagnosticRow => ({
+              label: row.label,
+              value: row.status,
+              status: statusForTileCapability(row.status),
+              detail: [row.detail, row.mitigation ? `Mitigation: ${row.mitigation}` : null]
+                .filter(Boolean)
+                .join(" "),
+            })),
+          ]
+        : [{ label: "Tile grid", value: "No document open", status: "info" }],
     },
     {
       id: "fallbacks",

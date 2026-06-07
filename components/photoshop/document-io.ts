@@ -264,6 +264,35 @@ export interface ExportLimitationReport {
   summary: string
 }
 
+export type ExportCompatibilityScoreCategoryId =
+  | "layers"
+  | "masks"
+  | "text"
+  | "effects"
+  | "color"
+  | "metadata"
+  | "smart-objects"
+
+export interface ExportCompatibilityScoreCategory {
+  id: ExportCompatibilityScoreCategoryId
+  label: string
+  score: number
+  status: "strong" | "mixed" | "risky"
+  detail: string
+}
+
+export interface ExportCompatibilityFixAction {
+  id: string
+  label: string
+  detail: string
+  primaryFormat?: ExportFormat
+}
+
+export interface ExportCompatibilityPreservationSummary {
+  preserved: CompatibilityManifestEntry[]
+  changed: CompatibilityManifestEntry[]
+}
+
 export interface ExportCompatibilityManifest {
   app: "Photoshop Web"
   format: "ps-export-manifest"
@@ -284,6 +313,12 @@ export interface ExportCompatibilityManifest {
   totals: Record<ReportStatus, number>
   warnings: string[]
   riskLevel: "low" | "medium" | "high"
+  score: {
+    overall: number
+    categories: ExportCompatibilityScoreCategory[]
+  }
+  preservationSummary: ExportCompatibilityPreservationSummary
+  fixActions: ExportCompatibilityFixAction[]
   summary: string
 }
 
@@ -2628,6 +2663,162 @@ export function createExportLimitationReport(
   }
 }
 
+const EXPORT_SCORE_CATEGORIES: Array<{
+  id: ExportCompatibilityScoreCategoryId
+  label: string
+  matches: RegExp
+}> = [
+  { id: "layers", label: "Layers", matches: /layer structure|groups|layer comps/i },
+  { id: "masks", label: "Masks", matches: /masks|alpha and saved channels|spot and extra channels|alpha transparency/i },
+  { id: "text", label: "Text", matches: /text|editable text/i },
+  { id: "effects", label: "Effects", matches: /layer styles|adjustment layers|smart filters|blend modes|3d scenes|timeline and video/i },
+  { id: "color", label: "Color", matches: /color|bit depth|high-bit|rgba export conversion|icc|gif palette|jpeg quality|webp encoder|avif encoder|portable anymap/i },
+  { id: "metadata", label: "Metadata", matches: /metadata|content credentials|print settings|notes|guides|slices|export presets|plugin and cloud|variable data|resolution/i },
+  { id: "smart-objects", label: "Smart Objects", matches: /smart object|linked smart|file system access/i },
+]
+
+function entryScore(status: ReportStatus) {
+  switch (status) {
+    case "preserved":
+      return 100
+    case "info":
+      return 92
+    case "approximated":
+      return 68
+    case "flattened":
+      return 45
+    case "unsupported":
+      return 20
+  }
+}
+
+function scoreStatus(score: number): ExportCompatibilityScoreCategory["status"] {
+  if (score >= 85) return "strong"
+  if (score >= 60) return "mixed"
+  return "risky"
+}
+
+function buildExportCompatibilityScore(entries: CompatibilityManifestEntry[]) {
+  const categories = EXPORT_SCORE_CATEGORIES.map((category): ExportCompatibilityScoreCategory => {
+    const categoryEntries = entries.filter((entry) => category.matches.test(entry.label))
+    const score = categoryEntries.length
+      ? Math.round(categoryEntries.reduce((sum, entry) => sum + entryScore(entry.status), 0) / categoryEntries.length)
+      : 100
+    const risky = categoryEntries.filter((entry) => entry.status === "flattened" || entry.status === "unsupported" || entry.status === "approximated")
+    return {
+      id: category.id,
+      label: category.label,
+      score,
+      status: scoreStatus(score),
+      detail: risky.length
+        ? `${risky.slice(0, 3).map((entry) => `${entry.label} ${entry.status}`).join("; ")}${risky.length > 3 ? "; ..." : ""}`
+        : "Preserved for this export target.",
+    }
+  })
+  const overall = Math.round(categories.reduce((sum, category) => sum + category.score, 0) / categories.length)
+  return { overall, categories }
+}
+
+function buildExportPreservationSummary(
+  entries: CompatibilityManifestEntry[],
+  options: ExportLimitationOptions,
+): ExportCompatibilityPreservationSummary {
+  const changedStatuses = new Set<ReportStatus>(["approximated", "flattened", "unsupported"])
+  const metadataEmbeddingPreserved = entries.some((entry) => entry.label === "Metadata embedding" && entry.status === "preserved")
+  const preserved = entries.filter((entry) =>
+    entry.status === "preserved" ||
+    entry.status === "info" ||
+    (entry.label === "File metadata" && metadataEmbeddingPreserved && options.includeMetadata),
+  )
+  const changed = entries.filter((entry) => changedStatuses.has(entry.status))
+  return {
+    preserved: dedupeManifestEntries(preserved),
+    changed: dedupeManifestEntries(changed),
+  }
+}
+
+function dedupeManifestEntries(entries: CompatibilityManifestEntry[]) {
+  const seen = new Set<string>()
+  const out: CompatibilityManifestEntry[] = []
+  for (const entry of entries) {
+    const key = `${entry.label}:${entry.status}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(entry)
+  }
+  return out
+}
+
+function hasEntry(entries: CompatibilityManifestEntry[], pattern: RegExp, statuses?: ReportStatus[]) {
+  return entries.some((entry) =>
+    pattern.test(`${entry.label} ${entry.detail}`) &&
+    (!statuses || statuses.includes(entry.status)),
+  )
+}
+
+function buildExportFixActions(
+  doc: PsDocument,
+  options: ExportLimitationOptions,
+  entries: CompatibilityManifestEntry[],
+  warnings: string[],
+): ExportCompatibilityFixAction[] {
+  const actions: ExportCompatibilityFixAction[] = []
+  const add = (action: ExportCompatibilityFixAction) => {
+    if (!actions.some((item) => item.id === action.id)) actions.push(action)
+  }
+
+  if (hasEntry(entries, /alpha transparency|no alpha channel|transparency/i, ["flattened"]) || warnings.some((warning) => /transparency/i.test(warning))) {
+    add({
+      id: "switch-alpha-format",
+      label: "Use an alpha-safe format",
+      detail: "Switch to PNG or WebP before export to preserve transparent pixels instead of compositing them against the matte.",
+      primaryFormat: "png",
+    })
+  }
+  if (doc.bitDepth > 8 && !(options.format === "tiff" || options.format === "ppm" || options.format === "pgm")) {
+    add({
+      id: "use-high-bit-format",
+      label: "Use a high-bit export",
+      detail: "Switch to TIFF or PPM/PGM when sample precision matters; browser-native image encoders use the 8-bit preview path.",
+      primaryFormat: "tiff",
+    })
+  }
+  if (hasEntry(entries, /editable text|text layers|text is rasterized/i, ["flattened", "approximated"])) {
+    add({
+      id: "rasterize-text",
+      label: "Rasterize or sidecar text",
+      detail: "Rasterize text intentionally for image export, or use a project/metadata sidecar when editable typography must be handed off.",
+      primaryFormat: "metadata-json",
+    })
+  }
+  if (doc.layers.length > 1 || hasEntry(entries, /layer structure|layers are composited/i, ["flattened"])) {
+    add({
+      id: "flatten-layer-structure",
+      label: "Review flattened layers",
+      detail: "Exported pixels will be a single flattened surface; save a project copy or sidecar before flattening a layered handoff.",
+      primaryFormat: "metadata-json",
+    })
+  }
+  if (doc.colorMode !== "RGB" || hasEntry(entries, /rgba export conversion|icc profile/i, ["approximated", "unsupported"])) {
+    add({
+      id: "convert-color-intent",
+      label: "Check color conversion",
+      detail: "Verify RGB conversion, proof profile, and ICC embedding before committing a color-critical export.",
+      primaryFormat: options.format === "metadata-json" ? "tiff" : options.format,
+    })
+  }
+  if (options.includeMetadata && hasEntry(entries, /metadata embedding/i, ["approximated", "unsupported"])) {
+    add({
+      id: "add-metadata-sidecar",
+      label: "Add metadata sidecar",
+      detail: "Use the sidecar export when the chosen image container cannot carry the full app metadata payload.",
+      primaryFormat: "metadata-json",
+    })
+  }
+
+  return actions.slice(0, 6)
+}
+
 export function createExportCompatibilityManifest(
   doc: PsDocument,
   options: ExportLimitationOptions,
@@ -2673,6 +2864,9 @@ export function createExportCompatibilityManifest(
   if (doc.layers.length > 1) {
     warnings.push(`${doc.layers.length} layers are flattened into a single exported output surface.`)
   }
+  const score = buildExportCompatibilityScore(entries)
+  const preservationSummary = buildExportPreservationSummary(entries, options)
+  const fixActions = buildExportFixActions(doc, options, entries, warnings)
 
   const riskLevel =
     totals.unsupported > 0 || totals.flattened > 2 || warnings.length >= 3
@@ -2701,6 +2895,9 @@ export function createExportCompatibilityManifest(
     totals,
     warnings,
     riskLevel,
+    score,
+    preservationSummary,
+    fixActions,
     summary: `${options.format.toUpperCase()} compatibility manifest: ${riskLevel} risk, ${totals.flattened} flattened, ${totals.approximated} approximated, ${totals.unsupported} unsupported.`,
   }
 }

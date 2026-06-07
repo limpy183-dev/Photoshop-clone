@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test"
 
 test("right dock defaults to pinned essentials and keeps advanced panels in More Panels", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
 
   const dock = page.getByTestId("panel-dock")
   await expect(dock).toHaveAttribute("data-mode", "expanded")
@@ -16,7 +16,7 @@ test("right dock defaults to pinned essentials and keeps advanced panels in More
 })
 
 test("workspace selector applies workspace-specific pinned panel sets", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
 
   await page.getByLabel("Workspace preset").selectOption("painting")
 
@@ -32,7 +32,7 @@ test("workspace selector applies workspace-specific pinned panel sets", async ({
 })
 
 test("panel dock supports compact and hidden modes without losing panel access", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
 
   await page.getByRole("button", { name: "Compact panel dock" }).click()
   await expect(page.getByTestId("panel-dock")).toHaveAttribute("data-mode", "compact")
@@ -51,7 +51,7 @@ test("panel dock supports compact and hidden modes without losing panel access",
 })
 
 test("users can pin, unpin, and reorder advanced panels", async ({ page }) => {
-  await page.goto("/")
+  await page.goto("/editor")
 
   await page.getByRole("button", { name: "More lower panels" }).click()
   await page.getByPlaceholder("Search lower panels").fill("Scripting")

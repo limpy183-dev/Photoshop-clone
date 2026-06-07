@@ -11,6 +11,7 @@ import {
   resolveErodibleTipSimulation,
   resolveMixerReservoirStep,
 } from "../components/photoshop/brush-engine"
+import { buildRetouchingFeedbackModel } from "../components/photoshop/retouch-feedback"
 
 const baseBrush: BrushSettings = {
   size: 40,
@@ -273,6 +274,77 @@ test("color replacement supports sampling tolerance and replace modes", () => {
   expect(replaced.pixel.a).toBe(255)
   expect(rejected.changed).toBe(false)
   expect(rejected.pixel).toEqual({ r: 40, g: 180, b: 40, a: 255 })
+})
+
+test("retouching feedback model explains brush edge clone source and healing preview state", () => {
+  const clone = buildRetouchingFeedbackModel({
+    tool: "clone-stamp",
+    brush: {
+      ...baseBrush,
+      size: 64,
+      hardness: 35,
+      spacing: 18,
+      scatter: 120,
+      tipShape: "bristle",
+      bristleTip: { length: 64, density: 70, thickness: 38, stiffness: 40, splay: 45, wetness: 52 },
+    },
+    cloneSource: {
+      activePresetId: "clone_1",
+      aligned: false,
+      sample: "all-layers",
+      scale: 125,
+      rotation: -12,
+      offsetX: 18,
+      offsetY: -9,
+      showOverlay: true,
+      presets: [{
+        id: "clone_1",
+        name: "Skin texture",
+        layerId: "layer_1",
+        sourceX: 120,
+        sourceY: 80,
+        scale: 125,
+        rotation: -12,
+        offsetX: 18,
+        offsetY: -9,
+      }],
+    },
+    cursor: { x: 220, y: 160 },
+  })
+  const healing = buildRetouchingFeedbackModel({
+    tool: "healing-brush",
+    brush: baseBrush,
+    cloneSource: {
+      activePresetId: null,
+      aligned: true,
+      sample: "current-layer",
+      scale: 100,
+      rotation: 0,
+      offsetX: 0,
+      offsetY: 0,
+      showOverlay: true,
+      presets: [],
+    },
+    cursor: { x: 40, y: 30 },
+  })
+
+  expect(clone.primaryStatus).toBe("Clone source ready")
+  expect(clone.previewGhost).toMatchObject({
+    visible: true,
+    sourcePoint: { x: 138, y: 71 },
+    destinationPoint: { x: 220, y: 160 },
+    scale: 125,
+    rotation: -12,
+  })
+  expect(clone.brushEdge).toMatchObject({
+    radius: 32,
+    hardnessRadius: 11.2,
+    scatterRadius: 76.8,
+    tipKind: "bristle",
+  })
+  expect(clone.hudChips.map((chip) => chip.label)).toContain("Non-aligned")
+  expect(healing.primaryStatus).toBe("Set a sample point")
+  expect(healing.healingPreview).toMatchObject({ mode: "sample-required", visible: false })
 })
 
 test("art history plans style dabs with bounded area and fidelity", () => {

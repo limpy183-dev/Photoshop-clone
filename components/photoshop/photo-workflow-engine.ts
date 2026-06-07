@@ -97,6 +97,9 @@ export type SelectAndMaskViewMode =
   | "on-black"
   | "on-white"
   | "bw"
+  | "alpha-matte"
+  | "edge-only"
+  | "split"
   | "on-layers"
   | "on-transparent"
   | "on-blue"
@@ -116,6 +119,9 @@ export const SELECT_AND_MASK_VIEW_MODES: Array<{ id: SelectAndMaskViewMode; labe
   { id: "on-black", label: "On Black (A)", background: "black" },
   { id: "on-white", label: "On White (T)", background: "white" },
   { id: "bw", label: "Black & White (K)", background: "mask" },
+  { id: "alpha-matte", label: "Alpha Matte", background: "transparent-grid" },
+  { id: "edge-only", label: "Edge Only", background: "edge-map" },
+  { id: "split", label: "Before/After Split", background: "layers" },
   { id: "on-layers", label: "On Layers (Y)", background: "layers" },
   { id: "on-transparent", label: "On Transparent", background: "transparent-grid" },
   { id: "on-blue", label: "On Blue", background: "blue" },
@@ -1676,9 +1682,22 @@ export function buildSelectAndMaskPreviewModel(options: SelectAndMaskPreviewOpti
   return {
     viewMode: view.id,
     background: view.background,
+    opacity: options.opacity ?? 50,
+    decontaminateColors: !!options.decontaminateColors,
     overlayOpacity,
-    showsComposite: view.id === "on-layers" || view.id === "marching" || view.id === "onion",
+    showsComposite: view.id === "on-layers" || view.id === "marching" || view.id === "onion" || view.id === "split",
     showsMaskOnly: view.id === "bw",
+    showsAlphaMatte: view.id === "alpha-matte",
+    showsEdgesOnly: view.id === "edge-only",
+    showsBeforeAfterSplit: view.id === "split",
+    edgeEmphasis: view.id === "edge-only" ? "selection-transition" : "none",
+    description: view.id === "split"
+      ? "Shows the unmasked composite on the left and the refined before/after result on the right."
+      : view.id === "edge-only"
+        ? "Shows only selection transition edges so missed hair, product corners, and halos stand out."
+        : view.id === "alpha-matte"
+          ? "Shows the refined alpha over transparency to judge semi-transparent edges."
+          : view.label,
     output: {
       target: outputTo,
       createsDocument: outputTo === "new-document",

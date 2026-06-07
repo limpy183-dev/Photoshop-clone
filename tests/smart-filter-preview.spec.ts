@@ -4,6 +4,11 @@ import {
   firstDirtySmartFilterPreviewIndex,
   smartFilterPreviewEntryKey,
 } from "../components/photoshop/smart-filter-preview"
+import {
+  buildFilterPreviewQualityModel,
+  getFilterPreviewDisplayModes,
+  planFilterPreviewExecution,
+} from "../components/photoshop/filter-preview"
 
 test("smart filter preview keys are stable for equivalent entry state", () => {
   const a = smartFilterPreviewEntryKey({
@@ -55,4 +60,30 @@ test("smart filter preview cache recomputes from the first changed stack entry",
     "a:blur:radius=2",
     "b:noise:amount=4",
   ])).toBe(2)
+})
+
+test("filter preview model exposes split preview and execution path guidance", () => {
+  const workerPlan = planFilterPreviewExecution("brightness-contrast", 1800, 1200, { brightness: 12, contrast: 8 })
+  const workerModel = buildFilterPreviewQualityModel(workerPlan, {
+    debounceMs: 80,
+    selectedLayerCount: 2,
+    smartTarget: false,
+  })
+  const tiledPlan = planFilterPreviewExecution("gaussian-blur", 6000, 4200, { radius: 40 })
+  const tiledModel = buildFilterPreviewQualityModel(tiledPlan, {
+    debounceMs: 24,
+    selectedLayerCount: 1,
+    smartTarget: true,
+  })
+
+  expect(getFilterPreviewDisplayModes().map((mode) => mode.id)).toEqual(["after", "split", "before"])
+  expect(workerModel).toMatchObject({
+    executionLabel: "Worker preview",
+    detailLabel: "Preview is queued after 80 ms and applies to 2 layers.",
+    pathKind: "worker",
+    destructive: true,
+  })
+  expect(tiledModel.pathKind).toBe("tiled-worker")
+  expect(tiledModel.executionLabel).toContain("Tiled worker")
+  expect(tiledModel.detailLabel).toContain("Smart Filter")
 })

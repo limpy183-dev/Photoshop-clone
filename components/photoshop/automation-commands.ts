@@ -428,7 +428,7 @@ export async function processImageBatch(
           type: mimeType,
           quality: fmt.quality != null ? fmt.quality / 100 : undefined,
         })
-        const baseName = job.fileName.replace(/\.[^.]+$/, "")
+        const _baseName = job.fileName.replace(/\.[^.]+$/, "")
         outputs.push({ format: ext, blob })
       }
     } catch {

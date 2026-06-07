@@ -19,6 +19,7 @@ import { extractMarchingAntsPaths, refineEdgeBrushMask } from "./tool-helpers"
 import {
   SELECT_AND_MASK_OUTPUT_TARGETS,
   SELECT_AND_MASK_VIEW_MODES,
+  buildSelectAndMaskPreviewModel,
   type SelectAndMaskOutputTarget,
   type SelectAndMaskViewMode,
 } from "./photo-workflow-engine"
@@ -72,6 +73,12 @@ export function SelectAndMaskDialog({
 
   const previewRef = React.useRef<HTMLCanvasElement>(null)
   const maskRef = React.useRef<HTMLCanvasElement | null>(null)
+  const previewModel = React.useMemo(() => buildSelectAndMaskPreviewModel({
+    viewMode,
+    outputTo,
+    opacity,
+    decontaminateColors: decontaminate,
+  }), [viewMode, outputTo, opacity, decontaminate])
 
   const renderPreview = React.useCallback(() => {
     const cv = previewRef.current
@@ -87,6 +94,65 @@ export function SelectAndMaskDialog({
     const ctx = cv.getContext("2d")!
     ctx.clearRect(0, 0, pw, ph)
 
+    const drawComposite = (maskedActiveLayer = false) => {
+      ctx.fillStyle = activeDoc.background === "transparent" ? "rgba(0,0,0,0)" : activeDoc.background
+      if (activeDoc.background !== "transparent") ctx.fillRect(0, 0, pw, ph)
+      ctx.save()
+      ctx.scale(scale, scale)
+      for (const l of activeDoc.layers) {
+        if (!l.visible || l.kind === "group") continue
+        if (typeof l.canvas.getContext !== "function") continue
+        ctx.globalAlpha = l.opacity
+        if (maskedActiveLayer && l.id === activeLayer.id) {
+          const tmp = document.createElement("canvas")
+          tmp.width = activeDoc.width
+          tmp.height = activeDoc.height
+          const tctx = tmp.getContext("2d")!
+          tctx.drawImage(l.canvas, 0, 0)
+          tctx.globalCompositeOperation = "destination-in"
+          tctx.drawImage(mask, 0, 0)
+          ctx.drawImage(tmp, 0, 0)
+        } else {
+          ctx.drawImage(l.canvas, 0, 0)
+        }
+      }
+      ctx.restore()
+      ctx.globalAlpha = 1
+    }
+
+    if (viewMode === "edge-only") {
+      ctx.fillStyle = "#0b0d10"
+      ctx.fillRect(0, 0, pw, ph)
+      const edge = buildMaskEdgeCanvas(mask)
+      ctx.drawImage(edge, 0, 0, pw, ph)
+      return
+    }
+
+    if (viewMode === "split") {
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(0, 0, pw / 2, ph)
+      ctx.clip()
+      drawComposite(false)
+      ctx.restore()
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(pw / 2, 0, pw / 2, ph)
+      ctx.clip()
+      drawComposite(true)
+      ctx.restore()
+      ctx.fillStyle = "rgba(255,255,255,0.85)"
+      ctx.fillRect(Math.floor(pw / 2) - 1, 0, 2, ph)
+      ctx.fillStyle = "rgba(0,0,0,0.55)"
+      ctx.fillRect(8, 8, 48, 18)
+      ctx.fillRect(Math.max(8, pw - 56), 8, 48, 18)
+      ctx.fillStyle = "#fff"
+      ctx.font = "10px sans-serif"
+      ctx.fillText("Before", 14, 21)
+      ctx.fillText("After", Math.max(14, pw - 50), 21)
+      return
+    }
+
     // Draw based on view mode
     if (viewMode === "on-black") {
       ctx.fillStyle = "#000"
@@ -99,22 +165,24 @@ export function SelectAndMaskDialog({
       ctx.fillRect(0, 0, pw, ph)
     } else if (viewMode === "on-layers" || viewMode === "onion" || viewMode === "marching") {
       // Draw composite
-      ctx.fillStyle = activeDoc.background
-      ctx.fillRect(0, 0, pw, ph)
-      ctx.save()
-      ctx.scale(scale, scale)
-      for (const l of activeDoc.layers) {
-        if (!l.visible || l.kind === "group") continue
-        if (typeof l.canvas.getContext !== "function") continue
-        ctx.globalAlpha = l.opacity
-        ctx.drawImage(l.canvas, 0, 0)
-      }
-      ctx.restore()
+      drawComposite(false)
     }
 
     if (viewMode === "bw") {
       // Show mask as black and white
       ctx.drawImage(mask, 0, 0, pw, ph)
+      return
+    }
+
+    if (viewMode === "alpha-matte") {
+      const tmp = document.createElement("canvas")
+      tmp.width = activeDoc.width
+      tmp.height = activeDoc.height
+      const tctx = tmp.getContext("2d")!
+      tctx.drawImage(activeLayer.canvas, 0, 0)
+      tctx.globalCompositeOperation = "destination-in"
+      tctx.drawImage(mask, 0, 0)
+      ctx.drawImage(tmp, 0, 0, pw, ph)
       return
     }
 
@@ -515,6 +583,9 @@ export function SelectAndMaskDialog({
                   <option key={v.id} value={v.id}>{v.label}</option>
                 ))}
               </select>
+              <div className="mt-2 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1.5 text-[10px] leading-snug text-[var(--ps-text-dim)]">
+                {previewModel.description}
+              </div>
               {viewMode === "overlay" && (
                 <div className="mt-2">
                   <PropSlider label="Opacity" value={opacity} min={0} max={100} suffix="%" onChange={setOpacity} />
@@ -595,6 +666,32 @@ export function SelectAndMaskDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+function buildMaskEdgeCanvas(mask: HTMLCanvasElement) {
+  const edge = document.createElement("canvas")
+  edge.width = mask.width
+  edge.height = mask.height
+  const src = mask.getContext("2d")!.getImageData(0, 0, mask.width, mask.height)
+  const out = new ImageData(mask.width, mask.height)
+  const threshold = 18
+  for (let y = 0; y < mask.height; y++) {
+    for (let x = 0; x < mask.width; x++) {
+      const idx = y * mask.width + x
+      const alpha = src.data[idx * 4 + 3]
+      const right = x + 1 < mask.width ? src.data[(idx + 1) * 4 + 3] : alpha
+      const down = y + 1 < mask.height ? src.data[(idx + mask.width) * 4 + 3] : alpha
+      const strength = Math.max(Math.abs(alpha - right), Math.abs(alpha - down))
+      if (strength <= threshold) continue
+      const outIdx = idx * 4
+      out.data[outIdx] = 96
+      out.data[outIdx + 1] = 213
+      out.data[outIdx + 2] = 255
+      out.data[outIdx + 3] = Math.min(255, 96 + strength)
+    }
+  }
+  edge.getContext("2d")!.putImageData(out, 0, 0)
+  return edge
 }
 
 /* ---- Reusable components ---- */

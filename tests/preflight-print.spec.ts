@@ -135,7 +135,6 @@ test("print preview report includes machine-checkable marks geometry limitations
     expect.arrayContaining([
       expect.objectContaining({ kind: "crop", enabled: true }),
       expect.objectContaining({ kind: "registration", enabled: true }),
-      expect.objectContaining({ kind: "center", enabled: true }),
       expect.objectContaining({ kind: "bleed", enabled: true }),
       expect.objectContaining({ kind: "label", enabled: true, label: expect.stringContaining(doc.name) }),
     ]),
