@@ -1,0 +1,192 @@
+1st:
+
+Prioritized Findings
+P0, verified defect: reducer executes twice despite being impure. dispatch manually calls reducer, then rawDispatch runs it again (editor-context.tsx (line 4451)). The reducer generates IDs/timestamps (editor-context.tsx (line 2145)) and schedules mutable asynchronous compression (editor-context.tsx (line 2719), editor-context.tsx (line 470)). This can diverge stateRef from React state and schedule overlapping compression against shared snapshots, risking corrupted dimensions and leaked blobs.
+Improve: make the reducer deterministic and side-effect-free; create IDs/timestamps before dispatch and move compression/release into a history service.
+
+P0, verified defect: saving can mark unsaved concurrent edits as saved. The document is serialized before asynchronous file operations (menu-bar.tsx (line 1913)), but completion later calls markDocumentSaved (menu-bar.tsx (line 1965)), which records the history index at completion time (editor-context.tsx (line 3715)). Edits made while the picker/write is pending can therefore appear saved although they are absent from disk.
+Improve: capture the document revision at serialization time and pass that exact revision in the save-completed action; remain dirty when the current revision differs.
+
+P1, verified defect: delayed history restore is not document-bound. Undo captures a document and entry, asynchronously decompresses it, then dispatches an action without a document ID (editor-context.tsx (line 4758), editor-context.tsx (line 4792)). The reducer applies it to whichever document is active at completion (editor-context.tsx (line 2807)). Switching documents during decompression can restore old layers into another document.
+Improve: include docId and expected history generation in restore actions and discard stale completions.
+
+P1, verified defect: history does not cover persisted document state. PsDocument contains timeline, plugins, metadata, color management, and print settings (types.ts (line 1823)), but HistoryEntry and makeHistoryEntry omit most of them (types.ts (line 1888), editor-context.tsx (line 3926)). File Info modifies three omitted fields and explicitly creates a history entry (file-info-dialog.tsx (line 161)); undo cannot revert them.
+Improve: define one complete document snapshot contract or use inverse domain operations instead of a manually duplicated subset.
+
+P1, verified defect: dirty tracking has false negatives and false positives. A manually maintained action allow-list controls dirty state (editor-context.tsx (line 1676)). Persisted set-plugin-storage mutations are omitted and occur without a history commit (advanced-subsystems-dialog.tsx (line 2562)). Conversely, listed actions mark dirty even when the reducer rejects them, such as removing the only layer (editor-context.tsx (line 2128)).
+Improve: derive dirty state from actual per-document revision changes, not action names.
+
+P1, verified defect: save events can target the wrong document. Shortcut saves omit docId (use-shortcuts.ts (line 157)); completion re-emits that missing ID (menu-bar.tsx (line 1977)). The asset generator then falls back to the currently active document (image-assets-generator-runner.tsx (line 210)). Switching tabs during save can run generation for the wrong document.
+Improve: every request/completion should carry resolved docId plus a correlation ID.
+
+P2, verified defect: the editor Home workspace is never rendered. It is lazy-loaded (editor-app.tsx (line 57)), but the state value is discarded (editor-app.tsx (line 111)); ps-show-home only updates that unused state (editor-app.tsx (line 231)). With no documents, CanvasView displays plain text instead (canvas-view.tsx (line 7013)).
+Improve: render HomeWorkspace when homeOpen || !activeDoc.
+
+P2, architecture risk: global context and module boundaries amplify coupling. One context exposes nearly every state slice and command (editor-context.tsx (line 4089)); its value depends on nearly all state (editor-context.tsx (line 5395)). Any change invalidates all useEditor consumers. The same module also imports UI, storage, algorithms, playback, history, and rendering services (editor-context.tsx (line 3)).
+Improve: split document/history/tool/lifecycle stores with selector subscriptions; separate command handlers from reducers and move the close dialog into the shell.
+
+Additional Risk
+The typed event map covers only part of the actual event surface (events.ts (line 1)); important save, preferences, image-size, and timeline events bypass it with raw window events. Consolidating them would prevent payload drift and improve testability.
+Strengths
+The discriminated action union, per-document histories/lifecycle, sanitized persistence, lazy shell loading, and RAF-coalesced dirty-rectangle render bus are solid foundations. In particular, the separate render bus avoids forcing mutable canvas updates through React state (render-bus.ts (line 144)).
+npm run typecheck passed. No files remain modified.
+
+
+2nd:
+
+Critical
+Mobile editor canvas collapses to 0px. The shell always reserves a 44px tool rail and 340–720px non-shrinking dock. At 394×851, the measured canvas width was exactly zero. editor-app.tsx (line 164), editor-app.tsx (line 315), panel-dock.tsx (line 445), panel-dock.tsx (line 500)
+Major dialogs retain desktop layouts on phones. New Document’s fixed 240px column reduced numeric inputs to 30–53px; Filter Gallery requires fixed 200px and 260px sidebars inside a clipped container. new-document-dialog.tsx (line 174), new-document-dialog.tsx (line 180), filter-gallery.tsx (line 460), filter-gallery.tsx (line 475)
+High
+The in-editor Home/onboarding workspace is dead code. It is lazy-loaded and events update state, but the state value is discarded and the component is never rendered. editor-app.tsx (line 57), editor-app.tsx (line 114), editor-app.tsx (line 231)
+New Document fields have no accessible names. Visible Label elements lack htmlFor, while controls lack IDs or aria-label; browser inspection exposed unnamed spinbuttons and comboboxes. new-document-dialog.tsx (line 207), new-document-dialog.tsx (line 212), new-document-dialog.tsx (line 221)
+Related-tool menus are keyboard-inaccessible and use invalid nested controls. “More tools” is a role="button" inside a button with tabIndex={-1}; the popup has no menu semantics or keyboard navigation. tool-palette.tsx (line 269), tool-palette.tsx (line 291), tool-palette.tsx (line 307)
+Document tabs cannot be activated by keyboard. Each tab is a clickable div without tab semantics or tabIndex; its options button is also fully transparent unless the group is hovered. document-tabs.tsx (line 66), document-tabs.tsx (line 74), document-tabs.tsx (line 90)
+The custom context menu never moves focus into the menu. Only Escape is handled; arrow navigation, Home/End, initial focus, and focus restoration are absent. editor-app.tsx (line 555), editor-app.tsx (line 621)
+Resize separators are pointer-only. They expose role="separator" but are not focusable and provide no keyboard resizing or value attributes. resize-handle.tsx (line 101)
+TweenDialog is not an accessible dialog. It is a fixed pair of divs with no dialog role, accessible title, focus trap, background inertness, Escape handling, or focus restoration. timeline-panel.tsx (line 2010)
+Panel browsers behave like dialogs but lack overlay semantics. They autofocus search, but have no role, Escape dismissal, outside-click handling, focus containment, or trigger-focus restoration. panel-dock.tsx (line 938), panel-dock.tsx (line 1028)
+The “Unsubscribe with one click” claim is unsupported. The UI promises it, but the only subscription API operation is POST; no unsubscribe route or link exists. newsletter-cta.tsx (line 216), route.ts (line 38)
+Licensing copy is contradictory and legally misleading. The footer says “MIT-spirit licensed,” while the README confirms there is no license file and incorrectly says users can do anything. footer.tsx (line 155), README.md (line 293)
+Medium
+Interactive actions are embedded inside Radix tooltips. The “Learn” button is inside tooltip content, making keyboard discovery and focus behavior unreliable and violating normal tooltip semantics. rich-tooltip.tsx (line 173), rich-tooltip.tsx (line 262)
+Mobile marketing navigation simply disappears. All section links are hidden below md, with no replacement menu. nav.tsx (line 57)
+Several targets are far below recommended touch size. Color actions are 12×12px, swatches 20×20px, and document controls 16×16px. tool-palette.tsx (line 518), document-tabs.tsx (line 90)
+Absolute marketing claims conflict with documented limits. “Every tool,” “the full workspace, nothing faked,” and unqualified “PSD round-trip” exceed the narrower compatibility claims elsewhere. tools-grid.tsx (line 183), editor-showcase.tsx (line 162), hero.tsx (line 172), limitations.tsx (line 24)
+Validation: phone-size browser inspection reproduced the zero-width canvas and broken New Document layout. The sole mobile smoke test also failed waiting for File; even when passing, it only checks element existence, not usable geometry. No repository files were edited.
+
+
+3rd:
+
+Findings
+[P0] Tile eviction can silently destroy pixel data. tile-store.ts (line 402) clears resident data even when OPFS is disabled or persistence fails. tile-store.ts (line 262) later reconstructs an empty tile. Only evict after confirmed persistence; otherwise retain the tile or reject the allocation.
+
+[P1] OPFS tile keys collide across documents. tiled-backing-store.ts (line 206) and tiled-backing-store.ts (line 235) omit a document/store namespace. PSB tiles also use fixed identifiers at psb-tile-view.ts (line 5). Include a unique document namespace and scratch-format version in every key.
+
+[P1] Pointer-to-document conversion is incorrect in tile-only and rotated views. Tile mode makes the composite canvas viewport-local at canvas-view.tsx (line 727), but canvas-view.tsx (line 1052) maps its bounds directly to full-document dimensions. CSS rotation at canvas-view.tsx (line 7093) is also not inverted. Centralize screen/document transforms using an inverse DOMMatrix plus viewport origin.
+
+[P1] Large-document fallback can still allocate full-document canvases. The overlay always uses full document dimensions at canvas-view.tsx (line 7108). Incompatible documents disable tiling at tile-only-pipeline.ts (line 792), followed by a full-size allocation at canvas-view.tsx (line 752). Use viewport-sized overlays and never silently fall back to an unsafe full canvas.
+
+[P1] Tile rendering applies smart filters twice and lacks effect halos. layer-tile-renderer.ts (line 402) materializes smart filters, then tile-only-pipeline.ts (line 530) applies them again. Filters operate on cropped tiles without neighboring pixels at tile-only-pipeline.ts (line 462), causing seams and stale adjacent tiles. Define one render contract and propagate effect radius through dirty-tile invalidation.
+
+[P1] Filter cancellation converts canceled work into main-thread work. Abort rejection at filter-worker.ts (line 1534) reaches a catch that permanently marks the worker failed and runs the filter synchronously at filter-worker.ts (line 1546). Preserve AbortError, implement worker cancellation, clean listeners, and serialize worker initialization.
+
+[P1] WebGL resources and contexts churn without deterministic cleanup. Composition creates transient canvases/contexts at canvas-view.tsx (line 862) and webgl-compositor.ts (line 3004). Shader passes allocate programs, buffers, and textures around webgl-compositor.ts (line 1851), but cleanup at webgl-compositor.ts (line 1978) covers only extra textures. Reuse a persistent compositor and add try/finally disposal and context-loss handling.
+
+[P1] WebGL capability planning assumes a 16,384-pixel texture limit. webgl-compositor.ts (line 1145) uses a guessed limit rather than MAX_TEXTURE_SIZE; allocations lack robust framebuffer/error checks. Query the active context and downgrade cleanly when texture or framebuffer allocation fails.
+
+[P1] Brush workflows allocate multiple full-document canvases per stroke. Transparency locking and buffered strokes clone full layers at canvas-view.tsx (line 1273) and canvas-view.tsx (line 1310). An 8192² RGBA canvas is roughly 256 MiB. Use stroke-bounds or tile-local scratch surfaces and account for them in the memory budget.
+
+[P1] “Tiled” filters remain full-document and block rendering. filter-worker.ts (line 1663) allocates a full output ImageData; row processing repeatedly uses slice() and only yields through resolved promises at filter-worker.ts (line 1668), which does not yield to input/rendering. Stream bounded tiles and use task/macrotask scheduling.
+
+[P2] Progressive rendering is not meaningfully integrated and has a restart race. Canvas handling at canvas-view.tsx (line 832) ignores planned preview scale and tile keys. An older run can clear a newer runner’s state in progressive-preview.ts (line 178). Guard cleanup with a generation/controller identity and wire the planner to actual low-resolution rendering.
+
+[P2] Pointer cancellation and lost capture are unhandled. The canvas registers down/move/up but no pointercancel or lostpointercapture handlers at canvas-view.tsx (line 7075). Interrupted input can retain stroke state and scratch canvases. Add one idempotent cancellation path for cancel, lost capture, blur, and unmount.
+
+[P2] DPR changes do not repaint the custom cursor. canvas-view.tsx (line 7003) reads devicePixelRatio without observing later monitor or zoom changes. Track DPR through resolution-media/resize events and resize the backing canvas when it changes.
+
+[P2] The canvas pool retains oversized backing stores indefinitely. canvas-utils.ts (line 111) returns large canvases to the pool, while cleanup at canvas-utils.ts (line 125) has no production caller. Cap by retained bytes, zero evicted dimensions, and clean on document close or memory pressure.
+
+The broader maintainability problem is duplicated rendering semantics across the 2D, WebGL, tile-only, and layer-tile paths. A canonical layer/render graph with backend-specific execution would prevent divergences such as double filters and inconsistent fallback behavior.
+Verification
+No files were edited; the worktree remains clean. Targeted tests produced 58 passes and 5 failures. All five failures were in canvas-interaction-performance.spec.ts and timed out during setup because /editor did not expose [data-canvas-stage]; planner, storage, large-document, infrastructure, and brush-engine tests passed.
+
+
+4th:
+
+High — Public generative-fill relay can expose a billable/private upstream
+The route has no authentication, rate limit, origin validation, request schema, body-size limit, timeout, or response-size limit. It forwards attacker-controlled JSON using the server’s bearer secret.
+Exploitability: requires a server deployment with GENERATIVE_FILL_ENDPOINT and GENERATIVE_FILL_API_KEY configured. An unauthenticated remote attacker could consume upstream capacity or cost.
+References: app/api/photoshop/generative-fill/route.ts (line 3), route.ts (line 13), route.ts (line 14), route.ts (line 22)
+Medium — Marketing rate limits are trivially bypassable
+Without trusted-proxy mode, the client identity is derived entirely from caller-controlled browser headers. Rotating User-Agent bypassed the limiter in dynamic testing. Trusted mode can also accept spoofed forwarding headers unless the proxy strips all incoming copies. Buckets are process-local, so restarts and multiple instances weaken enforcement.
+Exploitability: unauthenticated direct HTTP access permits quota exhaustion, data poisoning, and memory growth through unique bucket keys.
+References: lib/marketing-store.ts (line 96), marketing-store.ts (line 174), feedback/route.ts (line 42), subscribe/route.ts (line 46)
+Medium — Advanced image decoders validate dimensions after allocation
+TIFF, EXR, HEIC, JPEG 2000, and RAW inputs are decoded before canvas-dimension limits are checked. The compressed 80 MB file limit does not constrain decompressed memory.
+Exploitability: a user must import a crafted file accepted by the relevant codec. Impact is browser-tab memory exhaustion or prolonged CPU usage.
+References: raster-codecs.ts (line 544), raster-codecs.ts (line 579), raster-codecs.ts (line 631), raster-codecs.ts (line 722), raster-codecs.ts (line 773), advanced-subsystems.ts (line 30)
+Medium — Project imports permit parallel decode amplification
+Image data URLs are decoded before dimensions are checked. Layers and channels are decoded concurrently, while each layer may contain an uncapped number of smart-filter masks.
+Exploitability: requires opening a malicious project under the 50 MB file limit. Highly compressed images and numerous masks can produce substantial concurrent memory and CPU consumption.
+References: document-io.ts (line 3092), document-io.ts (line 3120), document-io.ts (line 3191), menu-bar.tsx (line 2081)
+Medium — Sensitive document contents persist despite “Recent Files Limit”
+Recent documents store complete serialized projects, including canvas and mask data URLs, in localStorage. Persistence hardcodes eight documents and does not consume the preference that allows users to select zero.
+Exploitability: requires same-browser-profile access, a malicious extension, local account access, or same-origin script execution. Sensitive image contents remain after closing the document.
+References: recent-documents.ts (line 20), recent-documents.ts (line 126), document-io.ts (line 2180), preferences-dialog.tsx (line 529)
+Low — GitHub Pages deployment omits application security headers
+The deployment uses a static export, where Next response-header configuration and nonce middleware do not run. The deployed application consequently lacks the configured CSP, framing restrictions, Permissions Policy, COOP/CORP, and related headers.
+Exploitability: applies specifically to the GitHub Pages deployment. The clearest direct risk is clickjacking because the application can be framed.
+References: deploy-pages.yml (line 21), deploy-pages.yml (line 36), next.config.mjs (line 39), next.config.mjs (line 122), proxy.ts (line 33)
+Meaningful Defenses
+Marketing routes use bounded streaming body readers, strict schemas, origin checks, and persistent-store quotas: marketing-store.ts (line 204), feedback/route.ts (line 17).
+Plugin execution uses sandboxed CSP-restricted iframes, permission checks, message validation, and storage limits: plugin-system.ts (line 926), plugin-system.ts (line 1202), advanced-subsystems-dialog.tsx (line 2404).
+Automation and command scripting use bounded parsers rather than evaluating user JavaScript: automation-engine.ts (line 67), command-dsl.ts (line 19).
+Standard raster imports preflight dimensions, and all canvas creation is capped at 8192 pixels/33.2 MP: document-io.ts (line 599), canvas-limits.ts (line 1).
+npm audit reported zero known vulnerabilities in both production-only and full dependency trees.
+
+
+5th:
+
+Findings
+[P1] Imported 16/32-bit PSDs lose precision on save. Import renders layers into 8-bit browser canvases, while saving merely expands those 8-bit values back to the declared depth. Normal Save does not request the limited native snapshot preservation path. document-io.ts (line 3504) document-io.ts (line 4155) high-bit-document.ts (line 1399) menu-bar.tsx (line 2038)
+
+[P1] Every high-bit or non-RGB PSD is routed through a structure-reducing writer. Groups are dissolved and masks, adjustment descriptors, guides, channels, paths, notes, print settings, linked files and most image resources are omitted. Index-based metadata restoration can then attach metadata to the wrong layer. document-io.ts (line 4155) psd-native-writer.ts (line 563) psd-native-writer.ts (line 610) psd-compatibility.ts (line 425)
+
+[P1] Original ICC data is discarded and replaced by a synthetic, identification-only profile. The importer extracts profile bytes but retains only a mapped name. The generated replacement omits gamut/TRC data and declares RGB even for CMYK-labelled profiles, producing misleading PSD and raster exports. document-io.ts (line 3672) psd-color-modes.ts (line 314) psd-color-modes.ts (line 332) document-io.ts (line 1255)
+
+[P1] HDR highlights are clipped before float TIFF/EXR export. The shared high-bit compositor clamps every channel to [0,1], including 32-bit float output, so scene-linear values above 1 are irreversibly lost. high-bit-document.ts (line 149) high-bit-document.ts (line 1324) advanced-subsystems-dialog.tsx (line 3198)
+
+[P1] Project loading silently truncates valid serialized data. safeJsonValue limits strings to 4,000 characters, arrays to 1,024 entries, objects to 256 keys and nesting to six levels. Embedded font/ICC payloads, plugin state, timelines, datasets and metadata can therefore be corrupted without rejection or warning. document-io.ts (line 2014) document-io.ts (line 3330) types.ts (line 219)
+
+[P1] Recovering or dismissing one autosave deletes every recovery snapshot. The dialog selects only the first entry, then calls a global store clear, destroying snapshots for other crashed documents. autosave-recovery.tsx (line 156) autosave-recovery.tsx (line 192) recent-documents.ts (line 267)
+
+[P1] Autosave failures can erase the last good recovery and suppress retries. Serialization exceptions clear all snapshots; versions are marked saved before asynchronous writes finish; IndexedDB/OPFS failures are swallowed. Failed versions are then skipped until another edit occurs. autosave-recovery.tsx (line 77) autosave-recovery.tsx (line 89) autosave-recovery.tsx (line 123) recent-documents.ts (line 213)
+
+[P2] PSD smart-object sources can be assigned to the wrong layer. Application layers are flattened in reverse order, while PSD nodes are collected in original order and consumed positionally. Multiple leaves or alpha-marker layers shift associations. document-io.ts (line 3427) document-io.ts (line 3580) document-io.ts (line 3730)
+
+[P2] File > Print bypasses both print setup and canonical rendering. It directly draws raw visible canvases, ignoring masks, clipping, adjustments, effects, color management, high-bit data, paper layout, bleed and printer profiles. menu-bar.tsx (line 2543) menu-bar.tsx (line 2549) print-engine.ts (line 291)
+
+[P2] JPEG 2000 encoder failures produce a fabricated invalid JPX instead of failing export. The fallback lacks tile-part, image data and a valid codestream, yet is downloaded as an image. raster-codecs.ts (line 3190) raster-codecs.ts (line 3240) advanced-subsystems-dialog.tsx (line 3222)
+
+[P2] 16-bit TGA decoding always discards the one-bit alpha channel. Both branches of the alpha expression produce 255, making transparent pixels opaque. raster-codecs.ts (line 817) raster-codecs.ts (line 826)
+
+[P2] Preflight caches pixel bounds indefinitely by canvas identity. Since editing mutates canvases in place, later preflight runs can report stale clipping or incorrectly offer empty-layer deletion. preflight-engine.ts (line 71) preflight-engine.ts (line 128) preflight-engine.ts (line 203)
+
+[P2] Project save/autosave creates severe avoidable memory amplification. Every layer and high-bit buffer is synchronously base64-encoded, assembled into a second object graph, and then pretty-printed into another full-size string on the UI thread. document-io.ts (line 2154) document-io.ts (line 2209) high-bit-document.ts (line 1454)
+
+Test Gaps
+Existing tests do not cover imported high-bit PSD save fidelity, groups/masks through the native writer, HDR values above 1, large project payload round trips, recovery of multiple documents, failed autosave writes, external JPEG 2000/ICC readers, 16-bit TGA alpha, or rerunning preflight after in-place edits.
+Focused verification completed: 81 Playwright tests passed and npx tsc --noEmit passed. No files were edited. Findings exclude the accepted limitations documented for private PSD descriptors, certified CMM parity, and absolute browser heap/file limits in BOUNDARIES.md (line 43), BOUNDARIES.md (line 59), and BOUNDARIES.md (line 88).
+
+
+6th:
+
+Prioritized Findings
+P0: GitHub Pages deployment is functionally broken. The workflow deletes all API routes before static export (deploy-pages.yml (line 36)), while the deployed UI still calls /api/subscribe and /api/feedback (newsletter-cta.tsx (line 56), newsletter-cta.tsx (line 90)). Those forms cannot work on Pages.
+The /Photoshop-clone base path is configured at next.config.mjs (line 76), but plain anchors and image paths remain root-relative (footer.tsx (line 15), footer.tsx (line 122), hero.tsx (line 236)). The generated artifact contained 3 root /editor links and 5 root marketing-image references, with no base-prefixed image references.
+
+P0: Deployment has no quality gate. The only workflow runs on pushes to main and immediately builds and deploys (deploy-pages.yml (line 3), deploy-pages.yml (line 18)). There is no PR workflow and no lint, typecheck, capability check, or Playwright step. The nominal verify script also omits lint (package.json (line 13)).
+
+P1: Security tests validate a deployment model that Pages does not use. CSP, HSTS, COOP, CORP, and related headers are supplied by Next configuration and proxy middleware (next.config.mjs (line 54), proxy.ts (line 33)). Static export explicitly warned that headers and middleware are disabled. Tests only assert the development server response (marketing-security.spec.ts (line 262)), so they provide false confidence about the deployed site.
+
+P1: The test suite is concurrency-sensitive and unreliable as a release gate. A default run produced 778 passed, 8 failed. All eight failures passed when isolated or run with one worker. Examples include canvas-tools.spec.ts (line 70), brush-stroke-undo.spec.ts (line 171), file-format-depth.spec.ts (line 605), and psd-roundtrip-fixtures.spec.ts (line 33).
+reuseExistingServer: true permits unrelated runs to share port 3000 (playwright.config.ts (line 11)); this occurred during review. trace: "on-first-retry" is ineffective because retries are not configured (playwright.config.ts (line 9)); failed runs produced zero traces and screenshots.
+
+P1: Static builds poison subsequent lint runs. out/ is Git-ignored (.gitignore (line 15)) but absent from ESLint ignores (eslint.config.mjs (line 36)). After a Pages build, lint reported 16,179 errors across 143 generated files. After removing out/, source lint passed.
+
+P1: Release licensing claims are invalid. There is no license file, yet README says “You can do anything with it” (README.md (line 293)) and the product claims “MIT-spirit licensed” (footer.tsx (line 155)). Without an actual license, downstream users do not receive those permissions.
+
+P2: Significant test volume relies on brittle techniques. Committed HEAD has 754 tests in 96 spec files and roughly 21,425 test lines, but includes:
+40 fixed waitForTimeout calls, including a 4.5-second sleep (photoshop-pixel-regression.spec.ts (line 459)).
+Five specs that assert source-code strings rather than behavior, for example browser-diagnostics.spec.ts (line 168) and typography-panel-polish.spec.ts (line 6).
+A direct dependency import failure converted into a skip (psd-color-modes.spec.ts (line 447)).
+Zero visual snapshot assertions, accessibility tooling, or code-coverage thresholds.
+
+P2: Coverage does not exercise production deployment. All browser tests use next dev, Chromium, and no Pages base path (playwright.config.ts (line 7)). Firefox and WebKit are absent; mobile coverage is exactly one tagged test (advanced-capabilities.spec.ts (line 77)). This is why the static-export defects escaped the suite.
+
+P2: Dependency and build maintenance is accumulating risk. npm audit reports 0 vulnerabilities across 436 dependencies, but npm outdated reports 49 outdated packages, 9 with major-version gaps. There is no engines, packageManager, Dependabot, or Renovate configuration. README recommends Node 20+, CI uses Node 22, and this review ran under Node 25. The build succeeds but repeatedly warns about a libraw-wasm circular runtime chunk (raster-codecs.ts (line 764)); the Pages artifact was 11.1 MB with a 1.44 MB largest JS chunk and no bundle budget.
+
+P2: Documentation is materially stale. README misidentifies app/page.tsx as the editor shell (README.md (line 247)); it actually renders StartWorkspace (app/page.tsx (line 1)). The improvement report still claims typecheck fails and lint has seven warnings (comprehensive-improvement-report-2026-06-01.md (line 9)), while both currently pass. BOUNDARIES.md references a nonexistent report (BOUNDARIES.md (line 3)).
+
+Verification: typecheck, source lint, capability reconciliation, dependency audit, and production build passed; build retained the circular-chunk warning. No repository files were edited by me. Concurrent external changes remain in two tracked source files and six untracked test files.

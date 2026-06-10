@@ -105,6 +105,11 @@ const nextConfig = {
     ],
   },
   turbopack: {
+    // Pin the workspace root to this project. Without this, Next/Turbopack
+    // infers the root by walking up to the outermost lockfile — and a stray
+    // package-lock.json in a parent directory (e.g. the home folder) would
+    // hijack module resolution, breaking `@import "tailwindcss"` and others.
+    root: outputFileTracingRoot,
     resolveAlias: {
       fs: "./components/photoshop/empty-node-fs.ts",
     },

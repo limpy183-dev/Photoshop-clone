@@ -143,7 +143,7 @@ export function normalizeFilterParams(filterId: string, params: Record<string, u
     const incoming = params[param.key]
     if (param.type === "slider") {
       const n = descNumber(incoming, param.default, param.min, param.max)
-      out[param.key] = param.step && param.step !== 1
+      out[param.key] = param.step
         ? Math.round(n / param.step) * param.step
         : n
     } else if (param.type === "select") {

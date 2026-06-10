@@ -245,6 +245,7 @@ interface CanvasRuntimePreferences {
   cursorStyle: CursorStylePreference
   showBrushPreview: boolean
   showBrushSizeCrosshair: boolean
+  showToolStatusHud: boolean
   screenDpi: number
   printResolution: number
   rulerUnits: RulerUnitPreference
@@ -400,6 +401,7 @@ function canvasRuntimePreferencesFrom(prefs: ReturnType<typeof loadPreferencesFr
     cursorStyle: prefs.toolBehavior.cursorStyle,
     showBrushPreview: prefs.toolBehavior.showBrushPreview,
     showBrushSizeCrosshair: prefs.toolBehavior.showBrushSizeCrosshair,
+    showToolStatusHud: prefs.toolBehavior.showToolStatusHud,
     screenDpi: prefs.rulerGrid.screenDpi,
     printResolution: prefs.rulerGrid.printResolution,
     rulerUnits: prefs.rulerGrid.rulerUnits,
@@ -7118,7 +7120,7 @@ export function CanvasView() {
               frequency={selectionOptions.magneticFrequency ?? 57}
             />
           ) : null}
-          {RETOUCH_FEEDBACK_TOOLS.has(tool) ? (
+          {canvasPrefs.showToolStatusHud && RETOUCH_FEEDBACK_TOOLS.has(tool) ? (
             <RetouchFeedbackOverlay
               tool={tool}
               model={buildRetouchingFeedbackModel({ tool, brush, cloneSource })}

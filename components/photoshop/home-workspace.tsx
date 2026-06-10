@@ -308,7 +308,7 @@ export function HomeWorkspace({ onOpenNew, onClose, onOpenFile }: HomeWorkspaceP
               </nav>
               <div
                 data-testid="home-preset-grid"
-                className="grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-3"
+                className="grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-4"
               >
                 {categoryPresets.length ? (
                   categoryPresets.map((preset) => (
@@ -446,22 +446,22 @@ function PresetTile({
       onClick={onSelect}
       aria-label={`Create ${preset.name}`}
       className={
-        "group flex min-h-32 flex-col justify-between rounded-sm border bg-[var(--ps-panel)] p-3 text-left hover:border-[var(--ps-accent)] hover:bg-[var(--ps-panel-2)] " +
+        "group flex min-h-52 flex-col justify-between rounded-sm border bg-[var(--ps-panel)] p-4 text-left hover:border-[var(--ps-accent)] hover:bg-[var(--ps-panel-2)] " +
         (featured ? "border-[var(--ps-accent-2)]" : "border-[var(--ps-divider)]")
       }
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="truncate text-[13px] font-semibold text-white">{preset.name}</div>
-          <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-[var(--ps-text-dim)]">
+          <div className="truncate text-[16px] font-semibold text-white">{preset.name}</div>
+          <div className="mt-1 text-[11px] uppercase tracking-[0.14em] text-[var(--ps-text-dim)]">
             {preset.group}
           </div>
         </div>
-        <ImagePlus className="h-4 w-4 shrink-0 text-[var(--ps-text-dim)] group-hover:text-[var(--ps-accent-2)]" />
+        <ImagePlus className="h-5 w-5 shrink-0 text-[var(--ps-text-dim)] group-hover:text-[var(--ps-accent-2)]" />
       </div>
       <div>
         <PresetPreview preset={preset} />
-        <div className="mt-2 flex items-center justify-between text-[10px] text-[var(--ps-text-dim)]">
+        <div className="mt-3 flex items-center justify-between text-[12px] text-[var(--ps-text-dim)]">
           <span>
             {preset.w} x {preset.h}
           </span>
@@ -475,12 +475,12 @@ function PresetTile({
 function PresetPreview({ preset }: { preset: NewDocumentPreset }) {
   const ratio = Math.max(0.45, Math.min(1.65, preset.w / preset.h))
   return (
-    <div className="flex h-12 items-center justify-center rounded-sm border border-[var(--ps-divider)] bg-[#121212]">
+    <div className="flex h-32 items-center justify-center rounded-sm border border-[var(--ps-divider)] bg-[#121212]">
       <div
         className="border border-[var(--ps-divider)] bg-white shadow-[0_0_0_1px_rgba(255,255,255,0.08)]"
         style={{
-          width: `${Math.min(62, 32 * ratio)}px`,
-          height: `${Math.min(42, 38 / ratio)}px`,
+          width: `${Math.min(170, 90 * ratio)}px`,
+          height: `${Math.min(112, 104 / ratio)}px`,
         }}
       />
     </div>

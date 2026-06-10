@@ -312,7 +312,7 @@ export interface ConditionalModeChangeSettings {
 
 /** Check if a mode change should happen based on conditions. */
 export function shouldChangeMode(currentMode: string, settings: ConditionalModeChangeSettings): boolean {
-  const normalized = currentMode.toLowerCase().replace(/[^a-z]/g, "")
+  const normalized = currentMode.toLowerCase().replace(/[^a-z]/g, "").replace(/color$/, "")
   if (settings.sourceMode === "any") return normalized !== settings.targetMode
   return normalized === settings.sourceMode && normalized !== settings.targetMode
 }

@@ -152,6 +152,7 @@ export interface ToolBehaviorPreferences {
   cursorStyle: CursorStylePreference
   showBrushPreview: boolean
   showBrushSizeCrosshair: boolean
+  showToolStatusHud: boolean
   precisePicking: boolean
   shiftCyclesTools: boolean
   showTooltips: boolean
@@ -325,6 +326,7 @@ export const DEFAULT_PREFERENCES: PhotoshopPreferences = {
     cursorStyle: "standard",
     showBrushPreview: true,
     showBrushSizeCrosshair: true,
+    showToolStatusHud: false,
     precisePicking: false,
     shiftCyclesTools: true,
     showTooltips: true,
@@ -592,6 +594,7 @@ function validatePreferenceImportShape(value: unknown) {
   validateEnumField(toolBehavior, "cursorStyle", CURSOR_STYLES, "toolBehavior.cursorStyle")
   validateBooleanField(toolBehavior, "showBrushPreview", "toolBehavior.showBrushPreview")
   validateBooleanField(toolBehavior, "showBrushSizeCrosshair", "toolBehavior.showBrushSizeCrosshair")
+  validateBooleanField(toolBehavior, "showToolStatusHud", "toolBehavior.showToolStatusHud")
   validateBooleanField(toolBehavior, "precisePicking", "toolBehavior.precisePicking")
   validateBooleanField(toolBehavior, "shiftCyclesTools", "toolBehavior.shiftCyclesTools")
   validateBooleanField(toolBehavior, "showTooltips", "toolBehavior.showTooltips")
@@ -813,6 +816,7 @@ function normalizeToolBehavior(
     cursorStyle: optionValue(input.cursorStyle ?? legacyCursorStyle, CURSOR_STYLES, defaults.cursorStyle),
     showBrushPreview: boolValue(input.showBrushPreview, defaults.showBrushPreview),
     showBrushSizeCrosshair: boolValue(input.showBrushSizeCrosshair, defaults.showBrushSizeCrosshair),
+    showToolStatusHud: boolValue(input.showToolStatusHud, defaults.showToolStatusHud),
     precisePicking: boolValue(input.precisePicking, defaults.precisePicking),
     shiftCyclesTools: boolValue(input.shiftCyclesTools, defaults.shiftCyclesTools),
     showTooltips: boolValue(input.showTooltips ?? legacyShowTooltips, defaults.showTooltips),

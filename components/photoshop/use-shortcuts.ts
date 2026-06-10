@@ -93,6 +93,16 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
 
   React.useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      // Pressing and releasing Alt on its own makes Chrome focus its menu
+      // (the hamburger / 3-dots) and Firefox focus its menu bar. Suppress
+      // that browser default so Alt only ever acts as an editor modifier.
+      // This does not affect `altKey` on other key/pointer events, nor the
+      // Alt keyup, so temporary-modifier behavior keeps working.
+      if (e.key === "Alt") {
+        e.preventDefault()
+        return
+      }
+
       const target = e.target as HTMLElement
       if (
         target &&

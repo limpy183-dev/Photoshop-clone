@@ -9,11 +9,20 @@ async function openCommand(page: Page, query: string) {
   await expect(page.getByText("Command Palette")).toBeHidden()
 }
 
-test("canvas shows an active tool status strip with live brush feedback", async ({ page }) => {
+test("canvas hides the tool status strip by default and shows it once enabled", async ({ page }) => {
   await page.goto("/editor", { waitUntil: "domcontentloaded" })
   await page.waitForSelector("[data-canvas-stage]", { timeout: 30000 })
 
   await openCommand(page, "Brush Tool")
+
+  // The on-canvas tool status strip is opt-in: hidden until the preference is enabled.
+  await expect(page.getByTestId("tool-preview-overlay")).toBeHidden()
+
+  await page.evaluate(() => {
+    localStorage.setItem("ps-preferences", JSON.stringify({ toolBehavior: { showToolStatusHud: true } }))
+    window.dispatchEvent(new CustomEvent("ps-preferences-changed"))
+  })
+
   const status = page.getByTestId("active-tool-status-strip")
   await expect(status).toBeVisible()
   await expect(status).toContainText(/Brush/i)

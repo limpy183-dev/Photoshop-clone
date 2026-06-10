@@ -807,6 +807,7 @@ export function PreferencesDialog({
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <ToggleRow checked={prefs.toolBehavior.showBrushPreview} onCheckedChange={(checked) => updateToolBehavior({ showBrushPreview: checked })} label="Show brush preview" />
                       <ToggleRow checked={prefs.toolBehavior.showBrushSizeCrosshair} onCheckedChange={(checked) => updateToolBehavior({ showBrushSizeCrosshair: checked })} label="Show brush size crosshair" />
+                      <ToggleRow checked={prefs.toolBehavior.showToolStatusHud} onCheckedChange={(checked) => updateToolBehavior({ showToolStatusHud: checked })} label="Show on-canvas tool status" />
                       <ToggleRow checked={prefs.toolBehavior.precisePicking} onCheckedChange={(checked) => updateToolBehavior({ precisePicking: checked })} label="Precise layer picking" />
                       <ToggleRow checked={prefs.toolBehavior.shiftCyclesTools} onCheckedChange={(checked) => updateToolBehavior({ shiftCyclesTools: checked })} label="Shift cycles grouped tools" />
                       <ToggleRow checked={prefs.toolBehavior.springLoadedTools} onCheckedChange={(checked) => updateToolBehavior({ springLoadedTools: checked })} label="Spring-loaded tool switching" />
