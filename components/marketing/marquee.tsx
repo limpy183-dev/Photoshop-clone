@@ -8,7 +8,7 @@ gsap.registerPlugin(useGSAP)
 
 const MARQUEE_ITEMS = [
   "Layer masks",
-  "PSD round-trip",
+  "PSD round-trip + reports",
   "Adjustment layers",
   "60fps canvas",
   "Smart filters",

@@ -396,6 +396,29 @@ test("TGA decoder imports RLE true-color pixels with alpha and top-left origin",
   expect(decoded.warnings).toEqual([])
 })
 
+test("TGA decoder maps 16-bit ARGB1555 alpha through the descriptor attribute bits", () => {
+  const header = (descriptor: number) => [
+    0, 0, 2,
+    0, 0, 0, 0, 0,
+    0, 0, 0, 0,
+    ...le16(2), ...le16(1),
+    16, descriptor,
+  ]
+  const pixels = [...le16(0xfc00), ...le16(0x03e0)]
+
+  const withAttribute = decodeTgaBuffer(new Uint8Array([...header(0x21), ...pixels]).buffer)
+  const withoutAttribute = decodeTgaBuffer(new Uint8Array([...header(0x20), ...pixels]).buffer)
+
+  expect(Array.from(withAttribute.imageData.data)).toEqual([
+    255, 0, 0, 255,
+    0, 255, 0, 0,
+  ])
+  expect(Array.from(withoutAttribute.imageData.data)).toEqual([
+    255, 0, 0, 255,
+    0, 255, 0, 255,
+  ])
+})
+
 test("PNM decoder tone maps 16-bit PPM samples into an 8-bit preview while reporting source depth", () => {
   const buffer = new Uint8Array([
     ...ascii("P6\n2 1\n65535\n"),

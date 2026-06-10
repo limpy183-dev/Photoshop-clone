@@ -119,13 +119,23 @@ export function Footer() {
               <ul className="mt-5 space-y-3">
                 {column.links.map((link) => (
                   <li key={`${column.title}-${link.label}`}>
-                    <a
-                      href={link.href}
-                      data-cursor="hover"
-                      className="mk-link text-[14px] text-[var(--mk-paper)] hover:text-[var(--mk-blue-soft)]"
-                    >
-                      {link.label}
-                    </a>
+                    {link.href.startsWith("#") ? (
+                      <a
+                        href={link.href}
+                        data-cursor="hover"
+                        className="mk-link text-[14px] text-[var(--mk-paper)] hover:text-[var(--mk-blue-soft)]"
+                      >
+                        {link.label}
+                      </a>
+                    ) : (
+                      <Link
+                        href={link.href}
+                        data-cursor="hover"
+                        className="mk-link text-[14px] text-[var(--mk-paper)] hover:text-[var(--mk-blue-soft)]"
+                      >
+                        {link.label}
+                      </Link>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -152,7 +162,7 @@ export function Footer() {
         {/* Big mark */}
         <div className="mt-24 flex items-end justify-between border-t border-[var(--mk-rule)] pt-10">
           <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--mk-paper-dim)]">
-            © {new Date().getFullYear()} Photoshop Web · MIT-spirit licensed
+            © {new Date().getFullYear()} Photoshop Web · MIT licensed
           </span>
           <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--mk-paper-dim)]">
             v0.1.0 · made for the browser tab

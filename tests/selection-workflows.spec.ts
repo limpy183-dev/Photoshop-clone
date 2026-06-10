@@ -15,8 +15,11 @@ async function selectToolFromGroup(page: Page, groupName: string | RegExp, toolN
   const box = await groupButton.boundingBox()
   if (!box) throw new Error(`Toolbar group ${String(groupName)} is not measurable`)
   await page.mouse.click(box.x + box.width - 4, box.y + box.height - 4)
-  await page.getByRole("button", { name: new RegExp(`^${toolName}\\b`) }).evaluate((element: HTMLElement) => element.click())
-  await expect(groupButton).toHaveAccessibleName(new RegExp(`^${toolName}\\b`))
+  // Flyout entries expose menu semantics (role=menuitem); the group's primary
+  // tool remains reachable as the palette button itself.
+  const toolPattern = new RegExp(`^${toolName}\\b`)
+  await page.getByRole("menuitem", { name: toolPattern }).or(page.getByRole("button", { name: toolPattern })).first().evaluate((element: HTMLElement) => element.click())
+  await expect(groupButton).toHaveAccessibleName(toolPattern)
 }
 
 function topMenu(page: Page, name: string) {

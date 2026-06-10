@@ -82,6 +82,25 @@ export function ResizeHandle({ direction, onResize, onResizeEnd, className, aria
     [finishDrag],
   )
 
+  const handleKeyDown = React.useCallback(
+    (e: React.KeyboardEvent) => {
+      let delta = 0
+      if (isH) {
+        if (e.key === "ArrowLeft") delta = -16
+        else if (e.key === "ArrowRight") delta = 16
+      } else {
+        if (e.key === "ArrowUp") delta = -16
+        else if (e.key === "ArrowDown") delta = 16
+      }
+      if (!delta) return
+      e.preventDefault()
+      onResizeRef.current(delta)
+      // Each step is a complete resize so persisted sizes stay in sync
+      onResizeEndRef.current?.()
+    },
+    [isH],
+  )
+
   React.useEffect(() => {
     const move = (event: PointerEvent) => handlePointerMove(event as unknown as React.PointerEvent)
     const up = (event: PointerEvent) => finishDrag(event.pointerId)
@@ -101,18 +120,20 @@ export function ResizeHandle({ direction, onResize, onResizeEnd, className, aria
     <div
       ref={handleRef}
       role="separator"
+      tabIndex={0}
       aria-label={ariaLabel ?? (isH ? "Resize horizontally" : "Resize vertically")}
       aria-orientation={isH ? "vertical" : "horizontal"}
       className={cn(
-        "group relative flex-shrink-0 bg-transparent transition-colors z-30",
+        "group relative flex-shrink-0 bg-transparent transition-colors z-30 focus-visible:outline-none",
         isH
-          ? "w-3 cursor-col-resize before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-[var(--ps-divider)] before:transition-colors hover:before:w-1 hover:before:bg-[var(--ps-accent)] active:before:w-1 active:before:bg-[var(--ps-accent)]"
-          : "h-2 cursor-row-resize before:absolute before:inset-x-0 before:top-1/2 before:h-px before:-translate-y-1/2 before:bg-[var(--ps-divider)] before:transition-colors hover:before:h-1 hover:before:bg-[var(--ps-accent)] active:before:h-1 active:before:bg-[var(--ps-accent)]",
+          ? "w-3 cursor-col-resize before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-[var(--ps-divider)] before:transition-colors hover:before:w-1 hover:before:bg-[var(--ps-accent)] active:before:w-1 active:before:bg-[var(--ps-accent)] focus-visible:before:w-1 focus-visible:before:bg-[var(--ps-accent)]"
+          : "h-2 cursor-row-resize before:absolute before:inset-x-0 before:top-1/2 before:h-px before:-translate-y-1/2 before:bg-[var(--ps-divider)] before:transition-colors hover:before:h-1 hover:before:bg-[var(--ps-accent)] active:before:h-1 active:before:bg-[var(--ps-accent)] focus-visible:before:h-1 focus-visible:before:bg-[var(--ps-accent)]",
         className,
       )}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onKeyDown={handleKeyDown}
       style={{ touchAction: "none" }}
     />
   )

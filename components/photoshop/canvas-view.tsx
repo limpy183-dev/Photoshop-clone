@@ -856,20 +856,22 @@ export function CanvasView() {
       return
     }
 
+    const glProbe = (() => {
+      try {
+        if (typeof document === "undefined") return null
+        const probe = document.createElement("canvas")
+        return probe.getContext("webgl2") || probe.getContext("webgl")
+      } catch {
+        return null
+      }
+    })()
     const webglPlan = planWebGLCompositor({
       width: cv.width,
       height: cv.height,
       layerCount: activeDoc.layers.length,
       preferWebGL: true,
-      webglAvailable: (() => {
-        try {
-          if (typeof document === "undefined") return false
-          const probe = document.createElement("canvas")
-          return !!(probe.getContext("webgl2") || probe.getContext("webgl"))
-        } catch {
-          return false
-        }
-      })(),
+      webglAvailable: !!glProbe,
+      maxTextureSize: glProbe ? Number(glProbe.getParameter(glProbe.MAX_TEXTURE_SIZE)) || undefined : undefined,
     })
     if (
       webglPlan.path !== "canvas-2d" &&
@@ -5103,6 +5105,38 @@ export function CanvasView() {
 
   /* ---- pointer up ---- */
 
+  // Commits an in-progress paint stroke and resets stroke-transient refs.
+  // Shared by onPointerUp and onPointerCancel: it never reads event
+  // coordinates, so the pixels already painted are preserved even when
+  // the cancel event carries no usable position. No-op unless a stroke
+  // drag is active, which keeps repeated calls safe.
+  const commitActiveStroke = () => {
+    const drag = drawingRef.current
+    if (drag.type !== "stroke") return
+    const smartFilterMaskLayerId = activeSmartFilterMaskCanvas() ? activeSmartFilterMaskTarget?.layerId : null
+    const label = smartFilterMaskLayerId ? "Smart Filter Mask" : labelForTool(tool)
+    const changedLayerIds =
+      activeLayer && drag.dirty && !activeDoc?.quickMask
+        ? { ids: [smartFilterMaskLayerId ?? activeLayer.id], bounds: { [smartFilterMaskLayerId ?? activeLayer.id]: drag.dirty } }
+        : activeLayer
+          ? [smartFilterMaskLayerId ?? activeLayer.id]
+          : undefined
+    finishBufferedStroke()
+    syncActiveLayerHighBitFromCanvas(drag.dirty)
+    drawingRef.current = { type: null }
+    smudgeBufferRef.current.reset()
+    transparencyLockMaskRef.current = null
+    eraserSourceRef.current = null
+    eraserSampleRef.current = null
+    colorReplacementSourceRef.current = null
+    colorReplacementSampleRef.current = null
+    if (tool === "mixer-brush" && brush.mixer?.cleanAfterStroke) mixerReservoirRef.current = null
+    lastBrushPointerSampleRef.current = null
+    selectionHitTesterRef.current = null
+    highBitStrokeSourceRef.current = null
+    schedulePaintCommit(label, changedLayerIds)
+  }
+
   const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     // Ensure pointer capture is released even if React's synthetic
     // pointer handling is interrupted (touch/pen handoff, devtools,
@@ -5161,28 +5195,7 @@ export function CanvasView() {
     }
 
     if (drag.type === "stroke") {
-      const smartFilterMaskLayerId = activeSmartFilterMaskCanvas() ? activeSmartFilterMaskTarget?.layerId : null
-      const label = smartFilterMaskLayerId ? "Smart Filter Mask" : labelForTool(tool)
-      const changedLayerIds =
-        activeLayer && drag.dirty && !activeDoc?.quickMask
-          ? { ids: [smartFilterMaskLayerId ?? activeLayer.id], bounds: { [smartFilterMaskLayerId ?? activeLayer.id]: drag.dirty } }
-          : activeLayer
-            ? [smartFilterMaskLayerId ?? activeLayer.id]
-            : undefined
-      finishBufferedStroke()
-      syncActiveLayerHighBitFromCanvas(drag.dirty)
-      drawingRef.current = { type: null }
-      smudgeBufferRef.current.reset()
-      transparencyLockMaskRef.current = null
-      eraserSourceRef.current = null
-      eraserSampleRef.current = null
-      colorReplacementSourceRef.current = null
-      colorReplacementSampleRef.current = null
-      if (tool === "mixer-brush" && brush.mixer?.cleanAfterStroke) mixerReservoirRef.current = null
-      lastBrushPointerSampleRef.current = null
-      selectionHitTesterRef.current = null
-      highBitStrokeSourceRef.current = null
-      schedulePaintCommit(label, changedLayerIds)
+      commitActiveStroke()
       return
     }
 
@@ -5595,6 +5608,54 @@ export function CanvasView() {
       drawingRef.current = { type: null }
       return
     }
+  }
+
+  /* ---- pointer cancel ---- */
+
+  const onPointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    // pointercancel fires when the browser takes over the gesture
+    // (touch scroll/zoom interception, pen handoff, window loss). Its
+    // coordinates are unreliable, so it must not be routed through
+    // onPointerUp (the slice/marquee branches read event positions).
+    // Instead commit an active stroke — commitActiveStroke never reads
+    // the event — and abort every other drag without committing.
+    try {
+      const target = e.target as Element | null
+      if (target?.hasPointerCapture?.(e.pointerId)) {
+        target.releasePointerCapture(e.pointerId)
+      }
+    } catch {
+      /* no-op: some browsers throw if the capture was already released */
+    }
+    dispatchPhotoshopEvent("ps-tool-info", { kind: "clear" })
+    const drag = drawingRef.current
+    if (drag.type === null) return
+    if (drag.type === "stroke") {
+      commitActiveStroke()
+      return
+    }
+    if (drag.type === "transform") {
+      // Same as onPointerUp: the drag's effect is already in
+      // transformRef; ending the drag keeps the session alive.
+      drawingRef.current = { type: null }
+      drawTransformHandles()
+      return
+    }
+    drawingRef.current = { type: null }
+    brushResizeRef.current = null
+    removeRef.current = null
+    smudgeBufferRef.current.reset()
+    transparencyLockMaskRef.current = null
+    eraserSourceRef.current = null
+    eraserSampleRef.current = null
+    colorReplacementSourceRef.current = null
+    colorReplacementSampleRef.current = null
+    lastBrushPointerSampleRef.current = null
+    selectionHitTesterRef.current = null
+    highBitStrokeSourceRef.current = null
+    const ov = overlayRef.current
+    if (ov) ov.getContext("2d")!.clearRect(0, 0, ov.width, ov.height)
+    requestRender()
   }
 
   /* ---- double-click handlers ---- */
@@ -7078,6 +7139,7 @@ export function CanvasView() {
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
         onPointerEnter={onPointerEnter}
         onPointerLeave={onPointerLeave}
         onDoubleClick={onDoubleClick}
@@ -7634,6 +7696,7 @@ function Rulers({
     const up = () => {
       window.removeEventListener("pointermove", move)
       window.removeEventListener("pointerup", up)
+      window.removeEventListener("pointercancel", cancel)
       const finalGuide = dragGuideRef.current
       if (finalGuide && onCreateGuide) {
         onCreateGuide(finalGuide.orient, finalGuide.pos)
@@ -7641,8 +7704,17 @@ function Rulers({
       dragGuideRef.current = null
       setDragGuide(null)
     }
+    const cancel = () => {
+      // Interrupted drag: discard the guide preview without creating a guide.
+      window.removeEventListener("pointermove", move)
+      window.removeEventListener("pointerup", up)
+      window.removeEventListener("pointercancel", cancel)
+      dragGuideRef.current = null
+      setDragGuide(null)
+    }
     window.addEventListener("pointermove", move)
     window.addEventListener("pointerup", up)
+    window.addEventListener("pointercancel", cancel)
     // Trigger initial position
     move(e.nativeEvent)
   }

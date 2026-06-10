@@ -10,6 +10,8 @@ export interface TiledBackingStorePlanInput {
   tileSize?: number
   bytesPerPixel?: number
   memoryBudgetMB?: number
+  /** Per-document prefix for OPFS scratch keys so concurrent stores never collide. */
+  scratchNamespace?: string
 }
 
 export interface TiledBackingStorePlan {
@@ -178,8 +180,11 @@ export function tileRecordsForPlan(plan: TiledBackingStorePlan): TileRecord[] {
   return records
 }
 
+let storeCounter = 0
+
 export class TiledBackingStore {
   readonly plan: TiledBackingStorePlan
+  private readonly scratchNs: string
   private readonly tiles = new Map<string, TileRecord>()
   private readonly memory = new Map<string, Blob>()
   private readonly layerTiles = new Map<string, LayerTileRecord>()
@@ -187,7 +192,19 @@ export class TiledBackingStore {
 
   constructor(input: TiledBackingStorePlanInput) {
     this.plan = planTiledBackingStore(input)
+    // Fall back to a per-instance counter so unnamespaced stores still get
+    // unique scratch keys; capped to keep keys within the OPFS key length.
+    const ns = sanitizeKeyPart(input.scratchNamespace ?? "", "").slice(0, 40)
+    this.scratchNs = ns || `store${++storeCounter}`
     for (const tile of tileRecordsForPlan(this.plan)) this.tiles.set(tile.key, tile)
+  }
+
+  private scratchTileKey(key: string) {
+    return `tile-${this.scratchNs}-${key.replace(":", "-")}`
+  }
+
+  private scratchLayerTileKey(key: string) {
+    return `layer-tile-${this.scratchNs}-${key.replace(/[^a-zA-Z0-9_.-]+/g, "-")}`
   }
 
   markDirty(rect: DirtyRect): string[] {
@@ -207,7 +224,7 @@ export class TiledBackingStore {
     const tile = this.tiles.get(key)
     if (!tile) throw new Error(`Unknown tile: ${key}`)
     if (this.plan.strategy === "spill-to-opfs") {
-      const result = await writeScratchBlob(`tile-${key.replace(":", "-")}`, blob)
+      const result = await writeScratchBlob(this.scratchTileKey(key), blob)
       tile.storage = result === "persisted" ? "opfs" : "memory"
       if (tile.storage === "memory") this.memory.set(key, blob)
       tile.dirty = false
@@ -222,13 +239,13 @@ export class TiledBackingStore {
   async readTile(key: string): Promise<Blob | null> {
     const tile = this.tiles.get(key)
     if (!tile) return null
-    if (tile.storage === "opfs") return readScratchBlob(`tile-${key.replace(":", "-")}`)
+    if (tile.storage === "opfs") return readScratchBlob(this.scratchTileKey(key))
     return this.memory.get(key) ?? null
   }
 
   async deleteTile(key: string): Promise<void> {
     this.memory.delete(key)
-    await deleteScratchKey(`tile-${key.replace(":", "-")}`)
+    await deleteScratchKey(this.scratchTileKey(key))
     this.tiles.delete(key)
   }
 
@@ -251,7 +268,7 @@ export class TiledBackingStore {
     }
     this.layerTiles.set(address.key, record)
     if (this.plan.strategy === "spill-to-opfs") {
-      const result = await writeScratchBlob(`layer-tile-${address.key.replace(/[^a-zA-Z0-9_.-]+/g, "-")}`, blob)
+      const result = await writeScratchBlob(this.scratchLayerTileKey(address.key), blob)
       record.storage = result === "persisted" ? "opfs" : "memory"
       if (record.storage === "memory") this.layerMemory.set(address.key, blob)
       return record.storage
@@ -264,7 +281,7 @@ export class TiledBackingStore {
     const address = "key" in addressInput ? addressInput : createLayerTileAddress(addressInput)
     const tile = this.layerTiles.get(address.key)
     if (!tile || tile.dirty) return null
-    if (tile.storage === "opfs") return readScratchBlob(`layer-tile-${address.key.replace(/[^a-zA-Z0-9_.-]+/g, "-")}`)
+    if (tile.storage === "opfs") return readScratchBlob(this.scratchLayerTileKey(address.key))
     return this.layerMemory.get(address.key) ?? null
   }
 
@@ -319,13 +336,13 @@ export class TiledBackingStore {
 
     const scratchDeletes: Promise<unknown>[] = []
     for (const tile of this.tiles.values()) {
-      if (tile.storage === "opfs") scratchDeletes.push(deleteScratchKey(`tile-${tile.key.replace(":", "-")}`))
+      if (tile.storage === "opfs") scratchDeletes.push(deleteScratchKey(this.scratchTileKey(tile.key)))
       tile.storage = "memory"
       tile.dirty = true
     }
     for (const tile of this.layerTiles.values()) {
       if (tile.storage === "opfs") {
-        scratchDeletes.push(deleteScratchKey(`layer-tile-${tile.key.replace(/[^a-zA-Z0-9_.-]+/g, "-")}`))
+        scratchDeletes.push(deleteScratchKey(this.scratchLayerTileKey(tile.key)))
       }
     }
     this.layerTiles.clear()

@@ -1,5 +1,7 @@
 "use client"
 
+import { loadPreferencesFromStorage } from "./preferences-engine"
+
 export interface RecentDocument {
   id: string
   name: string
@@ -96,6 +98,17 @@ async function clearAutosaveIDB(): Promise<void> {
   })
 }
 
+async function removeAutosaveIDB(documentId: string): Promise<void> {
+  const db = await openAutosaveDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, "readwrite")
+    const store = tx.objectStore(IDB_STORE)
+    store.delete(documentId)
+    tx.oncomplete = () => { db.close(); resolve() }
+    tx.onerror = () => { db.close(); reject(tx.error) }
+  })
+}
+
 /* Track whether IndexedDB is the current source */
 let _idbAvailable: boolean | null = null
 function canUseIDB() {
@@ -107,6 +120,16 @@ function canUseIDB() {
 
 function canUseStorage() {
   return typeof window !== "undefined" && typeof window.localStorage !== "undefined"
+}
+
+function recentDocumentsLimit() {
+  try {
+    const limit = loadPreferencesFromStorage().fileHandling.recentFilesLimit
+    if (!Number.isFinite(limit)) return MAX_RECENTS
+    return Math.min(100, Math.max(0, Math.floor(limit)))
+  } catch {
+    return MAX_RECENTS
+  }
 }
 
 export function readRecentDocuments(): RecentDocument[] {
@@ -126,6 +149,12 @@ export function readRecentDocuments(): RecentDocument[] {
 export function rememberRecentDocument(entry: Omit<RecentDocument, "id" | "updatedAt"> & { id?: string; updatedAt?: number; thumbnail?: string }) {
   if (!canUseStorage()) return
   try {
+    const limit = recentDocumentsLimit()
+    if (limit === 0) {
+      localStorage.removeItem(RECENTS_KEY)
+      window.dispatchEvent(new CustomEvent("ps-recents-changed"))
+      return
+    }
     if (entry.serialized.length > MAX_STORED_DOCUMENT_CHARS) {
       pruneRecentDocuments()
       return
@@ -142,7 +171,7 @@ export function rememberRecentDocument(entry: Omit<RecentDocument, "id" | "updat
       thumbnail: safeThumbnail(entry.thumbnail),
     }
     const recents = readRecentDocuments().filter((item) => item.id !== id && item.name !== next.name)
-    localStorage.setItem(RECENTS_KEY, JSON.stringify([next, ...recents].slice(0, MAX_RECENTS)))
+    localStorage.setItem(RECENTS_KEY, JSON.stringify([next, ...recents].slice(0, limit)))
     window.dispatchEvent(new CustomEvent("ps-recents-changed"))
   } catch {
     pruneRecentDocuments()
@@ -158,7 +187,12 @@ export function removeRecentDocument(id: string) {
 export function pruneRecentDocuments() {
   if (!canUseStorage()) return
   try {
-    const recents = readRecentDocuments().slice(0, Math.max(1, Math.floor(MAX_RECENTS / 2)))
+    const limit = recentDocumentsLimit()
+    if (limit === 0) {
+      localStorage.removeItem(RECENTS_KEY)
+      return
+    }
+    const recents = readRecentDocuments().slice(0, Math.max(1, Math.floor(limit / 2)))
     localStorage.setItem(RECENTS_KEY, JSON.stringify(recents))
   } catch { }
 }
@@ -209,8 +243,9 @@ export async function readAutosavesAsync(): Promise<AutosaveDocument[]> {
  * Write autosaved documents. Writes to both IndexedDB (for large documents)
  * and localStorage (for fast synchronous recovery on next load).
  * IndexedDB has no practical size limit; localStorage is capped at ~5MB.
+ * Resolves true when at least one backend accepted the write.
  */
-export function writeAutosaves(entries: Array<Omit<AutosaveDocument, "id" | "kind" | "updatedAt"> & { id?: string; updatedAt?: number }>) {
+export function writeAutosaves(entries: Array<Omit<AutosaveDocument, "id" | "kind" | "updatedAt"> & { id?: string; updatedAt?: number }>): Promise<boolean> {
   const payload: AutosaveDocument[] = entries
     .map((entry) => ({
       id: entry.id ?? `autosave_${entry.documentId}`,
@@ -224,24 +259,26 @@ export function writeAutosaves(entries: Array<Omit<AutosaveDocument, "id" | "kin
     }))
 
   // Write to IndexedDB (no size limit)
-  if (canUseIDB()) {
-    writeAutosavesIDB(payload).catch(() => {})
+  const idbWrite = canUseIDB()
+    ? writeAutosavesIDB(payload).then(() => true, () => false)
+    : Promise.resolve(false)
+
+  // Also write to localStorage (with size limit) as synchronous fallback.
+  // On failure (quota, all entries oversized) keep the previous good
+  // collection — IndexedDB may still hold the full payload.
+  let storedLocally = false
+  if (canUseStorage()) {
+    try {
+      const lsPayload = payload.filter((entry) => entry.serialized.length <= MAX_STORED_DOCUMENT_CHARS)
+      if (lsPayload.length) {
+        localStorage.setItem(AUTOSAVE_COLLECTION_KEY, JSON.stringify(lsPayload))
+        localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(lsPayload[0]))
+        storedLocally = true
+      }
+    } catch {}
   }
 
-  // Also write to localStorage (with size limit) as synchronous fallback
-  if (!canUseStorage()) return
-  try {
-    const lsPayload = payload.filter((entry) => entry.serialized.length <= MAX_STORED_DOCUMENT_CHARS)
-    if (!lsPayload.length) {
-      localStorage.removeItem(AUTOSAVE_COLLECTION_KEY)
-      localStorage.removeItem(AUTOSAVE_KEY)
-      return
-    }
-    localStorage.setItem(AUTOSAVE_COLLECTION_KEY, JSON.stringify(lsPayload))
-    localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(lsPayload[0]))
-  } catch {
-    localStorage.removeItem(AUTOSAVE_COLLECTION_KEY)
-  }
+  return idbWrite.then((storedInIDB) => storedInIDB || storedLocally)
 }
 
 export function writeAutosave(entry: Omit<RecentDocument, "id" | "kind" | "updatedAt">) {
@@ -272,6 +309,24 @@ export function clearAutosave() {
   if (!canUseStorage()) return
   localStorage.removeItem(AUTOSAVE_KEY)
   localStorage.removeItem(AUTOSAVE_COLLECTION_KEY)
+}
+
+/** Remove a single document's autosave from both IndexedDB and localStorage. */
+export function removeAutosave(documentId: string) {
+  if (canUseIDB()) {
+    removeAutosaveIDB(documentId).catch(() => {})
+  }
+  if (!canUseStorage()) return
+  try {
+    const remaining = readAutosaves().filter((entry) => entry.documentId !== documentId)
+    if (!remaining.length) {
+      localStorage.removeItem(AUTOSAVE_COLLECTION_KEY)
+      localStorage.removeItem(AUTOSAVE_KEY)
+      return
+    }
+    localStorage.setItem(AUTOSAVE_COLLECTION_KEY, JSON.stringify(remaining))
+    localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(remaining[0]))
+  } catch {}
 }
 
 function hashString(value: string) {

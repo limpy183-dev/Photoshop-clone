@@ -1755,7 +1755,6 @@ const DOCUMENT_DIRTY_ACTIONS = new Set<Action["type"]>([
   "apply-comp",
   "remove-comp",
   "set-measurement",
-  "set-gradient-stops",
   "grow-selection",
   "contract-selection",
   "grow-similar-selection",
@@ -1841,6 +1840,10 @@ function dirtyDocIdsForAction(action: Action, state: EditorState) {
   }
   if (action.type === "update-smart-object-parent") return [action.parentDocId]
   if (action.type === "apply-linked-smart-object-sync") return [action.docId]
+  if (action.type === "save-selection" || action.type === "update-channel") {
+    const targetId = action.targetDocId ?? state.activeDocId
+    return targetId ? [targetId] : []
+  }
   if (!DOCUMENT_DIRTY_ACTIONS.has(action.type)) return []
   return state.activeDocId ? [state.activeDocId] : []
 }
@@ -4436,7 +4439,16 @@ function savePersistedSettings(state: EditorState) {
 }
 
 export function EditorProvider({ children }: { children: React.ReactNode }) {
-  const [state, rawDispatch] = React.useReducer(reducer, initialState)
+  // React's useReducer gets an identity "commit" reducer rather than the real
+  // one: `dispatch` below runs the real reducer exactly once and commits the
+  // precomputed state here verbatim. The real reducer is impure (it generates
+  // layer/history IDs and schedules async snapshot compression), so letting
+  // useReducer re-run it would execute every action twice — diverging React
+  // state from stateRef and double-scheduling side effects.
+  const [state, rawDispatch] = React.useReducer(
+    (_prev: EditorState, committed: EditorState) => committed,
+    initialState,
+  )
   const stateRef = React.useRef(state)
   stateRef.current = state
   const historyJumpSchedulerRef = React.useRef<HistoryJumpScheduler | null>(null)
@@ -4450,7 +4462,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
   // dispatch that reads stateRef sees the latest value.
   const dispatch = React.useCallback((action: Action) => {
     const before = stateRef.current
-    // Mirror the reducer manually so stateRef is always current immediately
+    // Run the reducer once, here, so stateRef is always current immediately
     // after dispatch returns. This is critical for correctness of code that
     // reads `stateRef.current` between renders (e.g. the next commit() in a
     // rapid stroke sequence, or keyboard handlers that consult history
@@ -4476,10 +4488,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     // etc.) still render synchronously.
     const isHighFrequency = HIGH_FREQUENCY_ACTION_TYPES.has(action.type)
     const flush = () => {
-      rawDispatch(action)
-      for (const docId of dirtyDocs) {
-        rawDispatch({ type: "mark-document-dirty", id: docId })
-      }
+      rawDispatch(next)
     }
     if (isHighFrequency) {
       React.startTransition(flush)
@@ -4764,11 +4773,22 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
       if (!docHist) return
       const safeIdx = clamp(index, 0, docHist.entries.length - 1)
       const entry = docHist.entries[safeIdx]
-      const currentEntry = docHist.entries[docHist.index]
       const direction = safeIdx < docHist.index ? "undo" : safeIdx > docHist.index ? "redo" : null
+      const docId = doc.id
 
       const apply = () => {
-        const restoredLayers = restoreFromEntry(doc, entry, { currentEntry, direction })
+        // Re-derive from live state: decompression is async, so the user may
+        // have switched documents (or history may have moved) in the meantime.
+        // Restoring into a stale doc would paint another document's layers.
+        const now = stateRef.current
+        if (now.activeDocId !== docId) return
+        const liveDoc = now.documents.find((d) => d.id === docId)
+        const liveHist = now.histories[docId]
+        if (!liveDoc || !liveHist || liveHist.entries[safeIdx] !== entry) return
+        const restoredLayers = restoreFromEntry(liveDoc, entry, {
+          currentEntry: liveHist.entries[liveHist.index],
+          direction,
+        })
         dispatch({
           type: "restore-history",
           index: safeIdx,

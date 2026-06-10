@@ -6,6 +6,8 @@ import gsap from "gsap"
 import { ScrollTrigger } from "gsap/ScrollTrigger"
 import { useGSAP } from "@gsap/react"
 
+import { withBasePath } from "@/lib/base-path"
+
 gsap.registerPlugin(useGSAP, ScrollTrigger)
 
 type Pin = {
@@ -167,10 +169,10 @@ export function EditorShowcase() {
           </span>
           <span className="block">
             <span className="mk-reveal">
-              <span>nothing</span>
+              <span>honestly</span>
             </span>{" "}
             <span className="mk-reveal">
-              <span className="italic">faked.</span>
+              <span className="italic">built.</span>
             </span>
           </span>
         </h2>
@@ -201,7 +203,7 @@ export function EditorShowcase() {
 
           <div className="relative">
             <Image
-              src="/marketing/editor-overview.png"
+              src={withBasePath("/marketing/editor-overview.png")}
               alt="Photoshop Web editor showing the brush tool, color picker, and layers panel."
               width={1920}
               height={1080}

@@ -6,6 +6,8 @@ import gsap from "gsap"
 import { ScrollTrigger } from "gsap/ScrollTrigger"
 import { useGSAP } from "@gsap/react"
 
+import { withBasePath } from "@/lib/base-path"
+
 gsap.registerPlugin(useGSAP, ScrollTrigger)
 
 const WORKFLOW_STEPS = [
@@ -146,7 +148,7 @@ export function WorkflowSplit() {
                 </span>
               </div>
               <Image
-                src="/marketing/editor-layers.png"
+                src={withBasePath("/marketing/editor-layers.png")}
                 alt="Layers panel showing blend mode, opacity, fill, lock controls and a selected layer."
                 width={1920}
                 height={1080}
@@ -169,7 +171,7 @@ export function WorkflowSplit() {
                 </span>
               </div>
               <Image
-                src="/marketing/editor-image-menu.png"
+                src={withBasePath("/marketing/editor-image-menu.png")}
                 alt="Image menu open showing Mode, Adjustments, Auto submenu, Image Size, Canvas Size."
                 width={1920}
                 height={1080}

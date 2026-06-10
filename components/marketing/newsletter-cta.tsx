@@ -6,6 +6,8 @@ import { ScrollTrigger } from "gsap/ScrollTrigger"
 import { useGSAP } from "@gsap/react"
 import { toast } from "sonner"
 
+import { IS_STATIC_DEPLOY } from "@/lib/base-path"
+
 gsap.registerPlugin(useGSAP, ScrollTrigger)
 
 type FormState = "idle" | "loading" | "success" | "error"
@@ -132,7 +134,7 @@ export function NewsletterCta() {
           </span>
           <span className="h-px flex-1 bg-[var(--mk-rule)]" />
           <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--mk-paper-dim)]">
-            POST /api · file-backed
+            {IS_STATIC_DEPLOY ? "static export · no backend" : "POST /api · file-backed"}
           </span>
         </div>
 
@@ -159,109 +161,128 @@ export function NewsletterCta() {
         </h2>
 
         <div className="mt-16 grid grid-cols-12 gap-x-6 gap-y-16">
-          {/* Subscribe */}
-          <div data-cta-row className="col-span-12 lg:col-span-6">
-            <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--mk-blue-soft)]">
-              01 / Updates
-            </span>
-            <h3 className="mt-4 font-display text-[2rem] leading-tight italic">
-              Patch notes &amp; release pings.
-            </h3>
-            <p className="mt-3 max-w-[44ch] text-sm leading-relaxed text-[var(--mk-paper-dim)]">
-              No marketing emails. Just the changelog when a new build ships and
-              when a tool gains a real-world parity feature.
-            </p>
-
-            <form className="mt-8" onSubmit={onSubscribe} noValidate>
-              <label htmlFor="mk-email" className="sr-only">
-                Email
-              </label>
-              <div className="flex flex-col items-stretch gap-4 sm:flex-row sm:items-end sm:gap-5">
-                <input
-                  id="mk-email"
-                  type="email"
-                  required
-                  autoComplete="email"
-                  placeholder="you@studio.com"
-                  className="mk-input flex-1"
-                  value={email}
-                  onChange={(event) => {
-                    setEmail(event.target.value)
-                    if (formState === "error") setFormState("idle")
-                  }}
-                  disabled={formState === "loading"}
-                />
-                <button
-                  type="submit"
-                  data-cursor="hover"
-                  className="group inline-flex items-center justify-center gap-2 rounded-full bg-[var(--mk-paper)] px-5 py-3 text-[13px] font-medium uppercase tracking-[0.18em] text-[var(--mk-ink)] transition-transform duration-300 hover:scale-[1.02] disabled:cursor-progress disabled:opacity-70"
-                  disabled={formState === "loading"}
-                >
-                  {formState === "loading" ? "Sending…" : "Notify me"}
-                  <span aria-hidden="true">→</span>
-                </button>
-              </div>
-
-              <div className="mt-4 min-h-[20px] font-mono text-[11px] uppercase tracking-[0.18em]">
-                {formState === "success" ? (
-                  <span className="text-[var(--mk-blue-soft)]">
-                    ✓ Confirmed — you&apos;re on the patch list.
-                  </span>
-                ) : null}
-                {formState === "error" ? (
-                  <span className="text-[var(--mk-rust)]">{errorMessage}</span>
-                ) : null}
-                {formState === "idle" ? (
-                  <span className="text-[var(--mk-paper-dim)]">
-                    No spam. Unsubscribe with one click.
-                  </span>
-                ) : null}
-              </div>
-            </form>
-          </div>
-
-          {/* Feedback */}
-          <div data-cta-row className="col-span-12 lg:col-span-6">
-            <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--mk-amber)]">
-              02 / Feedback
-            </span>
-            <h3 className="mt-4 font-display text-[2rem] leading-tight italic">
-              What do you wish it did?
-            </h3>
-            <p className="mt-3 max-w-[44ch] text-sm leading-relaxed text-[var(--mk-paper-dim)]">
-              Tools, panels, filters, formats. Tell us what&apos;s missing and
-              what you&apos;d trust the browser version to handle.
-            </p>
-
-            <form className="mt-8" onSubmit={onFeedback} noValidate>
-              <label htmlFor="mk-feedback" className="sr-only">
-                Feedback
-              </label>
-              <textarea
-                id="mk-feedback"
-                rows={3}
-                placeholder="Smart objects with non-destructive perspective warp, please."
-                className="mk-input resize-none"
-                value={feedback}
-                onChange={(event) => setFeedback(event.target.value)}
-                disabled={feedbackState === "loading"}
-              />
-              <div className="mt-5 flex items-center justify-between">
-                <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--mk-paper-dim)]">
-                  {feedbackState === "success" ? "✓ Logged" : "Anonymous if you want"}
+          {IS_STATIC_DEPLOY ? (
+            /* Static export has no /api routes — point at GitHub instead. */
+            <div data-cta-row className="col-span-12 lg:col-span-8">
+              <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--mk-blue-soft)]">
+                01 / Updates
+              </span>
+              <h3 className="mt-4 font-display text-[2rem] leading-tight italic">
+                Release notes live on GitHub.
+              </h3>
+              <p className="mt-3 max-w-[52ch] text-sm leading-relaxed text-[var(--mk-paper-dim)]">
+                This static deployment ships without a subscribe or feedback
+                backend. Watch the repository for new builds, and open an
+                issue to tell us what&apos;s missing.
+              </p>
+            </div>
+          ) : (
+            <>
+              {/* Subscribe */}
+              <div data-cta-row className="col-span-12 lg:col-span-6">
+                <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--mk-blue-soft)]">
+                  01 / Updates
                 </span>
-                <button
-                  type="submit"
-                  data-cursor="hover"
-                  className="inline-flex items-center justify-center gap-2 rounded-full border border-[var(--mk-rule-strong)] px-5 py-3 text-[13px] font-medium uppercase tracking-[0.18em] text-[var(--mk-paper)] transition-colors duration-300 hover:bg-[var(--mk-paper)] hover:text-[var(--mk-ink)] disabled:cursor-progress disabled:opacity-70"
-                  disabled={feedbackState === "loading" || !feedback.trim()}
-                >
-                  {feedbackState === "loading" ? "Sending…" : "Send"}
-                  <span aria-hidden="true">→</span>
-                </button>
+                <h3 className="mt-4 font-display text-[2rem] leading-tight italic">
+                  Patch notes &amp; release pings.
+                </h3>
+                <p className="mt-3 max-w-[44ch] text-sm leading-relaxed text-[var(--mk-paper-dim)]">
+                  No marketing emails. Just the changelog when a new build ships and
+                  when a tool gains a real-world parity feature.
+                </p>
+
+                <form className="mt-8" onSubmit={onSubscribe} noValidate>
+                  <label htmlFor="mk-email" className="sr-only">
+                    Email
+                  </label>
+                  <div className="flex flex-col items-stretch gap-4 sm:flex-row sm:items-end sm:gap-5">
+                    <input
+                      id="mk-email"
+                      type="email"
+                      required
+                      autoComplete="email"
+                      placeholder="you@studio.com"
+                      className="mk-input flex-1"
+                      value={email}
+                      onChange={(event) => {
+                        setEmail(event.target.value)
+                        if (formState === "error") setFormState("idle")
+                      }}
+                      disabled={formState === "loading"}
+                    />
+                    <button
+                      type="submit"
+                      data-cursor="hover"
+                      className="group inline-flex items-center justify-center gap-2 rounded-full bg-[var(--mk-paper)] px-5 py-3 text-[13px] font-medium uppercase tracking-[0.18em] text-[var(--mk-ink)] transition-transform duration-300 hover:scale-[1.02] disabled:cursor-progress disabled:opacity-70"
+                      disabled={formState === "loading"}
+                    >
+                      {formState === "loading" ? "Sending…" : "Notify me"}
+                      <span aria-hidden="true">→</span>
+                    </button>
+                  </div>
+
+                  <div className="mt-4 min-h-[20px] font-mono text-[11px] uppercase tracking-[0.18em]">
+                    {formState === "success" ? (
+                      <span className="text-[var(--mk-blue-soft)]">
+                        ✓ Confirmed — you&apos;re on the patch list.
+                      </span>
+                    ) : null}
+                    {formState === "error" ? (
+                      <span className="text-[var(--mk-rust)]">{errorMessage}</span>
+                    ) : null}
+                    {formState === "idle" ? (
+                      <span className="text-[var(--mk-paper-dim)]">
+                        No spam. One email per release.
+                      </span>
+                    ) : null}
+                  </div>
+                </form>
               </div>
-            </form>
-          </div>
+
+              {/* Feedback */}
+              <div data-cta-row className="col-span-12 lg:col-span-6">
+                <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--mk-amber)]">
+                  02 / Feedback
+                </span>
+                <h3 className="mt-4 font-display text-[2rem] leading-tight italic">
+                  What do you wish it did?
+                </h3>
+                <p className="mt-3 max-w-[44ch] text-sm leading-relaxed text-[var(--mk-paper-dim)]">
+                  Tools, panels, filters, formats. Tell us what&apos;s missing and
+                  what you&apos;d trust the browser version to handle.
+                </p>
+
+                <form className="mt-8" onSubmit={onFeedback} noValidate>
+                  <label htmlFor="mk-feedback" className="sr-only">
+                    Feedback
+                  </label>
+                  <textarea
+                    id="mk-feedback"
+                    rows={3}
+                    placeholder="Smart objects with non-destructive perspective warp, please."
+                    className="mk-input resize-none"
+                    value={feedback}
+                    onChange={(event) => setFeedback(event.target.value)}
+                    disabled={feedbackState === "loading"}
+                  />
+                  <div className="mt-5 flex items-center justify-between">
+                    <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-[var(--mk-paper-dim)]">
+                      {feedbackState === "success" ? "✓ Logged" : "Anonymous if you want"}
+                    </span>
+                    <button
+                      type="submit"
+                      data-cursor="hover"
+                      className="inline-flex items-center justify-center gap-2 rounded-full border border-[var(--mk-rule-strong)] px-5 py-3 text-[13px] font-medium uppercase tracking-[0.18em] text-[var(--mk-paper)] transition-colors duration-300 hover:bg-[var(--mk-paper)] hover:text-[var(--mk-ink)] disabled:cursor-progress disabled:opacity-70"
+                      disabled={feedbackState === "loading" || !feedback.trim()}
+                    >
+                      {feedbackState === "loading" ? "Sending…" : "Send"}
+                      <span aria-hidden="true">→</span>
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </section>

@@ -7,6 +7,7 @@ import {
   MAX_CANVAS_PIXELS,
   MAX_PROJECT_CHANNELS,
   MAX_PROJECT_LAYERS,
+  MAX_PROJECT_SMART_FILTERS_PER_LAYER,
   assertCanvasSize,
   assertFileSize,
   clampCanvasSize,
@@ -98,6 +99,20 @@ test("project JSON import enforces layer, channel, and canvas payload limits", a
   })
   await expect(deserializeProject(tooManyChannels)).rejects.toThrow(
     `Project contains too many alpha channels. Maximum supported channels: ${MAX_PROJECT_CHANNELS}.`,
+  )
+
+  const tooManySmartFilters = JSON.stringify({
+    width: 16,
+    height: 16,
+    layers: [{
+      ...serializedLayer("layer_1"),
+      smartFilters: Array.from({ length: MAX_PROJECT_SMART_FILTERS_PER_LAYER + 1 }, (_, index) => ({
+        id: `filter_${index}`,
+      })),
+    }],
+  })
+  await expect(deserializeProject(tooManySmartFilters)).rejects.toThrow(
+    `Project layer contains too many smart filters. Maximum supported: ${MAX_PROJECT_SMART_FILTERS_PER_LAYER}.`,
   )
 
   await expect(canvasFromDataUrl("https://example.com/tracker.png", 1, 1)).rejects.toThrow(

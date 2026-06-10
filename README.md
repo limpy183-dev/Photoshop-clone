@@ -245,7 +245,9 @@ Representative test coverage includes:
 
 ```text
 app/
-  page.tsx                    Main editor shell
+  page.tsx                    Start workspace (home screen)
+  editor/page.tsx             Main editor shell
+  marketing/page.tsx          Marketing landing page
   layout.tsx                  App metadata and root layout
 
 components/photoshop/
@@ -292,4 +294,4 @@ See [BOUNDARIES.md](BOUNDARIES.md) for the list of features that are intentional
 
 ## License
 
-No license file is currently included in this repository. You can do anything with it.
+MIT — see [LICENSE](LICENSE).

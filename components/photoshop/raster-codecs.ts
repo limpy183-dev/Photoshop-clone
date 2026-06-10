@@ -501,6 +501,33 @@ function readExrChannelInfo(buffer: ArrayBuffer): { names: string[]; pixelTypes:
   return null
 }
 
+function readExrDataWindow(buffer: ArrayBuffer): { width: number; height: number } | null {
+  const bytes = new Uint8Array(buffer)
+  if (bytes.length < 12) return null
+  const view = new DataView(buffer)
+  let offset = 8
+  while (offset < bytes.length) {
+    const name = readCString(bytes, offset)
+    offset = name.next
+    if (!name.value) break
+    const type = readCString(bytes, offset)
+    offset = type.next
+    if (offset + 4 > bytes.length) return null
+    const size = view.getUint32(offset, true)
+    offset += 4
+    if (offset + size > bytes.length) return null
+    if (name.value === "dataWindow" && type.value === "box2i" && size >= 16) {
+      const xMin = view.getInt32(offset, true)
+      const yMin = view.getInt32(offset + 4, true)
+      const xMax = view.getInt32(offset + 8, true)
+      const yMax = view.getInt32(offset + 12, true)
+      return { width: xMax - xMin + 1, height: yMax - yMin + 1 }
+    }
+    offset += size
+  }
+  return null
+}
+
 export async function decodeAdvancedRasterBufferAsync(buffer: ArrayBuffer, name = "", mime = ""): Promise<DecodedRaster | null> {
   const ext = extensionForName(name)
   const head = new Uint8Array(buffer.slice(0, Math.min(32, buffer.byteLength)))
@@ -541,6 +568,11 @@ async function decodeTiffWithUtif(buffer: ArrayBuffer): Promise<DecodedRaster | 
     const ifds = UTIF.decode(buffer)
     const ifd = ifds.find((item) => Number(item.width || 0) > 0 && Number(item.height || 0) > 0) ?? ifds[0]
     if (!ifd) return null
+    // Preflight the IFD dimension tags so a tiny file declaring huge
+    // dimensions cannot trigger a multi-gigabyte decode allocation.
+    const tagWidth = Number(ifd.width || (Array.isArray(ifd.t256) ? ifd.t256[0] : ifd.t256) || 0)
+    const tagHeight = Number(ifd.height || (Array.isArray(ifd.t257) ? ifd.t257[0] : ifd.t257) || 0)
+    if (tagWidth > 0 && tagHeight > 0) assertCanvasSize(tagWidth, tagHeight, "TIFF image")
     UTIF.decodeImage(buffer, ifd)
     const width = Number(ifd.width || 0)
     const height = Number(ifd.height || 0)
@@ -576,6 +608,10 @@ async function decodeExrBuffer(buffer: ArrayBuffer): Promise<DecodedRaster | nul
   try {
     const { default: parseExr } = await import("parse-exr")
     const channelInfo = readExrChannelInfo(buffer)
+    // Preflight the header dataWindow so parseExr cannot allocate
+    // multi-gigabyte float buffers from a tiny crafted file.
+    const dataWindow = readExrDataWindow(buffer)
+    if (dataWindow && dataWindow.width > 0 && dataWindow.height > 0) assertCanvasSize(dataWindow.width, dataWindow.height, "OpenEXR image")
     const exr = parseExr(buffer, EXR_FLOAT_TYPE)
     assertCanvasSize(exr.width, exr.height, "OpenEXR image")
     const rgba = new Uint8ClampedArray(exr.width * exr.height * 4)
@@ -712,8 +748,54 @@ function jpeg2000RasterFromDecoded(
   }
 }
 
+// Cheap header scan so the WASM decoders can reject oversized dimensions
+// before allocating output buffers; returns null when nothing plausible
+// parses instead of throwing.
+function readJpeg2000Dimensions(buffer: ArrayBuffer): { width: number; height: number } | null {
+  try {
+    const bytes = new Uint8Array(buffer)
+    const view = new DataView(buffer)
+    if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0x4f) {
+      // Raw codestream: the SIZ segment (0xff51) follows the SOC marker.
+      for (let i = 2; i + 22 <= bytes.length && i < 64; i++) {
+        if (bytes[i] !== 0xff || bytes[i + 1] !== 0x51) continue
+        return {
+          width: view.getUint32(i + 6, false) - view.getUint32(i + 14, false),
+          height: view.getUint32(i + 10, false) - view.getUint32(i + 18, false),
+        }
+      }
+      return null
+    }
+    // JP2-family container: walk top-level boxes to jp2h, then ihdr inside it.
+    let offset = 0
+    while (offset + 8 <= bytes.length) {
+      const size = view.getUint32(offset, false)
+      if (readAscii(buffer, offset + 4, 4) === "jp2h") {
+        const end = size === 0 ? bytes.length : Math.min(bytes.length, offset + size)
+        let inner = offset + 8
+        while (inner + 8 <= end) {
+          const innerSize = view.getUint32(inner, false)
+          if (readAscii(buffer, inner + 4, 4) === "ihdr" && inner + 16 <= end) {
+            return { width: view.getUint32(inner + 12, false), height: view.getUint32(inner + 8, false) }
+          }
+          if (innerSize < 8) break
+          inner += innerSize
+        }
+        return null
+      }
+      if (size < 8) break
+      offset += size
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 async function decodeJpeg2000WithOpenJpeg(buffer: ArrayBuffer): Promise<DecodedRaster | null> {
   try {
+    const headerDims = readJpeg2000Dimensions(buffer)
+    if (headerDims && headerDims.width > 0 && headerDims.height > 0) assertCanvasSize(headerDims.width, headerDims.height, "JPEG 2000 image")
     const { J2KDecoder } = await loadOpenJpegCodec()
     const decoder = new J2KDecoder()
     const bytes = new Uint8Array(buffer)
@@ -734,6 +816,8 @@ async function decodeJpeg2000WithOpenJpeg(buffer: ArrayBuffer): Promise<DecodedR
 
 async function decodeJpeg2000Buffer(buffer: ArrayBuffer): Promise<DecodedRaster | null> {
   try {
+    const headerDims = readJpeg2000Dimensions(buffer)
+    if (headerDims && headerDims.width > 0 && headerDims.height > 0) assertCanvasSize(headerDims.width, headerDims.height, "JPEG 2000 image")
     const { decode } = await import("@abasb75/jpeg2000-decoder")
     const originalLog = console.log
     let decoded: Awaited<ReturnType<typeof decode>>
@@ -770,6 +854,11 @@ async function decodeRawBuffer(buffer: ArrayBuffer): Promise<DecodedRaster | nul
       userQual: 3,
     })
     const metadata = await raw.metadata(false) as Record<string, unknown>
+    // Preflight metadata dimensions before imageData() materialises the
+    // full demosaiced pixel buffer.
+    const metaWidth = Number(metadata.width ?? metadata.iwidth ?? (metadata.sizes as Record<string, unknown> | undefined)?.width ?? 0)
+    const metaHeight = Number(metadata.height ?? metadata.iheight ?? (metadata.sizes as Record<string, unknown> | undefined)?.height ?? 0)
+    if (metaWidth > 0 && metaHeight > 0) assertCanvasSize(metaWidth, metaHeight, "RAW/DNG image")
     const image = await raw.imageData() as Record<string, unknown>
     const width = Number(image.width ?? image.output_width ?? metadata.width ?? metadata.iwidth ?? (metadata.sizes as Record<string, unknown> | undefined)?.width ?? 0)
     const height = Number(image.height ?? image.output_height ?? metadata.height ?? metadata.iheight ?? (metadata.sizes as Record<string, unknown> | undefined)?.height ?? 0)
@@ -814,7 +903,7 @@ function linearPreviewSample(value: number) {
   return clamp8(Math.pow(Math.max(0, Math.min(1, normalized)), 1 / 2.2) * 255)
 }
 
-function decodeTgaColor(bytes: Uint8Array, offset: number, depth: number) {
+function decodeTgaColor(bytes: Uint8Array, offset: number, depth: number, alphaBits = 0) {
   if (depth === 32) return { r: bytes[offset + 2], g: bytes[offset + 1], b: bytes[offset], a: bytes[offset + 3], size: 4 }
   if (depth === 24) return { r: bytes[offset + 2], g: bytes[offset + 1], b: bytes[offset], a: 255, size: 3 }
   if (depth === 16 || depth === 15) {
@@ -823,7 +912,9 @@ function decodeTgaColor(bytes: Uint8Array, offset: number, depth: number) {
       r: Math.round(((value >> 10) & 31) * 255 / 31),
       g: Math.round(((value >> 5) & 31) * 255 / 31),
       b: Math.round((value & 31) * 255 / 31),
-      a: depth === 16 && (value & 0x8000) === 0 ? 255 : 255,
+      // ARGB1555: the high bit is alpha, but only when the image descriptor
+      // declares an attribute bit — many opaque files leave bit 15 zeroed.
+      a: depth === 16 && alphaBits > 0 ? ((value & 0x8000) !== 0 ? 255 : 0) : 255,
       size: 2,
     }
   }
@@ -933,6 +1024,7 @@ export function decodeTgaBuffer(buffer: ArrayBuffer): DecodedRaster {
   const rgba = new Uint8ClampedArray(width * height * 4)
   const topOrigin = (descriptor & 0x20) !== 0
   const rightOrigin = (descriptor & 0x10) !== 0
+  const attributeBits = descriptor & 0x0f
   const warnings: string[] = []
   const metadata = readTgaMetadata(bytes, idLength)
 
@@ -960,7 +1052,7 @@ export function decodeTgaBuffer(buffer: ArrayBuffer): DecodedRaster {
       const color = decodeTgaColor(bytes, paletteOffset + paletteIndex * paletteEntryBytes, colorMapDepth)
       return { ...color, size: Math.max(1, Math.ceil(pixelDepth / 8)) }
     }
-    return decodeTgaColor(bytes, offset, pixelDepth)
+    return decodeTgaColor(bytes, offset, pixelDepth, attributeBits)
   }
 
   let p = pixelOffset
@@ -3140,7 +3232,29 @@ async function loadOpenJpegCodec(): Promise<{
     openJpegCodecReady = (async () => {
       const mod = await import("@cornerstonejs/codec-openjpeg")
       const factory = (mod.default ?? mod) as unknown as (options?: Record<string, unknown>) => Promise<unknown>
-      return factory({ print: () => undefined, printErr: () => undefined })
+      const codec = (await factory({ print: () => undefined, printErr: () => undefined })) as {
+        J2KEncoder: new () => {
+          getDecodedBuffer: (frameInfo: { bitsPerSample: number; componentCount: number; width: number; height: number; isSigned: boolean }) => Uint8Array
+          encode: () => void
+          setDecompositions: (value: number) => void
+          setQuality: (reversible: boolean, quality: number) => void
+          delete?: () => void
+        }
+      }
+      // This emscripten build fails its very first opj_start_compress for
+      // some frame configurations (and crashes inside its own error-callback
+      // binding while reporting it). One successful warm-up encode reliably
+      // unlocks all subsequent encodes, so prime the module here and ignore
+      // any warm-up failure.
+      try {
+        const warm = new codec.J2KEncoder()
+        warm.setDecompositions(1)
+        warm.setQuality(true, 1)
+        warm.getDecodedBuffer({ bitsPerSample: 8, componentCount: 3, width: 16, height: 16, isSigned: false }).fill(0)
+        warm.encode()
+        warm.delete?.()
+      } catch {}
+      return codec
     })()
   }
   return openJpegCodecReady as Promise<{
@@ -3184,18 +3298,14 @@ async function encodeJpeg2000Codestream(imageData: ImageData, options: Jpeg2000E
     if (componentCount === 4) decoded[target + 3] = imageData.data[source + 3]
   }
   encoder.encode()
-  return bytesFromInput(encoder.getEncodedBuffer())
-}
-
-function jpeg2000FallbackCodestream(imageData: ImageData, options: Jpeg2000EncodeOptions): Uint8Array {
-  const components = options.includeAlpha ? 4 : 3
-  return concatUint8([
-    new Uint8Array([0xff, 0x4f, 0xff, 0x51]),
-    u32BE(38),
-    u32BE(imageData.width),
-    u32BE(imageData.height),
-    new Uint8Array([components, 8, options.reversible ? 1 : 0, 0xff, 0xd9]),
-  ])
+  const encoded = bytesFromInput(encoder.getEncodedBuffer())
+  // The WASM encoder can fail without throwing, leaving a stale or empty
+  // buffer behind. A real codestream always opens with the SOC+SIZ markers;
+  // anything else must surface as an error, not download as a valid file.
+  if (encoded.length < 32 || encoded[0] !== 0xff || encoded[1] !== 0x4f) {
+    throw new Error("JPEG 2000 encoder produced an invalid codestream")
+  }
+  return encoded
 }
 
 function jpeg2000Box(type: string, data: Uint8Array): Uint8Array {
@@ -3239,13 +3349,7 @@ function jpeg2000Container(imageData: ImageData, codestream: Uint8Array, options
 
 export async function encodeJpeg2000ImageData(imageData: ImageData, options: Jpeg2000EncodeOptions = {}): Promise<ArrayBuffer> {
   const container = options.container ?? "codestream"
-  let codestream: Uint8Array
-  try {
-    codestream = await encodeJpeg2000Codestream(imageData, options)
-  } catch (error) {
-    if (container === "codestream") throw error
-    codestream = jpeg2000FallbackCodestream(imageData, options)
-  }
+  const codestream = await encodeJpeg2000Codestream(imageData, options)
   if (container === "codestream") return exactArrayBuffer(codestream)
   return exactArrayBuffer(jpeg2000Container(imageData, codestream, options))
 }

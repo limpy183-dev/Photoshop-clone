@@ -1,6 +1,6 @@
 # Project Boundaries
 
-This document records features that **cannot** be implemented inside this project as a matter of design, IP, or browser sandbox limits — not as items waiting on engineering time. Some appear in `implementation-status-report.md` under "Not Implemented At All" or as caveats inside "Partially Implemented" sections; this file is the single place that explains *why* they will not be implemented and what the practical workaround is.
+This document records features that **cannot** be implemented inside this project as a matter of design, IP, or browser sandbox limits — not as items waiting on engineering time. This file is the single place that explains *why* they will not be implemented and what the practical workaround is.
 
 If a future contributor proposes work to "fix" one of these, this document is the place to read first.
 
@@ -34,7 +34,7 @@ Out of scope:
 - Native `.8bf` binary filter execution
 - ExtendScript / Action Manager host-object compatibility at full fidelity
 
-**Why:** these require executing native code outside the browser's sandbox. A browser tab cannot load `.8bf` DLLs, host UXP's CEF runtime, or expose a Photoshop DOM. The status report's existing "UXP/CEP adapter" is a *compatibility shim* for plugins that use only documented APIs the shim can map onto the in-browser editor — that is the maximum a browser project can offer.
+**Why:** these require executing native code outside the browser's sandbox. A browser tab cannot load `.8bf` DLLs, host UXP's CEF runtime, or expose a Photoshop DOM. The existing "UXP/CEP adapter" is a *compatibility shim* for plugins that use only documented APIs the shim can map onto the in-browser editor — that is the maximum a browser project can offer.
 
 **What does work:** the existing UXP-compatible adapter (`require("photoshop")`, `core.executeAsModal`, `action.batchPlay`), CEP-compatible adapter (`CSInterface`, `evalScript`), and `.8bf` metadata import with safe-kernel execution for 3×3 kernel descriptors.
 
@@ -67,7 +67,7 @@ Out of scope:
 
 **Why:** certified CMM behavior is reserved for vendor-licensed engines. A browser implementation can compute color transforms with matrix and TRC tags faithfully — this project does — but cannot claim certified parity, and downstream press shops will not accept uncertified output without their own conversion step.
 
-**What does work:** browser-local ICC engine for matrix+TRC RGB / Gray / CMYK profiles, soft-proofing, gamut warning, CMYK separation plates, total-ink reporting, spot overprint preview. (CLUT/device-link tag *parsing* could be added — see `implementation-status-report.md` highest-value item #2 — without claiming certified CMM behavior.)
+**What does work:** browser-local ICC engine for matrix+TRC RGB / Gray / CMYK profiles, soft-proofing, gamut warning, CMYK separation plates, total-ink reporting, spot overprint preview. (CLUT/device-link tag *parsing* could be added without claiming certified CMM behavior.)
 
 ---
 
@@ -113,4 +113,4 @@ Out of scope:
 
 ## Items that *are* in scope and tracked elsewhere
 
-Anything in `implementation-status-report.md` under "Partially Implemented" with a concrete browser-achievable next step. The "Highest-Value Remaining Work" section near the bottom of that report is the live backlog. This file (`BOUNDARIES.md`) is the inverse — the items that are intentionally *not* on that backlog.
+Partially implemented features with a concrete browser-achievable next step are normal backlog work, tracked through issues and commit history. This file (`BOUNDARIES.md`) is the inverse — the items that are intentionally *not* on that backlog.

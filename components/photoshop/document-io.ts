@@ -22,6 +22,7 @@ import {
   MAX_PROJECT_CHANNELS,
   MAX_PROJECT_DATA_URL_CHARS,
   MAX_PROJECT_LAYERS,
+  MAX_PROJECT_SMART_FILTERS_PER_LAYER,
   MAX_PSD_FILE_BYTES,
   MAX_RASTER_FILE_BYTES,
   assertCanvasSize,
@@ -2011,17 +2012,44 @@ const PROJECT_RESERVED_KEYS = new Set([
  *
  * Pure data passes through unchanged; nothing structural is rewritten.
  */
-const SAFE_JSON_MAX_DEPTH = 6
-const SAFE_JSON_MAX_STRING = 4000
-const SAFE_JSON_MAX_ARRAY = 1024
-const SAFE_JSON_MAX_OBJECT_KEYS = 256
+type SafeJsonLimits = {
+  maxString: number
+  maxArray: number
+  maxKeys: number
+  maxDepth: number
+}
+
+const SAFE_JSON_DEFAULT_LIMITS: SafeJsonLimits = {
+  maxString: 4000,
+  maxArray: 1024,
+  maxKeys: 256,
+  maxDepth: 6,
+}
+
+// Raised limits for project fields that legitimately carry large payloads
+// (metadata.psdNativeSource base64, asset library fonts/ICC profiles,
+// timeline frame thumbnails, plugin storage). Truncating these silently
+// corrupts the document on the next save.
+const PROJECT_PAYLOAD_LIMITS: SafeJsonLimits = {
+  maxString: 16_000_000,
+  maxArray: 10_000,
+  maxKeys: 4096,
+  maxDepth: 12,
+}
+
 const SAFE_JSON_KEY = /^[A-Za-z0-9_\-:.]{1,64}$/
 
-function safeJsonValue(value: unknown, depth = 0): unknown {
+function safeJsonValue(
+  value: unknown,
+  depth = 0,
+  limits: SafeJsonLimits = SAFE_JSON_DEFAULT_LIMITS,
+  state: { truncated: boolean } = { truncated: false },
+): unknown {
   if (value === null) return null
   const type = typeof value
   if (type === "string") {
-    return (value as string).slice(0, SAFE_JSON_MAX_STRING)
+    if ((value as string).length > limits.maxString) state.truncated = true
+    return (value as string).slice(0, limits.maxString)
   }
   if (type === "boolean") return value
   if (type === "number") {
@@ -2030,11 +2058,15 @@ function safeJsonValue(value: unknown, depth = 0): unknown {
   if (type === "function" || type === "symbol" || type === "bigint" || type === "undefined") {
     return undefined
   }
-  if (depth >= SAFE_JSON_MAX_DEPTH) return undefined
+  if (depth >= limits.maxDepth) {
+    state.truncated = true
+    return undefined
+  }
   if (Array.isArray(value)) {
+    if (value.length > limits.maxArray) state.truncated = true
     const out: unknown[] = []
-    for (const item of value.slice(0, SAFE_JSON_MAX_ARRAY)) {
-      const next = safeJsonValue(item, depth + 1)
+    for (const item of value.slice(0, limits.maxArray)) {
+      const next = safeJsonValue(item, depth + 1, limits, state)
       if (next !== undefined) out.push(next)
     }
     return out
@@ -2043,10 +2075,13 @@ function safeJsonValue(value: unknown, depth = 0): unknown {
     const out: Record<string, unknown> = {}
     let keysCopied = 0
     for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
-      if (keysCopied >= SAFE_JSON_MAX_OBJECT_KEYS) break
+      if (keysCopied >= limits.maxKeys) {
+        state.truncated = true
+        break
+      }
       if (PROJECT_RESERVED_KEYS.has(key)) continue
       if (!SAFE_JSON_KEY.test(key)) continue
-      const cleaned = safeJsonValue(nested, depth + 1)
+      const cleaned = safeJsonValue(nested, depth + 1, limits, state)
       if (cleaned === undefined) continue
       out[key] = cleaned
       keysCopied += 1
@@ -2056,19 +2091,28 @@ function safeJsonValue(value: unknown, depth = 0): unknown {
   return undefined
 }
 
+function warnIfTruncated(state: { truncated: boolean }, field?: string) {
+  if (!state.truncated) return
+  console.warn(`Project field "${field ?? "value"}" exceeded sanitiser limits and was truncated on load.`)
+}
+
 /**
  * Convenience wrappers around safeJsonValue for the typed PsDocument
  * fields that are pure-data passthroughs (no DOM/CSS sinks). Each helper
  * returns `undefined` when the input is not array/object as appropriate.
  */
-function safeJsonArray<T>(value: unknown): T[] | undefined {
-  const cleaned = safeJsonValue(value)
+function safeJsonArray<T>(value: unknown, limits: SafeJsonLimits = SAFE_JSON_DEFAULT_LIMITS, field?: string): T[] | undefined {
+  const state = { truncated: false }
+  const cleaned = safeJsonValue(value, 0, limits, state)
+  warnIfTruncated(state, field)
   return Array.isArray(cleaned) ? (cleaned as T[]) : undefined
 }
 
-function safeJsonObject<T extends object>(value: unknown): T | undefined {
+function safeJsonObject<T extends object>(value: unknown, limits: SafeJsonLimits = SAFE_JSON_DEFAULT_LIMITS, field?: string): T | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined
-  const cleaned = safeJsonValue(value)
+  const state = { truncated: false }
+  const cleaned = safeJsonValue(value, 0, limits, state)
+  warnIfTruncated(state, field)
   return cleaned && typeof cleaned === "object" && !Array.isArray(cleaned)
     ? (cleaned as T)
     : undefined
@@ -3128,6 +3172,9 @@ async function deserializeLayer(serialized: Record<string, unknown>, docW: numbe
         imageDataUrl: undefined,
       }
     : undefined
+  if (Array.isArray(smartFilters) && smartFilters.length > MAX_PROJECT_SMART_FILTERS_PER_LAYER) {
+    throw new Error(`Project layer contains too many smart filters. Maximum supported: ${MAX_PROJECT_SMART_FILTERS_PER_LAYER}.`)
+  }
   const restoredSmartFilters = smartFilters
     ? await Promise.all(
         (smartFilters as unknown[]).map(async (sf) => {
@@ -3173,6 +3220,19 @@ async function deserializeLayer(serialized: Record<string, unknown>, docW: numbe
   return layer
 }
 
+/**
+ * Map `items` through an async `mapper` in sequential batches of
+ * `batchSize`, preserving input order. Bounds the number of concurrent
+ * image decodes a hostile project file can trigger at once.
+ */
+async function mapInBatches<T, R>(items: T[], batchSize: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = []
+  for (let i = 0; i < items.length; i += batchSize) {
+    out.push(...(await Promise.all(items.slice(i, i + batchSize).map(mapper))))
+  }
+  return out
+}
+
 export async function deserializeProject(text: string): Promise<PsDocument> {
   const parsed = parseProjectEnvelope(text)
   const sourceCandidate = (parsed && typeof parsed === "object" && parsed.document) ?? parsed
@@ -3192,23 +3252,23 @@ export async function deserializeProject(text: string): Promise<PsDocument> {
     throw new Error(`Project contains too many layers. Maximum supported layers: ${MAX_PROJECT_LAYERS}.`)
   }
 
-  const layers = await Promise.all(
-    (source.layers as Record<string, unknown>[]).map((l) => deserializeLayer(l, width, height)),
+  const layers = await mapInBatches(
+    source.layers as Record<string, unknown>[],
+    4,
+    (l) => deserializeLayer(l, width, height),
   )
   const channelEntries = Array.isArray(source.channels) ? (source.channels as Record<string, unknown>[]) : []
   if (channelEntries.length > MAX_PROJECT_CHANNELS) {
     throw new Error(`Project contains too many alpha channels. Maximum supported channels: ${MAX_PROJECT_CHANNELS}.`)
   }
-  const channels = await Promise.all(
-    channelEntries.map(async (ch) => ({
-      id: cleanText(ch.id, uid("channel"), 80),
-      name: cleanText(ch.name, "Alpha"),
-      kind: ch.kind === "spot" ? "spot" as const : "alpha" as const,
-      spotColor: typeof ch.spotColor === "string" ? cleanText(ch.spotColor, "#ff00ff", 20) : undefined,
-      spotOpacity: typeof ch.spotOpacity === "number" ? Math.max(0, Math.min(100, ch.spotOpacity)) : undefined,
-      canvas: await canvasFromDataUrl(ch.canvasDataUrl as string | undefined, width, height),
-    })),
-  )
+  const channels = await mapInBatches(channelEntries, 4, async (ch) => ({
+    id: cleanText(ch.id, uid("channel"), 80),
+    name: cleanText(ch.name, "Alpha"),
+    kind: ch.kind === "spot" ? "spot" as const : "alpha" as const,
+    spotColor: typeof ch.spotColor === "string" ? cleanText(ch.spotColor, "#ff00ff", 20) : undefined,
+    spotOpacity: typeof ch.spotOpacity === "number" ? Math.max(0, Math.min(100, ch.spotOpacity)) : undefined,
+    canvas: await canvasFromDataUrl(ch.canvasDataUrl as string | undefined, width, height),
+  }))
 
   const rawSelection =
     source.selection && typeof source.selection === "object" && !Array.isArray(source.selection)
@@ -3349,17 +3409,17 @@ export async function deserializeProject(text: string): Promise<PsDocument> {
     gradientPresets: safeJsonArray<NonNullable<PsDocument["gradientPresets"]>[number]>(source.gradientPresets),
     characterStyles: safeJsonObject<NonNullable<PsDocument["characterStyles"]>>(source.characterStyles),
     paragraphStyles: safeJsonObject<NonNullable<PsDocument["paragraphStyles"]>>(source.paragraphStyles),
-    assetLibrary: safeJsonArray<NonNullable<PsDocument["assetLibrary"]>[number]>(source.assetLibrary),
-    timelineFrames: safeJsonArray<NonNullable<PsDocument["timelineFrames"]>[number]>(source.timelineFrames),
-    plugins: safeJsonArray<NonNullable<PsDocument["plugins"]>[number]>(source.plugins),
-    pluginStorage: safeJsonObject<NonNullable<PsDocument["pluginStorage"]>>(source.pluginStorage),
+    assetLibrary: safeJsonArray<NonNullable<PsDocument["assetLibrary"]>[number]>(source.assetLibrary, PROJECT_PAYLOAD_LIMITS, "assetLibrary"),
+    timelineFrames: safeJsonArray<NonNullable<PsDocument["timelineFrames"]>[number]>(source.timelineFrames, PROJECT_PAYLOAD_LIMITS, "timelineFrames"),
+    plugins: safeJsonArray<NonNullable<PsDocument["plugins"]>[number]>(source.plugins, PROJECT_PAYLOAD_LIMITS, "plugins"),
+    pluginStorage: safeJsonObject<NonNullable<PsDocument["pluginStorage"]>>(source.pluginStorage, PROJECT_PAYLOAD_LIMITS, "pluginStorage"),
     variableDataSets: safeJsonArray<NonNullable<PsDocument["variableDataSets"]>[number]>(source.variableDataSets),
     modeSettings: safeJsonObject<DocumentModeSettings>(source.modeSettings),
     // reports are generated at runtime (createDocumentReport); we never
     // restore them from a project file, since they reference the freshly
     // loaded layer canvases and the source-of-truth lives in editor state.
     reports: undefined,
-    metadata: safeJsonObject<DocumentMetadata>(source.metadata),
+    metadata: safeJsonObject<DocumentMetadata>(source.metadata, PROJECT_PAYLOAD_LIMITS, "metadata"),
     colorManagement: safeJsonObject<NonNullable<PsDocument["colorManagement"]>>(source.colorManagement),
     printSettings: safeJsonObject<NonNullable<PsDocument["printSettings"]>>(source.printSettings),
     smartObjectParent: cleanSmartObjectParent(source.smartObjectParent),
@@ -3799,6 +3859,7 @@ async function registerPsbCompositeTiles(docId: string, pixelData: PixelData | u
     height: sourceHeight,
     tileSize: plan.tileView.tileSize,
     memoryBudgetMB: 256,
+    scratchNamespace: docId,
   })
   for (let row = 0; row < plan.tileView.tileRows; row++) {
     for (let col = 0; col < plan.tileView.tileColumns; col++) {

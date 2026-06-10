@@ -166,12 +166,12 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
       }
       if (isShortcut("file-save")) {
         e.preventDefault()
-        if (activeDoc) window.dispatchEvent(new CustomEvent("ps-save-document", { detail: { mode: "save" } }))
+        if (activeDoc) window.dispatchEvent(new CustomEvent("ps-save-document", { detail: { docId: activeDoc.id, mode: "save" } }))
         return
       }
       if (isShortcut("file-saveas")) {
         e.preventDefault()
-        if (activeDoc) window.dispatchEvent(new CustomEvent("ps-save-document", { detail: { mode: "save-as" } }))
+        if (activeDoc) window.dispatchEvent(new CustomEvent("ps-save-document", { detail: { docId: activeDoc.id, mode: "save-as" } }))
         return
       }
       if (isShortcut("file-close")) {

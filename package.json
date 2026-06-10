@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test:smoke": "playwright test",
     "check:capabilities": "node scripts/check-capabilities.mjs",
-    "verify": "npm run typecheck && npm run check:capabilities && npm run build && npm run test:smoke"
+    "verify": "npm run lint && npm run typecheck && npm run check:capabilities && npm run build && npm run test:smoke"
   },
   "dependencies": {
     "@abasb75/jpeg2000-decoder": "^2.5.4-f",

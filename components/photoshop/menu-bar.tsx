@@ -483,6 +483,7 @@ export function MenuBar({
     styleClipboard,
     closedDocuments,
     documentStatuses,
+    documentHistoryVersions,
     duplicateDocument,
     requestCloseDocument,
     closeOtherDocuments,
@@ -1912,15 +1913,19 @@ export function MenuBar({
 
   const saveProjectDocument = React.useCallback(async (docId?: string, mode: SaveMode = "save") => {
     const doc = documents.find((candidate) => candidate.id === (docId ?? activeDoc?.id))
-    if (!doc) return false
+    if (!doc) return null
     const lifecycle = documentStatuses[doc.id]
     const report = createDocumentReport(doc, "Project Export")
     const docWithReport = { ...doc, reports: [report, ...(doc.reports ?? [])].slice(0, 12) }
     const serialized = serializeProject(docWithReport)
+    // Capture the history index at serialization time so edits made while the
+    // async file write is in flight are not marked as saved.
+    const savedHistoryIndex = documentHistoryVersions[doc.id] ?? 0
     const fallbackName = `${safeNameFor(lifecycle?.fileName ?? doc.name)}.psprojson`
     let nextLifecycle: Partial<DocumentLifecycleState> = {
       fileKind: "project",
       fileName: fallbackName,
+      savedHistoryIndex,
     }
 
     try {
@@ -1965,20 +1970,20 @@ export function MenuBar({
       markDocumentSaved(doc.id, nextLifecycle)
       refreshRecents()
       toast.success(nextLifecycle.storage === "download" ? "Project downloaded" : "Project saved")
-      return true
+      return doc.id
     } catch (err) {
       if (!(err instanceof DOMException && err.name === "AbortError")) {
         toast.error(err instanceof Error ? err.message : "Could not save project")
       }
-      return false
+      return null
     }
-  }, [activeDoc?.id, dispatch, documentStatuses, documents, markDocumentSaved, refreshRecents])
+  }, [activeDoc?.id, dispatch, documentHistoryVersions, documentStatuses, documents, markDocumentSaved, refreshRecents])
 
   React.useEffect(() => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<{ docId?: string; mode?: SaveMode }>).detail
-      void saveProjectDocument(detail?.docId, detail?.mode ?? "save").then((success) => {
-        window.dispatchEvent(new CustomEvent("ps-document-saved", { detail: { docId: detail?.docId, success } }))
+      void saveProjectDocument(detail?.docId, detail?.mode ?? "save").then((savedId) => {
+        window.dispatchEvent(new CustomEvent("ps-document-saved", { detail: { docId: savedId ?? detail?.docId, success: !!savedId } }))
       })
     }
     window.addEventListener("ps-save-document", handler as EventListener)
@@ -2026,6 +2031,17 @@ export function MenuBar({
       }
     })()
   }
+
+  // The home workspace (and anything else without access to the pickers)
+  // triggers File > Open through this event. openImageOrPsd is recreated
+  // each render, so route through a ref to register the listener once.
+  const openImageOrPsdRef = React.useRef(openImageOrPsd)
+  openImageOrPsdRef.current = openImageOrPsd
+  React.useEffect(() => {
+    const handler = () => openImageOrPsdRef.current()
+    window.addEventListener("ps-open-file", handler)
+    return () => window.removeEventListener("ps-open-file", handler)
+  }, [])
 
   const saveProject = () => {
     void saveProjectDocument(activeDoc?.id, "save")

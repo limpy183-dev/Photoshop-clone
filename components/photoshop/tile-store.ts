@@ -401,15 +401,16 @@ export class TiledBackingStore {
 
   private async spillSlot(slot: TileSlot): Promise<boolean> {
     if (!slot.data) return false
+    if (!this.enableOPFSSpill) return false
     const data = slot.data
-    if (this.enableOPFSSpill) {
-      const key = `tile-${this.documentId}-${slot.col}-${slot.row}`
-      try {
-        await writeScratchBlob(key, new Blob([new Uint8Array(data.buffer.slice(0))]))
-        slot.scratchKey = key
-      } catch {
-        // best effort
-      }
+    const key = `tile-${this.documentId}-${slot.col}-${slot.row}`
+    try {
+      await writeScratchBlob(key, new Blob([new Uint8Array(data.buffer.slice(0))]))
+      slot.scratchKey = key
+    } catch {
+      // Keep the tile resident: dropping it without a scratch copy would
+      // make ensureResident fabricate a transparent tile (pixel loss).
+      return false
     }
     this.liveBytes -= data.byteLength
     this.budget.release(slot.allocationId)

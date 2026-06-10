@@ -180,7 +180,7 @@ function snapHeight(value: number, min: number, max: number) {
   return clamped
 }
 
-export function PanelDock({ width }: { width?: number }) {
+export function PanelDock({ width, overlay }: { width?: number; overlay?: boolean }) {
   const dockRef = React.useRef<HTMLDivElement>(null)
   const [dockHeight, setDockHeight] = React.useState(0)
   const [topHeight, setTopHeight] = React.useState(WORKSPACE_PRESETS.essentials.topHeight)
@@ -194,6 +194,7 @@ export function PanelDock({ width }: { width?: number }) {
   const [allPanelsOpen, setAllPanelsOpen] = React.useState(false)
   const [recentPanels, setRecentPanels] = React.useState<string[]>([])
   const hydratedRef = React.useRef(false)
+  const hadSavedModeRef = React.useRef(false)
   const topHeightRef = React.useRef(topHeight)
   const topActiveRef = React.useRef(topActive)
   const bottomActiveRef = React.useRef(bottomActive)
@@ -311,6 +312,10 @@ export function PanelDock({ width }: { width?: number }) {
 
   React.useEffect(() => {
     const saved = readDockState()
+    // Capture whether a dock mode was ever persisted before this session's
+    // own persist effect writes one — the overlay default below must only
+    // apply when the user never picked a mode themselves.
+    if (!hydratedRef.current) hadSavedModeRef.current = !!(saved && isDockMode(saved.mode))
     if (saved) {
       if (Number.isFinite(Number(saved.topHeight))) setTopHeight(clampTopHeight(Number(saved.topHeight)))
       if (panelById(String(saved.topActive ?? ""))?.stack === "upper") setTopActive(String(saved.topActive))
@@ -331,6 +336,12 @@ export function PanelDock({ width }: { width?: number }) {
     }
     hydratedRef.current = true
   }, [clampTopHeight])
+
+  // Phone-width overlay layouts default the dock to the hidden rail so the
+  // canvas keeps usable width by default; an explicitly saved mode wins.
+  React.useEffect(() => {
+    if (overlay && !hadSavedModeRef.current) setMode("hidden")
+  }, [overlay])
 
   React.useEffect(() => {
     if (!hydratedRef.current) return
@@ -443,6 +454,11 @@ export function PanelDock({ width }: { width?: number }) {
   )
 
   const dockWidth = mode === "expanded" ? width ?? WORKSPACE_PRESETS.essentials.dockWidth : mode === "compact" ? 48 : 34
+  // Overlay docks float over the canvas on phone widths — cap the width so
+  // a sliver of canvas stays visible behind the expanded dock.
+  const expandedWidth = overlay && typeof window !== "undefined"
+    ? Math.min(dockWidth, window.innerWidth - 60)
+    : dockWidth
 
   if (mode === "hidden") {
     return (
@@ -497,8 +513,11 @@ export function PanelDock({ width }: { width?: number }) {
       data-mode="expanded"
       data-split={splitState}
       data-upper-hidden={upperHidden ? "true" : "false"}
-      className="relative shrink-0 bg-[var(--ps-panel)] border-l border-[var(--ps-divider)] flex flex-col select-none"
-      style={{ width: dockWidth }}
+      className={cn(
+        "shrink-0 bg-[var(--ps-panel)] border-l border-[var(--ps-divider)] flex flex-col select-none",
+        overlay ? "absolute inset-y-0 right-0 z-40 shadow-xl" : "relative",
+      )}
+      style={{ width: expandedWidth }}
     >
       <DockHeader
         upperHidden={upperHidden}

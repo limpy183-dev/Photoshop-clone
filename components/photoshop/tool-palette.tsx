@@ -230,6 +230,17 @@ function readToolTooltipPrefs(): ToolTooltipPreferences {
 export function ToolPalette() {
   const { tool, dispatch, foreground, background, activeDoc, toggleQuickMask } = useEditor()
   const [openGroup, setOpenGroup] = React.useState<string | null>(null)
+  const triggerRefs = React.useRef<Record<string, HTMLButtonElement | null>>({})
+  const flyoutRef = React.useRef<HTMLDivElement | null>(null)
+
+  // Move focus into the flyout menu when it opens (active item, else first)
+  React.useEffect(() => {
+    if (!openGroup) return
+    const items = flyoutRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]')
+    if (!items?.length) return
+    const active = Array.from(items).find((item) => item.dataset.active === "true")
+    ;(active ?? items[0]).focus()
+  }, [openGroup])
 
   /* ---- showTooltips preference + configurable delay ---- */
   const [prefs, setPrefs] = React.useState<ToolTooltipPreferences>(DEFAULT_PREFS)
@@ -268,6 +279,9 @@ export function ToolPalette() {
             >
               <button
                 type="button"
+                ref={(el) => {
+                  triggerRefs.current[groupKey] = el
+                }}
                 onClick={() => {
                   const target = group.others?.find((o) => o.id === tool) ?? group.primary
                   dispatch({ type: "set-tool", tool: target.id })
@@ -278,6 +292,12 @@ export function ToolPalette() {
                     setOpenGroup(openGroup === groupKey ? null : groupKey)
                   }
                 }}
+                onKeyDown={(e) => {
+                  if (e.key === "ArrowRight" && group.others?.length) {
+                    e.preventDefault()
+                    setOpenGroup(groupKey)
+                  }
+                }}
                 className={cn(
                   "relative w-9 h-9 rounded-sm flex items-center justify-center transition-colors",
                   isActive
@@ -285,18 +305,18 @@ export function ToolPalette() {
                     : "text-[var(--ps-text)] hover:bg-[var(--ps-tool-hover)]",
                 )}
                 aria-label={activeName}
+                aria-haspopup={group.others?.length ? "menu" : undefined}
+                aria-expanded={group.others?.length ? openGroup === groupKey : undefined}
               >
                 <ActiveIcon className="w-4 h-4" />
                 {group.others?.length ? (
                   <span
-                    role="button"
-                    tabIndex={-1}
+                    aria-hidden="true"
                     onClick={(e) => {
                       e.stopPropagation()
                       setOpenGroup(openGroup === groupKey ? null : groupKey)
                     }}
                     className="absolute right-0.5 bottom-0.5 cursor-pointer"
-                    aria-label="More tools"
                   >
                     <span className="block w-0 h-0 border-l-[4px] border-l-transparent border-t-[4px] border-t-[var(--ps-text-dim)]" />
                   </span>
@@ -306,13 +326,37 @@ export function ToolPalette() {
 
             {openGroup === groupKey && group.others ? (
               <div
+                ref={flyoutRef}
+                role="menu"
+                aria-label={`${group.primary.name} group`}
                 className="absolute left-[42px] top-0 z-50 bg-[var(--ps-panel)] border border-[var(--ps-divider)] rounded-sm shadow-lg py-1 min-w-[220px]"
                 onMouseLeave={() => setOpenGroup(null)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setOpenGroup(null)
+                    triggerRefs.current[groupKey]?.focus()
+                    return
+                  }
+                  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                    e.preventDefault()
+                    const items = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+                    const index = items.indexOf(document.activeElement as HTMLElement)
+                    const next =
+                      e.key === "ArrowDown"
+                        ? items[index < 0 ? 0 : (index + 1) % items.length]
+                        : items[index < 0 ? items.length - 1 : (index - 1 + items.length) % items.length]
+                    next?.focus()
+                  }
+                }}
               >
                 {[group.primary, ...group.others].map((t) => (
                   <button
                     key={t.id}
                     type="button"
+                    role="menuitem"
+                    data-active={t.id === tool ? "true" : undefined}
                     onClick={() => {
                       dispatch({ type: "set-tool", tool: t.id })
                       setOpenGroup(null)

@@ -54,7 +54,7 @@ const AutosaveRecovery = React.lazy(() =>
 // The Home/Start workspace is shown when no document is open or when the
 // user explicitly toggles it from Window ▸ Home. Lazy-load so its preset/
 // recent-thumbnail rendering only ships when actually visible.
-const _HomeWorkspace = React.lazy(() =>
+const HomeWorkspace = React.lazy(() =>
   import("@/components/photoshop/home-workspace").then((m) => ({ default: m.HomeWorkspace })),
 )
 
@@ -95,6 +95,22 @@ export default function Page() {
   )
 }
 
+// Below this width the shell cannot fit the tool rail, resize handle, and
+// the 340px-minimum dock next to a usable canvas, so the dock switches to an
+// overlay. Returns false until mounted so SSR and the first client render
+// agree (same hydration gating as the persisted dock width).
+function useIsNarrowViewport() {
+  const [isNarrow, setIsNarrow] = React.useState(false)
+  React.useEffect(() => {
+    const query = window.matchMedia("(max-width: 768px)")
+    const update = () => setIsNarrow(query.matches)
+    update()
+    query.addEventListener("change", update)
+    return () => query.removeEventListener("change", update)
+  }, [])
+  return isNarrow
+}
+
 // The main workspace shell. Context-menu state is intentionally NOT held
 // here: it lives in a sibling overlay so opening/positioning the menu
 // doesn't re-render the heavy MenuBar / Canvas / PanelDock tree.
@@ -111,7 +127,7 @@ function Workspace() {
   // Tracks whether the Home/Start workspace is explicitly open. The view is
   // also shown automatically whenever no documents are open, so this flag
   // only matters for "Window ▸ Home" toggling while a doc is active.
-  const [, setHomeOpen] = React.useState(false)
+  const [homeOpen, setHomeOpen] = React.useState(false)
   const openNew = React.useCallback(() => setNewOpen(true), [])
   const openCommandPalette = React.useCallback(() => setCommandOpen(true), [])
   useShortcuts(openNew, openCommandPalette)
@@ -119,6 +135,7 @@ function Workspace() {
   const [dockWidth, setDockWidth] = React.useState(380)
   const dockWidthRef = React.useRef(dockWidth)
   const activeDocRef = React.useRef(activeDoc)
+  const isNarrow = useIsNarrowViewport()
   // Persisted dock width is read from localStorage in an effect, so SSR
   // and first client render both see 380. Gate the value passed to
   // PanelDock so even if anything else (HMR, future lazy init) leaks the
@@ -240,6 +257,12 @@ function Workspace() {
     })
   }, [])
 
+  // Opening or switching to a real document always returns to the editor,
+  // even when Home was explicitly toggled on via Window ▸ Home.
+  React.useEffect(() => {
+    if (activeDocId) setHomeOpen(false)
+  }, [activeDocId])
+
   React.useEffect(() => {
     return addPhotoshopEventListener("ps-open-color-picker", (detail) => {
       const surface = detail?.surface === "hud" ? "hud" : "dialog"
@@ -312,10 +335,16 @@ function Workspace() {
       {screenModeState.hideMenuBar ? null : <OptionsBar />}
       {screenModeState.hideMenuBar ? null : <DocumentTabs />}
       <ImageAssetsGeneratorRunner />
-      <div className="flex-1 flex min-h-0">
+      <div className="relative flex-1 flex min-h-0">
         {screenModeState.hideToolPalette ? null : <ToolPalette />}
-        <CanvasView />
-        {screenModeState.hidePanels ? null : (
+        {homeOpen || !activeDoc ? (
+          <React.Suspense fallback={<div className="min-w-0 flex-1 bg-[var(--ps-canvas-bg)]" />}>
+            <HomeWorkspace onOpenNew={openNew} onClose={() => setHomeOpen(false)} />
+          </React.Suspense>
+        ) : (
+          <CanvasView />
+        )}
+        {screenModeState.hidePanels || isNarrow ? null : (
           <ResizeHandle
             direction="horizontal"
             ariaLabel="Resize right sidebar"
@@ -323,7 +352,7 @@ function Workspace() {
             onResizeEnd={saveDockWidth}
           />
         )}
-        {screenModeState.hidePanels ? null : <PanelDock width={mounted ? dockWidth : 380} />}
+        {screenModeState.hidePanels ? null : <PanelDock width={mounted ? dockWidth : 380} overlay={isNarrow} />}
       </div>
       {statusBarVisible && !screenModeState.hideStatusBar ? <StatusBar onHide={() => setStatusBarVisibility(false)} /> : null}
 
@@ -584,13 +613,7 @@ function ContextMenuLayer({
 
 function AppContextMenu({
   menu,
-  activeDoc,
-  statusBarVisible,
-  onClose,
-  onCommandPalette,
-  onToggleStatusBar,
-  onHudColorPicker,
-  onZoom,
+  ...rest
 }: {
   menu: WorkspaceContextMenu | null
   activeDoc: boolean
@@ -601,7 +624,69 @@ function AppContextMenu({
   onHudColorPicker: (x: number, y: number) => void
   onZoom: (zoom: number) => void
 }) {
+  // Mount the panel only while open so its focus-management hooks run on
+  // every open/close cycle without tripping the rules of hooks here.
   if (!menu) return null
+  return <ContextMenuPanel menu={menu} {...rest} />
+}
+
+function ContextMenuPanel({
+  menu,
+  activeDoc,
+  statusBarVisible,
+  onClose,
+  onCommandPalette,
+  onToggleStatusBar,
+  onHudColorPicker,
+  onZoom,
+}: {
+  menu: WorkspaceContextMenu
+  activeDoc: boolean
+  statusBarVisible: boolean
+  onClose: () => void
+  onCommandPalette: () => void
+  onToggleStatusBar: () => void
+  onHudColorPicker: (x: number, y: number) => void
+  onZoom: (zoom: number) => void
+}) {
+  const containerRef = React.useRef<HTMLDivElement>(null)
+
+  // Move focus into the menu on open and hand it back to the previously
+  // focused element on close, per the WAI-ARIA menu pattern.
+  React.useEffect(() => {
+    const previous = document.activeElement
+    containerRef.current
+      ?.querySelector<HTMLElement>("[role=menuitem]:not([disabled])")
+      ?.focus()
+    return () => {
+      if (previous instanceof HTMLElement) previous.focus()
+    }
+  }, [])
+
+  const handleKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key === "Tab") {
+      onClose()
+      return
+    }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Home" && event.key !== "End") return
+    const items = Array.from(
+      containerRef.current?.querySelectorAll<HTMLElement>("[role=menuitem]:not([disabled])") ?? [],
+    )
+    if (!items.length) return
+    event.preventDefault()
+    if (event.key === "Home") {
+      items[0].focus()
+      return
+    }
+    if (event.key === "End") {
+      items[items.length - 1].focus()
+      return
+    }
+    const index = items.indexOf(document.activeElement as HTMLElement)
+    const delta = event.key === "ArrowDown" ? 1 : -1
+    const next = index === -1 ? (delta === 1 ? 0 : items.length - 1) : (index + delta + items.length) % items.length
+    items[next].focus()
+  }
 
   const run = (action: () => void) => {
     action()
@@ -620,11 +705,13 @@ function AppContextMenu({
 
   return (
     <div
+      ref={containerRef}
       role="menu"
       aria-label={menuLabel}
       data-context-menu-root
       className="fixed z-[1000] w-56 overflow-hidden rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] py-1 text-[12px] text-[var(--ps-text)] shadow-2xl"
       style={{ left: menu.x, top: menu.y }}
+      onKeyDown={handleKeyDown}
       onClick={(event) => event.stopPropagation()}
       onContextMenu={(event) => {
         event.preventDefault()

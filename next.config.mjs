@@ -70,13 +70,21 @@ const securityHeaders = [
 const emptyNodeFs = fileURLToPath(new URL("./components/photoshop/empty-node-fs.ts", import.meta.url))
 const outputFileTracingRoot = fileURLToPath(new URL("./", import.meta.url))
 const isGithubPages = process.env.GITHUB_PAGES === "true"
+const githubPagesBasePath = "/Photoshop-clone"
 
 const nextConfig = {
   outputFileTracingRoot,
   output: isGithubPages ? "export" : undefined,
-  basePath: isGithubPages ? "/Photoshop-clone" : "",
-  assetPrefix: isGithubPages ? "/Photoshop-clone/" : "",
+  basePath: isGithubPages ? githubPagesBasePath : "",
+  assetPrefix: isGithubPages ? `${githubPagesBasePath}/` : "",
   trailingSlash: isGithubPages,
+  // images.unoptimized bypasses the image loader, so basePath is NOT
+  // prepended to <Image src> automatically — client code reads these via
+  // lib/base-path.ts to prefix static assets and skip /api calls on export.
+  env: {
+    NEXT_PUBLIC_BASE_PATH: isGithubPages ? githubPagesBasePath : "",
+    NEXT_PUBLIC_STATIC_EXPORT: isGithubPages ? "true" : "false",
+  },
   images: {
     unoptimized: true,
   },

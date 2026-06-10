@@ -211,9 +211,8 @@ export function ImageAssetsGeneratorRunner() {
     const onSaved = (event: Event) => {
       const detail = (event as CustomEvent<{ docId?: string; success?: boolean }>).detail
       if (detail?.success === false) return
-      const doc = detail?.docId
-        ? documentsRef.current.find((candidate) => candidate.id === detail.docId)
-        : documentsRef.current.find((candidate) => candidate.id === activeDocIdRef.current)
+      if (!detail?.docId) return
+      const doc = documentsRef.current.find((candidate) => candidate.id === detail.docId)
       if (!doc) return
       const plan = collectImageAssetGeneratorPlan(doc)
       if (!shouldRunImageAssetGenerator({ trigger: "save", plan, settings: doc.metadata?.imageAssetGenerator })) return

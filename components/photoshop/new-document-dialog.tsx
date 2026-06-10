@@ -56,6 +56,7 @@ export function NewDocumentDialog({
   onOpenChange: (v: boolean) => void
 }) {
   const { createDocument, foreground, background } = useEditor()
+  const uid = React.useId()
   const [name, setName] = React.useState("Untitled-1")
   const [width, setWidth] = React.useState(1200)
   const [height, setHeight] = React.useState(800)
@@ -177,10 +178,10 @@ export function NewDocumentDialog({
           <DialogDescription>Choose a preset, resolution, color mode, and background for the new canvas.</DialogDescription>
         </DialogHeader>
 
-        <div className="grid grid-cols-[240px_1fr] gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-[240px_1fr] gap-4">
           <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
             <div className="mb-2 text-[10px] uppercase tracking-wide text-[var(--ps-text-dim)]">Presets</div>
-            <div className="max-h-[380px] overflow-y-auto">
+            <div className="max-h-[200px] sm:max-h-[380px] overflow-y-auto">
               {NEW_DOCUMENT_PRESET_GROUPS.map((group) => (
                 <div key={group} className="mb-2">
                   <div className="px-1 py-1 text-[10px] text-[var(--ps-text-dim)]">{group}</div>
@@ -204,23 +205,23 @@ export function NewDocumentDialog({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="col-span-2 grid gap-1.5">
-              <Label className="text-[11px]">Name</Label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} />
+              <Label className="text-[11px]" htmlFor={`${uid}-name`}>Name</Label>
+              <Input id={`${uid}-name`} value={name} onChange={(e) => setName(e.target.value)} />
             </div>
 
             <div className="grid gap-1.5">
-              <Label className="text-[11px]">Width ({unit})</Label>
-              <Input type="number" value={width} min={unit === "px" ? 1 : 0.01} step={unit === "px" ? 1 : 0.1} onChange={(e) => setWidth(Math.max(0.01, Number(e.target.value) || 1))} />
+              <Label className="text-[11px]" htmlFor={`${uid}-width`}>Width ({unit})</Label>
+              <Input id={`${uid}-width`} type="number" value={width} min={unit === "px" ? 1 : 0.01} step={unit === "px" ? 1 : 0.1} onChange={(e) => setWidth(Math.max(0.01, Number(e.target.value) || 1))} />
             </div>
             <div className="grid gap-1.5">
-              <Label className="text-[11px]">Height ({unit})</Label>
-              <Input type="number" value={height} min={unit === "px" ? 1 : 0.01} step={unit === "px" ? 1 : 0.1} onChange={(e) => setHeight(Math.max(0.01, Number(e.target.value) || 1))} />
+              <Label className="text-[11px]" htmlFor={`${uid}-height`}>Height ({unit})</Label>
+              <Input id={`${uid}-height`} type="number" value={height} min={unit === "px" ? 1 : 0.01} step={unit === "px" ? 1 : 0.1} onChange={(e) => setHeight(Math.max(0.01, Number(e.target.value) || 1))} />
             </div>
 
             <div className="grid gap-1.5">
-              <Label className="text-[11px]">Units</Label>
+              <Label className="text-[11px]" htmlFor={`${uid}-unit`}>Units</Label>
               <Select value={unit} onValueChange={(value) => setUnitPreservingPixels(value as NewDocumentUnit)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger id={`${uid}-unit`}><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="px">Pixels</SelectItem>
                   <SelectItem value="in">Inches</SelectItem>
@@ -230,14 +231,14 @@ export function NewDocumentDialog({
               </Select>
             </div>
             <div className="grid gap-1.5">
-              <Label className="text-[11px]">Resolution (ppi)</Label>
-              <Input type="number" value={dpi} min={1} max={2400} onChange={(e) => setDpi(Math.max(1, Math.min(2400, Number(e.target.value) || 72)))} />
+              <Label className="text-[11px]" htmlFor={`${uid}-dpi`}>Resolution (ppi)</Label>
+              <Input id={`${uid}-dpi`} type="number" value={dpi} min={1} max={2400} onChange={(e) => setDpi(Math.max(1, Math.min(2400, Number(e.target.value) || 72)))} />
             </div>
 
             <div className="grid gap-1.5">
-              <Label className="text-[11px]">Color Mode</Label>
+              <Label className="text-[11px]" htmlFor={`${uid}-color-mode`}>Color Mode</Label>
               <Select value={colorMode} onValueChange={(value) => setColorMode(value as DocumentModeSettings["mode"])}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger id={`${uid}-color-mode`}><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="RGB">RGB Color</SelectItem>
                   <SelectItem value="CMYK">CMYK Color</SelectItem>
@@ -248,9 +249,9 @@ export function NewDocumentDialog({
               </Select>
             </div>
             <div className="grid gap-1.5">
-              <Label className="text-[11px]">Bit Depth</Label>
+              <Label className="text-[11px]" htmlFor={`${uid}-bit-depth`}>Bit Depth</Label>
               <Select value={String(bitDepth)} onValueChange={(value) => setBitDepth(Number(value) as 8 | 16 | 32)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger id={`${uid}-bit-depth`}><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="8">8 bit</SelectItem>
                   <SelectItem value="16">16 bit</SelectItem>
@@ -260,9 +261,9 @@ export function NewDocumentDialog({
             </div>
 
             <div className="grid gap-1.5">
-              <Label className="text-[11px]">Background Contents</Label>
+              <Label className="text-[11px]" htmlFor={`${uid}-bg`}>Background Contents</Label>
               <Select value={bg} onValueChange={(value) => setBg(value as BackgroundChoice)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger id={`${uid}-bg`}><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="white">White</SelectItem>
                   <SelectItem value="black">Black</SelectItem>
@@ -274,10 +275,10 @@ export function NewDocumentDialog({
               </Select>
             </div>
             <div className="grid gap-1.5">
-              <Label className="text-[11px]">Custom Background</Label>
+              <Label className="text-[11px]" htmlFor={`${uid}-custom-bg`}>Custom Background</Label>
               <div className="flex items-center gap-2">
-                <Input type="color" value={customBg} disabled={bg !== "custom"} onChange={(e) => setCustomBg(e.target.value)} className="h-9 w-12 p-1" />
-                <Input value={customBg} disabled={bg !== "custom"} onChange={(e) => setCustomBg(e.target.value)} />
+                <Input type="color" aria-label="Custom background color swatch" value={customBg} disabled={bg !== "custom"} onChange={(e) => setCustomBg(e.target.value)} className="h-9 w-12 p-1" />
+                <Input id={`${uid}-custom-bg`} value={customBg} disabled={bg !== "custom"} onChange={(e) => setCustomBg(e.target.value)} />
               </div>
             </div>
 

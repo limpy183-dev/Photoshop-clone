@@ -9,7 +9,7 @@ import { deserializeProject, serializeProject } from "./document-io"
 import { useEditor } from "./editor-context"
 import { writeScratchBlob } from "./opfs-scratch"
 import { loadPreferencesFromStorage } from "./preferences-engine"
-import { clearAutosave, readAutosaves, readAutosavesAsync, writeAutosaves, type AutosaveDocument } from "./recent-documents"
+import { clearAutosave, readAutosaves, readAutosavesAsync, removeAutosave, writeAutosaves, type AutosaveDocument } from "./recent-documents"
 
 function autosavePreferences() {
   try {
@@ -75,18 +75,24 @@ export function AutosaveRecovery() {
       if (!plan.documentsToSerialize.length && !pruned) return
 
       const serializedLengths: Record<string, number> = {}
+      const serializedIds: string[] = []
       for (const planDoc of plan.documentsToSerialize) {
         const doc = docs.find((candidateDoc) => candidateDoc.id === planDoc.id)
         if (!doc) continue
-        const serialized = serializeProject(doc)
-        serializedLengths[doc.id] = serialized.length
-        serializedAutosavesRef.current[doc.id] = {
-          documentId: doc.id,
-          name: doc.name,
-          serialized,
+        try {
+          const serialized = serializeProject(doc)
+          serializedLengths[doc.id] = serialized.length
+          serializedAutosavesRef.current[doc.id] = {
+            documentId: doc.id,
+            name: doc.name,
+            serialized,
+          }
+          serializedIds.push(doc.id)
+        } catch {
+          // Serialization failed for this document — keep its last good
+          // snapshot and retry on the next tick.
         }
       }
-      lastSavedVersionsRef.current = plan.nextSavedVersions
 
       const incremental = planIncrementalAutosave({
         documents: docs.map((doc) => {
@@ -116,12 +122,21 @@ export function AutosaveRecovery() {
 
       const payload = Object.values(serializedAutosavesRef.current)
       if (payload.length) {
-        writeAutosaves(payload)
+        const savedVersions: Record<string, number> = {}
+        for (const id of serializedIds) {
+          savedVersions[id] = plan.nextSavedVersions[id]
+        }
+        // Mark versions saved only once the write actually lands somewhere,
+        // so failed writes are retried on the next tick.
+        void writeAutosaves(payload).then((persisted) => {
+          if (!persisted) return
+          lastSavedVersionsRef.current = { ...lastSavedVersionsRef.current, ...savedVersions }
+        })
       } else {
         clearAutosave()
       }
     } catch {
-      clearAutosave()
+      // Keep the last good snapshots on unexpected failures.
     } finally {
       writingRef.current = false
     }
@@ -195,7 +210,7 @@ export function AutosaveRecovery() {
       const doc = await deserializeProject(candidate.serialized)
       doc.name = `${doc.name} (Recovered)`
       createDocument(doc, "Recover Autosave")
-      clearAutosave()
+      removeAutosave(candidate.documentId)
       setCandidate(null)
       toast.success("Recovered autosaved document")
     } catch (error) {
@@ -204,7 +219,7 @@ export function AutosaveRecovery() {
   }
 
   const dismiss = () => {
-    clearAutosave()
+    if (candidate) removeAutosave(candidate.documentId)
     setCandidate(null)
   }
 

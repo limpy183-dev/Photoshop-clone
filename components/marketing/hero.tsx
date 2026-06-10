@@ -7,6 +7,8 @@ import gsap from "gsap"
 import { ScrollTrigger } from "gsap/ScrollTrigger"
 import { useGSAP } from "@gsap/react"
 
+import { withBasePath } from "@/lib/base-path"
+
 gsap.registerPlugin(useGSAP, ScrollTrigger)
 
 const HEADLINE_LINES: { words: { text: string; italic?: boolean; tone?: "blue" | "rust" }[] }[] = [
@@ -169,7 +171,7 @@ export function Hero() {
             className="max-w-[40ch] text-base leading-relaxed text-[var(--mk-paper-dim)] md:text-lg"
           >
             A layer-honest, panel-rich image editor that runs where you already
-            are. <span className="font-display italic text-[var(--mk-paper)]">Canvas, workers, PSD round-trip,</span> and a
+            are. <span className="font-display italic text-[var(--mk-paper)]">Canvas, workers, PSD round-trip with compat reports,</span> and a
             stubborn refusal to lie about what a browser can do.
           </p>
 
@@ -234,7 +236,7 @@ export function Hero() {
                 </span>
               </div>
               <Image
-                src="/marketing/editor-overview.png"
+                src={withBasePath("/marketing/editor-overview.png")}
                 alt="Photoshop Web editor with brush, color picker, and layers panel."
                 width={1920}
                 height={1080}

@@ -180,7 +180,7 @@ export function ToolsGrid() {
           >
             <span className="block">
               <span className="mk-reveal">
-                <span>Every tool</span>
+                <span>The tools</span>
               </span>{" "}
               <span className="mk-reveal">
                 <span className="italic">you reach</span>

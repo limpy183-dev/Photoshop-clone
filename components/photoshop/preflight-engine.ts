@@ -68,11 +68,13 @@ export interface PreflightFixCandidates {
   invalidSlices: Slice[]
 }
 
-const alphaBoundsCache = new WeakMap<HTMLCanvasElement, { x: number; y: number; w: number; h: number } | null>()
+// Per-run cache only: layer canvases are mutated in place by painting, so bounds
+// must not be memoized across analysis runs.
+type AlphaBoundsCache = Map<HTMLCanvasElement, { x: number; y: number; w: number; h: number } | null>
 
-function alphaBounds(layer: Layer) {
+function alphaBounds(layer: Layer, cache: AlphaBoundsCache) {
   const canvas = layer.canvas
-  const cached = alphaBoundsCache.get(canvas)
+  const cached = cache.get(canvas)
   if (cached !== undefined) return cached
   const ctx = canvas.getContext?.("2d")
   if (!ctx || canvas.width <= 0 || canvas.height <= 0) return null
@@ -94,7 +96,7 @@ function alphaBounds(layer: Layer) {
     }
   }
   const result = any ? { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 } : null
-  alphaBoundsCache.set(canvas, result)
+  cache.set(canvas, result)
   return result
 }
 
@@ -125,8 +127,8 @@ function isValidSlice(slice: Slice, width: number, height: number) {
   )
 }
 
-function contentTouchesCanvasEdge(layer: Layer) {
-  const bounds = alphaBounds(layer)
+function contentTouchesCanvasEdge(layer: Layer, cache: AlphaBoundsCache) {
+  const bounds = alphaBounds(layer, cache)
   if (!bounds) return false
   return bounds.x <= 0 || bounds.y <= 0 || bounds.x + bounds.w >= layer.canvas.width || bounds.y + bounds.h >= layer.canvas.height
 }
@@ -200,11 +202,11 @@ function isOverprintLikeLayer(layer: Layer) {
   return burnOrMultiply || opacityBlend || !!channelKnockout
 }
 
-export function getPreflightFixes(doc: PsDocument): PreflightFixCandidates {
+export function getPreflightFixes(doc: PsDocument, boundsCache: AlphaBoundsCache = new Map()): PreflightFixCandidates {
   const layers = doc.layers
   const rasterish = layers.filter((layer) => layer.kind !== "group" && layer.kind !== "adjustment")
   return {
-    emptyLayers: rasterish.filter((layer) => !layer.text && !layer.shape && !alphaBounds(layer)),
+    emptyLayers: rasterish.filter((layer) => !layer.text && !layer.shape && !alphaBounds(layer, boundsCache)),
     hiddenLayers: layers.filter((layer) => !layer.visible),
     unnamedLayers: layers.filter((layer) => !layer.name.trim()),
     unmaskedAdjustments: layers.filter((layer) => layer.kind === "adjustment" && !layer.mask),
@@ -216,14 +218,15 @@ export function analyzePreflightDocument(doc: PsDocument): PreflightReport {
   const findings: PreflightFinding[] = []
   const layers = doc.layers
   const rasterish = layers.filter((layer) => layer.kind !== "group" && layer.kind !== "adjustment")
-  const fixes = getPreflightFixes(doc)
+  const boundsCache: AlphaBoundsCache = new Map()
+  const fixes = getPreflightFixes(doc, boundsCache)
   const lockedLayers = layers.filter((layer) => layer.locked || layer.lockAll || layer.lockDraw || layer.lockMove || layer.lockTransparency)
   const smartFilterCount = layers.reduce((sum, layer) => sum + (layer.smartFilters?.length ?? 0), 0)
   const disabledSmartFilters = layers.reduce((sum, layer) => sum + (layer.smartFilters?.filter((filter) => !filter.enabled).length ?? 0), 0)
   const textLayers = layers.filter((layer) => layer.text)
   const fontDiagnostics = diagnoseDocumentFonts(layers)
   const missingFonts = fontDiagnostics.missingFonts
-  const edgeClippedLayers = rasterish.filter(contentTouchesCanvasEdge)
+  const edgeClippedLayers = rasterish.filter((layer) => contentTouchesCanvasEdge(layer, boundsCache))
   const smartObjects = layers.filter((layer) => layer.kind === "smart-object" || layer.smartObject)
   const psdRasterizedEffects = layers.filter((layer) => layer.smartFilters?.length || layer.kind === "adjustment" || layer.frame || layer.artboard)
   const _adjustmentLayers = layers.filter((layer) => layer.kind === "adjustment")
