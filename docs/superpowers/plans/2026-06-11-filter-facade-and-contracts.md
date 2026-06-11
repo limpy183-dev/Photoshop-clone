@@ -107,6 +107,7 @@ git commit -m "test: characterize filter module boundaries"
 
 **Files:**
 - Create by move: `components/photoshop/filters/registry.ts`
+- Create: `components/photoshop/filters/composite.ts`
 - Replace: `components/photoshop/filters.ts`
 - Test: `tests/filter-module-boundaries.spec.ts`
 
@@ -153,7 +154,20 @@ Create `components/photoshop/filters.ts`:
 export * from "./filters/registry"
 ```
 
-- [ ] **Step 4: Run static validation**
+- [ ] **Step 4: Create a transitional compositing re-export**
+
+Create `components/photoshop/filters/composite.ts`:
+
+```typescript
+export {
+  compositeFilterImageData,
+  type FilterCompositeOptions,
+} from "./registry"
+```
+
+This keeps TypeScript and the boundary test green until Task 4 moves the implementation into this module.
+
+- [ ] **Step 5: Run static validation**
 
 Run:
 
@@ -162,9 +176,9 @@ npm run typecheck
 npm run lint
 ```
 
-Expected: both commands exit 0. The boundary test still fails only because `filters/composite.ts` has not been created.
+Expected: both commands exit 0.
 
-- [ ] **Step 5: Run the existing deterministic filter tests**
+- [ ] **Step 6: Run the existing deterministic filter tests**
 
 Run:
 
@@ -174,10 +188,10 @@ npx playwright test --config=playwright.node.config.ts tests/filter-fidelity-gol
 
 Expected: all tests pass with unchanged pixel outputs and registry behavior.
 
-- [ ] **Step 6: Commit the facade move**
+- [ ] **Step 7: Commit the facade move**
 
 ```powershell
-git add components/photoshop/filters.ts components/photoshop/filters/registry.ts
+git add components/photoshop/filters.ts components/photoshop/filters/composite.ts components/photoshop/filters/registry.ts
 git commit -m "refactor: add stable filter facade"
 ```
 
