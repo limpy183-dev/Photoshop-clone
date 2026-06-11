@@ -8,48 +8,13 @@ import type { BlendMode } from "../types"
 import { hexToRgb as hexToRgbFilter } from "../color-utils"
 import { applyChannelMixerToImageData, type ChannelMixerParams } from "../color-channel-ops"
 import { parseFieldBlurPins, parsePathBlurPoints } from "../blur-gallery-controls"
+import type { FilterContext, FilterDef } from "./contracts"
 
-export type FilterParam =
-  | { type: "slider"; key: string; label: string; min: number; max: number; step?: number; default: number; suffix?: string }
-  | { type: "select"; key: string; label: string; options: { value: string; label: string }[]; default: string }
-  | { type: "checkbox"; key: string; label: string; default: boolean }
-  | { type: "text"; key: string; label: string; default: string; multiline?: boolean; placeholder?: string; accept?: string }
-
-export interface FilterDef {
-  id: string
-  name: string
-  category: string
-  params: FilterParam[]
-  apply: (src: ImageData, params: Record<string, number | string | boolean>, context?: FilterContext) => ImageData
-}
-
-export interface FilterContext {
-  matchColorSource?: ImageData | null
-  displacementMap?: ImageData | null
-  applyImageSource?: ImageData | null
-  calcSourceA?: ImageData | null
-  calcSourceB?: ImageData | null
-  /**
-   * Optional rasterized selection mask used by Equalize (and similar filters).
-   * 0 = outside selection, 255 = fully selected. Length must be at least
-   * width*height. Pass null when there is no active selection.
-   */
-  selectionMask?: Uint8Array | null
-  /** Optional selection mode used by Equalize ("image" by default). */
-  selectionMode?: "image" | "selection-only" | "selection-source"
-  /**
-   * Optional depth map source used by Lens Blur. When supplied, the per-pixel
-   * blur radius is modulated by the sampled depth channel value. Must match
-   * the source ImageData dimensions or it will be sampled bilinearly.
-   */
-  lensBlurDepthSource?: ImageData | null
-  /**
-   * Optional bump map source used by Lighting Effects. When supplied,
-   * the specified channel becomes the height field for surface normals.
-   * Must match the source dimensions or it will be sampled bilinearly.
-   */
-  lightingBumpSource?: ImageData | null
-}
+export type {
+  FilterContext,
+  FilterDef,
+  FilterParam,
+} from "./contracts"
 
 /* --------------------------- helpers ----------------------------------- */
 
