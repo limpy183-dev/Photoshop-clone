@@ -12,6 +12,19 @@ import {
 import {
   compositeFilterImageData as moduleComposite,
 } from "../components/photoshop/filters/composite"
+import {
+  boxBlur,
+  brightnessContrast,
+  emboss,
+  findEdges,
+  gaussianBlur,
+  motionBlur,
+  noise,
+  pixelate,
+  sharpen,
+  solarize,
+  unsharpMask,
+} from "../components/photoshop/filters/basic-algorithms"
 
 class TestImageData {
   data: Uint8ClampedArray
@@ -33,6 +46,20 @@ class TestImageData {
 
 globalThis.ImageData = TestImageData as unknown as typeof ImageData
 
+function fixture3x3() {
+  return new ImageData(new Uint8ClampedArray([
+    10, 20, 30, 255, 70, 80, 90, 255, 130, 120, 100, 255,
+    35, 55, 85, 255, 125, 135, 145, 255, 220, 210, 180, 255,
+    20, 90, 60, 255, 155, 80, 45, 255, 245, 245, 230, 255,
+  ]), 3, 3)
+}
+
+function expectSamePixels(actual: ImageData, expected: ImageData) {
+  expect(actual.width).toBe(expected.width)
+  expect(actual.height).toBe(expected.height)
+  expect(Array.from(actual.data)).toEqual(Array.from(expected.data))
+}
+
 test("filter facade and registry expose the same objects", () => {
   expect(facadeFilters).toBe(registryFilters)
   expect(facadeGetFilter).toBe(registryGetFilter)
@@ -50,4 +77,35 @@ test("filter facade and composite module share the canonical implementation", ()
   })
 
   expect(Array.from(result.data)).toEqual([150, 80, 110, 255])
+})
+
+test("basic algorithm module matches registry filter output", () => {
+  const src = fixture3x3()
+  const cases: Array<{
+    id: string
+    params: Record<string, number | string | boolean>
+    direct: () => ImageData
+  }> = [
+    { id: "gaussian-blur", params: { radius: 3 }, direct: () => gaussianBlur(src, 3) },
+    { id: "box-blur", params: { radius: 2 }, direct: () => boxBlur(src, 2) },
+    { id: "motion-blur", params: { distance: 2, angle: 30 }, direct: () => motionBlur(src, 2, 30) },
+    { id: "sharpen", params: { amount: 75 }, direct: () => sharpen(src, 75) },
+    { id: "unsharp-mask", params: { amount: 80, radius: 2 }, direct: () => unsharpMask(src, 80, 2) },
+    { id: "find-edges", params: {}, direct: () => findEdges(src) },
+    { id: "emboss", params: { amount: 60 }, direct: () => emboss(src, 60) },
+    { id: "solarize", params: { threshold: 120 }, direct: () => solarize(src, 120) },
+    { id: "pixelate", params: { size: 2 }, direct: () => pixelate(src, 2) },
+    { id: "noise", params: { amount: 0, mono: true, distribution: "uniform" }, direct: () => noise(src, 0, true, false) },
+    {
+      id: "brightness-contrast",
+      params: { brightness: 20, contrast: -15, useLegacy: false },
+      direct: () => brightnessContrast(src, 20, -15, false),
+    },
+  ]
+
+  for (const item of cases) {
+    const filter = facadeGetFilter(item.id)
+    expect(filter, item.id).toBeTruthy()
+    expectSamePixels(item.direct(), filter!.apply(src, item.params))
+  }
 })
