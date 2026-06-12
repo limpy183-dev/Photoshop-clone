@@ -1,9 +1,14 @@
 import { expect, test } from "@playwright/test"
 
 import {
+  AUTO_DEFAULTS as facadeAutoDefaults,
   FILTERS as facadeFilters,
+  HDR_TONING_PRESETS as facadeHdrToningPresets,
+  applyAutoAdjustment as facadeApplyAutoAdjustment,
   compositeFilterImageData as facadeComposite,
+  formatReplaceColorSamples as facadeFormatReplaceColorSamples,
   getFilter as facadeGetFilter,
+  parseReplaceColorSamples as facadeParseReplaceColorSamples,
 } from "../components/photoshop/filters"
 import {
   FILTERS as registryFilters,
@@ -41,6 +46,20 @@ import {
   parseCurvePoints,
   pseudoDither,
 } from "../components/photoshop/filters/curve-helpers"
+import {
+  AUTO_DEFAULTS as moduleAutoDefaults,
+  HDR_TONING_PRESETS as moduleHdrToningPresets,
+  applyAutoAdjustment as moduleApplyAutoAdjustment,
+  equalize,
+  formatReplaceColorSamples as moduleFormatReplaceColorSamples,
+  hdrToning,
+  hueSaturation,
+  levels,
+  parseReplaceColorSamples as moduleParseReplaceColorSamples,
+  posterize,
+  selectiveColor,
+  shadowsHighlights,
+} from "../components/photoshop/filters/adjustment-algorithms"
 
 class TestImageData {
   data: Uint8ClampedArray
@@ -173,4 +192,98 @@ test("curve helpers preserve parsing, interpolation, and dithering", () => {
   expect(pseudoDither(0)).toBeCloseTo(0.9216903898159217, 14)
   expect(pseudoDither(1)).toBeCloseTo(0.05721816934965318, 14)
   expect(pseudoDither(17)).toBeCloseTo(0.6441862510764622, 14)
+})
+
+test("adjustment facade exports retain canonical module identity", () => {
+  expect(facadeHdrToningPresets).toBe(moduleHdrToningPresets)
+  expect(facadeAutoDefaults).toBe(moduleAutoDefaults)
+  expect(facadeApplyAutoAdjustment).toBe(moduleApplyAutoAdjustment)
+  expect(facadeParseReplaceColorSamples).toBe(moduleParseReplaceColorSamples)
+  expect(facadeFormatReplaceColorSamples).toBe(moduleFormatReplaceColorSamples)
+})
+
+test("adjustment algorithm module matches registry filter output", () => {
+  const src = fixture3x3()
+  const cases: Array<{
+    id: string
+    params: Record<string, number | string | boolean>
+    direct: () => ImageData
+  }> = [
+    {
+      id: "hue-saturation",
+      params: { hue: 30, saturation: 25, lightness: -10, range: "reds", colorize: false },
+      direct: () => hueSaturation(src, 30, 25, -10, "reds", false),
+    },
+    {
+      id: "levels",
+      params: { inputBlack: 12, inputWhite: 235, gamma: 1.2, outputBlack: 5, outputWhite: 245, channel: "green" },
+      direct: () => levels(src, 12, 235, 1.2, 5, 245, "green"),
+    },
+    {
+      id: "posterize",
+      params: { levels: 5, dither: true },
+      direct: () => posterize(src, 5, true),
+    },
+    {
+      id: "selective-color",
+      params: { range: "reds", cyan: 15, magenta: -10, yellow: 20, black: 5, method: "relative" },
+      direct: () => selectiveColor(src, "reds", 15, -10, 20, 5, "relative"),
+    },
+    {
+      id: "shadows-highlights",
+      params: {
+        shadowsAmount: 35,
+        shadowsTonalWidth: 45,
+        shadowsRadius: 2,
+        highlightsAmount: 15,
+        highlightsTonalWidth: 55,
+        highlightsRadius: 3,
+        colorCorrection: 20,
+        midtoneContrast: 10,
+        blackClip: 0.01,
+        whiteClip: 0.01,
+      },
+      direct: () => shadowsHighlights(src, 35, 45, 2, 15, 55, 3, 20, 10, 0.01, 0.01),
+    },
+    {
+      id: "hdr-toning",
+      params: {
+        method: "local-adaptation",
+        radius: 2,
+        strength: 90,
+        edgeGlow: 20,
+        gamma: 1.1,
+        exposureEv: 0.2,
+        detail: 10,
+        shadow: 5,
+        highlight: -5,
+        vibrance: 15,
+        saturation: 5,
+        toningCurve: "0,0;128,140;255,250",
+      },
+      direct: () => hdrToning(src, "local-adaptation", 2, 90, 20, 1.1, 0.2, 10, 5, -5, 15, 5, [
+        [0, 0],
+        [128, 140],
+        [255, 250],
+      ]),
+    },
+  ]
+
+  for (const item of cases) {
+    const filter = facadeGetFilter(item.id)
+    expect(filter, item.id).toBeTruthy()
+    expectSamePixels(item.direct(), filter!.apply(src, item.params))
+  }
+})
+
+test("selection-aware equalize remains identical across the module boundary", () => {
+  const src = fixture3x3()
+  const selectionMask = new Uint8Array([255, 255, 0, 255, 0, 0, 0, 255, 255])
+  const filter = facadeGetFilter("equalize")
+
+  expect(filter).toBeTruthy()
+  expectSamePixels(
+    equalize(src, "selection-only", selectionMask),
+    filter!.apply(src, { mode: "selection-only" }, { selectionMask }),
+  )
 })
