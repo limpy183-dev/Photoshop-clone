@@ -60,6 +60,15 @@ import {
   selectiveColor,
   shadowsHighlights,
 } from "../components/photoshop/filters/adjustment-algorithms"
+import {
+  blackWhiteAdvanced,
+  colorBalanceAdvanced,
+  colorLookup,
+  curvesAdvanced,
+  gradientMapAdvanced,
+  matchColorAdvanced,
+  vibranceAdvanced,
+} from "../components/photoshop/filters/advanced-adjustment-algorithms"
 
 class TestImageData {
   data: Uint8ClampedArray
@@ -285,5 +294,84 @@ test("selection-aware equalize remains identical across the module boundary", ()
   expectSamePixels(
     equalize(src, "selection-only", selectionMask),
     filter!.apply(src, { mode: "selection-only" }, { selectionMask }),
+  )
+})
+
+test("advanced adjustment module matches registry filter output", () => {
+  const src = fixture3x3()
+  const cases: Array<{
+    id: string
+    params: Record<string, number | string | boolean>
+    direct: () => ImageData
+  }> = [
+    {
+      id: "vibrance",
+      params: { amount: 35, saturation: -10 },
+      direct: () => vibranceAdvanced(src, 35, -10),
+    },
+    {
+      id: "black-white",
+      params: {
+        reds: 15,
+        yellows: -5,
+        greens: 10,
+        cyans: -10,
+        blues: 20,
+        magentas: 5,
+        tint: true,
+        tintHue: 42,
+        tintSaturation: 20,
+      },
+      direct: () => blackWhiteAdvanced(src, 15, -5, 10, -10, 20, 5, true, 42, 20),
+    },
+    {
+      id: "curves",
+      params: { channel: "blue", shadow: 8, midtone: 145, highlight: 248 },
+      direct: () => curvesAdvanced(src, { channel: "blue", shadow: 8, midtone: 145, highlight: 248 }),
+    },
+    {
+      id: "color-balance",
+      params: { cyanRed: 20, magentaGreen: -15, yellowBlue: 12, tone: "midtones", preserveLuminosity: true },
+      direct: () => colorBalanceAdvanced(src, 20, -15, 12, "midtones", true),
+    },
+    {
+      id: "color-lookup",
+      params: { strength: 65, lutData: "", preset: "cross-process" },
+      direct: () => colorLookup(src, 65, "", "cross-process"),
+    },
+    {
+      id: "gradient-map",
+      params: { gradient: "0,#102030;0.5,#808040;1,#f0e0d0", reverse: true, dither: true, interpolation: "hsl" },
+      direct: () => gradientMapAdvanced(src, "0,#102030;0.5,#808040;1,#f0e0d0", true, true, "hsl"),
+    },
+  ]
+
+  for (const item of cases) {
+    const filter = facadeGetFilter(item.id)
+    expect(filter, item.id).toBeTruthy()
+    expectSamePixels(item.direct(), filter!.apply(src, item.params))
+  }
+})
+
+test("context-backed match color remains identical across the module boundary", () => {
+  const src = fixture3x3()
+  const source = new ImageData(new Uint8ClampedArray([
+    200, 40, 60, 255, 180, 80, 30, 255, 220, 140, 70, 255,
+    140, 30, 120, 255, 110, 90, 180, 255, 80, 160, 200, 255,
+    50, 120, 80, 255, 160, 180, 90, 255, 235, 220, 170, 255,
+  ]), 3, 3)
+  const params = {
+    matchSource: "layer:test:source",
+    luminance: 90,
+    colorIntensity: 115,
+    fade: 20,
+    neutralize: true,
+  }
+  const filter = facadeGetFilter("match-color")
+
+  expect(filter).toBeTruthy()
+  expectSamePixels(
+    matchColorAdvanced(src, source, 90, 115, 20, true),
+    filter!.apply(src, params, { matchColorSource: source }),
   )
 })
