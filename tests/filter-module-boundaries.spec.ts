@@ -69,6 +69,15 @@ import {
   matchColorAdvanced,
   vibranceAdvanced,
 } from "../components/photoshop/filters/advanced-adjustment-algorithms"
+import {
+  adaptiveWideAngle,
+  bilinearSample,
+  distortPolar,
+  distortTwirl,
+  distortWave,
+  parseAdaptiveConstraints,
+  vanishingPoint,
+} from "../components/photoshop/filters/distortion-algorithms"
 
 class TestImageData {
   data: Uint8ClampedArray
@@ -374,4 +383,71 @@ test("context-backed match color remains identical across the module boundary", 
     matchColorAdvanced(src, source, 90, 115, 20, true),
     filter!.apply(src, params, { matchColorSource: source }),
   )
+})
+
+test("geometry sampling preserves bilinear interpolation", () => {
+  const src = new Uint8ClampedArray([
+    0, 10, 20, 255,
+    100, 110, 120, 255,
+    200, 210, 220, 255,
+    240, 250, 255, 255,
+  ])
+
+  expect(bilinearSample(src, 2, 2, 0.5, 0.5)).toEqual([135, 145, 153.75, 255])
+})
+
+test("distortion module matches registry filter output", () => {
+  const src = fixture3x3()
+  const constraints = '[{"type":"vertical","x1":0.3,"y1":0.1,"x2":0.35,"y2":0.9}]'
+  const planeOffsets = {
+    topLeftX: 12,
+    topLeftY: -4,
+    topRightX: -8,
+    topRightY: 5,
+    bottomRightX: 6,
+    bottomRightY: -3,
+    bottomLeftX: -10,
+    bottomLeftY: 7,
+  }
+  const cases: Array<{
+    id: string
+    params: Record<string, number | string | boolean>
+    direct: () => ImageData
+  }> = [
+    {
+      id: "twirl",
+      params: { angle: 75 },
+      direct: () => distortTwirl(src, 75),
+    },
+    {
+      id: "wave",
+      params: { wavelength: 4, amplitude: 2, type: "triangle", scale: 65 },
+      direct: () => distortWave(src, 4, 2, "triangle", 65),
+    },
+    {
+      id: "polar-coordinates",
+      params: { mode: "polar-to-rect" },
+      direct: () => distortPolar(src, "polar-to-rect"),
+    },
+    {
+      id: "adaptive-wide-angle",
+      params: { correction: 35, fisheye: -10, rotate: 2, scale: 105, focalLength: 24, cropFactor: 1.5, constraints },
+      direct: () => adaptiveWideAngle(src, 35, -10, 2, 105, {
+        focalLength: 24,
+        cropFactor: 1.5,
+        constraints: parseAdaptiveConstraints(constraints),
+      }),
+    },
+    {
+      id: "vanishing-point",
+      params: { horizon: 42, left: -30, right: 25, depth: 40, grid: true, ...planeOffsets },
+      direct: () => vanishingPoint(src, 42, -30, 25, 40, true, planeOffsets),
+    },
+  ]
+
+  for (const item of cases) {
+    const filter = facadeGetFilter(item.id)
+    expect(filter, item.id).toBeTruthy()
+    expectSamePixels(item.direct(), filter!.apply(src, item.params))
+  }
 })
