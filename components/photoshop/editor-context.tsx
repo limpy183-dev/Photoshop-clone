@@ -116,6 +116,16 @@ import {
   loadPersistedEditorSettings,
   savePersistedEditorSettings,
 } from "./editor-persisted-settings"
+import {
+  currentHistoryIndex,
+  currentHistoryIndexFromHistories,
+  dirtyDocIdsForAction,
+  documentLifecycleFor,
+  documentLifecycleForSlices,
+  isDocumentDirtyInState,
+  makeDocumentLifecycle,
+  withDocumentLifecyclePatch,
+} from "./editor-document-lifecycle"
 
 /* ----------------------------- helpers --------------------------------- */
 
@@ -1677,181 +1687,6 @@ const HISTORY_CONTEXT_INVALIDATING_ACTION_TYPES = new Set<Action["type"]>([
   "activate-document",
   "update-smart-object-parent",
 ])
-
-const DOCUMENT_DIRTY_ACTIONS = new Set<Action["type"]>([
-  "add-layer",
-  "remove-layer",
-  "duplicate-layer",
-  "toggle-layer-visibility",
-  "set-layer-visibility",
-  "toggle-layer-lock",
-  "toggle-layer-clipped",
-  "set-layer-opacity",
-  "set-layer-fill-opacity",
-  "set-layer-blend",
-  "set-layer-advanced-blending",
-  "set-layer-style",
-  "set-layer-mask",
-  "set-layer-mask-enabled",
-  "set-layer-text",
-  "set-layer-shape",
-  "set-layer-path",
-  "set-layer-kind",
-  "set-layer-3d",
-  "set-layer-video",
-  "set-layer-smart",
-  "set-layer-smart-link",
-  "set-layer-smart-link-status",
-  "apply-linked-smart-object-sync",
-  "replace-smart-object-contents",
-  "rename-layer",
-  "move-layer",
-  "merge-down",
-  "merge-selected",
-  "flatten",
-  "flatten-all-layer-effects",
-  "flatten-all-masks",
-  "delete-empty-layers",
-  "rasterize-layers",
-  "flatten-transparency",
-  "link-selected",
-  "unlink-selected",
-  "group-selected",
-  "ungroup",
-  "resize-document",
-  "resize-canvas",
-  "set-layer-vector-mask",
-  "set-layer-adjustment",
-  "set-layer-smart-filters",
-  "set-style-presets",
-  "set-asset-library",
-  "set-timeline-frames",
-  "set-timeline-settings",
-  "set-global-light",
-  "set-document-metadata",
-  "set-color-management",
-  "set-print-settings",
-  "set-document-mode-settings",
-  "set-plugins",
-  "set-variable-data-sets",
-  "add-document-report",
-  "clear-document-reports",
-  "set-layer-color-label",
-  "align-layers",
-  "distribute-layers",
-  "reorder-layer",
-  "add-note",
-  "update-note",
-  "remove-note",
-  "add-slice",
-  "update-slice",
-  "set-active-slice",
-  "remove-slice",
-  "clear-slices",
-  "add-count",
-  "remove-count",
-  "clear-counts",
-  "set-count-group",
-  "add-color-sampler",
-  "update-color-sampler",
-  "remove-color-sampler",
-  "clear-color-samplers",
-  "save-comp",
-  "apply-comp",
-  "remove-comp",
-  "set-measurement",
-  "grow-selection",
-  "contract-selection",
-  "grow-similar-selection",
-  "similar-selection",
-  "transform-selection",
-  "stamp-visible",
-  "toggle-layer-lock-transparency",
-  "toggle-layer-lock-draw",
-  "toggle-layer-lock-move",
-  "toggle-layer-lock-all",
-  "feather-selection",
-  "border-selection",
-  "smooth-selection",
-  "save-selection",
-  "load-selection",
-  "update-channel",
-  "delete-channel",
-])
-
-function makeDocumentLifecycle(
-  doc: PsDocument,
-  savedHistoryIndex = 0,
-  patch: Partial<DocumentLifecycleState> = {},
-): DocumentLifecycleState {
-  return {
-    dirty: false,
-    savedHistoryIndex,
-    storage: "new",
-    fileName: doc.name,
-    ...patch,
-  }
-}
-
-function currentHistoryIndexFromHistories(histories: EditorState["histories"], docId: string) {
-  return histories[docId]?.index ?? 0
-}
-
-function currentHistoryIndex(state: EditorState, docId: string) {
-  return currentHistoryIndexFromHistories(state.histories, docId)
-}
-
-function documentLifecycleForSlices(
-  documentLifecycle: EditorState["documentLifecycle"],
-  histories: EditorState["histories"],
-  doc: PsDocument,
-) {
-  return documentLifecycle[doc.id] ?? makeDocumentLifecycle(doc, currentHistoryIndexFromHistories(histories, doc.id))
-}
-
-function documentLifecycleFor(state: EditorState, doc: PsDocument) {
-  return documentLifecycleForSlices(state.documentLifecycle, state.histories, doc)
-}
-
-function isDocumentDirtyInState(state: EditorState, docId: string) {
-  const doc = state.documents.find((candidate) => candidate.id === docId)
-  if (!doc) return false
-  const lifecycle = documentLifecycleFor(state, doc)
-  return lifecycle.dirty || lifecycle.savedHistoryIndex !== currentHistoryIndex(state, docId)
-}
-
-function withDocumentLifecyclePatch(
-  state: EditorState,
-  docId: string,
-  patch: Partial<DocumentLifecycleState>,
-): EditorState {
-  const doc = state.documents.find((candidate) => candidate.id === docId)
-  if (!doc) return state
-  return {
-    ...state,
-    documentLifecycle: {
-      ...state.documentLifecycle,
-      [docId]: {
-        ...documentLifecycleFor(state, doc),
-        ...patch,
-      },
-    },
-  }
-}
-
-function dirtyDocIdsForAction(action: Action, state: EditorState) {
-  if (action.type === "move-layers-to-document") {
-    return action.copy ? [action.targetDocId] : [action.sourceDocId, action.targetDocId]
-  }
-  if (action.type === "update-smart-object-parent") return [action.parentDocId]
-  if (action.type === "apply-linked-smart-object-sync") return [action.docId]
-  if (action.type === "save-selection" || action.type === "update-channel") {
-    const targetId = action.targetDocId ?? state.activeDocId
-    return targetId ? [targetId] : []
-  }
-  if (!DOCUMENT_DIRTY_ACTIONS.has(action.type)) return []
-  return state.activeDocId ? [state.activeDocId] : []
-}
 
 export function reducer(state: EditorState, action: Action): EditorState {
   switch (action.type) {
