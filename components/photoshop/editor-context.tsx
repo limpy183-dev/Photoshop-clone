@@ -126,6 +126,11 @@ import {
   makeDocumentLifecycle,
   withDocumentLifecyclePatch,
 } from "./editor-document-lifecycle"
+import {
+  applyGlobalLightToStyle,
+  normalizeGlobalLight,
+  type EditorGlobalLight,
+} from "./editor-global-light"
 
 /* ----------------------------- helpers --------------------------------- */
 
@@ -1254,57 +1259,7 @@ function rasterizeLayerForOption(layer: Layer, option: RasterizeLayerOption, doc
   }
 }
 
-type GlobalLight = NonNullable<PsDocument["globalLight"]>
-
-function normalizeGlobalLight(light: GlobalLight): GlobalLight {
-  return {
-    angle: clamp(Math.round(Number.isFinite(light.angle) ? light.angle : 120), -180, 180),
-    altitude: clamp(Math.round(Number.isFinite(light.altitude) ? light.altitude : 30), 0, 90),
-  }
-}
-
-function offsetFromGlobalLight(effect: { angle?: number; distance?: number; offsetX?: number; offsetY?: number }, angle: number) {
-  const distance = effect.distance ?? Math.hypot(effect.offsetX ?? 0, effect.offsetY ?? 0)
-  const radians = (angle * Math.PI) / 180
-  return {
-    angle,
-    distance,
-    offsetX: -Math.cos(radians) * distance,
-    offsetY: Math.sin(radians) * distance,
-  }
-}
-
-function applyGlobalLightToStyle(style: LayerStyle | undefined, light: GlobalLight): LayerStyle | undefined {
-  if (!style) return style
-  let next: LayerStyle | undefined = style
-  const editable = () => {
-    if (next === style) next = deepClonePlain(style)
-    return next!
-  }
-  if (style.dropShadow && (style.dropShadow.useGlobalLight ?? true)) {
-    const target = editable()
-    target.dropShadow = {
-      ...target.dropShadow!,
-      ...offsetFromGlobalLight(target.dropShadow!, light.angle),
-    }
-  }
-  if (style.innerShadow && (style.innerShadow.useGlobalLight ?? true)) {
-    const target = editable()
-    target.innerShadow = {
-      ...target.innerShadow!,
-      ...offsetFromGlobalLight(target.innerShadow!, light.angle),
-    }
-  }
-  if (style.bevel && (style.bevel.useGlobalLight ?? true)) {
-    const target = editable()
-    target.bevel = {
-      ...target.bevel!,
-      angle: light.angle,
-      altitude: light.altitude,
-    }
-  }
-  return next
-}
+type GlobalLight = EditorGlobalLight
 
 /* ---------------------------- state shape ------------------------------ */
 
