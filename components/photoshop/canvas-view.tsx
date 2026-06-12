@@ -124,8 +124,6 @@ import {
   pointInTransformBox,
   transformCorners,
   transformHandles,
-  transformOrigin,
-  transformPoint,
   transformedBounds,
   type TransformDragState,
   type TransformHandleId,
@@ -235,7 +233,7 @@ import { ColorPickerHud, hexToHsv, hsvToHex, pickFromHud, type ColorPickerHudHsv
 import { MagneticLassoIndicator, GridOverlay, PixelGridOverlay, GuidesOverlay, RetouchFeedbackOverlay } from "./canvas-overlays"
 import { SelectionTransformOverlay } from "./selection-transform-overlay"
 import { applyThreeDMaterialDrop } from "./three-d-video-engine"
-import type { BlendMode, GradientStop, Layer, PathPoint, PathProps, PsDocument, Selection, ShapeProps } from "./types"
+import type { BlendMode, GradientStop, Layer, PathPoint, PathProps, PsDocument, Selection } from "./types"
 
 interface BrushInput {
   pressure: number
