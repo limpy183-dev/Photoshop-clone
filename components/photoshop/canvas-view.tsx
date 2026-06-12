@@ -142,52 +142,19 @@ import {
 import { SmartGuidesOverlay, smartSnapLayerDelta } from "./canvas-smart-guides"
 import { MaskSelectionOverlay, SelectionOverlay, TextEditOverlay } from "./canvas-selection-overlays"
 import { Rulers } from "./canvas-rulers"
+import {
+  adjustmentParamsFingerprint,
+  advancedBlendingFingerprint,
+  canvasIdFor,
+  invalidateMaskAlphaCache,
+  layerStyleCacheKey,
+  maskAlphaEpoch,
+  offsetPath,
+  pathFingerprint,
+  smartFilterCacheKey,
+} from "./canvas-compositor-cache"
 
-// Canvas identity cache for composite fingerprinting — gives each canvas a stable numeric ID
-const _canvasIdMap = new WeakMap<HTMLCanvasElement, number>()
-let _nextCanvasId = 1
 const ZOOM_COMMIT_IDLE_MS = 420
-function _assignCanvasId(canvas: HTMLCanvasElement): number {
-  const id = _nextCanvasId++
-  _canvasIdMap.set(canvas, id)
-  return id
-}
-
-// Adjustment-params fingerprint cache. Keyed by the params object identity; the
-// reducer always produces a fresh params object on edit, so misses naturally
-// align with actual parameter changes. Avoids JSON.stringify per layer per frame.
-const _adjustmentParamsFingerprintCache = new WeakMap<object, string>()
-function adjustmentParamsFingerprint(params: unknown): string {
-  if (params == null || typeof params !== "object") return String(params ?? "")
-  const cached = _adjustmentParamsFingerprintCache.get(params as object)
-  if (cached !== undefined) return cached
-  const fp = JSON.stringify(params)
-  _adjustmentParamsFingerprintCache.set(params as object, fp)
-  return fp
-}
-
-function pathFingerprint(path: PathProps | null | undefined): string {
-  return path ? JSON.stringify(path) : ""
-}
-
-function advancedBlendingFingerprint(advanced: Layer["advancedBlending"]): string {
-  return advanced ? JSON.stringify(normalizeAdvancedBlending(advanced)) : ""
-}
-
-function offsetPath(path: PathProps | null | undefined, dx: number, dy: number): PathProps | null | undefined {
-  if (!path) return path
-  return {
-    ...path,
-    points: path.points.map((point) => ({
-      ...point,
-      x: point.x + dx,
-      y: point.y + dy,
-      cp1: point.cp1 ? { x: point.cp1.x + dx, y: point.cp1.y + dy } : undefined,
-      cp2: point.cp2 ? { x: point.cp2.x + dx, y: point.cp2.y + dy } : undefined,
-    })),
-    subpaths: path.subpaths?.map((subpath) => offsetPath(subpath, dx, dy) as PathProps),
-  }
-}
 
 function textLayerPath(layer: Layer | null | undefined): PathProps | null {
   const points = layer?.text?.textPath
@@ -573,15 +540,15 @@ export function CanvasView() {
     for (const layer of activeDoc.layers) {
       if (!layer.visible) { fp += `H|`; continue }
       if (layer.kind === "group") continue
-      const canvasId = _canvasIdMap.get(layer.canvas) ?? _assignCanvasId(layer.canvas)
-      const maskId = layer.mask ? _canvasIdMap.get(layer.mask) ?? _assignCanvasId(layer.mask) : ""
+      const canvasId = canvasIdFor(layer.canvas)
+      const maskId = layer.mask ? canvasIdFor(layer.mask) : ""
       const vectorMaskFp = pathFingerprint(layer.vectorMask)
       const adjFp = layer.adjustment ? `${layer.adjustment.type}:${adjustmentParamsFingerprint(layer.adjustment.params)}` : ""
       const styleFp = layer.style ? layerStyleCacheKey(layer.style) : ""
       const smartFilterFp = layer.smartFilters ? smartFilterCacheKey(layer.smartFilters) : ""
       const advancedFp = advancedBlendingFingerprint(layer.advancedBlending)
       const previewCanvas = filterPreviews[layer.id]
-      const previewId = previewCanvas ? _canvasIdMap.get(previewCanvas) ?? _assignCanvasId(previewCanvas) : ""
+      const previewId = previewCanvas ? canvasIdFor(previewCanvas) : ""
       fp +=
         `${layer.id}:${layer.kind ?? "raster"}:${canvasId}:${maskId}:${vectorMaskFp}:` +
         `${layer.maskEnabled === false ? 0 : 1}:${layer.opacity}:${layer.fillOpacity ?? 1}:` +
@@ -867,15 +834,15 @@ export function CanvasView() {
       }
       // Extend prefix fingerprint with this layer's contribution so the next
       // adjustment can key its cache on what came before it.
-      const canvasId = _canvasIdMap.get(layer.canvas) ?? _assignCanvasId(layer.canvas)
-      const maskId = layer.mask ? _canvasIdMap.get(layer.mask) ?? _assignCanvasId(layer.mask) : ""
+      const canvasId = canvasIdFor(layer.canvas)
+      const maskId = layer.mask ? canvasIdFor(layer.mask) : ""
       const vectorMaskFp = pathFingerprint(layer.vectorMask)
-      const clipId = clipMask ? _canvasIdMap.get(clipMask) ?? _assignCanvasId(clipMask) : ""
+      const clipId = clipMask ? canvasIdFor(clipMask) : ""
       const adjFpPrefix = layer.adjustment ? `${layer.adjustment.type}:${adjustmentParamsFingerprint(layer.adjustment.params)}` : ""
       const smartFilterFp = layer.smartFilters ? smartFilterCacheKey(layer.smartFilters) : ""
       const advancedFpPrefix = advancedBlendingFingerprint(layer.advancedBlending)
       const previewCanvasPrefix = filterPreviews[layer.id]
-      const previewIdPrefix = previewCanvasPrefix ? _canvasIdMap.get(previewCanvasPrefix) ?? _assignCanvasId(previewCanvasPrefix) : ""
+      const previewIdPrefix = previewCanvasPrefix ? canvasIdFor(previewCanvasPrefix) : ""
       prefixFp +=
         `${layer.id}:${layer.kind ?? "raster"}:${canvasId}:${maskId}:${vectorMaskFp}:${clipId}:` +
         `${layer.maskEnabled === false ? 0 : 1}:${layer.opacity}:${layer.fillOpacity ?? 1}:` +
@@ -7189,17 +7156,6 @@ interface SmartFilterCacheEntry {
 }
 const _smartFilterCache = new WeakMap<HTMLCanvasElement, SmartFilterCacheEntry>()
 
-function smartFilterCacheKey(smartFilters: NonNullable<Layer["smartFilters"]>): string {
-  return smartFilters
-    .filter((sf) => sf.enabled)
-    .map((sf) => {
-      const maskId = sf.mask ? _canvasIdMap.get(sf.mask) ?? _assignCanvasId(sf.mask) : ""
-      const maskEpoch = sf.mask ? _maskAlphaEpoch : 0
-      return `${sf.id}:${sf.filterId}:${JSON.stringify(sf.params)}:${sf.opacity ?? 1}:${sf.blendMode ?? "normal"}:${sf.maskEnabled === false ? 0 : 1}:${maskId}:${sf.maskDensity ?? 1}:${sf.maskFeather ?? 0}:${maskEpoch}`
-    })
-    .join("|")
-}
-
 /* ----------- layer style result cache ----------- */
 interface LayerStyleCacheEntry {
   styleKey: string
@@ -7207,38 +7163,6 @@ interface LayerStyleCacheEntry {
   result: HTMLCanvasElement
 }
 const _layerStyleCache = new WeakMap<HTMLCanvasElement, LayerStyleCacheEntry>()
-const _layerStyleKeyCache = new WeakMap<NonNullable<Layer["style"]>, string>()
-
-function styleEffectFp(prefix: string, e: Record<string, unknown> | undefined): string {
-  if (!e || e.enabled !== true) return ""
-  let out = prefix
-  for (const k of Object.keys(e).sort()) {
-    if (k === "enabled") continue
-    const v = (e as Record<string, unknown>)[k]
-    if (v == null) continue
-    if (typeof v === "object") out += `${k}=${JSON.stringify(v)};`
-    else out += `${k}=${v};`
-  }
-  return out + "|"
-}
-
-function layerStyleCacheKey(style: NonNullable<Layer["style"]>): string {
-  const cached = _layerStyleKeyCache.get(style)
-  if (cached !== undefined) return cached
-  const fp =
-    styleEffectFp("st:", style.stroke as Record<string, unknown> | undefined) +
-    styleEffectFp("og:", style.outerGlow as Record<string, unknown> | undefined) +
-    styleEffectFp("ig:", style.innerGlow as Record<string, unknown> | undefined) +
-    styleEffectFp("is:", style.innerShadow as Record<string, unknown> | undefined) +
-    styleEffectFp("bv:", style.bevel as Record<string, unknown> | undefined) +
-    styleEffectFp("sa:", style.satin as Record<string, unknown> | undefined) +
-    styleEffectFp("co:", style.colorOverlay as Record<string, unknown> | undefined) +
-    styleEffectFp("go:", style.gradientOverlay as Record<string, unknown> | undefined) +
-    styleEffectFp("po:", style.patternOverlay as Record<string, unknown> | undefined) +
-    styleEffectFp("ds:", style.dropShadow as Record<string, unknown> | undefined)
-  _layerStyleKeyCache.set(style, fp)
-  return fp
-}
 
 function _createSelectSubjectMask(width: number, height: number): ImageData {
   // Create a heuristic-based selection for subject detection
@@ -7450,7 +7374,7 @@ function renderLayerSourceForCompositor(layer: Layer, filterPreviewCanvas?: HTML
   let styleRendered = false
   if (renderLayer.style) {
     // Check layer style cache
-    const effectId = effectContent === content ? "" : _canvasIdMap.get(effectContent) ?? _assignCanvasId(effectContent)
+    const effectId = effectContent === content ? "" : canvasIdFor(effectContent)
     const sKey =
       layerStyleCacheKey(renderLayer.style) +
       `|ab:${advanced.transparencyShapesLayer ? 1 : 0}:${advanced.layerMaskHidesEffects ? 1 : 0}:${advanced.vectorMaskHidesEffects ? 1 : 0}:${effectId}`
@@ -7597,7 +7521,7 @@ function readSmartFilterMask(canvas: HTMLCanvasElement, width: number, height: n
   const cached = _smartFilterMaskCache.get(canvas)
   if (
     cached &&
-    cached.epoch === _maskAlphaEpoch &&
+    cached.epoch === maskAlphaEpoch &&
     cached.width === w &&
     cached.height === h &&
     cached.feather === feather
@@ -7606,7 +7530,7 @@ function readSmartFilterMask(canvas: HTMLCanvasElement, width: number, height: n
   }
   const mask = smartFilterMaskToImageData(canvas, width, height, feather)
   if (!mask) return null
-  _smartFilterMaskCache.set(canvas, { epoch: _maskAlphaEpoch, width: w, height: h, feather, mask })
+  _smartFilterMaskCache.set(canvas, { epoch: maskAlphaEpoch, width: w, height: h, feather, mask })
   return mask
 }
 
@@ -7677,16 +7601,11 @@ function applySmartFilters(
 // The epoch lets us invalidate when a mask canvas may have been painted on
 // in-place (brush strokes mutate the canvas without changing its identity).
 const _maskAlphaCache = new WeakMap<HTMLCanvasElement, { epoch: number; result: HTMLCanvasElement }>()
-let _maskAlphaEpoch = 0
-function invalidateMaskAlphaCache() {
-  _maskAlphaEpoch++
-}
-
 function getMaskAsAlphaCanvas(mask: HTMLCanvasElement): HTMLCanvasElement | null {
   const cached = _maskAlphaCache.get(mask)
   if (
     cached &&
-    cached.epoch === _maskAlphaEpoch &&
+    cached.epoch === maskAlphaEpoch &&
     cached.result.width === mask.width &&
     cached.result.height === mask.height
   ) {
@@ -7715,7 +7634,7 @@ function getMaskAsAlphaCanvas(mask: HTMLCanvasElement): HTMLCanvasElement | null
     dData[i + 3] = lum
   }
   outCtx.putImageData(dst, 0, 0)
-  _maskAlphaCache.set(mask, { epoch: _maskAlphaEpoch, result: out })
+  _maskAlphaCache.set(mask, { epoch: maskAlphaEpoch, result: out })
   return out
 }
 
@@ -7850,7 +7769,7 @@ function alphaBounds(canvas: HTMLCanvasElement): AlphaBoundsRect {
   const w = canvas.width
   const h = canvas.height
   const cached = _alphaBoundsCache.get(canvas)
-  if (cached && cached.epoch === _maskAlphaEpoch && cached.width === w && cached.height === h) {
+  if (cached && cached.epoch === maskAlphaEpoch && cached.width === w && cached.height === h) {
     return cached.result
   }
   const img = ctx.getImageData(0, 0, w, h)
@@ -7876,7 +7795,7 @@ function alphaBounds(canvas: HTMLCanvasElement): AlphaBoundsRect {
   const result: AlphaBoundsRect = hasPixels
     ? { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 }
     : null
-  _alphaBoundsCache.set(canvas, { epoch: _maskAlphaEpoch, width: w, height: h, result })
+  _alphaBoundsCache.set(canvas, { epoch: maskAlphaEpoch, width: w, height: h, result })
   return result
 }
 
