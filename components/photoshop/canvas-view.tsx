@@ -97,8 +97,6 @@ import { applyLuminanceMaskToCanvas, normalizeAdvancedBlending } from "./layer-w
 import {
   DEFAULT_PREFERENCES,
   calculatePrintSizeZoom,
-  loadPreferencesFromStorage,
-  type CursorStylePreference,
   type RulerUnitPreference,
 } from "./preferences-engine"
 import { buildRulerTickMarks } from "./ruler-calibration"
@@ -106,6 +104,21 @@ import { paintCanvasCursorOverlay, resolveCanvasCursorState } from "./cursor-ove
 import { buildRetouchingFeedbackModel } from "./retouch-feedback"
 import { buildEdgeAwareQuickSelectionMaskData } from "./algorithmic-operations"
 import { getLayerHighBitImage, highBitImageToSelectionSource, renderDocumentHighBitPreviewCanvas, syncHighBitLayerFromCanvasChange } from "./high-bit-document"
+import {
+  clampZoom,
+  defaultCanvasRuntimePreferences,
+  getCustomShapeRuntimeId,
+  getCustomShapeRuntimePreset,
+  getEyedropperSampleSize,
+  getFrameRuntimeOptions,
+  getMoveRuntimeOptions,
+  getPathRuntimeOptions,
+  getShapeRuntimeOptions,
+  layerAllowsDrawing,
+  layerAllowsMoving,
+  readCanvasRuntimePreferences,
+  type CanvasRuntimePreferences,
+} from "./canvas-view-runtime"
 
 // Canvas identity cache for composite fingerprinting — gives each canvas a stable numeric ID
 const _canvasIdMap = new WeakMap<HTMLCanvasElement, number>()
@@ -198,7 +211,7 @@ import { ColorPickerHud, hexToHsv, hsvToHex, pickFromHud, type ColorPickerHudHsv
 import { MagneticLassoIndicator, GridOverlay, PixelGridOverlay, GuidesOverlay, RetouchFeedbackOverlay } from "./canvas-overlays"
 import { SelectionTransformOverlay } from "./selection-transform-overlay"
 import { applyThreeDMaterialDrop } from "./three-d-video-engine"
-import type { BlendMode, CustomShapeId, GradientStop, Layer, PathHandleMode, PathPoint, PathProps, PsDocument, Selection, ShapeProps } from "./types"
+import type { BlendMode, GradientStop, Layer, PathPoint, PathProps, PsDocument, Selection, ShapeProps } from "./types"
 
 interface BrushInput {
   pressure: number
@@ -241,16 +254,6 @@ const RETOUCH_FEEDBACK_TOOLS = new Set([
   "art-history-brush",
 ])
 
-interface CanvasRuntimePreferences {
-  cursorStyle: CursorStylePreference
-  showBrushPreview: boolean
-  showBrushSizeCrosshair: boolean
-  showToolStatusHud: boolean
-  screenDpi: number
-  printResolution: number
-  rulerUnits: RulerUnitPreference
-}
-
 interface StampOptions {
   includeBrushOpacity?: boolean
   enforceTransparencyLock?: boolean
@@ -271,154 +274,7 @@ interface StrokeCompositeState {
 type BrushInputControl = "off" | "pressure" | "tilt" | "velocity" | "fade" | "random"
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v))
-const clampZoom = (v: number) => Math.max(0.05, Math.min(32, v))
-
-type MoveToolRuntimeOptions = {
-  autoSelect: boolean
-  select: "layer" | "group"
-  showTransformControls: boolean
-}
-
-type ShapeToolRuntimeOptions = {
-  strokeWidth: number
-  radius: number
-  sides: number
-  innerRadiusRatio: number
-  vertexRoundness: number
-  polygonStarMode: boolean
-  smoothCorners: boolean
-  smoothIndent: boolean
-  rotation: number
-  cornerRadiusTL?: number
-  cornerRadiusTR?: number
-  cornerRadiusBR?: number
-  cornerRadiusBL?: number
-}
-
-type PathToolRuntimeOptions = {
-  handleMode: PathHandleMode
-}
-
-type FrameToolRuntimeOptions = {
-  shape: "rect" | "ellipse"
-}
-
-type EyedropperSampleSize = "point" | "3x3" | "5x5"
 type DirectShapeHandleId = "nw" | "ne" | "se" | "sw" | "center" | `radius-${RoundedRectCorner}`
-
-declare global {
-  interface Window {
-    __psMoveOptions?: Partial<MoveToolRuntimeOptions>
-    __psShapeOptions?: Partial<ShapeToolRuntimeOptions>
-    __psPathOptions?: Partial<PathToolRuntimeOptions>
-    __psFrameOptions?: Partial<FrameToolRuntimeOptions>
-    __psCustomShape?: string
-    __psCustomShapePreset?: ShapeProps
-    __psEyedropperSampleSize?: EyedropperSampleSize
-  }
-}
-
-function getMoveRuntimeOptions(): MoveToolRuntimeOptions {
-  return {
-    autoSelect: window.__psMoveOptions?.autoSelect ?? true,
-    select: window.__psMoveOptions?.select ?? "layer",
-    showTransformControls: window.__psMoveOptions?.showTransformControls ?? false,
-  }
-}
-
-function getShapeRuntimeOptions(): ShapeToolRuntimeOptions {
-  return {
-    strokeWidth: Math.max(0, window.__psShapeOptions?.strokeWidth ?? 0),
-    radius: Math.max(0, window.__psShapeOptions?.radius ?? 0),
-    sides: Math.max(3, Math.min(64, window.__psShapeOptions?.sides ?? 6)),
-    innerRadiusRatio: Math.max(0.05, Math.min(0.95, window.__psShapeOptions?.innerRadiusRatio ?? 0.45)),
-    vertexRoundness: Math.max(0, Math.min(1, window.__psShapeOptions?.vertexRoundness ?? 0)),
-    polygonStarMode: window.__psShapeOptions?.polygonStarMode === true,
-    smoothCorners: window.__psShapeOptions?.smoothCorners === true,
-    smoothIndent: window.__psShapeOptions?.smoothIndent === true,
-    rotation: window.__psShapeOptions?.rotation ?? 0,
-    cornerRadiusTL: window.__psShapeOptions?.cornerRadiusTL,
-    cornerRadiusTR: window.__psShapeOptions?.cornerRadiusTR,
-    cornerRadiusBR: window.__psShapeOptions?.cornerRadiusBR,
-    cornerRadiusBL: window.__psShapeOptions?.cornerRadiusBL,
-  }
-}
-
-function getPathRuntimeOptions(): PathToolRuntimeOptions {
-  return {
-    handleMode: window.__psPathOptions?.handleMode ?? "symmetric",
-  }
-}
-
-function getFrameRuntimeOptions(): FrameToolRuntimeOptions {
-  return {
-    shape: window.__psFrameOptions?.shape ?? "rect",
-  }
-}
-
-function getCustomShapeRuntimeId(): CustomShapeId {
-  const shape = window.__psCustomShape
-  const supported: readonly CustomShapeId[] = [
-    "star5",
-    "star6",
-    "heart",
-    "arrow-right",
-    "arrow-left",
-    "arrow-up",
-    "arrow-down",
-    "speech",
-    "check",
-    "cross",
-    "lightning",
-    "polygon-hex",
-    "polygon-tri",
-    "diamond",
-  ]
-  return supported.includes(shape as CustomShapeId) ? (shape as CustomShapeId) : "star5"
-}
-
-function getCustomShapeRuntimePreset(): ShapeProps | null {
-  const preset = window.__psCustomShapePreset
-  if (!preset || typeof preset !== "object") return null
-  return preset
-}
-
-function getEyedropperSampleSize(): EyedropperSampleSize {
-  return window.__psEyedropperSampleSize ?? "point"
-}
-
-function readCanvasRuntimePreferences(): CanvasRuntimePreferences {
-  const prefs = loadPreferencesFromStorage()
-  return canvasRuntimePreferencesFrom(prefs)
-}
-
-function defaultCanvasRuntimePreferences(): CanvasRuntimePreferences {
-  return canvasRuntimePreferencesFrom(DEFAULT_PREFERENCES)
-}
-
-function canvasRuntimePreferencesFrom(prefs: ReturnType<typeof loadPreferencesFromStorage>): CanvasRuntimePreferences {
-  return {
-    cursorStyle: prefs.toolBehavior.cursorStyle,
-    showBrushPreview: prefs.toolBehavior.showBrushPreview,
-    showBrushSizeCrosshair: prefs.toolBehavior.showBrushSizeCrosshair,
-    showToolStatusHud: prefs.toolBehavior.showToolStatusHud,
-    screenDpi: prefs.rulerGrid.screenDpi,
-    printResolution: prefs.rulerGrid.printResolution,
-    rulerUnits: prefs.rulerGrid.rulerUnits,
-  }
-}
-
-function layerBlocksAllEdits(layer: Layer | null | undefined) {
-  return !layer || layer.locked || layer.lockAll
-}
-
-function layerAllowsDrawing(layer: Layer | null | undefined): layer is Layer {
-  return Boolean(layer && !layerBlocksAllEdits(layer) && !layer.lockDraw && layer.kind !== "group")
-}
-
-function layerAllowsMoving(layer: Layer | null | undefined): layer is Layer {
-  return Boolean(layer && !layerBlocksAllEdits(layer) && !layer.lockMove && layer.kind !== "group")
-}
 
 export function CanvasView() {
   const ed = useEditor()
