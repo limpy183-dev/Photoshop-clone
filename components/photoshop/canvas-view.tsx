@@ -157,6 +157,11 @@ import {
   createRemoveMask,
   selectBackgroundMaskFromImage,
 } from "./canvas-selection-helpers"
+import {
+  drawArtboardPreview,
+  drawFramePlaceholder,
+  drawSlicePreview,
+} from "./canvas-preview-drawing"
 
 const ZOOM_COMMIT_IDLE_MS = 420
 
@@ -7139,68 +7144,4 @@ export function CanvasView() {
       ) : null}
     </div>
   )
-}
-
-/* ============================== helpers ============================== */
-
-function drawFramePlaceholder(
-  ctx: CanvasRenderingContext2D,
-  frame: { shape: "rect" | "ellipse"; x: number; y: number; w: number; h: number },
-) {
-  ctx.save()
-  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
-  ctx.fillStyle = "rgba(15, 23, 42, 0.18)"
-  ctx.strokeStyle = "#38bdf8"
-  ctx.lineWidth = 2
-  ctx.setLineDash([8, 5])
-  ctx.beginPath()
-  if (frame.shape === "ellipse") {
-    ctx.ellipse(frame.x + frame.w / 2, frame.y + frame.h / 2, frame.w / 2, frame.h / 2, 0, 0, Math.PI * 2)
-  } else {
-    ctx.rect(frame.x, frame.y, frame.w, frame.h)
-  }
-  ctx.fill()
-  ctx.stroke()
-  ctx.setLineDash([])
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.8)"
-  ctx.beginPath()
-  ctx.moveTo(frame.x, frame.y)
-  ctx.lineTo(frame.x + frame.w, frame.y + frame.h)
-  ctx.moveTo(frame.x + frame.w, frame.y)
-  ctx.lineTo(frame.x, frame.y + frame.h)
-  ctx.stroke()
-  ctx.restore()
-}
-
-function drawArtboardPreview(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  background: string,
-) {
-  ctx.save()
-  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
-  ctx.fillStyle = background
-  ctx.fillRect(x, y, w, h)
-  ctx.strokeStyle = "#f8fafc"
-  ctx.lineWidth = 2
-  ctx.strokeRect(x, y, w, h)
-  ctx.strokeStyle = "#0f172a"
-  ctx.lineWidth = 1
-  ctx.strokeRect(x + 3, y + 3, Math.max(0, w - 6), Math.max(0, h - 6))
-  ctx.restore()
-}
-
-function drawSlicePreview(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
-  ctx.save()
-  ctx.strokeStyle = "#f97316"
-  ctx.lineWidth = 2
-  ctx.setLineDash([6, 4])
-  ctx.strokeRect(x, y, w, h)
-  ctx.setLineDash([])
-  ctx.fillStyle = "rgba(249, 115, 22, 0.14)"
-  ctx.fillRect(x, y, w, h)
-  ctx.restore()
 }
