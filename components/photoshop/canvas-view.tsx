@@ -3,7 +3,6 @@
 import * as React from "react"
 import { useEditor } from "./editor-context"
 import { compositeLayer } from "./blend-modes"
-import { getFilter } from "./filters"
 import { applyModeAndColorManagement } from "./advanced-subsystems"
 import {
   addAnchorPointToPath,
@@ -53,18 +52,11 @@ import {
   renderTileOnlyViewportComposite,
 } from "./tile-only-pipeline"
 import {
-  applyGpuLayerStyleToCanvas,
-  applyGpuSmartFiltersToCanvas,
   compositeDocumentWithWebGL,
-  cropWebGLSource,
   prepareLayerInputForWebGL,
-  rasterizeVectorMaskForWebGL,
   planWebGLCompositor,
-  type WebGLCompositeLayerContext,
 } from "./webgl-compositor"
-import { acquirePooledCanvas, releasePooledCanvas } from "./canvas-utils"
 import { containsSelectionPoint, createSelectionHitTester, type SelectionHitTester } from "./selection-hit-testing"
-import { isAdjustmentNoop } from "./adjustment-layers"
 import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
 import {
   applyBlurGalleryKeyboardCommand,
@@ -91,8 +83,7 @@ import {
   type LightingEffectsDrag,
   type LightingEffectsParams,
 } from "./lighting-effects-controls"
-import { smartFilterMaskAmountAt, smartFilterMaskToImageData } from "./smart-filter-masks"
-import { applyLuminanceMaskToCanvas, normalizeAdvancedBlending } from "./layer-workflows"
+import { normalizeAdvancedBlending } from "./layer-workflows"
 import {
   DEFAULT_PREFERENCES,
   calculatePrintSizeZoom,
@@ -149,10 +140,16 @@ import {
   invalidateMaskAlphaCache,
   layerStyleCacheKey,
   maskAlphaEpoch,
-  offsetPath,
   pathFingerprint,
   smartFilterCacheKey,
 } from "./canvas-compositor-cache"
+import {
+  applyAdjustmentForCompositorContext,
+  applyAdjustmentLayer,
+  drawLayer,
+  drawLayerForCompositorContext,
+  renderLayerSourceForCompositor,
+} from "./canvas-compositor"
 
 const ZOOM_COMMIT_IDLE_MS = 420
 
@@ -200,7 +197,7 @@ import { ColorPickerHud, hexToHsv, hsvToHex, pickFromHud, type ColorPickerHudHsv
 import { MagneticLassoIndicator, GridOverlay, PixelGridOverlay, GuidesOverlay, RetouchFeedbackOverlay } from "./canvas-overlays"
 import { SelectionTransformOverlay } from "./selection-transform-overlay"
 import { applyThreeDMaterialDrop } from "./three-d-video-engine"
-import type { BlendMode, GradientStop, Layer, PathPoint, PathProps, PsDocument, Selection } from "./types"
+import type { GradientStop, Layer, PathPoint, PathProps, PsDocument, Selection } from "./types"
 
 interface BrushInput {
   pressure: number
@@ -7140,30 +7137,6 @@ export function CanvasView() {
 
 /* ============================== helpers ============================== */
 
-/* ----------- canvas pool (reuse offscreen canvases) ----------- */
-function acquireCanvas(w: number, h: number): HTMLCanvasElement {
-  return acquirePooledCanvas(w, h)
-}
-
-function releaseCanvas(c: HTMLCanvasElement) {
-  releasePooledCanvas(c)
-}
-
-/* ----------- smart filter result cache ----------- */
-interface SmartFilterCacheEntry {
-  paramsKey: string
-  result: HTMLCanvasElement
-}
-const _smartFilterCache = new WeakMap<HTMLCanvasElement, SmartFilterCacheEntry>()
-
-/* ----------- layer style result cache ----------- */
-interface LayerStyleCacheEntry {
-  styleKey: string
-  fillOpacity: number
-  result: HTMLCanvasElement
-}
-const _layerStyleCache = new WeakMap<HTMLCanvasElement, LayerStyleCacheEntry>()
-
 function _createSelectSubjectMask(width: number, height: number): ImageData {
   // Create a heuristic-based selection for subject detection
   // In a real implementation, this would use an actual AI model
@@ -7348,402 +7321,6 @@ function clipToSelection(ctx: CanvasRenderingContext2D, doc: PsDocument) {
     ctx.rect(sel.bounds.x, sel.bounds.y, sel.bounds.w, sel.bounds.h)
   }
   ctx.clip()
-}
-
-function renderLayerSourceForCompositor(layer: Layer, filterPreviewCanvas?: HTMLCanvasElement): {
-  canvas: HTMLCanvasElement
-  fillOpacity: number
-  styleRendered: boolean
-  knockoutMask: HTMLCanvasElement
-} {
-  const baseCanvas = filterPreviewCanvas || layer.canvas
-  const content = applyGpuSmartFiltersToCanvas(baseCanvas, layer.smartFilters) ?? applySmartFilters(baseCanvas, layer.smartFilters)
-  const advanced = normalizeAdvancedBlending(layer.advancedBlending)
-  const vectorMask = layer.vectorMask ? rasterizeVectorMaskForWebGL(layer, content.width, content.height) : null
-  const layerMask = layer.mask && layer.maskEnabled !== false ? layer.mask : null
-  const fillMasks = [layerMask, vectorMask].filter(Boolean) as HTMLCanvasElement[]
-  let fillContent = content
-  for (const mask of fillMasks) fillContent = applyLuminanceMaskToCanvas(fillContent, mask)
-
-  let effectContent = content
-  if (advanced.layerMaskHidesEffects && layerMask) effectContent = applyLuminanceMaskToCanvas(effectContent, layerMask)
-  if (advanced.vectorMaskHidesEffects && vectorMask) effectContent = applyLuminanceMaskToCanvas(effectContent, vectorMask)
-
-  const renderLayer = { ...layer, canvas: fillContent }
-  let toDraw: HTMLCanvasElement = fillContent
-  let styleRendered = false
-  if (renderLayer.style) {
-    // Check layer style cache
-    const effectId = effectContent === content ? "" : canvasIdFor(effectContent)
-    const sKey =
-      layerStyleCacheKey(renderLayer.style) +
-      `|ab:${advanced.transparencyShapesLayer ? 1 : 0}:${advanced.layerMaskHidesEffects ? 1 : 0}:${advanced.vectorMaskHidesEffects ? 1 : 0}:${effectId}`
-    const fillOp = renderLayer.fillOpacity ?? 1
-    const cached = _layerStyleCache.get(fillContent)
-    if (cached && cached.styleKey === sKey && cached.fillOpacity === fillOp) {
-      toDraw = cached.result
-    } else {
-      // Lazy import to avoid circular ref hazards
-      const { applyLayerStyle } = require("./layer-styles") as typeof import("./layer-styles")
-      const gpuEffectSource = advanced.transparencyShapesLayer ? effectContent : makeOpaqueMask(content.width, content.height)
-      const gpuStyled = applyGpuLayerStyleToCanvas(renderLayer, fillOp, {
-        effectSourceCanvas: gpuEffectSource,
-        fillSourceCanvas: fillContent,
-      })
-      toDraw = gpuStyled ?? applyLayerStyle(renderLayer, fillOp, {
-        effectSourceCanvas: effectContent,
-        transparencyShapesLayer: advanced.transparencyShapesLayer,
-      })
-      _layerStyleCache.set(fillContent, { styleKey: sKey, fillOpacity: fillOp, result: toDraw })
-    }
-    styleRendered = true
-  }
-  return {
-    canvas: toDraw,
-    fillOpacity: styleRendered ? 1 : layer.fillOpacity ?? 1,
-    styleRendered,
-    knockoutMask: advanced.transparencyShapesLayer ? effectContent : makeOpaqueMask(content.width, content.height),
-  }
-}
-
-function makeOpaqueMask(width: number, height: number) {
-  const mask = makeCanvas(width, height)
-  const ctx = mask.getContext("2d")!
-  ctx.fillStyle = "#ffffff"
-  ctx.fillRect(0, 0, width, height)
-  return mask
-}
-
-function restoreKnockoutBackdrop(ctx: CanvasRenderingContext2D, mask: HTMLCanvasElement, backdrop: HTMLCanvasElement | null) {
-  ctx.save()
-  ctx.globalCompositeOperation = "destination-out"
-  ctx.drawImage(mask, 0, 0)
-  ctx.restore()
-  if (!backdrop) return
-  const tmp = makeCanvas(ctx.canvas.width, ctx.canvas.height)
-  const tctx = tmp.getContext("2d")!
-  tctx.drawImage(backdrop, 0, 0)
-  tctx.globalCompositeOperation = "destination-in"
-  tctx.drawImage(mask, 0, 0)
-  ctx.drawImage(tmp, 0, 0)
-}
-
-function drawLayer(
-  ctx: CanvasRenderingContext2D,
-  layer: Layer,
-  clipMask: HTMLCanvasElement | null,
-  filterPreviewCanvas?: HTMLCanvasElement,
-  knockoutBackdrop?: HTMLCanvasElement | null,
-) {
-  // Apply layer styles + mask via offscreen if needed
-  const rendered = renderLayerSourceForCompositor(layer, filterPreviewCanvas)
-  let toDraw: HTMLCanvasElement = rendered.canvas
-  if (clipMask) {
-    toDraw = applyLuminanceMaskToCanvas(toDraw, clipMask)
-  }
-  const advanced = normalizeAdvancedBlending(layer.advancedBlending)
-  if (advanced.knockout !== "none") restoreKnockoutBackdrop(ctx, rendered.knockoutMask, knockoutBackdrop ?? null)
-  // Use the pixel-exact blend-modes compositor which handles all 26 modes correctly
-  compositeLayer(ctx, toDraw, layer.blendMode, layer.opacity, rendered.fillOpacity, layer.advancedBlending)
-}
-
-function drawLayerForCompositorContext(ctx: CanvasRenderingContext2D, layer: Layer, context: WebGLCompositeLayerContext) {
-  if (!context.tileRect) {
-    drawLayer(ctx, layer, context.clipMask, context.filterPreviewCanvas)
-    return
-  }
-  const rect = context.tileRect
-  const tileLayer: Layer = {
-    ...layer,
-    canvas: cropWebGLSource(layer.canvas, rect),
-    mask: layer.mask && layer.maskEnabled !== false ? cropWebGLSource(layer.mask, rect) : layer.mask,
-    vectorMask: offsetPath(layer.vectorMask, -rect.x, -rect.y) ?? null,
-  }
-  const clipMask = context.clipMask ? cropWebGLSource(context.clipMask, rect) : null
-  const filterPreviewCanvas = context.filterPreviewCanvas ? cropWebGLSource(context.filterPreviewCanvas, rect) : undefined
-  drawLayer(ctx, tileLayer, clipMask, filterPreviewCanvas)
-}
-
-function applyAdjustmentForCompositorContext(ctx: CanvasRenderingContext2D, layer: Layer, context: WebGLCompositeLayerContext) {
-  if (!context.tileRect) {
-    applyAdjustmentLayer(ctx, layer, context.width, context.height, context.clipMask, undefined)
-    return
-  }
-  const rect = context.tileRect
-  const tileLayer: Layer = {
-    ...layer,
-    canvas: cropWebGLSource(layer.canvas, rect),
-    mask: layer.mask && layer.maskEnabled !== false ? cropWebGLSource(layer.mask, rect) : layer.mask,
-    vectorMask: offsetPath(layer.vectorMask, -rect.x, -rect.y) ?? null,
-  }
-  const clipMask = context.clipMask ? cropWebGLSource(context.clipMask, rect) : null
-  applyAdjustmentLayer(ctx, tileLayer, context.width, context.height, clipMask, undefined)
-}
-
-function paramsWithDefaults(filter: NonNullable<ReturnType<typeof getFilter>>, params: Record<string, number | string | boolean>) {
-  const out: Record<string, number | string | boolean> = {}
-  for (const param of filter.params) {
-    const raw = params[param.key] ?? param.default
-    if (param.type === "slider") {
-      const numeric = typeof raw === "number" ? raw : Number(raw)
-      out[param.key] = Math.max(param.min, Math.min(param.max, Number.isFinite(numeric) ? numeric : param.default))
-    } else if (param.type === "checkbox") {
-      out[param.key] = raw === true
-    } else if (param.type === "select") {
-      out[param.key] = param.options.some((option) => option.value === raw) ? raw : param.default
-    } else {
-      out[param.key] = typeof raw === "string" ? raw : param.default
-    }
-  }
-  return out
-}
-
-function imageDataToCanvas(data: ImageData) {
-  const canvas = document.createElement("canvas")
-  canvas.width = data.width
-  canvas.height = data.height
-  canvas.getContext("2d")!.putImageData(data, 0, 0)
-  return canvas
-}
-
-interface SmartFilterMaskCacheEntry {
-  epoch: number
-  width: number
-  height: number
-  feather: number
-  mask: ImageData
-}
-const _smartFilterMaskCache = new WeakMap<HTMLCanvasElement, SmartFilterMaskCacheEntry>()
-function readSmartFilterMask(canvas: HTMLCanvasElement, width: number, height: number, feather = 0): ImageData | null {
-  const w = Math.min(canvas.width, width)
-  const h = Math.min(canvas.height, height)
-  if (w <= 0 || h <= 0) return null
-  const cached = _smartFilterMaskCache.get(canvas)
-  if (
-    cached &&
-    cached.epoch === maskAlphaEpoch &&
-    cached.width === w &&
-    cached.height === h &&
-    cached.feather === feather
-  ) {
-    return cached.mask
-  }
-  const mask = smartFilterMaskToImageData(canvas, width, height, feather)
-  if (!mask) return null
-  _smartFilterMaskCache.set(canvas, { epoch: maskAlphaEpoch, width: w, height: h, feather, mask })
-  return mask
-}
-
-function smartFilterResult(
-  before: ImageData,
-  after: ImageData,
-  smartFilter: NonNullable<Layer["smartFilters"]>[number],
-  width: number,
-  height: number,
-) {
-  const opacity = Math.max(0, Math.min(1, smartFilter.opacity ?? 1))
-  if (opacity <= 0) return before
-  const blendMode = (smartFilter.blendMode ?? "normal") as BlendMode
-  const maskCanvas = smartFilter.maskEnabled === false ? null : smartFilter.mask ?? null
-  const mask = maskCanvas ? readSmartFilterMask(maskCanvas, width, height, smartFilter.maskFeather ?? 0) : null
-
-  if (!mask && opacity >= 1 && blendMode === "normal") return after
-
-  const overlay = new ImageData(new Uint8ClampedArray(after.data), width, height)
-  if (mask) {
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const i = (y * width + x) * 4
-        overlay.data[i + 3] = Math.round(overlay.data[i + 3] * smartFilterMaskAmountAt(mask, x, y, smartFilter.maskDensity ?? 1))
-      }
-    }
-  }
-
-  const baseCanvas = imageDataToCanvas(before)
-  const overlayCanvas = imageDataToCanvas(overlay)
-  const ctx = baseCanvas.getContext("2d")!
-  compositeLayer(ctx, overlayCanvas, blendMode, opacity)
-  return ctx.getImageData(0, 0, width, height)
-}
-
-function applySmartFilters(
-  source: HTMLCanvasElement,
-  smartFilters: Layer["smartFilters"],
-): HTMLCanvasElement {
-  const enabled = smartFilters?.filter((sf) => sf.enabled) ?? []
-  if (!enabled.length) return source
-  // Check cache
-  const cacheKey = smartFilterCacheKey(enabled)
-  const cached = _smartFilterCache.get(source)
-  if (cached && cached.paramsKey === cacheKey) return cached.result
-  // Compute
-  const out = document.createElement("canvas")
-  out.width = source.width
-  out.height = source.height
-  const ctx = out.getContext("2d")!
-  ctx.drawImage(source, 0, 0)
-  let current = ctx.getImageData(0, 0, out.width, out.height)
-  for (const smartFilter of enabled) {
-    const filter = getFilter(smartFilter.filterId)
-    if (!filter) continue
-    const before = current
-    const after = filter.apply(before, paramsWithDefaults(filter, smartFilter.params))
-    current = smartFilterResult(before, after, smartFilter, out.width, out.height)
-  }
-  ctx.putImageData(current, 0, 0)
-  _smartFilterCache.set(source, { paramsKey: cacheKey, result: out })
-  return out
-}
-
-/* ----------- adjustment layer cache & helpers ----------- */
-
-// Cache: mask canvas -> alpha-encoded version (luminance written into alpha).
-// The epoch lets us invalidate when a mask canvas may have been painted on
-// in-place (brush strokes mutate the canvas without changing its identity).
-const _maskAlphaCache = new WeakMap<HTMLCanvasElement, { epoch: number; result: HTMLCanvasElement }>()
-function getMaskAsAlphaCanvas(mask: HTMLCanvasElement): HTMLCanvasElement | null {
-  const cached = _maskAlphaCache.get(mask)
-  if (
-    cached &&
-    cached.epoch === maskAlphaEpoch &&
-    cached.result.width === mask.width &&
-    cached.result.height === mask.height
-  ) {
-    return cached.result
-  }
-  if (typeof mask.getContext !== "function") return null
-  const srcCtx = mask.getContext("2d")
-  if (!srcCtx) return null
-  const w = mask.width
-  const h = mask.height
-  const out = cached?.result.width === w && cached.result.height === h ? cached.result : document.createElement("canvas")
-  out.width = w
-  out.height = h
-  const outCtx = out.getContext("2d")!
-  const src = srcCtx.getImageData(0, 0, w, h)
-  const dst = outCtx.createImageData(w, h)
-  const sData = src.data
-  const dData = dst.data
-  for (let i = 0; i < sData.length; i += 4) {
-    // Luminance * source alpha → alpha; RGB stays white so destination-in
-    // multiplies the target alpha by this value cleanly.
-    const lum = (sData[i] + sData[i + 1] + sData[i + 2]) * (sData[i + 3] / 255) / 3
-    dData[i] = 255
-    dData[i + 1] = 255
-    dData[i + 2] = 255
-    dData[i + 3] = lum
-  }
-  outCtx.putImageData(dst, 0, 0)
-  _maskAlphaCache.set(mask, { epoch: maskAlphaEpoch, result: out })
-  return out
-}
-
-// Cache: per-adjustment-layer filter output. Keyed by layer object identity (WeakMap).
-// `inputFingerprint` is a fingerprint of the ctx state going INTO this adjustment;
-// `paramsKey` is a fingerprint of the filter type + params. If both match, we reuse
-// the cached filter output canvas without re-running the (expensive) pixel filter.
-interface AdjustmentFilterCacheEntry {
-  inputFingerprint: string
-  paramsKey: string
-  width: number
-  height: number
-  result: HTMLCanvasElement
-}
-const _adjustmentFilterCache = new WeakMap<Layer, AdjustmentFilterCacheEntry>()
-
-function adjustmentParamsKey(layer: Layer): string {
-  if (!layer.adjustment) return ""
-  return `${layer.adjustment.type}|${JSON.stringify(layer.adjustment.params)}`
-}
-
-function applyAdjustmentLayer(
-  ctx: CanvasRenderingContext2D,
-  layer: Layer,
-  width: number,
-  height: number,
-  clipMask?: HTMLCanvasElement | null,
-  inputFingerprint?: string,
-) {
-  if (!layer.adjustment) return
-  if (layer.opacity <= 0 || isAdjustmentNoop(layer.adjustment)) return
-  const filter = getFilter(layer.adjustment.type)
-  if (!filter) return
-
-  const opacity = Math.max(0, Math.min(1, layer.opacity))
-  const maskCanvas = layer.maskEnabled === false ? null : layer.mask ?? null
-  const hasMask = !!maskCanvas
-  const hasClip = !!clipMask
-
-  // --- 1. Produce the filter output canvas (cached when input + params unchanged). ---
-  const paramsKey = adjustmentParamsKey(layer)
-  const cached = _adjustmentFilterCache.get(layer)
-  let filterOutCanvas: HTMLCanvasElement
-  let reused = false
-  if (
-    cached &&
-    inputFingerprint !== undefined &&
-    cached.inputFingerprint === inputFingerprint &&
-    cached.paramsKey === paramsKey &&
-    cached.width === width &&
-    cached.height === height
-  ) {
-    filterOutCanvas = cached.result
-    reused = true
-  } else {
-    const before = ctx.getImageData(0, 0, width, height)
-    const after = filter.apply(before, paramsWithDefaults(filter, layer.adjustment.params))
-    const out = document.createElement("canvas")
-    out.width = width
-    out.height = height
-    out.getContext("2d")!.putImageData(after, 0, 0)
-    filterOutCanvas = out
-    if (inputFingerprint !== undefined) {
-      _adjustmentFilterCache.set(layer, {
-        inputFingerprint,
-        paramsKey,
-        width,
-        height,
-        result: out,
-      })
-    }
-  }
-
-  // --- 2. Fast path: no mask, no clip, full opacity → just blit. ---
-  if (!hasMask && !hasClip && opacity >= 1) {
-    ctx.clearRect(0, 0, width, height)
-    ctx.drawImage(filterOutCanvas, 0, 0)
-    return
-  }
-
-  // --- 3. Mask/clip path: apply alpha coverage via GPU composite ops. ---
-  // We build a temp canvas containing the filter output, then multiply its alpha
-  // by mask luminance and clip alpha (via destination-in), then composite onto
-  // the existing ctx (which still has `before`) with globalAlpha for opacity.
-  const tmp = acquireCanvas(width, height)
-  const tctx = tmp.getContext("2d")!
-  tctx.drawImage(filterOutCanvas, 0, 0)
-
-  if (hasMask) {
-    const maskAlpha = getMaskAsAlphaCanvas(maskCanvas!)
-    if (maskAlpha) {
-      tctx.globalCompositeOperation = "destination-in"
-      tctx.drawImage(maskAlpha, 0, 0)
-      tctx.globalCompositeOperation = "source-over"
-    }
-  }
-  if (hasClip) {
-    tctx.globalCompositeOperation = "destination-in"
-    tctx.drawImage(clipMask!, 0, 0)
-    tctx.globalCompositeOperation = "source-over"
-  }
-
-  ctx.save()
-  ctx.globalAlpha = opacity
-  ctx.drawImage(tmp, 0, 0)
-  ctx.restore()
-  releaseCanvas(tmp)
-  // Suppress unused warning while still emitting cache stats in debug builds.
-  void reused
 }
 
 function autoPickLayer(
