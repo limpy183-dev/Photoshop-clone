@@ -65,9 +65,6 @@ import {
   getBlurGalleryControlState,
   isBlurGalleryFilterId,
   normalizeBlurGalleryParams,
-  parseFieldBlurPins,
-  parsePathBlurPoints,
-  percentToCanvasPoint,
   updateBlurGalleryInteraction,
   type BlurGalleryDrag,
   type BlurGalleryFilterId,
@@ -76,9 +73,7 @@ import {
 import {
   beginLightingEffectsInteraction,
   finishLightingEffectsInteraction,
-  getLightingEffectsControlState,
   normalizeLightingEffectsParams,
-  parseLightingEffectsLights,
   updateLightingEffectsInteraction,
   type LightingEffectsDrag,
   type LightingEffectsParams,
@@ -162,6 +157,10 @@ import {
   drawFramePlaceholder,
   drawSlicePreview,
 } from "./canvas-preview-drawing"
+import {
+  drawBlurGalleryOverlayCanvas,
+  drawLightingEffectsOverlayCanvas,
+} from "./canvas-filter-overlays"
 
 const ZOOM_COMMIT_IDLE_MS = 420
 
@@ -3121,254 +3120,18 @@ export function CanvasView() {
     return true
   }, [activeDoc, blurGalleryOverlay, setBlurGalleryParams])
 
+  function filterOverlayDocument() {
+    return activeDoc
+      ? { id: activeDoc.id, width: activeDoc.width, height: activeDoc.height }
+      : null
+  }
+
   function drawBlurGalleryOverlay(state = blurGalleryOverlay) {
-    const ov = overlayRef.current
-    if (!ov || !activeDoc) return
-    const ctx = ov.getContext("2d")
-    if (!ctx) return
-    ctx.clearRect(0, 0, ov.width, ov.height)
-    if (!state || state.docId !== activeDoc.id) return
-
-    const controlState = getBlurGalleryControlState(state.params)
-    const zoom = Math.max(0.5, visualZoomRef.current)
-    const accent = "#38bdf8"
-    const selectedAccent = "#fbbf24"
-
-    ctx.save()
-    ctx.lineWidth = Math.max(1, 1.5 / zoom)
-    ctx.strokeStyle = accent
-    ctx.fillStyle = accent
-    ctx.shadowColor = "rgba(0,0,0,0.45)"
-    ctx.shadowBlur = 2 / zoom
-
-    if (state.filterId === "field-blur") {
-      const pins = parseFieldBlurPins(String(state.params.pins ?? ""))
-      for (let index = 0; index < pins.length; index++) {
-        const pin = pins[index]
-        const selected = controlState.selectedFieldPinIndexes.includes(index)
-        const center = percentToCanvasPoint(pin, activeDoc.width, activeDoc.height)
-        const handle = { x: center.x + pin.blur, y: center.y }
-        ctx.save()
-        ctx.fillStyle = selected ? "rgba(251,191,36,0.08)" : "rgba(56,189,248,0.06)"
-        ctx.beginPath()
-        ctx.arc(center.x, center.y, Math.max(3 / zoom, pin.blur), 0, Math.PI * 2)
-        ctx.fill()
-        ctx.strokeStyle = selected ? selectedAccent : "rgba(125,211,252,0.86)"
-        ctx.lineWidth = selected ? Math.max(1.5, 2.25 / zoom) : Math.max(1, 1.25 / zoom)
-        ctx.setLineDash([5 / zoom, 4 / zoom])
-        ctx.beginPath()
-        ctx.arc(center.x, center.y, Math.max(3, pin.blur), 0, Math.PI * 2)
-        ctx.stroke()
-        ctx.setLineDash([])
-        ctx.strokeStyle = selected ? selectedAccent : accent
-        ctx.beginPath()
-        ctx.moveTo(center.x, center.y)
-        ctx.lineTo(handle.x, handle.y)
-        ctx.stroke()
-        ctx.restore()
-        drawRoundHandle(ctx, center.x, center.y, 5, selected ? selectedAccent : accent, selected)
-        drawRoundHandle(ctx, handle.x, handle.y, 4, "#ffffff", selected)
-        if (selected) drawOverlayLabel(ctx, `${pin.blur}px`, handle.x + 8 / zoom, handle.y - 8 / zoom)
-      }
-    } else if (state.filterId === "iris-blur") {
-      const center = percentToCanvasPoint({ x: numOverlay(state.params.centerX, 50), y: numOverlay(state.params.centerY, 50) }, activeDoc.width, activeDoc.height)
-      const rotation = numOverlay(state.params.rotation, 0)
-      const radians = rotation * Math.PI / 180
-      const axisX = { x: Math.cos(radians), y: Math.sin(radians) }
-      const axisY = { x: -Math.sin(radians), y: Math.cos(radians) }
-      const rx = activeDoc.width * numOverlay(state.params.ellipseWidth, numOverlay(state.params.radius, 42)) / 100 * 0.5
-      const ry = activeDoc.height * numOverlay(state.params.ellipseHeight, numOverlay(state.params.radius, 42)) / 100 * 0.5
-      const feather = 1 + numOverlay(state.params.feather, 30) / 100
-      const widthHandle = { x: center.x + axisX.x * rx, y: center.y + axisX.y * rx }
-      const heightHandle = { x: center.x + axisY.x * ry, y: center.y + axisY.y * ry }
-      const featherHandle = { x: center.x + axisX.x * rx * feather, y: center.y + axisX.y * rx * feather }
-      const rotationHandle = { x: center.x + axisX.x * (rx + 18 / zoom), y: center.y + axisX.y * (rx + 18 / zoom) }
-      ctx.fillStyle = "rgba(56,189,248,0.07)"
-      ctx.beginPath()
-      ctx.ellipse(center.x, center.y, Math.max(1, rx * feather), Math.max(1, ry * feather), radians, 0, Math.PI * 2)
-      ctx.fill()
-      ctx.fillStyle = "rgba(16,185,129,0.11)"
-      ctx.beginPath()
-      ctx.ellipse(center.x, center.y, Math.max(1, rx), Math.max(1, ry), radians, 0, Math.PI * 2)
-      ctx.fill()
-      ctx.setLineDash([])
-      ctx.strokeStyle = "#22c55e"
-      ctx.beginPath()
-      ctx.ellipse(center.x, center.y, Math.max(1, rx), Math.max(1, ry), radians, 0, Math.PI * 2)
-      ctx.stroke()
-      ctx.strokeStyle = accent
-      ctx.setLineDash([5 / zoom, 4 / zoom])
-      ctx.beginPath()
-      ctx.ellipse(center.x, center.y, Math.max(1, rx * feather), Math.max(1, ry * feather), radians, 0, Math.PI * 2)
-      ctx.stroke()
-      ctx.setLineDash([])
-      ctx.strokeStyle = selectedAccent
-      ctx.beginPath()
-      ctx.moveTo(center.x, center.y)
-      ctx.lineTo(rotationHandle.x, rotationHandle.y)
-      ctx.stroke()
-      drawRoundHandle(ctx, center.x, center.y, 5, controlState.activeControl === "iris-center" ? selectedAccent : accent, controlState.activeControl === "iris-center")
-      drawRoundHandle(ctx, widthHandle.x, widthHandle.y, 4, "#ffffff", controlState.activeControl === "iris-width" || controlState.activeControl === "iris-radius")
-      drawRoundHandle(ctx, heightHandle.x, heightHandle.y, 4, "#ffffff", controlState.activeControl === "iris-height")
-      drawRoundHandle(ctx, featherHandle.x, featherHandle.y, 4, "#ffffff", controlState.activeControl === "iris-feather")
-      drawRoundHandle(ctx, rotationHandle.x, rotationHandle.y, 4, "#ffffff", controlState.activeControl === "iris-rotation")
-      drawOverlayLabel(ctx, "focus", center.x - axisX.x * rx - axisY.x * ry - 8 / zoom, center.y - axisX.y * rx - axisY.y * ry - 8 / zoom)
-      drawOverlayLabel(ctx, "feather", featherHandle.x + 8 / zoom, featherHandle.y)
-    } else if (state.filterId === "tilt-shift") {
-      const center = percentToCanvasPoint({ x: numOverlay(state.params.centerX, 50), y: numOverlay(state.params.centerY, 50) }, activeDoc.width, activeDoc.height)
-      const angle = numOverlay(state.params.angle, 0) * Math.PI / 180
-      const tangent = { x: Math.cos(angle), y: Math.sin(angle) }
-      const normal = { x: -Math.sin(angle), y: Math.cos(angle) }
-      const length = Math.hypot(activeDoc.width, activeDoc.height)
-      const radius = Math.min(activeDoc.width, activeDoc.height) * numOverlay(state.params.radius, 30) / 100 * 0.5
-      const feather = radius + Math.min(activeDoc.width, activeDoc.height) * numOverlay(state.params.feather, 30) / 100
-      drawTiltBand(ctx, center, tangent, normal, 0, radius * 2, length, "rgba(34,197,94,0.1)")
-      drawTiltBand(ctx, center, tangent, normal, (radius + feather) * 0.5, Math.max(1, feather - radius), length, "rgba(56,189,248,0.08)")
-      drawTiltBand(ctx, center, tangent, normal, -(radius + feather) * 0.5, Math.max(1, feather - radius), length, "rgba(56,189,248,0.08)")
-      drawTiltLine(ctx, center, tangent, normal, radius, length, false)
-      drawTiltLine(ctx, center, tangent, normal, -radius, length, false)
-      drawTiltLine(ctx, center, tangent, normal, feather, length, true)
-      drawTiltLine(ctx, center, tangent, normal, -feather, length, true)
-      const angleHandle = {
-        x: center.x + tangent.x * Math.min(activeDoc.width, activeDoc.height) * 0.24,
-        y: center.y + tangent.y * Math.min(activeDoc.width, activeDoc.height) * 0.24,
-      }
-      ctx.strokeStyle = selectedAccent
-      ctx.beginPath()
-      ctx.moveTo(center.x, center.y)
-      ctx.lineTo(angleHandle.x, angleHandle.y)
-      ctx.stroke()
-      drawRoundHandle(ctx, center.x, center.y, 5, controlState.activeControl === "tilt-center" ? selectedAccent : accent, controlState.activeControl === "tilt-center")
-      drawRoundHandle(ctx, angleHandle.x, angleHandle.y, 4, "#ffffff", controlState.activeControl === "tilt-angle")
-      drawOverlayLabel(ctx, "sharp", center.x + normal.x * radius + 6 / zoom, center.y + normal.y * radius - 6 / zoom)
-      drawOverlayLabel(ctx, "fade", center.x + normal.x * feather + 6 / zoom, center.y + normal.y * feather - 6 / zoom)
-    } else if (state.filterId === "path-blur") {
-      const points = parsePathBlurPoints(String(state.params.path ?? ""))
-      const canvasPoints = points.map((point) => percentToCanvasPoint(point, activeDoc.width, activeDoc.height))
-      if (canvasPoints.length > 0) {
-        ctx.save()
-        ctx.strokeStyle = "rgba(56,189,248,0.18)"
-        ctx.lineWidth = Math.max(8 / zoom, 2)
-        ctx.lineCap = "round"
-        ctx.lineJoin = "round"
-        ctx.beginPath()
-        ctx.moveTo(canvasPoints[0].x, canvasPoints[0].y)
-        for (let i = 1; i < canvasPoints.length; i++) ctx.lineTo(canvasPoints[i].x, canvasPoints[i].y)
-        ctx.stroke()
-        ctx.restore()
-        ctx.strokeStyle = accent
-        ctx.lineCap = "round"
-        ctx.lineJoin = "round"
-        ctx.beginPath()
-        ctx.moveTo(canvasPoints[0].x, canvasPoints[0].y)
-        for (let i = 1; i < canvasPoints.length; i++) ctx.lineTo(canvasPoints[i].x, canvasPoints[i].y)
-        ctx.stroke()
-        for (let i = 1; i < canvasPoints.length; i++) {
-          drawPathArrow(ctx, canvasPoints[i - 1], canvasPoints[i])
-        }
-        for (let index = 0; index < canvasPoints.length; index++) {
-          const point = canvasPoints[index]
-          const selected = controlState.selectedPathPointIndexes.includes(index)
-          drawRoundHandle(ctx, point.x, point.y, 5, selected ? selectedAccent : accent, selected)
-        }
-      }
-    } else if (state.filterId === "spin-blur") {
-      const center = percentToCanvasPoint({ x: numOverlay(state.params.centerX, 50), y: numOverlay(state.params.centerY, 50) }, activeDoc.width, activeDoc.height)
-      const radius = Math.min(activeDoc.width, activeDoc.height) * numOverlay(state.params.radius, 55) / 100 * 0.5
-      ctx.fillStyle = "rgba(56,189,248,0.08)"
-      ctx.beginPath()
-      ctx.arc(center.x, center.y, Math.max(1, radius), 0, Math.PI * 2)
-      ctx.fill()
-      ctx.strokeStyle = accent
-      ctx.beginPath()
-      ctx.arc(center.x, center.y, Math.max(1, radius), 0, Math.PI * 2)
-      ctx.stroke()
-      ctx.setLineDash([5 / zoom, 4 / zoom])
-      ctx.beginPath()
-      ctx.arc(center.x, center.y, Math.max(1, radius * 1.18), 0, Math.PI * 2)
-      ctx.stroke()
-      ctx.setLineDash([])
-      drawSpinSpokes(ctx, center, Math.max(1, radius))
-      const amount = numOverlay(state.params.amount, 28)
-      const amountHandle = {
-        x: center.x,
-        y: center.y - radius * Math.max(0.2, amount / 50),
-      }
-      ctx.strokeStyle = selectedAccent
-      ctx.beginPath()
-      ctx.moveTo(center.x, center.y)
-      ctx.lineTo(amountHandle.x, amountHandle.y)
-      ctx.stroke()
-      drawRoundHandle(ctx, center.x, center.y, 5, controlState.activeControl === "spin-center" ? selectedAccent : accent, controlState.activeControl === "spin-center")
-      drawRoundHandle(ctx, center.x + radius, center.y, 4, "#ffffff", controlState.activeControl === "spin-radius")
-      drawRoundHandle(ctx, amountHandle.x, amountHandle.y, 4, "#ffffff", controlState.activeControl === "spin-amount")
-      drawOverlayLabel(ctx, "radius", center.x + radius + 8 / zoom, center.y - 8 / zoom)
-      drawOverlayLabel(ctx, `${Math.round(amount)}deg`, amountHandle.x + 8 / zoom, amountHandle.y)
-    }
-
-    ctx.restore()
+    drawBlurGalleryOverlayCanvas(overlayRef.current, filterOverlayDocument(), visualZoomRef.current, state)
   }
 
   function drawLightingEffectsOverlay(state = lightingEffectsOverlay) {
-    const ov = overlayRef.current
-    if (!ov || !activeDoc) return
-    const ctx = ov.getContext("2d")
-    if (!ctx) return
-    ctx.clearRect(0, 0, ov.width, ov.height)
-    if (!state || state.docId !== activeDoc.id) return
-
-    const lights = parseLightingEffectsLights(String(state.params.lights ?? ""))
-    const controlState = getLightingEffectsControlState(state.params)
-    const zoom = Math.max(0.5, visualZoomRef.current)
-    const minDim = Math.max(1, Math.min(activeDoc.width, activeDoc.height))
-    const accent = "#fbbf24"
-    const secondary = "#38bdf8"
-
-    ctx.save()
-    ctx.lineWidth = Math.max(1, 1.5 / zoom)
-    ctx.shadowColor = "rgba(0,0,0,0.45)"
-    ctx.shadowBlur = 2 / zoom
-    for (let index = 0; index < lights.length; index++) {
-      const light = lights[index]
-      const selected = controlState.selectedLightIndex === index
-      const center = { x: light.x * activeDoc.width, y: light.y * activeDoc.height }
-      const radius = Math.max(1, light.radius * minDim)
-      const focusRadius = radius * 0.5 * light.focus
-      const amountHandle = { x: center.x, y: center.y - radius * Math.max(0.2, light.intensity * 0.5) }
-      const focusHandle = { x: center.x + focusRadius, y: center.y }
-      const radiusHandle = { x: center.x + radius, y: center.y }
-
-      ctx.save()
-      ctx.fillStyle = selected ? "rgba(251,191,36,0.08)" : "rgba(56,189,248,0.06)"
-      ctx.strokeStyle = selected ? accent : secondary
-      ctx.setLineDash([5 / zoom, 4 / zoom])
-      ctx.beginPath()
-      ctx.arc(center.x, center.y, radius, 0, Math.PI * 2)
-      ctx.fill()
-      ctx.stroke()
-      ctx.setLineDash([])
-      if (light.type === "spot") {
-        ctx.strokeStyle = "rgba(248,250,252,0.46)"
-        ctx.beginPath()
-        ctx.arc(center.x, center.y, Math.max(1, focusRadius), 0, Math.PI * 2)
-        ctx.stroke()
-      }
-      ctx.strokeStyle = "rgba(248,250,252,0.58)"
-      ctx.beginPath()
-      ctx.moveTo(center.x, center.y)
-      ctx.lineTo(amountHandle.x, amountHandle.y)
-      ctx.moveTo(center.x, center.y)
-      ctx.lineTo(radiusHandle.x, radiusHandle.y)
-      ctx.stroke()
-      ctx.restore()
-
-      drawRoundHandle(ctx, center.x, center.y, 5, selected ? accent : secondary, selected)
-      drawRoundHandle(ctx, radiusHandle.x, radiusHandle.y, 4, "#ffffff", controlState.activeControl === `light-radius:${index}`)
-      drawRoundHandle(ctx, focusHandle.x, focusHandle.y, 4, "#ffffff", controlState.activeControl === `light-focus:${index}`)
-      drawRoundHandle(ctx, amountHandle.x, amountHandle.y, 4, "#ffffff", controlState.activeControl === `light-intensity:${index}`)
-      drawOverlayLabel(ctx, `${light.type} ${Math.round(light.intensity * 100)}%`, center.x + 8 / zoom, center.y - 10 / zoom)
-    }
-    ctx.restore()
+    drawLightingEffectsOverlayCanvas(overlayRef.current, filterOverlayDocument(), visualZoomRef.current, state)
   }
 
   drawBlurGalleryOverlayRef.current = drawBlurGalleryOverlay
@@ -3578,144 +3341,6 @@ export function CanvasView() {
       color: rgbaToCss(step.paintColor),
       opacityMultiplier: step.depositAlpha,
     }
-  }
-
-  function drawRoundHandle(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, fill = "#38bdf8", selected = false) {
-    const zoom = Math.max(0.5, visualZoomRef.current)
-    ctx.save()
-    if (selected) {
-      ctx.fillStyle = "rgba(251,191,36,0.22)"
-      ctx.beginPath()
-      ctx.arc(x, y, (radius + 5) / zoom, 0, Math.PI * 2)
-      ctx.fill()
-    }
-    ctx.fillStyle = fill
-    ctx.strokeStyle = "#0f172a"
-    ctx.lineWidth = Math.max(1, 1 / zoom)
-    ctx.beginPath()
-    ctx.arc(x, y, radius / zoom, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.stroke()
-    if (selected) {
-      ctx.strokeStyle = "#fbbf24"
-      ctx.lineWidth = Math.max(1, 1.5 / zoom)
-      ctx.beginPath()
-      ctx.arc(x, y, (radius + 2) / zoom, 0, Math.PI * 2)
-      ctx.stroke()
-    }
-    ctx.restore()
-  }
-
-  function drawOverlayLabel(ctx: CanvasRenderingContext2D, label: string, x: number, y: number) {
-    const zoom = Math.max(0.5, visualZoomRef.current)
-    const fontSize = Math.max(10, 11 / zoom)
-    ctx.save()
-    ctx.shadowBlur = 0
-    ctx.font = `${fontSize}px sans-serif`
-    const metrics = ctx.measureText(label)
-    const padX = 4 / zoom
-    const padY = 3 / zoom
-    ctx.fillStyle = "rgba(15,23,42,0.82)"
-    ctx.strokeStyle = "rgba(255,255,255,0.28)"
-    ctx.lineWidth = Math.max(1, 1 / zoom)
-    ctx.beginPath()
-    ctx.roundRect(x - padX, y - fontSize + padY, metrics.width + padX * 2, fontSize + padY * 2, 3 / zoom)
-    ctx.fill()
-    ctx.stroke()
-    ctx.fillStyle = "#f8fafc"
-    ctx.fillText(label, x, y)
-    ctx.restore()
-  }
-
-  function drawTiltBand(
-    ctx: CanvasRenderingContext2D,
-    center: { x: number; y: number },
-    tangent: { x: number; y: number },
-    normal: { x: number; y: number },
-    offset: number,
-    width: number,
-    length: number,
-    color: string,
-  ) {
-    ctx.save()
-    ctx.strokeStyle = color
-    ctx.lineWidth = Math.max(1, width)
-    ctx.beginPath()
-    const x = center.x + normal.x * offset
-    const y = center.y + normal.y * offset
-    ctx.moveTo(x - tangent.x * length, y - tangent.y * length)
-    ctx.lineTo(x + tangent.x * length, y + tangent.y * length)
-    ctx.stroke()
-    ctx.restore()
-  }
-
-  function drawTiltLine(
-    ctx: CanvasRenderingContext2D,
-    center: { x: number; y: number },
-    tangent: { x: number; y: number },
-    normal: { x: number; y: number },
-    offset: number,
-    length: number,
-    dashed: boolean,
-  ) {
-    const zoom = Math.max(0.5, visualZoomRef.current)
-    ctx.save()
-    ctx.strokeStyle = dashed ? "rgba(125,211,252,0.92)" : "#22c55e"
-    ctx.lineWidth = dashed ? Math.max(1, 1.25 / zoom) : Math.max(1.25, 1.75 / zoom)
-    ctx.setLineDash(dashed ? [5 / zoom, 5 / zoom] : [])
-    const x = center.x + normal.x * offset
-    const y = center.y + normal.y * offset
-    ctx.beginPath()
-    ctx.moveTo(x - tangent.x * length, y - tangent.y * length)
-    ctx.lineTo(x + tangent.x * length, y + tangent.y * length)
-    ctx.stroke()
-    ctx.restore()
-  }
-
-  function drawPathArrow(ctx: CanvasRenderingContext2D, from: { x: number; y: number }, to: { x: number; y: number }) {
-    const zoom = Math.max(0.5, visualZoomRef.current)
-    const dx = to.x - from.x
-    const dy = to.y - from.y
-    const length = Math.hypot(dx, dy)
-    if (length < 1) return
-    const ux = dx / length
-    const uy = dy / length
-    const mid = { x: from.x + dx * 0.55, y: from.y + dy * 0.55 }
-    const size = 7 / zoom
-    ctx.save()
-    ctx.fillStyle = "#f8fafc"
-    ctx.strokeStyle = "#0f172a"
-    ctx.lineWidth = Math.max(1, 1 / zoom)
-    ctx.beginPath()
-    ctx.moveTo(mid.x + ux * size, mid.y + uy * size)
-    ctx.lineTo(mid.x - ux * size * 0.65 - uy * size * 0.55, mid.y - uy * size * 0.65 + ux * size * 0.55)
-    ctx.lineTo(mid.x - ux * size * 0.65 + uy * size * 0.55, mid.y - uy * size * 0.65 - ux * size * 0.55)
-    ctx.closePath()
-    ctx.fill()
-    ctx.stroke()
-    ctx.restore()
-  }
-
-  function drawSpinSpokes(ctx: CanvasRenderingContext2D, center: { x: number; y: number }, radius: number) {
-    const zoom = Math.max(0.5, visualZoomRef.current)
-    ctx.save()
-    ctx.strokeStyle = "rgba(248,250,252,0.52)"
-    ctx.lineWidth = Math.max(1, 1 / zoom)
-    for (let i = 0; i < 8; i++) {
-      const angle = (i / 8) * Math.PI * 2
-      const inner = radius * 0.18
-      const outer = radius * 0.92
-      ctx.beginPath()
-      ctx.moveTo(center.x + Math.cos(angle) * inner, center.y + Math.sin(angle) * inner)
-      ctx.lineTo(center.x + Math.cos(angle) * outer, center.y + Math.sin(angle) * outer)
-      ctx.stroke()
-    }
-    ctx.restore()
-  }
-
-  function numOverlay(value: BlurGalleryParams[string], fallback: number) {
-    const parsed = Number(value)
-    return Number.isFinite(parsed) ? parsed : fallback
   }
 
   /* ---- pointer state ---- */
