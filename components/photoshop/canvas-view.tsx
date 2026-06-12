@@ -35,6 +35,7 @@ import {
   resolveColorReplacementPixel,
   resolveErodibleTipSimulation,
   resolveMixerReservoirStep,
+  type BrushDynamicsInput,
   type BrushPointerSample,
   type BrushRgba,
   type BrushTipSimulation,
@@ -161,6 +162,11 @@ import {
   drawBlurGalleryOverlayCanvas,
   drawLightingEffectsOverlayCanvas,
 } from "./canvas-filter-overlays"
+import {
+  applyCanvasBrushColorDynamics,
+  applyCanvasBrushShapeDynamics,
+  applyCanvasBrushTransfer,
+} from "./canvas-brush-dynamics"
 
 const ZOOM_COMMIT_IDLE_MS = 420
 
@@ -209,15 +215,7 @@ import { SelectionTransformOverlay } from "./selection-transform-overlay"
 import { applyThreeDMaterialDrop } from "./three-d-video-engine"
 import type { GradientStop, Layer, PathPoint, PathProps, PsDocument, Selection } from "./types"
 
-interface BrushInput {
-  pressure: number
-  tiltX: number
-  tiltY: number
-  twist: number
-  velocity: number
-  fade: number
-  strokeAngle: number
-}
+type BrushInput = BrushDynamicsInput
 
 interface DirtyRect {
   x: number
@@ -266,8 +264,6 @@ interface StrokeCompositeState {
   opacity: number
   flow: number
 }
-
-type BrushInputControl = "off" | "pressure" | "tilt" | "velocity" | "fade" | "random"
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v))
 
@@ -1221,165 +1217,6 @@ export function CanvasView() {
     strokeCompositeRef.current = null
   }
 
-  /* ---- brush dynamics helpers ---- */
-
-  /** Convert hex to HSL (0-360, 0-100, 0-100) */
-  function hexToHsl(hex: string): [number, number, number] {
-    const r = parseInt(hex.slice(1, 3), 16) / 255
-    const g = parseInt(hex.slice(3, 5), 16) / 255
-    const b = parseInt(hex.slice(5, 7), 16) / 255
-    const max = Math.max(r, g, b), min = Math.min(r, g, b)
-    const l = (max + min) / 2
-    if (max === min) return [0, 0, l * 100]
-    const d = max - min
-    const s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
-    let h = 0
-    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6
-    else if (max === g) h = ((b - r) / d + 2) / 6
-    else h = ((r - g) / d + 4) / 6
-    return [h * 360, s * 100, l * 100]
-  }
-
-  /** Convert HSL to hex */
-  function hslToHex(h: number, s: number, l: number): string {
-    h = ((h % 360) + 360) % 360
-    const s1 = Math.max(0, Math.min(100, s)) / 100
-    const l1 = Math.max(0, Math.min(100, l)) / 100
-    const a = s1 * Math.min(l1, 1 - l1)
-    const f = (n: number) => {
-      const k = (n + h / 30) % 12
-      const color = l1 - a * Math.max(Math.min(k - 3, 9 - k, 1), -1)
-      return Math.round(color * 255).toString(16).padStart(2, "0")
-    }
-    return `#${f(0)}${f(8)}${f(4)}`
-  }
-
-  /** Apply color dynamics to get the per-dab color */
-  function applyColorDynamics(fg: string, bg: string): string {
-    let color = fg
-    // FG/BG jitter: randomly swap to background color
-    if (brush.fgBgJitter && brush.fgBgJitter > 0) {
-      if (Math.random() * 100 < brush.fgBgJitter) color = bg
-    }
-    // HSL jitter
-    const hj = brush.hueJitter ?? 0
-    const sj = brush.satJitter ?? 0
-    const bj = brush.brightJitter ?? 0
-    if (hj > 0 || sj > 0 || bj > 0) {
-      const [h, s, l] = hexToHsl(color)
-      const nh = h + (Math.random() - 0.5) * 2 * (hj / 100) * 360
-      const ns = s + (Math.random() - 0.5) * 2 * (sj / 100) * 100
-      const nl = l + (Math.random() - 0.5) * 2 * (bj / 100) * 100
-      color = hslToHex(nh, ns, nl)
-    }
-    if (brush.purity) {
-      const [h, s, l] = hexToHsl(color)
-      color = hslToHex(h, Math.max(0, Math.min(100, s + brush.purity)), l)
-    }
-    return color
-  }
-
-  function controlValue(control: BrushInputControl | undefined, input: BrushInput) {
-    switch (control) {
-      case "pressure":
-        return clamp01(input.pressure)
-      case "tilt":
-        return clamp01(Math.hypot(input.tiltX + (brush.pose?.tiltX ?? 0), input.tiltY + (brush.pose?.tiltY ?? 0)) / 90)
-      case "velocity":
-        return clamp01(input.velocity / 80)
-      case "fade":
-        return clamp01(1 - input.fade / 220)
-      case "random":
-        return Math.random()
-      default:
-        return 1
-    }
-  }
-
-  function brushSimulationSeed(input: BrushInput, salt = 0) {
-    return Math.max(1, Math.round((input.fade + 1) * 101 + brush.size * 17 + salt))
-  }
-
-  function applyShapeDynamics(input: BrushInput): { dabSize: number; dabAngle: number; dabRoundness: number; tipState?: BrushTipSimulation } {
-    const minDiam = (brush.minDiameter ?? 0) / 100
-    let sizeScale = 1
-    if (brush.sizeControl && brush.sizeControl !== "off") {
-      const v = controlValue(brush.sizeControl, input)
-      sizeScale = minDiam + (1 - minDiam) * v
-    }
-    if (brush.sizeJitter && brush.sizeJitter > 0) {
-      const jitter = (Math.random() * brush.sizeJitter) / 100
-      sizeScale *= 1 - jitter * (1 - minDiam)
-    }
-    let dabSize = Math.max(1, brush.size * sizeScale)
-
-    const poseRotation = ((brush.pose?.rotation ?? 0) + (brush.pose?.stylusAngle ?? 0) + input.twist) * (Math.PI / 180)
-    let dabAngle = poseRotation
-    if (brush.angleControl === "tilt") {
-      dabAngle += Math.atan2(input.tiltY + (brush.pose?.tiltY ?? 0), input.tiltX + (brush.pose?.tiltX ?? 0))
-    } else if (brush.angleControl === "velocity") {
-      dabAngle += input.strokeAngle
-    } else if (brush.angleControl && brush.angleControl !== "off") {
-      dabAngle += (controlValue(brush.angleControl, input) - 0.5) * 2 * ((brush.angleJitter ?? 0) * Math.PI / 180)
-    }
-    if (brush.angleJitter && brush.angleJitter > 0) {
-      dabAngle += (Math.random() - 0.5) * 2 * brush.angleJitter * (Math.PI / 180)
-    }
-
-    let dabRoundness = 1
-    if (brush.roundnessControl && brush.roundnessControl !== "off") {
-      dabRoundness = 0.1 + controlValue(brush.roundnessControl, input) * 0.9
-    }
-    if (brush.roundnessJitter && brush.roundnessJitter > 0) {
-      dabRoundness *= 1 - (Math.random() * brush.roundnessJitter) / 100
-    }
-    dabRoundness = Math.max(0.08, Math.min(1, dabRoundness))
-
-    if (brush.flipX && Math.random() > 0.5) dabAngle += Math.PI
-    if (brush.flipY && Math.random() > 0.5) dabSize *= 0.96
-
-    const tipState =
-      brush.tipShape === "erodible"
-        ? resolveErodibleTipSimulation(brush, input, { seed: brushSimulationSeed(input, 7) })
-        : brush.tipShape === "bristle"
-          ? resolveBristleTipSimulation(brush, input, { seed: brushSimulationSeed(input, 13) })
-          : undefined
-    if (tipState?.kind === "erodible") {
-      dabSize *= tipState.sizeScale
-      dabAngle += tipState.angle
-      dabRoundness *= tipState.roundnessScale
-    } else if (tipState?.kind === "bristle") {
-      dabRoundness *= 0.72 + tipState.coverage * 0.2
-    }
-    dabRoundness = Math.max(0.08, Math.min(1, dabRoundness))
-
-    return { dabSize, dabAngle, dabRoundness, tipState }
-  }
-
-  function applyTransfer(input: BrushInput): { opaMul: number; flowMul: number } {
-    let opaMul = brush.opacityControl && brush.opacityControl !== "off" ? controlValue(brush.opacityControl, input) : 1
-    let flowMul = brush.flowControl && brush.flowControl !== "off" ? controlValue(brush.flowControl, input) : 1
-    if (brush.opacityJitter && brush.opacityJitter > 0) {
-      opaMul *= 1 - (Math.random() * brush.opacityJitter) / 100
-    }
-    if (brush.flowJitter && brush.flowJitter > 0) {
-      flowMul *= 1 - (Math.random() * brush.flowJitter) / 100
-    }
-    const posePressure = brush.pose?.pressure
-    if (posePressure !== undefined && (!brush.opacityControl || brush.opacityControl === "off")) {
-      opaMul *= Math.max(0.05, posePressure / 100)
-    }
-    if (brush.tipShape === "erodible") {
-      const tip = resolveErodibleTipSimulation(brush, input, { seed: brushSimulationSeed(input, 17) })
-      opaMul *= tip.alphaScale
-    } else if (brush.tipShape === "bristle") {
-      const tip = resolveBristleTipSimulation(brush, input, { seed: brushSimulationSeed(input, 19) })
-      opaMul *= 0.55 + tip.coverage * 0.45
-      flowMul *= 0.72 + tip.wetness * 0.28
-    }
-    return { opaMul: clamp01(opaMul), flowMul: clamp01(flowMul) }
-  }
-
   function stamp(
     ctx: CanvasRenderingContext2D,
     x: number,
@@ -1389,8 +1226,8 @@ export function CanvasView() {
     options: StampOptions = {},
   ) {
     if (!activeDoc?.quickMask && !withinSelection({ x, y })) return
-    const { dabSize, dabAngle, dabRoundness, tipState } = applyShapeDynamics(input)
-    const { opaMul, flowMul } = applyTransfer(input)
+    const { dabSize, dabAngle, dabRoundness, tipState } = applyCanvasBrushShapeDynamics(brush, input)
+    const { opaMul, flowMul } = applyCanvasBrushTransfer(brush, input)
     const isBuffered = options.includeBrushOpacity === false
     // When painting to the stroke buffer, stamp at full alpha so overlapping
     // dabs don't accumulate and show individual circles.  The combined
@@ -1398,7 +1235,7 @@ export function CanvasView() {
     const opacity = isBuffered ? 1 : clamp01((brush.opacity / 100) * (brush.flow / 100) * opaMul * flowMul * (options.opacityMultiplier ?? 1))
     const isErase = tool === "eraser" || tool === "background-eraser" || tool === "magic-eraser"
     const compositeAsErase = activeDoc?.quickMask ? quickMaskPaintsSubtract() : isErase && !options.drawEraserMask
-    const dabColor = isErase && options.drawEraserMask ? "#000000" : activeDoc?.quickMask ? "#ffffff" : applyColorDynamics(color, background)
+    const dabColor = isErase && options.drawEraserMask ? "#000000" : activeDoc?.quickMask ? "#ffffff" : applyCanvasBrushColorDynamics(brush, color, background)
     if (tool === "pattern-stamp") {
       drawPatternStampDab(ctx, x, y, dabSize, dabAngle, dabRoundness, opacity)
       if (options.enforceTransparencyLock !== false) enforceTransparencyLock(ctx)
@@ -1991,8 +1828,8 @@ export function CanvasView() {
   function selectiveEraserStamp(ctx: CanvasRenderingContext2D, x: number, y: number, input: BrushInput) {
     if (!activeLayer || !activeDoc || activeDoc.quickMask) return
     const sourceCanvas = eraserSourceRef.current ?? activeLayer.canvas
-    const { dabSize } = applyShapeDynamics(input)
-    const { opaMul, flowMul } = applyTransfer(input)
+    const { dabSize } = applyCanvasBrushShapeDynamics(brush, input)
+    const { opaMul, flowMul } = applyCanvasBrushTransfer(brush, input)
     const r = Math.max(1, Math.floor(dabSize / 2))
     const x0 = Math.max(0, Math.floor(x - r))
     const y0 = Math.max(0, Math.floor(y - r))
