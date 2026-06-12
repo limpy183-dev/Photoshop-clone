@@ -36,6 +36,11 @@ import {
   parseNumber,
   rgbToHsl,
 } from "../components/photoshop/filters/pixel-helpers"
+import {
+  monotoneCurveLut,
+  parseCurvePoints,
+  pseudoDither,
+} from "../components/photoshop/filters/curve-helpers"
 
 class TestImageData {
   data: Uint8ClampedArray
@@ -152,4 +157,20 @@ test("pixel helpers clone image data and preserve RGB/HSL conversion", () => {
   expect(rgb.r).toBeCloseTo(64, 10)
   expect(rgb.g).toBeCloseTo(128, 10)
   expect(rgb.b).toBeCloseTo(192, 10)
+})
+
+test("curve helpers preserve parsing, interpolation, and dithering", () => {
+  expect(parseCurvePoints("255,240;bad;128,160;-4,8")).toEqual([
+    [0, 8],
+    [128, 160],
+    [255, 240],
+  ])
+  expect(parseCurvePoints(42, [[0, 5], [255, 250]])).toEqual([[0, 5], [255, 250]])
+
+  const identity = monotoneCurveLut([[0, 0], [255, 255]])
+  expect(Array.from(identity)).toEqual(Array.from({ length: 256 }, (_, value) => value))
+
+  expect(pseudoDither(0)).toBeCloseTo(0.9216903898159217, 14)
+  expect(pseudoDither(1)).toBeCloseTo(0.05721816934965318, 14)
+  expect(pseudoDither(17)).toBeCloseTo(0.6441862510764622, 14)
 })
