@@ -139,7 +139,6 @@ import {
   canvasIdFor,
   invalidateMaskAlphaCache,
   layerStyleCacheKey,
-  maskAlphaEpoch,
   pathFingerprint,
   smartFilterCacheKey,
 } from "./canvas-compositor-cache"
@@ -150,6 +149,14 @@ import {
   drawLayerForCompositorContext,
   renderLayerSourceForCompositor,
 } from "./canvas-compositor"
+import {
+  alphaBounds,
+  applySelectionMaskToCanvas,
+  autoPickLayer,
+  clipToSelection,
+  createRemoveMask,
+  selectBackgroundMaskFromImage,
+} from "./canvas-selection-helpers"
 
 const ZOOM_COMMIT_IDLE_MS = 420
 
@@ -182,7 +189,6 @@ import {
   featherMask,
   magneticLassoSnap,
   magneticLassoTrace,
-  selectBackgroundMask,
   selectSubjectMask,
   selectSkyMask,
   objectSelectionMask,
@@ -7137,245 +7143,6 @@ export function CanvasView() {
 
 /* ============================== helpers ============================== */
 
-function _createSelectSubjectMask(width: number, height: number): ImageData {
-  // Create a heuristic-based selection for subject detection
-  // In a real implementation, this would use an actual AI model
-  const imageData = new ImageData(width, height)
-  const data = imageData.data
-
-  // Create a radial gradient selection centered in the image
-  const centerX = width / 2
-  const centerY = height / 2
-  const radiusX = width * 0.4
-  const radiusY = height * 0.4
-
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const i = (y * width + x) * 4
-
-      // Calculate normalized distance from center
-      const dx = (x - centerX) / radiusX
-      const dy = (y - centerY) / radiusY
-      const distance = Math.sqrt(dx * dx + dy * dy)
-
-      // Convert distance to alpha (closer to center = higher alpha)
-      let alpha = 0
-      if (distance <= 1) {
-        // Smooth falloff using cosine
-        alpha = Math.floor(255 * (0.5 + 0.5 * Math.cos(distance * Math.PI)))
-      }
-
-      data[i] = 255     // R
-      data[i + 1] = 255 // G
-      data[i + 2] = 255 // B
-      data[i + 3] = alpha // A
-    }
-  }
-
-  return imageData
-}
-
-function _createSelectSkyMask(width: number, height: number): ImageData {
-  // Implement a heuristic-based sky detection algorithm
-  // This provides effective sky selection for many common image types
-  const imageData = new ImageData(width, height)
-  const data = imageData.data
-
-  // Create a selection that's stronger at the top (where sky usually is)
-  // and gradually decreases towards the bottom
-  const _skyHeight = height * 0.6 // Sky typically occupies the top portion
-
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const i = (y * width + x) * 4
-
-      // Calculate normalized vertical position (0 at top, 1 at bottom)
-      const normalizedY = y / height
-
-      // Create a gradient that's strong at the top and fades towards the bottom
-      let alpha = 0
-      if (normalizedY <= 0.3) {
-        // Strong sky presence in the top 30%
-        alpha = 255
-      } else if (normalizedY <= 0.8) {
-        // Fade out between 30% and 80%
-        const fadeFactor = 1 - ((normalizedY - 0.3) / 0.5)
-        alpha = Math.floor(255 * fadeFactor)
-      }
-      // Below 80%, alpha remains 0 (no sky)
-
-      data[i] = 135     // R (sky blue)
-      data[i + 1] = 206 // G (sky blue)
-      data[i + 2] = 250 // B (sky blue)
-      data[i + 3] = alpha // A
-    }
-  }
-
-  return imageData
-}
-
-function _createSelectBackgroundMask(width: number, height: number): ImageData {
-  // Implement a heuristic-based background detection algorithm
-  // This provides effective background selection for many common image types
-  const imageData = new ImageData(width, height)
-  const data = imageData.data
-
-  // Create a selection that's stronger at the bottom (where background usually is)
-  // and gradually decreases towards the top
-  const _backgroundStart = height * 0.4 // Background typically starts from the middle going down
-
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const i = (y * width + x) * 4
-
-      // Calculate normalized vertical position (0 at top, 1 at bottom)
-      const normalizedY = y / height
-
-      // Create a gradient that's strong at the bottom and fades towards the top
-      let alpha = 0
-      if (normalizedY >= 0.7) {
-        // Strong background presence in the bottom 30%
-        alpha = 255
-      } else if (normalizedY >= 0.4) {
-        // Fade in between 40% and 70%
-        const fadeFactor = (normalizedY - 0.4) / 0.3
-        alpha = Math.floor(255 * fadeFactor)
-      }
-      // Above 40%, alpha remains 0 (no background)
-
-      // Use a neutral gray color for background selection
-      data[i] = 128     // R (gray)
-      data[i + 1] = 128 // G (gray)
-      data[i + 2] = 128 // B (gray)
-      data[i + 3] = alpha // A
-    }
-  }
-
-  return imageData
-}
-
-function createRemoveMask(points: { x: number; y: number }[], brushSize: number, width: number, height: number): ImageData {
-  // Create a mask from the stroked points for the remove tool
-  const mask = new ImageData(width, height)
-  const data = mask.data
-
-  // Clear the mask (all transparent)
-  for (let i = 0; i < data.length; i += 4) {
-    data[i + 3] = 0 // alpha = 0
-  }
-
-  if (points.length === 0) return mask
-
-  const radius = brushSize / 2
-
-  // For each point, draw a circle in the mask
-  for (const pt of points) {
-    const x = Math.max(0, Math.min(width - 1, Math.floor(pt.x)))
-    const y = Math.max(0, Math.min(height - 1, Math.floor(pt.y)))
-
-    // Draw a filled circle
-    for (let dy = -radius; dy <= radius; dy++) {
-      for (let dx = -radius; dx <= radius; dx++) {
-        const px = x + dx
-        const py = y + dy
-
-        if (px >= 0 && px < width && py >= 0 && py < height) {
-          const distance = Math.sqrt(dx * dx + dy * dy)
-          if (distance <= radius) {
-            const i = (py * width + px) * 4
-            data[i + 3] = 255 // Set alpha to fully opaque
-          }
-        }
-      }
-    }
-  }
-
-  return mask
-}
-
-function clipToSelection(ctx: CanvasRenderingContext2D, doc: PsDocument) {
-  const sel = doc.selection
-  if (!sel.bounds) return
-  if (sel.mask) {
-    // Use mask alpha as clip
-    ctx.save()
-    // Convert mask into a path is non-trivial; use destination-in mask later.
-    // Workaround: clip to bounding rect for simplicity, mask multiplies in compose.
-    ctx.beginPath()
-    ctx.rect(sel.bounds.x, sel.bounds.y, sel.bounds.w, sel.bounds.h)
-    ctx.clip()
-    return
-  }
-  ctx.beginPath()
-  if (sel.shape === "ellipse") {
-    ctx.ellipse(
-      sel.bounds.x + sel.bounds.w / 2,
-      sel.bounds.y + sel.bounds.h / 2,
-      sel.bounds.w / 2,
-      sel.bounds.h / 2,
-      0,
-      0,
-      Math.PI * 2,
-    )
-  } else {
-    ctx.rect(sel.bounds.x, sel.bounds.y, sel.bounds.w, sel.bounds.h)
-  }
-  ctx.clip()
-}
-
-function autoPickLayer(
-  doc: PsDocument,
-  p: { x: number; y: number },
-): Layer | null {
-  for (let i = doc.layers.length - 1; i >= 0; i--) {
-    const l = doc.layers[i] as Layer
-    if (!l.visible || l.kind === "group") continue
-    if (typeof l.canvas.getContext !== "function") continue
-    const ctx = l.canvas.getContext("2d")!
-    const px = ctx.getImageData(Math.floor(p.x), Math.floor(p.y), 1, 1).data
-    if (px[3] > 8) return l
-  }
-  return null
-}
-
-type AlphaBoundsRect = { x: number; y: number; w: number; h: number } | null
-const _alphaBoundsCache = new WeakMap<HTMLCanvasElement, { epoch: number; width: number; height: number; result: AlphaBoundsRect }>()
-function alphaBounds(canvas: HTMLCanvasElement): AlphaBoundsRect {
-  const ctx = canvas.getContext("2d")
-  if (!ctx) return null
-  const w = canvas.width
-  const h = canvas.height
-  const cached = _alphaBoundsCache.get(canvas)
-  if (cached && cached.epoch === maskAlphaEpoch && cached.width === w && cached.height === h) {
-    return cached.result
-  }
-  const img = ctx.getImageData(0, 0, w, h)
-  const data = img.data
-  let minX = w
-  let minY = h
-  let maxX = 0
-  let maxY = 0
-  let hasPixels = false
-  // Row-major scan with strided alpha lookups; unrolled to minimise inner-loop overhead.
-  for (let y = 0; y < h; y++) {
-    let rowStart = y * w * 4 + 3
-    for (let x = 0; x < w; x++, rowStart += 4) {
-      if (data[rowStart] > 8) {
-        hasPixels = true
-        if (x < minX) minX = x
-        if (y < minY) minY = y
-        if (x > maxX) maxX = x
-        if (y > maxY) maxY = y
-      }
-    }
-  }
-  const result: AlphaBoundsRect = hasPixels
-    ? { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 }
-    : null
-  _alphaBoundsCache.set(canvas, { epoch: maskAlphaEpoch, width: w, height: h, result })
-  return result
-}
-
 function drawFramePlaceholder(
   ctx: CanvasRenderingContext2D,
   frame: { shape: "rect" | "ellipse"; x: number; y: number; w: number; h: number },
@@ -7436,19 +7203,4 @@ function drawSlicePreview(ctx: CanvasRenderingContext2D, x: number, y: number, w
   ctx.fillStyle = "rgba(249, 115, 22, 0.14)"
   ctx.fillRect(x, y, w, h)
   ctx.restore()
-}
-
-function applySelectionMaskToCanvas(canvas: HTMLCanvasElement, doc: PsDocument) {
-  const mask = selectionToMaskCanvas(doc.width, doc.height, doc.selection)
-  if (!mask) return
-  const ctx = canvas.getContext("2d")
-  if (!ctx) return
-  ctx.save()
-  ctx.globalCompositeOperation = "destination-in"
-  ctx.drawImage(mask, 0, 0)
-  ctx.restore()
-}
-
-function selectBackgroundMaskFromImage(canvas: HTMLCanvasElement, tolerance: number) {
-  return selectBackgroundMask(canvas, tolerance)
 }

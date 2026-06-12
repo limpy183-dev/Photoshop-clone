@@ -50,6 +50,7 @@ class FixtureCanvas {
       measureText: (text: string) => ({ width: text.length * 6 }),
       fillText: () => {},
       strokeText: () => {},
+      createImageData: (width: number, height: number) => new FixtureImageData(width, height),
       getImageData: () => this.imageData ?? ({ data: new Uint8ClampedArray(this.width * this.height * 4), width: this.width, height: this.height }),
       putImageData: (image: ImageData) => {
         this.imageData = image
