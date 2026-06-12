@@ -25,6 +25,17 @@ import {
   solarize,
   unsharpMask,
 } from "../components/photoshop/filters/basic-algorithms"
+import {
+  clamp01,
+  clamp8,
+  cloneImageData,
+  hslToRgb,
+  luma,
+  numberParam,
+  parseBool,
+  parseNumber,
+  rgbToHsl,
+} from "../components/photoshop/filters/pixel-helpers"
 
 class TestImageData {
   data: Uint8ClampedArray
@@ -108,4 +119,37 @@ test("basic algorithm module matches registry filter output", () => {
     expect(filter, item.id).toBeTruthy()
     expectSamePixels(item.direct(), filter!.apply(src, item.params))
   }
+})
+
+test("pixel helpers preserve the registry's numeric behavior", () => {
+  expect(clamp8(-1)).toBe(0)
+  expect(clamp8(12.5)).toBe(12.5)
+  expect(clamp8(300)).toBe(255)
+  expect(clamp01(-0.1)).toBe(0)
+  expect(clamp01(0.25)).toBe(0.25)
+  expect(clamp01(1.1)).toBe(1)
+  expect(luma(100, 150, 200)).toBeCloseTo(140.75, 10)
+  expect(numberParam("12.5", 3)).toBe(12.5)
+  expect(numberParam("not-a-number", 3)).toBe(3)
+  expect(parseBool(true, false)).toBe(true)
+  expect(parseBool("true", false)).toBe(false)
+  expect(parseNumber("9.5", 2)).toBe(9.5)
+  expect(parseNumber("bad", 2)).toBe(2)
+})
+
+test("pixel helpers clone image data and preserve RGB/HSL conversion", () => {
+  const src = fixture3x3()
+  const copy = cloneImageData(src)
+  expect(copy).not.toBe(src)
+  expect(copy.data).not.toBe(src.data)
+  expectSamePixels(copy, src)
+
+  const hsl = rgbToHsl(64, 128, 192)
+  expect(hsl.h).toBeCloseTo(0.5833333333333334, 12)
+  expect(hsl.s).toBeCloseTo(0.5039370078740157, 12)
+  expect(hsl.l).toBeCloseTo(0.5019607843137255, 12)
+  const rgb = hslToRgb(hsl.h, hsl.s, hsl.l)
+  expect(rgb.r).toBeCloseTo(64, 10)
+  expect(rgb.g).toBeCloseTo(128, 10)
+  expect(rgb.b).toBeCloseTo(192, 10)
 })
