@@ -78,6 +78,12 @@ import {
   parseAdaptiveConstraints,
   vanishingPoint,
 } from "../components/photoshop/filters/distortion-algorithms"
+import {
+  renderClouds,
+  renderFibers,
+  renderLensFlare,
+  skyReplacement,
+} from "../components/photoshop/filters/render-algorithms"
 
 class TestImageData {
   data: Uint8ClampedArray
@@ -442,6 +448,47 @@ test("distortion module matches registry filter output", () => {
       id: "vanishing-point",
       params: { horizon: 42, left: -30, right: 25, depth: 40, grid: true, ...planeOffsets },
       direct: () => vanishingPoint(src, 42, -30, 25, 40, true, planeOffsets),
+    },
+  ]
+
+  for (const item of cases) {
+    const filter = facadeGetFilter(item.id)
+    expect(filter, item.id).toBeTruthy()
+    expectSamePixels(item.direct(), filter!.apply(src, item.params))
+  }
+})
+
+test("procedural render module matches registry filter output", () => {
+  const src = fixture3x3()
+  const cases: Array<{
+    id: string
+    params: Record<string, number | string | boolean>
+    direct: () => ImageData
+  }> = [
+    {
+      id: "sky-replacement",
+      params: { horizon: 60, tolerance: 55, blend: 75, warmth: 15, seed: 7 },
+      direct: () => skyReplacement(src, 60, 55, 75, 15, 7),
+    },
+    {
+      id: "clouds",
+      params: { scale: 45, seed: 12 },
+      direct: () => renderClouds(src, 45, 12, false),
+    },
+    {
+      id: "difference-clouds",
+      params: { scale: 70, seed: 9 },
+      direct: () => renderClouds(src, 70, 9, true),
+    },
+    {
+      id: "fibers",
+      params: { variance: 18, strength: 22, seed: 5 },
+      direct: () => renderFibers(src, 18, 22, 5),
+    },
+    {
+      id: "lens-flare",
+      params: { brightness: 130, cx: 35, cy: 65, lens: "105mm-prime" },
+      direct: () => renderLensFlare(src, 130, 35, 65, "105mm-prime"),
     },
   ]
 
