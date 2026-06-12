@@ -1,10 +1,7 @@
-function clone(src: ImageData): ImageData {
-  return new ImageData(new Uint8ClampedArray(src.data), src.width, src.height)
-}
-
-function clamp8(v: number) {
-  return v < 0 ? 0 : v > 255 ? 255 : v
-}
+import {
+  clamp8,
+  cloneImageData as clone,
+} from "./pixel-helpers"
 
 /** Stack box blur - fast, separable, good Gaussian approximation. */
 export function boxBlur(src: ImageData, radius: number): ImageData {
