@@ -189,6 +189,7 @@ import {
   blurStamp,
   sharpenStamp,
   dodgeBurnStamp,
+  spongeStamp,
   SmudgeBuffer,
   paintBucketFill,
   polygonToMask,
@@ -2196,43 +2197,6 @@ export function CanvasView() {
       }
     }
     if (!renderBufferedStroke()) requestTileAwareStrokeRender()
-  }
-
-  function spongeStamp(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, strength: number) {
-    const r = Math.max(2, Math.floor(radius))
-    const sx = Math.max(0, Math.floor(x - r))
-    const sy = Math.max(0, Math.floor(y - r))
-    const sw = Math.min(ctx.canvas.width - sx, r * 2)
-    const sh = Math.min(ctx.canvas.height - sy, r * 2)
-    if (sw <= 0 || sh <= 0) return
-    const img = ctx.getImageData(sx, sy, sw, sh)
-    const data = img.data
-    const rSq = r * r
-    // Iterate per-row, derive the analytic horizontal extent of the circle for
-    // that scanline, then only touch pixels inside. Avoids ~21% wasted work on
-    // the corner squares vs. the original bounding-box loop and lets the inner
-    // loop branch-predict cleanly.
-    for (let py = 0; py < sh; py++) {
-      const dy = py - r
-      const dy2 = dy * dy
-      if (dy2 > rSq) continue
-      const halfW = Math.sqrt(rSq - dy2)
-      const pxStart = Math.max(0, Math.floor(r - halfW))
-      const pxEnd = Math.min(sw - 1, Math.ceil(r + halfW))
-      const rowStart = py * sw * 4
-      for (let px = pxStart; px <= pxEnd; px++) {
-        const i = rowStart + px * 4
-        if (data[i + 3] === 0) continue
-        const rr = data[i]
-        const gg = data[i + 1]
-        const bb = data[i + 2]
-        const lum = 0.299 * rr + 0.587 * gg + 0.114 * bb
-        data[i] = rr + (lum - rr) * strength
-        data[i + 1] = gg + (lum - gg) * strength
-        data[i + 2] = bb + (lum - bb) * strength
-      }
-    }
-    ctx.putImageData(img, sx, sy)
   }
 
   /* ---- gradient preview & commit ---- */
