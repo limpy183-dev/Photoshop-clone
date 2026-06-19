@@ -58,7 +58,7 @@ import {
   planWebGLCompositor,
 } from "./webgl-compositor"
 import { containsSelectionPoint, createSelectionHitTester, type SelectionHitTester } from "./selection-hit-testing"
-import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
+import { dispatchPhotoshopEvent } from "./events"
 import {
   applyBlurGalleryKeyboardCommand,
   beginBlurGalleryInteraction,
@@ -80,16 +80,12 @@ import {
   type LightingEffectsParams,
 } from "./lighting-effects-controls"
 import { normalizeAdvancedBlending } from "./layer-workflows"
-import {
-  DEFAULT_PREFERENCES,
-  calculatePrintSizeZoom,
-} from "./preferences-engine"
+import { DEFAULT_PREFERENCES } from "./preferences-engine"
 import { paintCanvasCursorOverlay, resolveCanvasCursorState } from "./cursor-overlay"
 import { buildRetouchingFeedbackModel } from "./retouch-feedback"
 import { buildEdgeAwareQuickSelectionMaskData } from "./algorithmic-operations"
 import { getLayerHighBitImage, highBitImageToSelectionSource, renderDocumentHighBitPreviewCanvas, syncHighBitLayerFromCanvasChange } from "./high-bit-document"
 import {
-  clampZoom,
   defaultCanvasRuntimePreferences,
   getEyedropperSampleSize,
   getFrameRuntimeOptions,
@@ -101,6 +97,7 @@ import {
   readCanvasRuntimePreferences,
   type CanvasRuntimePreferences,
 } from "./canvas-view-runtime"
+import { useCanvasViewportController } from "./canvas-viewport-controller"
 import {
   applyTransformContext,
   clampTransformSkew,
@@ -172,8 +169,6 @@ import {
   connectedEraserMask,
   localPatchGradient,
 } from "./canvas-eraser-helpers"
-
-const ZOOM_COMMIT_IDLE_MS = 420
 
 function textLayerPath(layer: Layer | null | undefined): PathProps | null {
   const points = layer?.text?.textPath
@@ -307,8 +302,6 @@ export function CanvasView() {
   const cursorRef = React.useRef<HTMLDivElement>(null)
   const cursorCanvasRef = React.useRef<HTMLCanvasElement>(null)
   const stageRef = React.useRef<HTMLDivElement>(null)
-  const panRef = React.useRef({ x: 0, y: 0 })
-  const [viewZoom, setViewZoom] = React.useState(activeDoc?.zoom ?? 1)
   const [blurGalleryOverlay, setBlurGalleryOverlay] = React.useState<{
     filterId: BlurGalleryFilterId
     params: BlurGalleryParams
@@ -322,11 +315,6 @@ export function CanvasView() {
   } | null>(null)
   const lightingEffectsDragRef = React.useRef<LightingEffectsDrag | null>(null)
   const drawLightingEffectsOverlayRef = React.useRef<(state?: typeof lightingEffectsOverlay) => void>(() => {})
-  const layoutZoomRef = React.useRef(activeDoc?.zoom ?? 1)
-  const visualZoomRef = React.useRef(activeDoc?.zoom ?? 1)
-  const pendingZoomRef = React.useRef<number | null>(null)
-  const zoomFrameRef = React.useRef<number | null>(null)
-  const zoomCommitTimerRef = React.useRef<number | null>(null)
 
   /* ---- canvas runtime preferences ---- */
   const [canvasPrefs, setCanvasPrefs] = React.useState<CanvasRuntimePreferences>(() => defaultCanvasRuntimePreferences())
@@ -351,6 +339,25 @@ export function CanvasView() {
     const frame = window.requestAnimationFrame(() => setCustomCursorReady(true))
     return () => window.cancelAnimationFrame(frame)
   }, [])
+
+  const commitViewportZoom = React.useCallback((zoom: number) => {
+    dispatch({ type: "set-zoom", zoom })
+  }, [dispatch])
+  const {
+    panRef,
+    viewZoom,
+    visualZoomRef,
+    applyStageTransform,
+    applyViewZoom,
+    onWheel,
+  } = useCanvasViewportController({
+    activeDoc,
+    canvasPrefs,
+    compositeRef,
+    overlayRef,
+    stageRef,
+    onCommitZoom: commitViewportZoom,
+  })
 
   const cloneSourceRef = React.useRef<{ sourceX: number; sourceY: number; destX?: number; destY?: number; layerId: string } | null>(null)
   const eraserSampleRef = React.useRef<{ r: number; g: number; b: number; a: number } | null>(null)
@@ -382,99 +389,6 @@ export function CanvasView() {
       if (mouseMoveCoalescerRef.current === coalescer) mouseMoveCoalescerRef.current = null
     }
   }, [])
-
-  const applyStageTransform = React.useCallback((transientScale = 1) => {
-    const stage = stageRef.current
-    if (!stage) return
-    const scale = Math.abs(transientScale - 1) > 0.0001 ? ` scale(${transientScale})` : ""
-    stage.style.transform = `translate(${panRef.current.x}px, ${panRef.current.y}px) rotate(${activeDoc?.rotation ?? 0}deg)${scale}`
-  }, [activeDoc?.rotation])
-
-  const applyZoomStyles = React.useCallback(
-    (zoom: number, transient = true) => {
-      if (!activeDoc) return
-      const scale = transient ? zoom / Math.max(0.0001, layoutZoomRef.current) : 1
-      applyStageTransform(scale)
-      const imageRendering = zoom >= 4 ? "pixelated" : "auto"
-      if (compositeRef.current) compositeRef.current.style.imageRendering = imageRendering
-      if (overlayRef.current) overlayRef.current.style.imageRendering = imageRendering
-    },
-    [activeDoc, applyStageTransform],
-  )
-
-  const applyViewZoom = React.useCallback(
-    (zoom: number) => {
-      const next = clampZoom(zoom)
-      visualZoomRef.current = next
-      pendingZoomRef.current = next
-
-      if (zoomFrameRef.current === null) {
-        zoomFrameRef.current = window.requestAnimationFrame(() => {
-          zoomFrameRef.current = null
-          const pending = pendingZoomRef.current
-          if (pending !== null) {
-            pendingZoomRef.current = null
-            applyZoomStyles(pending)
-          }
-        })
-      }
-
-      if (zoomCommitTimerRef.current !== null) {
-        window.clearTimeout(zoomCommitTimerRef.current)
-      }
-      zoomCommitTimerRef.current = window.setTimeout(() => {
-        zoomCommitTimerRef.current = null
-        const committedZoom = visualZoomRef.current
-        setViewZoom(committedZoom)
-        dispatch({ type: "set-zoom", zoom: committedZoom })
-      }, ZOOM_COMMIT_IDLE_MS)
-    },
-    [applyZoomStyles, dispatch],
-  )
-
-  React.useEffect(() => {
-    return () => {
-      if (zoomFrameRef.current !== null) window.cancelAnimationFrame(zoomFrameRef.current)
-      if (zoomCommitTimerRef.current !== null) window.clearTimeout(zoomCommitTimerRef.current)
-    }
-  }, [])
-
-  React.useEffect(() => {
-    if (!activeDoc) return
-    const next = clampZoom(activeDoc.zoom)
-    visualZoomRef.current = next
-    pendingZoomRef.current = null
-    setViewZoom(next)
-    window.requestAnimationFrame(() => applyZoomStyles(next, false))
-  }, [activeDoc, applyZoomStyles])
-
-  React.useLayoutEffect(() => {
-    layoutZoomRef.current = viewZoom
-    applyZoomStyles(viewZoom, false)
-  }, [viewZoom, applyZoomStyles])
-
-  React.useEffect(() => {
-    return addPhotoshopEventListener("ps-request-zoom", (detail) => {
-      if (!detail) return
-      if (typeof detail.zoom === "number") {
-        applyViewZoom(detail.zoom)
-      } else if (typeof detail.factor === "number") {
-        applyViewZoom(visualZoomRef.current * detail.factor)
-      }
-    })
-  }, [applyViewZoom])
-
-  React.useEffect(() => {
-    return addPhotoshopEventListener("ps-request-print-size-view", () => {
-      if (!activeDoc) return
-      try {
-        applyViewZoom(calculatePrintSizeZoom({
-          screenDpi: canvasPrefs.screenDpi,
-          documentDpi: activeDoc.dpi ?? canvasPrefs.printResolution,
-        }))
-      } catch {}
-    })
-  }, [activeDoc, applyViewZoom, canvasPrefs.printResolution, canvasPrefs.screenDpi])
 
   const schedulePaintCommit = React.useCallback(
     (label: string, changedLayerIds?: Parameters<typeof commit>[1]) => {
@@ -5272,7 +5186,7 @@ export function CanvasView() {
     }
     window.addEventListener("ps-navigator-pan", navigatorPanHandler)
     return () => window.removeEventListener("ps-navigator-pan", navigatorPanHandler)
-  }, [activeDoc, applyStageTransform])
+  }, [activeDoc, applyStageTransform, panRef, visualZoomRef])
 
   function commitTextEdit() {
     if (!editingText || !activeDoc) return
@@ -6200,20 +6114,6 @@ export function CanvasView() {
       at(x0, y1, c) * (1 - tx) * ty +
       at(x1, y1, c) * tx * ty
     return { r: mix(0), g: mix(1), b: mix(2), a: mix(3) }
-  }
-
-  /* ---- wheel ---- */
-
-  const onWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    if (!activeDoc) return
-    if (e.ctrlKey || e.metaKey || e.altKey) {
-      e.preventDefault()
-      const factor = Math.exp(-e.deltaY * 0.0015)
-      applyViewZoom(visualZoomRef.current * factor)
-    } else {
-      panRef.current = { x: panRef.current.x - e.deltaX, y: panRef.current.y - e.deltaY }
-      applyStageTransform()
-    }
   }
 
   const onPointerEnter = () => {
