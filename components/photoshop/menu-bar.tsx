@@ -16,16 +16,6 @@ import {
   MenubarSubTrigger as DropdownMenuSubTrigger,
   MenubarTrigger as DropdownMenuTrigger,
 } from "@/components/ui/menubar"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
 import { useEditor, makeDocument, makeCanvas, type DocumentLifecycleState, type FileSystemFileHandleLike } from "./editor-context"
 import { compositeLayer } from "./blend-modes"
 import { FILTER_META, getFilterName } from "./filters-meta"
@@ -35,285 +25,10 @@ import type { GapWorkflowKind } from "./gap-workflow-dialog"
 import type { SelectionOperation } from "./management-dialogs"
 import type { WorkflowPackId } from "./workflow-presets"
 import { WORKFLOW_PACKS } from "./workflow-presets"
-import { lazyDialog } from "./lazy-dialog"
 import { dispatchPhotoshopEvent } from "./events"
 import { canPluginUsePermission, permissionsForPluginActionDescriptors } from "./plugin-system"
+import { MenuDialogs, type AutoAlgorithmId } from "./menus/menu-dialogs"
 
-// All dialogs below are lazy-mounted: the JS chunk is fetched only the first
-// time the user opens the dialog, and the component returns null until then.
-// This keeps ~480KB of dialog source out of the workspace's eager bundle and
-// out of the React tree on idle re-renders.
-const FilterDialog = lazyDialog<{ filterId: string | null; onClose: () => void }>(
-  () => import("./filter-dialog").then((m) => ({ default: m.FilterDialog })),
-  (p) => p.filterId != null,
-)
-const ImageSizeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./image-size-dialog").then((m) => ({ default: m.ImageSizeDialog })),
-)
-const CanvasSizeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./canvas-size-dialog").then((m) => ({ default: m.CanvasSizeDialog })),
-)
-const StrokeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./stroke-dialog").then((m) => ({ default: m.StrokeDialog })),
-)
-const FlattenTransparencyDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./flatten-transparency-dialog").then((m) => ({ default: m.FlattenTransparencyDialog })),
-)
-const ColorRangeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./color-range-dialog").then((m) => ({ default: m.ColorRangeDialog })),
-)
-const RefineEdgeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./refine-edge-dialog").then((m) => ({ default: m.RefineEdgeDialog })),
-)
-const LiquifyDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./liquify-dialog").then((m) => ({ default: m.LiquifyDialog })),
-)
-const PuppetWarpDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./puppet-warp-dialog").then((m) => ({ default: m.PuppetWarpDialog })),
-)
-const LayerStyleDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./layer-style-dialog").then((m) => ({ default: m.LayerStyleDialog })),
-)
-const WarpTextDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./warp-text-dialog").then((m) => ({ default: m.WarpTextDialog })),
-)
-const LayerCompsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./layer-comps-dialog").then((m) => ({ default: m.LayerCompsDialog })),
-)
-const ColorLabelsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./color-labels-dialog").then((m) => ({ default: m.ColorLabelsDialog })),
-)
-const FitImageDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./fit-image-dialog").then((m) => ({ default: m.FitImageDialog })),
-)
-const ExportAsDialog = lazyDialog<{
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  initial?: unknown
-}>(
-  () => import("./export-as-dialog").then((m) => ({ default: m.ExportAsDialog as unknown as React.ComponentType<{
-    open: boolean
-    onOpenChange: (open: boolean) => void
-    initial?: unknown
-  }> })),
-)
-const BatchExportDialog = lazyDialog<{
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  initial?: unknown
-}>(
-  () => import("./batch-export-dialog").then((m) => ({ default: m.BatchExportDialog as unknown as React.ComponentType<{
-    open: boolean
-    onOpenChange: (open: boolean) => void
-    initial?: unknown
-  }> })),
-)
-const BatchProcessingDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./processing-dialogs").then((m) => ({ default: m.BatchProcessingDialog })),
-)
-const ImageProcessorDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void; initial?: unknown }>(
-  () => import("./processing-dialogs").then((m) => ({ default: m.ImageProcessorDialog as unknown as React.ComponentType<{
-    open: boolean
-    onOpenChange: (open: boolean) => void
-    initial?: unknown
-  }> })),
-)
-const CropAndStraightenDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./processing-dialogs").then((m) => ({ default: m.CropAndStraightenDialog })),
-)
-const PdfImportDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./pdf-import-dialog").then((m) => ({ default: m.PdfImportDialog })),
-)
-const DocumentReportDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./document-report-dialog").then((m) => ({ default: m.DocumentReportDialog })),
-)
-const PreflightDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./preflight-dialog").then((m) => ({ default: m.PreflightDialog })),
-)
-const FilterGalleryDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./filter-gallery").then((m) => ({ default: m.FilterGalleryDialog })),
-)
-const CameraRawDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./camera-raw-dialog").then((m) => ({ default: m.CameraRawDialog })),
-)
-const SelectAndMaskDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./select-and-mask").then((m) => ({ default: m.SelectAndMaskDialog })),
-)
-const FileInfoDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./file-info-dialog").then((m) => ({ default: m.FileInfoDialog })),
-)
-const RevealSourceDialog = lazyDialog<{
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  docId?: string | null
-}>(
-  () => import("./reveal-source-dialog").then((m) => ({ default: m.RevealSourceDialog })),
-)
-const AdvancedSubsystemsDialog = lazyDialog<{
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  initialTab?: AdvancedSubsystemTab
-  initialColorWorkflow?: ColorWorkflowMode
-}>(
-  () => import("./advanced-subsystems-dialog").then((m) => ({ default: m.AdvancedSubsystemsDialog as unknown as React.ComponentType<{
-    open: boolean
-    onOpenChange: (open: boolean) => void
-    initialTab?: AdvancedSubsystemTab
-    initialColorWorkflow?: ColorWorkflowMode
-  }> })),
-)
-const AlgorithmicOperationsDialog = lazyDialog<{
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}>(
-  () => import("./algorithmic-operations-dialog").then((m) => ({ default: m.AlgorithmicOperationsDialog })),
-)
-const GapWorkflowDialog = lazyDialog<{
-  workflow: GapWorkflowKind | null
-  onOpenChange: (open: boolean) => void
-}>(
-  () => import("./gap-workflow-dialog").then((m) => ({ default: m.GapWorkflowDialog as unknown as React.ComponentType<{
-    workflow: GapWorkflowKind | null
-    onOpenChange: (open: boolean) => void
-  }> })),
-  (p) => p.workflow != null,
-)
-const WorkflowPackDialog = lazyDialog<{
-  workflowId: WorkflowPackId | null
-  onOpenChange: (open: boolean) => void
-}>(
-  () => import("./workflow-pack-dialog").then((m) => ({ default: m.WorkflowPackDialog as unknown as React.ComponentType<{
-    workflowId: WorkflowPackId | null
-    onOpenChange: (open: boolean) => void
-  }> })),
-  (p) => p.workflowId != null,
-)
-const ColorModeDialog = lazyDialog<{
-  target: import("./color-mode-dialog").ColorModeDialogTarget | null
-  onOpenChange: (open: boolean) => void
-}>(
-  () => import("./color-mode-dialog").then((m) => ({ default: m.ColorModeDialog as unknown as React.ComponentType<{
-    target: import("./color-mode-dialog").ColorModeDialogTarget | null
-    onOpenChange: (open: boolean) => void
-  }> })),
-  (p) => p.target != null,
-)
-const PreferencesDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./preferences-dialog").then((m) => ({ default: m.PreferencesDialog })),
-)
-const KeyboardShortcutsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./keyboard-shortcuts-dialog").then((m) => ({ default: m.KeyboardShortcutsDialog })),
-)
-const MenuCustomizationDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./menu-customization-dialog").then((m) => ({ default: m.MenuCustomizationDialog })),
-)
-const PresetManagerDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./preset-manager-dialog").then((m) => ({ default: m.PresetManagerDialog })),
-)
-const AboutDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./about-dialog").then((m) => ({ default: m.AboutDialog })),
-)
-const RecentDocumentsDialog = lazyDialog<{
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  recents: RecentDocument[]
-  onOpenRecent: (recent: RecentDocument) => void | Promise<void>
-  onRemoveRecent: (id: string) => void
-  onClearRecents: () => void
-}>(
-  () => import("./management-dialogs").then((m) => ({ default: m.RecentDocumentsDialog as unknown as React.ComponentType<{
-    open: boolean
-    onOpenChange: (open: boolean) => void
-    recents: RecentDocument[]
-    onOpenRecent: (recent: RecentDocument) => void | Promise<void>
-    onRemoveRecent: (id: string) => void
-    onClearRecents: () => void
-  }> })),
-)
-const SelectionOperationDialog = lazyDialog<{
-  operation: SelectionOperation | null
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}>(
-  () => import("./management-dialogs").then((m) => ({ default: m.SelectionOperationDialog as unknown as React.ComponentType<{
-    operation: SelectionOperation | null
-    open: boolean
-    onOpenChange: (open: boolean) => void
-  }> })),
-)
-const SaveSelectionDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./management-dialogs").then((m) => ({ default: m.SaveSelectionDialog })),
-)
-const LoadSelectionDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./management-dialogs").then((m) => ({ default: m.LoadSelectionDialog })),
-)
-const WorkspaceManagerDialog = lazyDialog<{
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  savedWorkspaces: { name: string; savedAt?: number }[]
-  onRefresh: () => void
-}>(
-  () => import("./management-dialogs").then((m) => ({ default: m.WorkspaceManagerDialog as unknown as React.ComponentType<{
-    open: boolean
-    onOpenChange: (open: boolean) => void
-    savedWorkspaces: { name: string; savedAt?: number }[]
-    onRefresh: () => void
-  }> })),
-)
-const ContactSheetDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./contact-sheet-dialog").then((m) => ({ default: m.ContactSheetDialog })),
-)
-const PhotomergeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./photomerge-dialog").then((m) => ({ default: m.PhotomergeDialog })),
-)
-const LargeDocumentRecoveryDialog = lazyDialog<{
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  plan: import("./large-document").LargeDocumentOpenPlan | null
-  busy?: boolean
-  onOpenReduced: () => void
-  onOpenTileOnly: () => void
-  onInspect: () => void
-}>(
-  () => import("./large-document-recovery-dialog").then((m) => ({ default: m.LargeDocumentRecoveryDialog })),
-)
-const GridSettingsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./workspace-dialogs").then((m) => ({ default: m.GridSettingsDialog })),
-)
-const GuideLayoutDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./workspace-dialogs").then((m) => ({ default: m.GuideLayoutDialog })),
-)
-const NewGuideDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./workspace-dialogs").then((m) => ({ default: m.NewGuideDialog })),
-)
-// Task 27 — Adjustment workflows. Each of these adjustments has UI that does
-// not fit the generic FilterDialog renderer (eyedroppers, presets,
-// dialog-prompt flows, "Save As Defaults" persistence), so they ship as
-// purpose-built dialogs lazily mounted only when their menu entry is used.
-const ShadowsHighlightsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./adjustment-dialogs").then((m) => ({ default: m.ShadowsHighlightsDialog })),
-)
-const HdrToningDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./adjustment-dialogs").then((m) => ({ default: m.HdrToningDialog })),
-)
-const MatchColorDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./adjustment-dialogs").then((m) => ({ default: m.MatchColorDialog })),
-)
-const ReplaceColorDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./adjustment-dialogs").then((m) => ({ default: m.ReplaceColorDialog })),
-)
-const EqualizePromptDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("./adjustment-dialogs").then((m) => ({ default: m.EqualizePromptDialog })),
-)
-type AutoAlgorithmId = "monochromatic-contrast" | "per-channel-contrast" | "dark-light-colors" | "brightness-contrast"
-const AutoOptionsDialog = lazyDialog<{
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  initialAlgorithm?: AutoAlgorithmId
-  label?: string
-}>(
-  () => import("./adjustment-dialogs").then((m) => ({ default: m.AutoOptionsDialog })),
-)
 import {
   PANEL_CATEGORIES,
   PANEL_DEFINITIONS,
@@ -4201,131 +3916,140 @@ export function MenuBar({
         </Menubar>
       </div>
 
-      <FilterDialog filterId={openFilter} onClose={() => setOpenFilter(null)} />
-      <ImageSizeDialog open={imageSizeOpen} onOpenChange={setImageSizeOpen} />
-      <CanvasSizeDialog open={canvasSizeOpen} onOpenChange={setCanvasSizeOpen} />
-      <StrokeDialog open={strokeOpen} onOpenChange={setStrokeOpen} />
-      <FlattenTransparencyDialog
-        open={flattenTransparencyOpen}
-        onOpenChange={setFlattenTransparencyOpen}
-      />
-      <ColorRangeDialog open={colorRangeOpen} onOpenChange={setColorRangeOpen} />
-      <RefineEdgeDialog open={refineEdgeOpen} onOpenChange={setRefineEdgeOpen} />
-      <LiquifyDialog open={liquifyOpen} onOpenChange={setLiquifyOpen} />
-      <PuppetWarpDialog open={puppetWarpOpen} onOpenChange={setPuppetWarpOpen} />
-      <LayerStyleDialog open={layerStyleOpen} onOpenChange={setLayerStyleOpen} />
-      <WarpTextDialog open={warpTextOpen} onOpenChange={setWarpTextOpen} />
-      <LayerCompsDialog open={layerCompsOpen} onOpenChange={setLayerCompsOpen} />
-      <ColorLabelsDialog open={colorLabelsOpen} onOpenChange={setColorLabelsOpen} />
-      <FitImageDialog open={fitImageOpen} onOpenChange={setFitImageOpen} />
-      <ExportAsDialog open={exportAsOpen} onOpenChange={setExportAsOpen} initial={exportAsInitial} />
-      <BatchExportDialog open={batchExportOpen} onOpenChange={setBatchExportOpen} initial={batchExportInitial} />
-      <BatchProcessingDialog open={batchProcessingOpen} onOpenChange={setBatchProcessingOpen} />
-      <ImageProcessorDialog open={imageProcessorOpen} onOpenChange={setImageProcessorOpen} initial={imageProcessorInitial} />
-      <CropAndStraightenDialog open={cropAndStraightenOpen} onOpenChange={setCropAndStraightenOpen} />
-      <PdfImportDialog open={pdfImportOpen} onOpenChange={setPdfImportOpen} />
-      <DocumentReportDialog open={documentReportOpen} onOpenChange={setDocumentReportOpen} />
-      <PreflightDialog open={preflightOpen} onOpenChange={setPreflightOpen} />
-      <GridSettingsDialog open={gridSettingsOpen} onOpenChange={setGridSettingsOpen} />
-      <NewGuideDialog open={newGuideOpen} onOpenChange={setNewGuideOpen} />
-      <GuideLayoutDialog open={guideLayoutOpen} onOpenChange={setGuideLayoutOpen} />
-      <ContactSheetDialog open={contactSheetOpen} onOpenChange={setContactSheetOpen} />
-      <PhotomergeDialog open={photomergeOpen} onOpenChange={setPhotomergeOpen} />
-      <FileInfoDialog open={fileInfoOpen} onOpenChange={setFileInfoOpen} />
-      <RevealSourceDialog
-        open={revealSourceOpen}
-        onOpenChange={(value) => {
-          setRevealSourceOpen(value)
-          if (!value) setRevealSourceDocId(null)
-        }}
-        docId={revealSourceDocId}
-      />
-      <ShadowsHighlightsDialog open={shadowsHighlightsOpen} onOpenChange={setShadowsHighlightsOpen} />
-      <HdrToningDialog open={hdrToningOpen} onOpenChange={setHdrToningOpen} />
-      <MatchColorDialog open={matchColorOpen} onOpenChange={setMatchColorOpen} />
-      <ReplaceColorDialog open={replaceColorOpen} onOpenChange={setReplaceColorOpen} />
-      <EqualizePromptDialog open={equalizePromptOpen} onOpenChange={setEqualizePromptOpen} />
-      <AutoOptionsDialog
-        open={autoOptions !== null}
-        onOpenChange={(v) => { if (!v) setAutoOptions(null) }}
-        initialAlgorithm={autoOptions?.algorithm}
-        label={autoOptions?.label}
-      />
-      <AdvancedSubsystemsDialog open={advancedOpen} onOpenChange={setAdvancedOpen} initialTab={advancedTab} initialColorWorkflow={advancedColorWorkflow} />
-      <AlgorithmicOperationsDialog open={algorithmOpen} onOpenChange={setAlgorithmOpen} />
-      <GapWorkflowDialog workflow={gapWorkflow} onOpenChange={(open) => !open && setGapWorkflow(null)} />
-      <WorkflowPackDialog workflowId={workflowPack} onOpenChange={(open) => !open && setWorkflowPack(null)} />
-      <ColorModeDialog target={colorModeTarget} onOpenChange={(open) => !open && setColorModeTarget(null)} />
-      <PreferencesDialog open={preferencesOpen} onOpenChange={setPreferencesOpen} />
-      <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
-      <MenuCustomizationDialog open={menuCustomizationOpen} onOpenChange={setMenuCustomizationOpen} />
-      <PresetManagerDialog open={presetManagerOpen} onOpenChange={setPresetManagerOpen} />
-      <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
-      <LargeDocumentRecoveryDialog
-        open={!!largeDocumentRecovery}
-        onOpenChange={(open) => {
-          if (!open) closeLargeDocumentRecovery()
-        }}
-        plan={largeDocumentRecovery?.plan ?? null}
-        busy={largeDocumentRecoveryBusy}
-        onOpenReduced={() => void openLargeDocumentReduced()}
-        onOpenTileOnly={() => void openLargeDocumentTileOnly()}
-        onInspect={inspectLargeDocument}
-      />
-      <FilterGalleryDialog open={filterGalleryOpen} onOpenChange={setFilterGalleryOpen} />
-      <CameraRawDialog open={cameraRawOpen} onOpenChange={setCameraRawOpen} />
-      <SelectAndMaskDialog open={selectMaskOpen} onOpenChange={setSelectMaskOpen} />
-      <RecentDocumentsDialog
-        open={recentManagerOpen}
-        onOpenChange={setRecentManagerOpen}
-        recents={recentDocuments}
-        onOpenRecent={openRecent}
-        onRemoveRecent={(id) => {
+      <MenuDialogs
+        openFilter={openFilter}
+        setOpenFilter={setOpenFilter}
+        imageSizeOpen={imageSizeOpen}
+        setImageSizeOpen={setImageSizeOpen}
+        canvasSizeOpen={canvasSizeOpen}
+        setCanvasSizeOpen={setCanvasSizeOpen}
+        strokeOpen={strokeOpen}
+        setStrokeOpen={setStrokeOpen}
+        flattenTransparencyOpen={flattenTransparencyOpen}
+        setFlattenTransparencyOpen={setFlattenTransparencyOpen}
+        colorRangeOpen={colorRangeOpen}
+        setColorRangeOpen={setColorRangeOpen}
+        refineEdgeOpen={refineEdgeOpen}
+        setRefineEdgeOpen={setRefineEdgeOpen}
+        liquifyOpen={liquifyOpen}
+        setLiquifyOpen={setLiquifyOpen}
+        puppetWarpOpen={puppetWarpOpen}
+        setPuppetWarpOpen={setPuppetWarpOpen}
+        layerStyleOpen={layerStyleOpen}
+        setLayerStyleOpen={setLayerStyleOpen}
+        warpTextOpen={warpTextOpen}
+        setWarpTextOpen={setWarpTextOpen}
+        layerCompsOpen={layerCompsOpen}
+        setLayerCompsOpen={setLayerCompsOpen}
+        colorLabelsOpen={colorLabelsOpen}
+        setColorLabelsOpen={setColorLabelsOpen}
+        fitImageOpen={fitImageOpen}
+        setFitImageOpen={setFitImageOpen}
+        exportAsOpen={exportAsOpen}
+        setExportAsOpen={setExportAsOpen}
+        exportAsInitial={exportAsInitial}
+        batchExportOpen={batchExportOpen}
+        setBatchExportOpen={setBatchExportOpen}
+        batchExportInitial={batchExportInitial}
+        batchProcessingOpen={batchProcessingOpen}
+        setBatchProcessingOpen={setBatchProcessingOpen}
+        imageProcessorOpen={imageProcessorOpen}
+        setImageProcessorOpen={setImageProcessorOpen}
+        imageProcessorInitial={imageProcessorInitial}
+        cropAndStraightenOpen={cropAndStraightenOpen}
+        setCropAndStraightenOpen={setCropAndStraightenOpen}
+        pdfImportOpen={pdfImportOpen}
+        setPdfImportOpen={setPdfImportOpen}
+        documentReportOpen={documentReportOpen}
+        setDocumentReportOpen={setDocumentReportOpen}
+        preflightOpen={preflightOpen}
+        setPreflightOpen={setPreflightOpen}
+        gridSettingsOpen={gridSettingsOpen}
+        setGridSettingsOpen={setGridSettingsOpen}
+        newGuideOpen={newGuideOpen}
+        setNewGuideOpen={setNewGuideOpen}
+        guideLayoutOpen={guideLayoutOpen}
+        setGuideLayoutOpen={setGuideLayoutOpen}
+        contactSheetOpen={contactSheetOpen}
+        setContactSheetOpen={setContactSheetOpen}
+        photomergeOpen={photomergeOpen}
+        setPhotomergeOpen={setPhotomergeOpen}
+        fileInfoOpen={fileInfoOpen}
+        setFileInfoOpen={setFileInfoOpen}
+        revealSourceOpen={revealSourceOpen}
+        setRevealSourceOpen={setRevealSourceOpen}
+        revealSourceDocId={revealSourceDocId}
+        setRevealSourceDocId={setRevealSourceDocId}
+        shadowsHighlightsOpen={shadowsHighlightsOpen}
+        setShadowsHighlightsOpen={setShadowsHighlightsOpen}
+        hdrToningOpen={hdrToningOpen}
+        setHdrToningOpen={setHdrToningOpen}
+        matchColorOpen={matchColorOpen}
+        setMatchColorOpen={setMatchColorOpen}
+        replaceColorOpen={replaceColorOpen}
+        setReplaceColorOpen={setReplaceColorOpen}
+        equalizePromptOpen={equalizePromptOpen}
+        setEqualizePromptOpen={setEqualizePromptOpen}
+        autoOptions={autoOptions}
+        setAutoOptions={setAutoOptions}
+        advancedOpen={advancedOpen}
+        setAdvancedOpen={setAdvancedOpen}
+        advancedTab={advancedTab}
+        advancedColorWorkflow={advancedColorWorkflow}
+        algorithmOpen={algorithmOpen}
+        setAlgorithmOpen={setAlgorithmOpen}
+        gapWorkflow={gapWorkflow}
+        setGapWorkflow={setGapWorkflow}
+        workflowPack={workflowPack}
+        setWorkflowPack={setWorkflowPack}
+        colorModeTarget={colorModeTarget}
+        setColorModeTarget={setColorModeTarget}
+        preferencesOpen={preferencesOpen}
+        setPreferencesOpen={setPreferencesOpen}
+        shortcutsOpen={shortcutsOpen}
+        setShortcutsOpen={setShortcutsOpen}
+        menuCustomizationOpen={menuCustomizationOpen}
+        setMenuCustomizationOpen={setMenuCustomizationOpen}
+        presetManagerOpen={presetManagerOpen}
+        setPresetManagerOpen={setPresetManagerOpen}
+        aboutOpen={aboutOpen}
+        setAboutOpen={setAboutOpen}
+        largeDocumentRecovery={largeDocumentRecovery}
+        largeDocumentRecoveryBusy={largeDocumentRecoveryBusy}
+        closeLargeDocumentRecovery={closeLargeDocumentRecovery}
+        openLargeDocumentReduced={openLargeDocumentReduced}
+        openLargeDocumentTileOnly={openLargeDocumentTileOnly}
+        inspectLargeDocument={inspectLargeDocument}
+        filterGalleryOpen={filterGalleryOpen}
+        setFilterGalleryOpen={setFilterGalleryOpen}
+        cameraRawOpen={cameraRawOpen}
+        setCameraRawOpen={setCameraRawOpen}
+        selectMaskOpen={selectMaskOpen}
+        setSelectMaskOpen={setSelectMaskOpen}
+        recentManagerOpen={recentManagerOpen}
+        setRecentManagerOpen={setRecentManagerOpen}
+        recentDocuments={recentDocuments}
+        openRecent={openRecent}
+        removeRecent={(id) => {
           removeRecentDocument(id)
           refreshRecents()
         }}
-        onClearRecents={clearRecentDocuments}
-      />
-      <WorkspaceManagerDialog
-        open={workspaceManagerOpen}
-        onOpenChange={setWorkspaceManagerOpen}
+        clearRecentDocuments={clearRecentDocuments}
+        workspaceManagerOpen={workspaceManagerOpen}
+        setWorkspaceManagerOpen={setWorkspaceManagerOpen}
         savedWorkspaces={savedWorkspaces}
-        onRefresh={refreshWorkspaces}
+        refreshWorkspaces={refreshWorkspaces}
+        selectionOperation={selectionOperation}
+        setSelectionOperation={setSelectionOperation}
+        pendingPurge={pendingPurge}
+        setPendingPurge={setPendingPurge}
+        pendingPurgeTitle={pendingPurgeCommand?.label ?? "Purge"}
+        executePurge={executePurge}
+        saveSelectionOpen={saveSelectionOpen}
+        setSaveSelectionOpen={setSaveSelectionOpen}
+        loadSelectionOpen={loadSelectionOpen}
+        setLoadSelectionOpen={setLoadSelectionOpen}
       />
-      <SelectionOperationDialog
-        operation={selectionOperation}
-        open={!!selectionOperation}
-        onOpenChange={(open) => {
-          if (!open) setSelectionOperation(null)
-        }}
-      />
-      <AlertDialog
-        open={pendingPurge !== null}
-        onOpenChange={(open) => { if (!open) setPendingPurge(null) }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{pendingPurgeCommand?.label ?? "Purge"}</AlertDialogTitle>
-            <AlertDialogDescription>
-              This action cannot be undone. Continue?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                const target = pendingPurge
-                setPendingPurge(null)
-                if (target) executePurge(target)
-              }}
-            >
-              OK
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-      <SaveSelectionDialog open={saveSelectionOpen} onOpenChange={setSaveSelectionOpen} />
-      <LoadSelectionDialog open={loadSelectionOpen} onOpenChange={setLoadSelectionOpen} />
     </>
   )
 }
