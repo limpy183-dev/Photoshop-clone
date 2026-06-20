@@ -492,7 +492,7 @@ export function PreflightDialog({ open, onOpenChange }: { open: boolean; onOpenC
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[760px] border-[var(--ps-divider)] bg-[var(--ps-panel)] text-[var(--ps-text)]">
+      <DialogContent className="w-[min(760px,calc(100vw-2rem))] max-w-[760px] border-[var(--ps-divider)] bg-[var(--ps-panel)] text-[var(--ps-text)] sm:max-w-[760px]">
         <DialogHeader>
           <DialogTitle>Preflight Check</DialogTitle>
           <DialogDescription className="sr-only">Inspect the active document for handoff, export, and layer-structure issues.</DialogDescription>
@@ -516,7 +516,7 @@ export function PreflightDialog({ open, onOpenChange }: { open: boolean; onOpenC
         ) : null}
         <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
           <div className="mb-2 text-[10px] uppercase tracking-wide text-[var(--ps-text-dim)]">Quick fixes</div>
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-8">
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(104px,1fr))] gap-2">
             <QuickFixButton label="Show Hidden" count={fixCandidates.hiddenLayers.length} onClick={showHiddenLayers} />
             <QuickFixButton label="Name Layers" count={fixCandidates.unnamedLayers.length} onClick={nameUnnamedLayers} />
             <QuickFixButton label="Mask Adjust" count={fixCandidates.unmaskedAdjustments.length} onClick={maskAdjustmentLayers} />
@@ -527,7 +527,7 @@ export function PreflightDialog({ open, onOpenChange }: { open: boolean; onOpenC
             <select
               value={profileTarget}
               onChange={(event) => setProfileTarget(event.target.value as ColorManagementSettings["assignedProfile"])}
-              className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] px-2 text-[11px]"
+              className="h-8 min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] px-2 text-[11px]"
               aria-label="Preflight profile target"
             >
               {supportedIccProfileNames().map((profile) => <option key={profile} value={profile}>{profile}</option>)}

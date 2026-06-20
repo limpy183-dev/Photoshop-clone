@@ -658,6 +658,30 @@ test("standalone high-bit filter helper preserves float buffers for preview and 
   expect(shifted.warnings.join(" ")).not.toContain("8-bit fallback")
 })
 
+test("float high-bit adjustments preserve scene-linear RGB above display white", () => {
+  const source = {
+    width: 1,
+    height: 1,
+    channels: 4 as const,
+    bitDepth: 32 as const,
+    colorMode: "RGB" as const,
+    storage: "float32" as const,
+    data: new Float32Array([0.8, 1.2, 2.5, 1.25]),
+    warnings: [],
+  }
+
+  const adjusted = applyHighBitAdjustment(source, {
+    type: "exposure",
+    params: { ev: 1 },
+  })
+
+  expect(adjusted.storage).toBe("float32")
+  expect(adjusted.data[0]).toBeCloseTo(1.6, 5)
+  expect(adjusted.data[1]).toBeCloseTo(2.4, 5)
+  expect(adjusted.data[2]).toBeCloseTo(5, 5)
+  expect(adjusted.data[3]).toBe(1)
+})
+
 test("high-bit paint dabs and canvas delta sync update typed layer sources", () => {
   const source = createHighBitImageFromImageData(
     imageData(2, 1, [

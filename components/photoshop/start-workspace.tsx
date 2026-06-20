@@ -3,6 +3,7 @@
 import * as React from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { toast } from "sonner"
 import {
   BookOpen,
   Clock3,
@@ -25,6 +26,7 @@ import {
   type NewDocumentPreset,
 } from "./new-document-presets"
 import { readRecentDocuments, type RecentDocument } from "./recent-documents"
+import { STARTUP_IMAGE_IMPORT_PARAM, writeStartupImageImport } from "./startup-file-handoff"
 
 const PINNED_DOCUMENTS_KEY = "ps-pinned-documents-v1"
 
@@ -110,6 +112,7 @@ function useStartDocuments() {
 export function StartWorkspace() {
   const router = useRouter()
   const { recents, pinnedIds, togglePin } = useStartDocuments()
+  const imageInputRef = React.useRef<HTMLInputElement>(null)
   const pinnedSet = React.useMemo(() => new Set(pinnedIds), [pinnedIds])
   const pinned = React.useMemo(
     () => pinnedIds.map((id) => recents.find((recent) => recent.id === id)).filter((recent): recent is RecentDocument => !!recent),
@@ -125,25 +128,58 @@ export function StartWorkspace() {
     router.push(`/editor?${params.toString()}`)
   }, [router])
 
+  const openImagePicker = React.useCallback(() => {
+    imageInputRef.current?.click()
+  }, [])
+
+  const importImageFile = React.useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0]
+    event.currentTarget.value = ""
+    if (!file) return
+    try {
+      const importId = await writeStartupImageImport(file)
+      const params = new URLSearchParams({ [STARTUP_IMAGE_IMPORT_PARAM]: importId })
+      router.push(`/editor?${params.toString()}`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not open image")
+    }
+  }, [router])
+
   return (
     <main className="min-h-screen bg-[var(--ps-chrome)] text-[var(--ps-text)]">
       <div className="grid min-h-screen grid-cols-[72px_minmax(0,1fr)]">
         <aside className="border-r border-[var(--ps-divider)] bg-[#181818]">
           <div className="flex h-16 items-center justify-center border-b border-[var(--ps-divider)]">
-            <div className="flex h-9 w-9 items-center justify-center rounded-sm bg-[var(--ps-accent)] text-[13px] font-semibold text-white">
-              Ps
-            </div>
+            <img
+              src="/photoshop-web-logo.svg"
+              alt="Photoshop web logo"
+              className="h-9 w-9 rounded-sm"
+              draggable={false}
+            />
           </div>
           <nav aria-label="Start workspace" className="flex flex-col gap-1 p-2">
             <a className="flex h-11 items-center justify-center rounded-sm bg-[var(--ps-tool-active)] text-white" href="#home" aria-label="Home">
               <Home className="h-4 w-4" />
             </a>
-            <a className="flex h-11 items-center justify-center rounded-sm text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]" href="#new-document" aria-label="New document">
+            <button
+              type="button"
+              onClick={openImagePicker}
+              className="flex h-11 items-center justify-center rounded-sm text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]"
+              aria-label="Open image"
+            >
               <ImagePlus className="h-4 w-4" />
-            </a>
-            <a className="flex h-11 items-center justify-center rounded-sm text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]" href="#learn" aria-label="Learn">
+            </button>
+            <Link className="flex h-11 items-center justify-center rounded-sm text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]" href="/documentation" aria-label="Documentation">
               <BookOpen className="h-4 w-4" />
-            </a>
+            </Link>
+            <input
+              ref={imageInputRef}
+              data-testid="start-open-image-input"
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(event) => void importImageFile(event)}
+            />
           </nav>
         </aside>
 

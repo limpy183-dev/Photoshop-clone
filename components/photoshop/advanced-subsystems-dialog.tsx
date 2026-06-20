@@ -6,6 +6,28 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import {
+  CapabilityNotice,
+  CheckField,
+  ColorField,
+  EmptyState,
+  FileButton,
+  NumberField,
+  Panel,
+  SelectField,
+} from "./advanced-subsystems-dialog-controls"
+import {
+  ADVANCED_SUBSYSTEM_TABS,
+  type AdvancedSubsystemTab,
+  type AdvancedSubsystemsDialogProps,
+  type ColorWorkflowMode,
+} from "./advanced-subsystems-dialog.types"
+import {
+  cleanImportText,
+  isImportRecord,
+  normalizeCredentialImportPayload,
+  normalizeDropletImportPayload,
+} from "./advanced-subsystems-import-normalizers"
 import { useEditor, makeCanvas } from "./editor-context"
 import { canvasToGifDataUrl, deserializePsdFile, downloadBlob, downloadDataUrl, downloadText, inspectImportFileDimensions, loadRasterCanvasFromFile, rasterMime, renderDocumentComposite } from "./document-io"
 import { assertCanvasSize } from "./canvas-limits"
@@ -154,222 +176,7 @@ import type {
   VideoLayerProps,
 } from "./types"
 
-export type AdvancedSubsystemTab =
-  | "3d"
-  | "video"
-  | "print"
-  | "preview"
-  | "automation"
-  | "provenance"
-  | "plugins"
-  | "libraries"
-  | "color"
-  | "formats"
-  | "variables"
-
-export type ColorWorkflowMode = "assign" | "convert" | "proof"
-
-interface AdvancedSubsystemsDialogProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  initialTab: AdvancedSubsystemTab
-  initialColorWorkflow?: ColorWorkflowMode
-}
-
-const TABS: { id: AdvancedSubsystemTab; label: string }[] = [
-  { id: "3d", label: "3D" },
-  { id: "video", label: "Video" },
-  { id: "print", label: "Print" },
-  { id: "preview", label: "Preview" },
-  { id: "automation", label: "Automation" },
-  { id: "provenance", label: "Provenance" },
-  { id: "plugins", label: "Plugins" },
-  { id: "libraries", label: "Libraries" },
-  { id: "color", label: "Color" },
-  { id: "formats", label: "Formats" },
-  { id: "variables", label: "Variables" },
-]
-
-// =====================================================================
-// Import normalisers - applied to credential / droplet imports
-// (see app-security audit). Each helper:
-//   - rejects __proto__ / constructor / prototype keys,
-//   - bounds string and array sizes,
-//   - rejects non-finite numbers,
-//   - drops anything outside the allow-list before the value lands in
-//     editor state, autosave, or a sandboxed iframe.
-// =====================================================================
-
-const RESERVED_IMPORT_KEYS = new Set(["__proto__", "constructor", "prototype"])
-const SAFE_IMPORT_KEY = /^[A-Za-z0-9_\-:.]{1,64}$/
-const ASSET_KINDS: ReadonlySet<AssetLibraryItem["kind"]> = new Set([
-  "brush", "gradient", "pattern", "style", "swatch", "shape", "export",
-  "tool-preset", "plugin", "cloud-library", "stock", "font", "icc-profile",
-  "variable-data", "prepress",
-])
-const HEX_HASH = /^[0-9a-fA-F]+$/
-
-function isImportRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value)
-}
-
-function cleanImportText(value: unknown, fallback: string, maxLength = 120) {
-  if (typeof value !== "string") return fallback
-  // Strip C0 controls, DEL, bidi/zero-width formatters; collapse whitespace.
-  const cleaned = value
-    .replace(/[\u0000-\u001f\u007f]/g, "")
-    .replace(/[\u200B-\u200F\u2028-\u202E\u2066-\u2069\uFEFF]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, maxLength)
-  return cleaned || fallback
-}
-
-function cleanImportOptionalText(value: unknown, maxLength = 120) {
-  if (typeof value !== "string") return undefined
-  const cleaned = cleanImportText(value, "", maxLength)
-  return cleaned || undefined
-}
-
-function cleanFiniteNumber(value: unknown, fallback: number, min = -Infinity, max = Infinity) {
-  if (typeof value !== "number" || !Number.isFinite(value)) return fallback
-  return Math.max(min, Math.min(max, value))
-}
-
-function cleanImportBoolean(value: unknown, fallback: boolean) {
-  return typeof value === "boolean" ? value : fallback
-}
-
-const IMPORT_MAX_DEPTH = 6
-const IMPORT_MAX_STRING = 4000
-const IMPORT_MAX_ARRAY = 1024
-const IMPORT_MAX_KEYS = 256
-
-/**
- * Bounded recursive sanitiser used for unstructured `payload` fields on
- * AssetLibraryItem (asset payloads vary by kind and are normalised again
- * at use sites). Drops dangerous keys and bounds size; pure data passes
- * through unchanged.
- */
-function safeImportJson(value: unknown, depth = 0): unknown {
-  if (value === null) return null
-  const type = typeof value
-  if (type === "string") return (value as string).slice(0, IMPORT_MAX_STRING)
-  if (type === "boolean") return value
-  if (type === "number") return Number.isFinite(value as number) ? value : undefined
-  if (type === "function" || type === "symbol" || type === "bigint" || type === "undefined") return undefined
-  if (depth >= IMPORT_MAX_DEPTH) return undefined
-  if (Array.isArray(value)) {
-    const out: unknown[] = []
-    for (const item of value.slice(0, IMPORT_MAX_ARRAY)) {
-      const next = safeImportJson(item, depth + 1)
-      if (next !== undefined) out.push(next)
-    }
-    return out
-  }
-  if (type === "object") {
-    const out: Record<string, unknown> = {}
-    let copied = 0
-    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
-      if (copied >= IMPORT_MAX_KEYS) break
-      if (RESERVED_IMPORT_KEYS.has(key)) continue
-      if (!SAFE_IMPORT_KEY.test(key)) continue
-      const next = safeImportJson(nested, depth + 1)
-      if (next === undefined) continue
-      out[key] = next
-      copied += 1
-    }
-    return out
-  }
-  return undefined
-}
-
-function normalizeImportedCredential(value: unknown): ContentCredential | null {
-  if (!isImportRecord(value)) return null
-  const documentHash = typeof value.documentHash === "string" ? value.documentHash : ""
-  const hashOk = documentHash.length >= 8 && documentHash.length <= 128 && HEX_HASH.test(documentHash)
-  if (!hashOk) return null
-
-  const dimensionsRaw = isImportRecord(value.dimensions) ? value.dimensions : { width: 0, height: 0 }
-  const ingredientsRaw = Array.isArray(value.ingredients) ? value.ingredients : []
-  const ingredients = ingredientsRaw
-    .slice(0, 256)
-    .map((ing): ContentCredential["ingredients"][number] | null => {
-      if (!isImportRecord(ing)) return null
-      const ingHash = typeof ing.hash === "string" ? ing.hash : ""
-      if (ingHash.length === 0 || ingHash.length > 128 || !HEX_HASH.test(ingHash)) return null
-      return {
-        id: cleanImportText(ing.id, uid("ingredient"), 80),
-        name: cleanImportText(ing.name, "Layer", 120),
-        kind: typeof ing.kind === "string" ? (ing.kind as ContentCredential["ingredients"][number]["kind"]) : undefined,
-        visible: cleanImportBoolean(ing.visible, true),
-        hash: ingHash.toLowerCase(),
-      }
-    })
-    .filter((ing): ing is ContentCredential["ingredients"][number] => ing !== null)
-
-  const createdAt =
-    typeof value.createdAt === "string" && value.createdAt.length <= 64
-      ? value.createdAt
-      : new Date().toISOString()
-
-  return {
-    id: cleanImportText(value.id, uid("credential"), 80),
-    action: cleanImportText(value.action, "Imported Provenance", 120),
-    actor: cleanImportText(value.actor, "Imported Actor", 120),
-    software: cleanImportText(value.software, "Photoshop Web", 120),
-    createdAt,
-    documentName: cleanImportText(value.documentName, "Document", 200),
-    documentHash: documentHash.toLowerCase(),
-    layerCount: cleanFiniteNumber(value.layerCount, 0, 0, 100_000),
-    dimensions: {
-      width: cleanFiniteNumber(dimensionsRaw.width, 0, 0, 65_535),
-      height: cleanFiniteNumber(dimensionsRaw.height, 0, 0, 65_535),
-    },
-    ingredients,
-    assertion: cleanImportText(value.assertion, "Imported Provenance", 200),
-  }
-}
-
-function normalizeCredentialImportPayload(parsed: unknown): ContentCredential[] {
-  const list = isImportRecord(parsed) && Array.isArray(parsed.credentials)
-    ? (parsed.credentials as unknown[])
-    : Array.isArray(parsed)
-      ? (parsed as unknown[])
-      : [parsed]
-  const out: ContentCredential[] = []
-  for (const item of list.slice(0, 256)) {
-    const next = normalizeImportedCredential(item)
-    if (next) out.push(next)
-  }
-  if (!out.length) {
-    throw new Error("Credential file did not contain any valid manifests.")
-  }
-  return out
-}
-
-function normalizeImportedAsset(value: unknown): AssetLibraryItem | null {
-  if (!isImportRecord(value)) return null
-  const kind = value.kind
-  if (typeof kind !== "string" || !ASSET_KINDS.has(kind as AssetLibraryItem["kind"])) return null
-  return {
-    id: cleanImportText(value.id, uid("asset"), 80),
-    name: cleanImportText(value.name, "Imported Asset", 120),
-    kind: kind as AssetLibraryItem["kind"],
-    group: cleanImportOptionalText(value.group, 80),
-    payload: safeImportJson(value.payload),
-    createdAt: cleanFiniteNumber(value.createdAt, Date.now(), 0, Number.MAX_SAFE_INTEGER),
-  }
-}
-
-function normalizeDropletImportPayload(parsed: unknown): AssetLibraryItem {
-  const candidate = isImportRecord(parsed) && parsed.asset !== undefined ? parsed.asset : parsed
-  const cleaned = normalizeImportedAsset(candidate)
-  if (!cleaned) {
-    throw new Error("Droplet file does not contain a recognisable asset.")
-  }
-  return cleaned
-}
+export type { AdvancedSubsystemTab, ColorWorkflowMode } from "./advanced-subsystems-dialog.types"
 
 function canvasToDataUrl(canvas: HTMLCanvasElement) {
   return canvas.toDataURL("image/png")
@@ -430,35 +237,61 @@ export function AdvancedSubsystemsDialog({ open, onOpenChange, initialTab, initi
           <DialogTitle className="text-sm">Advanced Photoshop Subsystems</DialogTitle>
         </DialogHeader>
         <div className="grid min-h-0 grid-cols-[176px_minmax(0,1fr)]">
-          <div className="overflow-y-auto border-r border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
-            {TABS.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setTab(item.id)}
-                className={`mb-1 flex h-8 w-full items-center rounded-sm px-3 text-left text-[12px] ${tab === item.id ? "bg-[var(--ps-accent)] text-white" : "hover:bg-[var(--ps-tool-hover)]"}`}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
+          <AdvancedSubsystemTabList activeTab={tab} onTabChange={setTab} />
           <div className="min-h-0 min-w-0 overflow-auto p-4">
-            {tab === "3d" && <ThreeDWorkspace />}
-            {tab === "video" && <VideoWorkspace />}
-            {tab === "print" && <PrintWorkspace />}
-            {tab === "preview" && <DevicePreviewWorkspace />}
-            {tab === "automation" && <AutomationWorkspace />}
-            {tab === "provenance" && <ProvenanceWorkspace />}
-            {tab === "plugins" && <PluginWorkspace />}
-            {tab === "libraries" && <LibrariesWorkspace />}
-            {tab === "color" && <ColorWorkspace initialWorkflow={initialColorWorkflow} />}
-            {tab === "formats" && <FormatsWorkspace />}
-            {tab === "variables" && <VariablesWorkspace />}
+            <AdvancedSubsystemTabContent tab={tab} initialColorWorkflow={initialColorWorkflow} />
           </div>
         </div>
       </DialogContent>
     </Dialog>
   )
+}
+
+function AdvancedSubsystemTabList({ activeTab, onTabChange }: { activeTab: AdvancedSubsystemTab; onTabChange: (tab: AdvancedSubsystemTab) => void }) {
+  return (
+    <div className="overflow-y-auto border-r border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
+      {ADVANCED_SUBSYSTEM_TABS.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          onClick={() => onTabChange(item.id)}
+          className={`mb-1 flex h-8 w-full items-center rounded-sm px-3 text-left text-[12px] ${activeTab === item.id ? "bg-[var(--ps-accent)] text-white" : "hover:bg-[var(--ps-tool-hover)]"}`}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function AdvancedSubsystemTabContent({ tab, initialColorWorkflow }: { tab: AdvancedSubsystemTab; initialColorWorkflow: ColorWorkflowMode }) {
+  switch (tab) {
+    case "3d":
+      return <ThreeDWorkspace />
+    case "video":
+      return <VideoWorkspace />
+    case "print":
+      return <PrintWorkspace />
+    case "preview":
+      return <DevicePreviewWorkspace />
+    case "automation":
+      return <AutomationWorkspace />
+    case "provenance":
+      return <ProvenanceWorkspace />
+    case "plugins":
+      return <PluginWorkspace />
+    case "libraries":
+      return <LibrariesWorkspace />
+    case "color":
+      return <ColorWorkspace initialWorkflow={initialColorWorkflow} />
+    case "formats":
+      return <FormatsWorkspace />
+    case "variables":
+      return <VariablesWorkspace />
+  }
+
+  const _exhaustive: never = tab
+  return _exhaustive
 }
 
 function ThreeDWorkspace() {
@@ -3692,86 +3525,5 @@ function VariablesWorkspace() {
         ) : <EmptyState text="Import a CSV to create text and visibility bindings." />}
       </Panel>
     </div>
-  )
-}
-
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-3">
-      <h3 className="mb-3 text-[12px] font-semibold text-[var(--ps-text)]">{title}</h3>
-      <div className="space-y-2">{children}</div>
-    </section>
-  )
-}
-
-function CapabilityNotice({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] p-2 text-[11px] leading-5 text-[var(--ps-text-dim)]">
-      {children}
-    </div>
-  )
-}
-
-function EmptyState({ text }: { text: string }) {
-  return <div className="rounded-sm border border-[var(--ps-divider)] p-6 text-center text-[12px] text-[var(--ps-text-dim)]">{text}</div>
-}
-
-function NumberField({ label, value, min, max, step = 1, onChange }: { label: string; value: number; min: number; max: number; step?: number; onChange: (value: number) => void }) {
-  return (
-    <label className="grid grid-cols-[110px_1fr_64px] items-center gap-2 text-[11px]">
-      <span className="text-[var(--ps-text-dim)]">{label}</span>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
-      <Input type="number" min={min} max={max} step={step} value={Number.isFinite(value) ? value : 0} onChange={(event) => onChange(Number(event.target.value))} className="h-7 px-2 text-[11px]" />
-    </label>
-  )
-}
-
-function SelectField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {
-  return (
-    <label className="grid grid-cols-[110px_1fr] items-center gap-2 text-[11px]">
-      <span className="text-[var(--ps-text-dim)]">{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)} className="h-7 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] px-2 text-[11px]">
-        {options.map((option) => <option key={option} value={option}>{option}</option>)}
-      </select>
-    </label>
-  )
-}
-
-function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return (
-    <label className="grid grid-cols-[110px_36px_1fr] items-center gap-2 text-[11px]">
-      <span className="text-[var(--ps-text-dim)]">{label}</span>
-      <input type="color" value={value} onChange={(event) => onChange(event.target.value)} className="h-7 w-9 bg-transparent" />
-      <Input value={value} onChange={(event) => onChange(event.target.value)} className="h-7 px-2 text-[11px]" />
-    </label>
-  )
-}
-
-function CheckField({ label, checked, onChange }: { label: string; checked: boolean; onChange: (checked: boolean) => void }) {
-  return (
-    <label className="flex items-center gap-2 text-[11px]">
-      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
-      <span>{label}</span>
-    </label>
-  )
-}
-
-function FileButton({ accept, label, onFile }: { accept: string; label: string; onFile: (file: File) => void | Promise<void> }) {
-  const inputRef = React.useRef<HTMLInputElement>(null)
-  return (
-    <>
-      <input
-        ref={inputRef}
-        type="file"
-        accept={accept}
-        className="hidden"
-        onChange={(event) => {
-          const file = event.target.files?.[0]
-          if (file) void onFile(file)
-          event.currentTarget.value = ""
-        }}
-      />
-      <Button size="sm" variant="secondary" onClick={() => inputRef.current?.click()}>{label}</Button>
-    </>
   )
 }

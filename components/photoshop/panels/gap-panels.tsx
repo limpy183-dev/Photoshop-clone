@@ -2,10 +2,11 @@
 
 import * as React from "react"
 import { useEditor } from "../editor-context"
-import { downloadText } from "../document-io"
+import { downloadBlob, downloadText } from "../document-io"
 import type { Note } from "../types"
 import { uid } from "../uid"
-import { appendThreadReply, createReviewReport, createReviewThread, setThreadResolved } from "../collaboration"
+import { appendThreadReply, createReviewPacketEntries, createReviewReport, createReviewThread, setThreadResolved } from "../collaboration"
+import { createStoredZipBlob } from "../zip-packaging"
 import { TimelinePanel } from "./timeline-panel"
 
 /**
@@ -78,10 +79,17 @@ export function CommentsPanel() {
           <option value="resolved">Resolved</option>
           <option value="all">All</option>
         </select>
-        <SmallButton
-          label="Export"
-          onClick={() => downloadText(createReviewReport(activeDoc), `${activeDoc.name}-review-report.md`, "text/markdown")}
-        />
+        <div className="flex gap-1">
+          <SmallButton
+            label="Export"
+            onClick={() => downloadText(createReviewReport(activeDoc), `${activeDoc.name}-review-report.md`, "text/markdown")}
+          />
+          <SmallButton
+            label="Packet"
+            ariaLabel="Export review packet ZIP"
+            onClick={() => downloadBlob(createStoredZipBlob(createReviewPacketEntries(activeDoc)), `${activeDoc.name}-review-packet.zip`)}
+          />
+        </div>
       </div>
       {threads.length ? threads.map((note) => (
         <div key={note.id} className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">

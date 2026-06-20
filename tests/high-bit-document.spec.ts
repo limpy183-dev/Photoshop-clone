@@ -4,9 +4,10 @@ import { createHighBitImageFromImageData, readHighBitPixel } from "../components
 import {
   getLayerHighBitImage,
   renderDocumentHighBitComposite,
+  applyHighBitFilter,
   serializeHighBitImagePayload,
 } from "../components/photoshop/high-bit-document"
-import { deserializeProject, exportRasterBlob, serializeProject } from "../components/photoshop/document-io"
+import { createProjectSerializationManifest, deserializeProject, exportRasterBlob, serializeProject } from "../components/photoshop/document-io"
 import type { Layer, PsDocument } from "../components/photoshop/types"
 import { installFixtureDom } from "./photoshop-fixtures"
 
@@ -119,6 +120,40 @@ test("project serialization round-trips high-bit layer payloads as editable sour
 
   expect(restoredSource?.storage).toBe("uint16")
   expect(readHighBitPixel(restoredSource!, 0, 0)?.r).toBe(32768)
+})
+
+test("project serialization can emit compact JSON and a payload manifest", () => {
+  installFixtureDom()
+  const doc = highBitDoc([highBitLayer()])
+  const pretty = serializeProject(doc)
+  const compact = serializeProject(doc, { pretty: false })
+  const manifest = createProjectSerializationManifest(doc, compact)
+
+  expect(pretty.length).toBeGreaterThan(compact.length)
+  expect(compact).not.toContain("\n  ")
+  expect(manifest.inlineCanvasDataUrls).toBeGreaterThan(0)
+  expect(manifest.highBitPayloads).toBeGreaterThan(0)
+  expect(manifest.recommendations.join(" ")).toContain("Canvas payloads")
+})
+
+test("float high-bit filters keep HDR RGB values while bounding alpha", () => {
+  const source = {
+    width: 1,
+    height: 1,
+    channels: 4 as const,
+    bitDepth: 32 as const,
+    colorMode: "RGB" as const,
+    storage: "float32" as const,
+    data: new Float32Array([1.5, 0.5, 0.25, 1.25]),
+    warnings: [],
+  }
+
+  const adjusted = applyHighBitFilter(source, "exposure", { ev: 1 })
+
+  expect(adjusted.storage).toBe("float32")
+  expect(adjusted.data[0]).toBeGreaterThan(1)
+  expect(adjusted.data[1]).toBeCloseTo(1, 5)
+  expect(adjusted.data[3]).toBeLessThanOrEqual(1)
 })
 
 test("high-bit raster export uses typed-array precision for TIFF when available", async () => {

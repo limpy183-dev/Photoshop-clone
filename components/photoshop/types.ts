@@ -1167,6 +1167,23 @@ export interface PluginEightBfBinarySummary {
   reason: string
 }
 
+export interface PluginManifestSignatureSummary {
+  signed: boolean
+  verified: boolean
+  signer?: string
+  algorithm?: string
+  digest?: string
+  reason: string
+}
+
+export interface PluginMarketplaceMetadata {
+  bundleId?: string
+  rating?: number
+  ratingsCount?: number
+  dependencyWarnings?: string[]
+  signature?: PluginManifestSignatureSummary
+}
+
 export interface PluginDescriptor {
   id: string
   name: string
@@ -1176,6 +1193,8 @@ export interface PluginDescriptor {
   version?: string
   author?: string
   description?: string
+  dependencies?: string[]
+  marketplace?: PluginMarketplaceMetadata
   permissions?: PluginPermission[]
   capabilities?: string[]
   runtimeAdapters?: Array<"browser" | "uxp" | "cep" | "8bf-native">

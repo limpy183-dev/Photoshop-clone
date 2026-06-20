@@ -42,6 +42,7 @@ export default tseslint.config(
       "gsap-skills-main/**",
       "node_modules/**",
       "out/**",
+      "public/vendor/**",
       "test-results/**",
       "tocodex-docs/**",
       "tsconfig.tsbuildinfo",

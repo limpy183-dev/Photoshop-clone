@@ -80,7 +80,7 @@ export function AutosaveRecovery() {
         const doc = docs.find((candidateDoc) => candidateDoc.id === planDoc.id)
         if (!doc) continue
         try {
-          const serialized = serializeProject(doc)
+          const serialized = serializeProject(doc, { pretty: false })
           serializedLengths[doc.id] = serialized.length
           serializedAutosavesRef.current[doc.id] = {
             documentId: doc.id,

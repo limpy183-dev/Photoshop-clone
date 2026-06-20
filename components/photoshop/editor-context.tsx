@@ -62,6 +62,7 @@ import type {
   VariableDataSet,
   VideoLayerProps,
 } from "./types"
+import { selectActiveDocument, selectActiveLayer, selectSelectedLayers } from "./editor-selectors"
 import { createSmartObjectSource, markSmartObjectLinked, replaceSmartObjectContents } from "./smart-objects"
 import {
   deleteEmptyLayersFromDocument,
@@ -3681,17 +3682,14 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const activeDoc = React.useMemo(
-    () => state.documents.find((d) => d.id === state.activeDocId) ?? null,
+    () => selectActiveDocument({ documents: state.documents, activeDocId: state.activeDocId }),
     [state.documents, state.activeDocId],
   )
   const activeLayer = React.useMemo(
-    () => activeDoc?.layers.find((l) => l.id === activeDoc.activeLayerId) ?? null,
+    () => selectActiveLayer(activeDoc),
     [activeDoc],
   )
-  const selectedLayers = React.useMemo(() => {
-    if (!activeDoc) return []
-    return activeDoc.layers.filter((l) => activeDoc.selectedLayerIds.includes(l.id))
-  }, [activeDoc])
+  const selectedLayers = React.useMemo(() => selectSelectedLayers(activeDoc), [activeDoc])
 
   // Stable fallbacks: avoid allocating a fresh empty history/snapshot on
   // every render, which would otherwise invalidate the context value's

@@ -33,9 +33,9 @@ export function LargeDocumentRecoveryDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Large Document Recovery</DialogTitle>
+          <DialogTitle>Advanced Import Wizard</DialogTitle>
           <DialogDescription>
-            Choose a browser-safe way to open this file.
+            Choose full-edit alternatives before expensive decoder work: safe preview, reduced scale, tile-only, or inspection.
           </DialogDescription>
         </DialogHeader>
         {plan ? (
@@ -95,7 +95,7 @@ export function LargeDocumentRecoveryDialog({
                 className="justify-start gap-2"
               >
                 <Search className="h-4 w-4" />
-                Inspect Only
+                Safe Preview / Inspect Only
               </Button>
             </div>
             {plan.warnings.length ? (

@@ -74,11 +74,19 @@ test("browser diagnostics report covers canvas webgl offscreen encoder opfs heap
       jsHeapSizeLimit: 1024 * MIB,
       declaredBytes: 64 * MIB,
     },
+    autosave: {
+      enabled: true,
+      intervalSec: 120,
+      dirtyDocumentCount: 1,
+      pendingRecoveryCount: 2,
+      storage: "indexeddb",
+    },
   }
 
   const report = createBrowserDiagnosticsReport(snapshot)
 
   expect(report.sections.map((section) => section.id)).toEqual([
+    "health",
     "scale",
     "canvas",
     "webgl",
@@ -89,6 +97,13 @@ test("browser diagnostics report covers canvas webgl offscreen encoder opfs heap
     "tile-only",
     "fallbacks",
   ])
+  expect(report.sections.find((section) => section.id === "health")?.rows).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ label: "Document risk", value: "high risk" }),
+      expect.objectContaining({ label: "Autosave", value: "on / 120s" }),
+      expect.objectContaining({ label: "Memory", value: "50% headroom" }),
+    ]),
+  )
   expect(report.sections.find((section) => section.id === "scale")?.rows).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ label: "Large-document strategy", value: "Tile-only or reduced-scale required" }),
@@ -133,6 +148,7 @@ test("browser diagnostics report covers canvas webgl offscreen encoder opfs heap
 
   const text = formatBrowserDiagnosticsReport(report)
   expect(text).toContain("Browser Diagnostics Report")
+  expect(text).toContain("Health Dashboard")
   expect(text).toContain("Canvas")
   expect(text).toContain("WebGL")
   expect(text).toContain("Scale Confidence")

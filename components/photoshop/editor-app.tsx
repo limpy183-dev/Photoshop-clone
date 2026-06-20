@@ -21,13 +21,23 @@ import {
   loadPreferencesFromStorage,
   normalizePreferences,
 } from "@/components/photoshop/preferences-engine"
-import { deserializeProject } from "@/components/photoshop/document-io"
+import {
+  deserializeProject,
+  generateDocumentThumbnail,
+  loadRasterCanvasFromFile,
+  serializeProject,
+} from "@/components/photoshop/document-io"
 import { requestCanvasZoom } from "@/components/photoshop/zoom-events"
 import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "@/components/photoshop/events"
 import { buildLearningIndex, runLearningIndexItem } from "@/components/photoshop/learning-index"
 import { findNewDocumentPreset } from "@/components/photoshop/new-document-presets"
 import { readRecentDocuments, rememberRecentDocument } from "@/components/photoshop/recent-documents"
-import { createDocumentFromPreset } from "@/components/photoshop/startup-documents"
+import { createDocumentFromPreset, createDocumentFromRasterImport } from "@/components/photoshop/startup-documents"
+import {
+  deleteStartupImageImport,
+  readStartupImageImport,
+  STARTUP_IMAGE_IMPORT_PARAM,
+} from "@/components/photoshop/startup-file-handoff"
 import {
   applyScreenMode,
   cycleScreenMode,
@@ -403,13 +413,24 @@ function StartupRouteEffects() {
   const presetName = searchParams.get("preset")
   const recentId = searchParams.get("recent")
   const learnId = searchParams.get("learn")
+  const startupImportId = searchParams.get(STARTUP_IMAGE_IMPORT_PARAM)
   const handledKeyRef = React.useRef<string | null>(null)
+  const inFlightKeyRef = React.useRef<string | null>(null)
 
   React.useEffect(() => {
-    const key = `${presetName ?? ""}|${recentId ?? ""}|${learnId ?? ""}`
-    if (handledKeyRef.current === key) return
-    handledKeyRef.current = key
+    const key = `${presetName ?? ""}|${recentId ?? ""}|${learnId ?? ""}|${startupImportId ?? ""}`
+    const hasStartupRoute = !!presetName || !!recentId || !!learnId || !!startupImportId
+    if (!hasStartupRoute || handledKeyRef.current === key || inFlightKeyRef.current === key) return
+    inFlightKeyRef.current = key
     let cancelled = false
+    const markHandled = () => {
+      if (cancelled) return
+      handledKeyRef.current = key
+      if (inFlightKeyRef.current === key) inFlightKeyRef.current = null
+    }
+    const clearInFlight = () => {
+      if (inFlightKeyRef.current === key) inFlightKeyRef.current = null
+    }
 
     const openPreset = () => {
       const preset = findNewDocumentPreset(presetName)
@@ -422,6 +443,7 @@ function StartupRouteEffects() {
         lifecycle: { storage: "new" },
       })
       requestRender()
+      markHandled()
       return true
     }
 
@@ -447,28 +469,80 @@ function StartupRouteEffects() {
         })
         rememberRecentDocument({ ...recent, updatedAt: Date.now() })
         requestRender()
+        markHandled()
       } catch (error) {
         if (!cancelled) {
           toast.error(error instanceof Error ? error.message : "Could not open recent document")
+          markHandled()
         }
       }
     }
 
-    openPreset()
-    void openRecent()
+    const openStartupImport = async () => {
+      if (!startupImportId || presetName || recentId) return
+      try {
+        const file = await readStartupImageImport(startupImportId)
+        if (!file) {
+          toast.error("The selected image is no longer available. Choose it again from Home.")
+          markHandled()
+          return
+        }
+        const raster = await loadRasterCanvasFromFile(file)
+        if (cancelled) return
+        const doc = createDocumentFromRasterImport(file, raster)
+        dispatch({
+          type: "replace-startup-document",
+          doc,
+          entry: makeHistoryEntry(doc, raster.mode === "reduced-scale" ? "Open Reduced Image" : "Open"),
+          lifecycle: {
+            storage: "opened-file",
+            fileKind: "image",
+            fileName: file.name,
+            lastSaveNote: "Opened from the Home image picker. The browser did not provide a reusable local file handle.",
+          },
+        })
+        rememberRecentDocument({
+          name: doc.name,
+          kind: "image",
+          serialized: serializeProject(doc),
+          thumbnail: generateDocumentThumbnail(doc),
+          fileName: file.name,
+          storage: "opened-file",
+        })
+        requestRender()
+        void deleteStartupImageImport(startupImportId)
+        markHandled()
+      } catch (error) {
+        if (!cancelled) {
+          toast.error(error instanceof Error ? error.message : "Could not open selected image")
+          markHandled()
+        }
+      }
+    }
+
+    const presetOpened = openPreset()
+    if (!presetOpened) {
+      void openRecent().finally(clearInFlight)
+      void openStartupImport().finally(clearInFlight)
+      if (!recentId && !startupImportId) clearInFlight()
+    } else {
+      clearInFlight()
+    }
 
     if (learnId) {
       window.setTimeout(() => {
         if (cancelled) return
         const item = buildLearningIndex().find((candidate) => candidate.id === learnId)
         if (item) runLearningIndexItem(item)
+        markHandled()
       }, 350)
     }
 
     return () => {
       cancelled = true
+      clearInFlight()
     }
-  }, [dispatch, learnId, presetName, recentId, requestRender])
+  }, [dispatch, learnId, presetName, recentId, requestRender, startupImportId])
 
   return null
 }

@@ -6,6 +6,8 @@ import type {
   PluginDescriptor,
   PluginCepManifestSummary,
   PluginEightBfBinarySummary,
+  PluginManifestSignatureSummary,
+  PluginMarketplaceMetadata,
   PluginPermission,
   PluginUxpEntrypoint,
   PluginUxpManifestSummary,
@@ -142,6 +144,13 @@ export interface PluginInstallPermissionReview {
   requiresPrompt: boolean
   permissions: Array<{ id: PluginPermission; label: string; description: string }>
   capabilities: string[]
+  marketplace?: {
+    rating?: number
+    ratingsCount?: number
+    dependencies: string[]
+    dependencyWarnings: string[]
+    signature: PluginManifestSignatureSummary
+  }
 }
 
 export function getPluginManifestSchema() {
@@ -189,6 +198,13 @@ export function getPluginManifestSchema() {
               maxItems: 16,
               items: { type: "string", maxLength: 80 },
             },
+            dependencies: {
+              type: "array",
+              maxItems: 16,
+              items: { type: "string", maxLength: 80 },
+            },
+            marketplace: { type: "object" },
+            signature: { type: "object" },
             uxpManifest: { type: "object" },
             cepManifest: { type: "object" },
             binary8bf: { type: "object" },
@@ -400,6 +416,70 @@ function normalizeRuntimeAdapters(value: unknown): PluginDescriptor["runtimeAdap
     }
   }
   return out.length ? out : undefined
+}
+
+function normalizeDependencies(value: unknown): string[] | undefined {
+  const source = Array.isArray(value) ? value : []
+  const out: string[] = []
+  for (const item of source.slice(0, 16)) {
+    const label = cleanOptionalText(item, 80)
+    if (label && !out.includes(label)) out.push(label)
+  }
+  return out.length ? out : undefined
+}
+
+function normalizeManifestSignature(value: unknown): PluginManifestSignatureSummary | undefined {
+  if (!isRecord(value)) return undefined
+  const signer = cleanOptionalText(value.signer ?? value.issuer ?? value.signedBy, 80)
+  const digest = cleanOptionalText(value.digest ?? value.manifestDigest, 128)
+  const algorithm = cleanOptionalText(value.algorithm, 32) ?? (digest ? "sha256" : undefined)
+  const signed = cleanBoolean(value.signed, !!signer || !!digest)
+  const expectedDigest = cleanOptionalText(value.expectedDigest, 128)
+  const verified = signed && !!digest && (!expectedDigest || expectedDigest === digest)
+  return {
+    signed,
+    verified,
+    signer,
+    algorithm,
+    digest,
+    reason: signed
+      ? verified
+        ? "Manifest signature metadata is present and the digest matches the local bundle record."
+        : "Manifest signature metadata is present, but the local bundle digest could not be verified."
+      : "Manifest is unsigned.",
+  }
+}
+
+function dependencyWarningsFor(dependencies: readonly string[]) {
+  const warnings: string[] = []
+  for (const dependency of dependencies) {
+    if (/native|8bf|cep|uxp|external|cloud/i.test(dependency)) {
+      warnings.push(`${dependency} may need a browser-safe adapter or local bundle fallback.`)
+    }
+  }
+  return warnings
+}
+
+function normalizeMarketplaceMetadata(value: unknown, dependencies: readonly string[], signatureFallback?: unknown): PluginMarketplaceMetadata | undefined {
+  const source = isRecord(value) ? value : {}
+  const rating = typeof source.rating === "number" ? cleanNumber(source.rating, 0, 0, 5) : undefined
+  const ratingsCount = typeof source.ratingsCount === "number" ? Math.round(cleanNumber(source.ratingsCount, 0, 0, 1_000_000)) : undefined
+  const declaredWarnings = normalizeDependencies(source.dependencyWarnings) ?? []
+  const dependencyWarnings = [...new Set([...declaredWarnings, ...dependencyWarningsFor(dependencies)])]
+  const signature = normalizeManifestSignature(source.signature ?? signatureFallback)
+  const bundleId = cleanOptionalText(source.bundleId, 120)
+  if (!bundleId && rating === undefined && ratingsCount === undefined && !dependencyWarnings.length && !signature) return undefined
+  return {
+    bundleId,
+    rating,
+    ratingsCount,
+    dependencyWarnings: dependencyWarnings.length ? dependencyWarnings : undefined,
+    signature: signature ?? {
+      signed: false,
+      verified: false,
+      reason: "Manifest is unsigned.",
+    },
+  }
 }
 
 function normalizeUxpManifestSummary(value: unknown): PluginUxpManifestSummary | null {
@@ -699,10 +779,13 @@ function normalizeOnePlugin(value: unknown, index: number, options: NormalizePlu
     permissions: normalizePermissions(value.permissions),
     capabilities: normalizeCapabilities(value.capabilities),
     runtimeAdapters: normalizeRuntimeAdapters(value.runtimeAdapters),
+    dependencies: normalizeDependencies(value.dependencies),
     createdAt: options.now,
     installedAt: options.now,
     source: "import",
   }
+  const marketplace = normalizeMarketplaceMetadata(value.marketplace, plugin.dependencies ?? [], value.signature)
+  if (marketplace) plugin.marketplace = marketplace
 
   const uxpManifest = normalizeUxpManifestSummary(value.uxpManifest)
   if (uxpManifest) plugin.uxpManifest = uxpManifest
@@ -871,8 +954,28 @@ export function buildPluginPackagePayload(
     exportedAt,
     manifest: buildPluginExportPayload(plugins, { exportedAt }),
     assets: options?.assets ?? [],
+    marketplace: buildPluginMarketplaceListing(plugins),
     host: describePluginHostCapabilities(),
   }
+}
+
+export function buildPluginMarketplaceListing(plugins: readonly PluginDescriptor[]) {
+  return plugins.map((plugin) => ({
+    id: plugin.id,
+    name: plugin.name,
+    kind: plugin.kind,
+    version: plugin.version,
+    bundleId: plugin.marketplace?.bundleId ?? plugin.id,
+    rating: plugin.marketplace?.rating ?? null,
+    ratingsCount: plugin.marketplace?.ratingsCount ?? 0,
+    dependencies: plugin.dependencies ?? [],
+    dependencyWarnings: plugin.marketplace?.dependencyWarnings ?? dependencyWarningsFor(plugin.dependencies ?? []),
+    signature: plugin.marketplace?.signature ?? {
+      signed: false,
+      verified: false,
+      reason: "Manifest is unsigned.",
+    },
+  }))
 }
 
 export function pluginInstallReview(plugin: PluginDescriptor): PluginInstallPermissionReview {
@@ -900,14 +1003,34 @@ export function pluginInstallReview(plugin: PluginDescriptor): PluginInstallPerm
       if (!capabilities.includes(capability)) capabilities.push(capability)
     }
   }
+  if (plugin.marketplace?.signature) {
+    capabilities.push(plugin.marketplace.signature.verified ? "Signed manifest verified" : "Manifest signature unverified")
+  }
+  if (plugin.marketplace?.dependencyWarnings?.length) {
+    capabilities.push(`${plugin.marketplace.dependencyWarnings.length} dependency warning${plugin.marketplace.dependencyWarnings.length === 1 ? "" : "s"}`)
+  }
 
-  return {
+  const review: PluginInstallPermissionReview = {
     pluginId: plugin.id,
     name: plugin.name,
-    requiresPrompt: permissions.length > 0 || capabilities.length > 0,
+    requiresPrompt: permissions.length > 0 || capabilities.length > 0 || !!plugin.marketplace?.dependencyWarnings?.length,
     permissions,
     capabilities,
   }
+  if (plugin.marketplace) {
+    review.marketplace = {
+      rating: plugin.marketplace.rating,
+      ratingsCount: plugin.marketplace.ratingsCount,
+      dependencies: plugin.dependencies ?? [],
+      dependencyWarnings: plugin.marketplace.dependencyWarnings ?? [],
+      signature: plugin.marketplace.signature ?? {
+        signed: false,
+        verified: false,
+        reason: "Manifest is unsigned.",
+      },
+    }
+  }
+  return review
 }
 
 export function canPluginUsePermission(plugin: Pick<PluginDescriptor, "enabled" | "permissions">, permission: PluginPermission) {

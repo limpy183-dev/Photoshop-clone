@@ -12,6 +12,8 @@ import {
 } from "../browser-diagnostics"
 import { downloadText } from "../document-io"
 import { useEditor } from "../editor-context"
+import { loadPreferencesFromStorage } from "../preferences-engine"
+import { readAutosaves } from "../recent-documents"
 import { createTileOnlyCapabilityDashboard, type TileOnlyCapabilityDashboard, type TileOnlyCapabilityStatus } from "../tile-only-pipeline"
 import type { PsDocument } from "../types"
 
@@ -138,7 +140,7 @@ function TileOnlyDashboard({ dashboard }: { dashboard: TileOnlyCapabilityDashboa
 }
 
 export function BrowserDiagnosticsPanel() {
-  const { activeDoc } = useEditor()
+  const { activeDoc, documentStatuses } = useEditor()
   const [report, setReport] = React.useState<BrowserDiagnosticsReport | null>(null)
   const [loading, setLoading] = React.useState(false)
   const [message, setMessage] = React.useState("")
@@ -147,14 +149,24 @@ export function BrowserDiagnosticsPanel() {
     setLoading(true)
     setMessage("")
     try {
-      const snapshot = await collectBrowserDiagnosticsSnapshot(documentSnapshot(activeDoc))
+      const preferences = loadPreferencesFromStorage()
+      const pendingRecoveries = readAutosaves()
+      const snapshot = await collectBrowserDiagnosticsSnapshot(documentSnapshot(activeDoc), {
+        autosave: {
+          enabled: preferences.fileHandling.autoSave,
+          intervalSec: preferences.fileHandling.autosaveIntervalSec,
+          dirtyDocumentCount: Object.values(documentStatuses).filter((status) => status.dirty).length,
+          pendingRecoveryCount: pendingRecoveries.length,
+          storage: typeof indexedDB !== "undefined" ? "indexeddb" : typeof localStorage !== "undefined" ? "localstorage" : "unavailable",
+        },
+      })
       setReport(createBrowserDiagnosticsReport(snapshot))
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error))
     } finally {
       setLoading(false)
     }
-  }, [activeDoc])
+  }, [activeDoc, documentStatuses])
 
   React.useEffect(() => {
     refresh()

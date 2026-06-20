@@ -151,7 +151,11 @@ function readUnit(image: HighBitImage, index: number) {
 }
 
 function writeUnit(image: HighBitImage, index: number, value: number) {
-  const v = clamp(value)
+  const finite = Number.isFinite(value) ? value : 0
+  const isAlpha = index % 4 === 3
+  const v = image.storage === "float32"
+    ? (isAlpha ? clamp(finite) : Math.max(0, finite))
+    : clamp(finite)
   if (image.storage === "uint16") (image.data as Uint16Array)[index] = Math.round(v * 65535)
   else if (image.storage === "uint8") (image.data as Uint8ClampedArray)[index] = clamp8(v * 255)
   else (image.data as Float32Array)[index] = v

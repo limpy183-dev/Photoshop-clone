@@ -31,3 +31,33 @@ export function createDocumentFromPreset(preset: NewDocumentPreset): PsDocument 
 
   return doc
 }
+
+export function createDocumentFromRasterImport(
+  file: Pick<File, "name">,
+  raster: {
+    canvas: HTMLCanvasElement
+    originalWidth: number
+    originalHeight: number
+    scale: number
+    mode: "full" | "reduced-scale"
+  },
+): PsDocument {
+  const doc = makeDocument(file.name, raster.canvas.width, raster.canvas.height)
+  doc.layers[0].canvas.getContext("2d")!.drawImage(raster.canvas, 0, 0)
+  doc.metadata = {
+    ...(doc.metadata ?? {}),
+    title: file.name,
+    source: file.name,
+    createdAt: new Date().toISOString(),
+  }
+  if (raster.mode === "reduced-scale") {
+    doc.name = file.name.replace(/\.[^.]+$/, " (Reduced)")
+    doc.metadata = {
+      ...(doc.metadata ?? {}),
+      title: file.name,
+      source: file.name,
+      description: `Opened at ${(raster.scale * 100).toFixed(1)}% scale from ${raster.originalWidth} x ${raster.originalHeight}px.`,
+    }
+  }
+  return doc
+}

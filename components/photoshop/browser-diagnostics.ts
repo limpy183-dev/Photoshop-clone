@@ -21,7 +21,7 @@ export interface BrowserDiagnosticRow {
 }
 
 export interface BrowserDiagnosticSection {
-  id: "scale" | "canvas" | "webgl" | "offscreen" | "encoders" | "opfs" | "heap" | "tile-only" | "fallbacks"
+  id: "health" | "scale" | "canvas" | "webgl" | "offscreen" | "encoders" | "opfs" | "heap" | "tile-only" | "fallbacks"
   title: string
   rows: BrowserDiagnosticRow[]
 }
@@ -87,6 +87,15 @@ export interface BrowserDiagnosticsHeapSnapshot {
   declaredBytes: number
 }
 
+export interface BrowserDiagnosticsAutosaveSnapshot {
+  enabled: boolean
+  intervalSec: number | null
+  dirtyDocumentCount: number
+  pendingRecoveryCount: number
+  storage: "indexeddb" | "localstorage" | "opfs" | "unavailable"
+  lastRunAt?: string | null
+}
+
 export interface BrowserDiagnosticsSnapshot {
   generatedAt: string
   userAgent: string
@@ -98,6 +107,7 @@ export interface BrowserDiagnosticsSnapshot {
   imageEncoders: BrowserDiagnosticsImageEncoderSnapshot[]
   opfs: BrowserDiagnosticsOpfsSnapshot
   heap: BrowserDiagnosticsHeapSnapshot
+  autosave?: BrowserDiagnosticsAutosaveSnapshot
 }
 
 export interface BrowserDiagnosticsReport {
@@ -308,6 +318,7 @@ function currentUserAgent() {
 
 export async function collectBrowserDiagnosticsSnapshot(
   documentSnapshot?: BrowserDiagnosticsDocumentSnapshot | null,
+  environment?: { autosave?: BrowserDiagnosticsAutosaveSnapshot },
 ): Promise<BrowserDiagnosticsSnapshot> {
   const canvasProbe = detectRuntimeCanvasLimit()
   const heapSample = createHeapMemoryMonitor({ tracker: getGlobalMemoryBudget() }).sample()
@@ -336,6 +347,7 @@ export async function collectBrowserDiagnosticsSnapshot(
       jsHeapSizeLimit: heapSample.jsHeapSizeLimit,
       declaredBytes: heapSample.declaredBytes,
     },
+    autosave: environment?.autosave,
   }
 }
 
@@ -369,6 +381,48 @@ function statusForTileCapability(statusValue: TileOnlyCapabilityStatus): Browser
   if (statusValue === "safe") return "ok"
   if (statusValue === "approximate") return "warn"
   return "unavailable"
+}
+
+function healthScore(fallbacks: readonly string[], snapshot: BrowserDiagnosticsSnapshot) {
+  const width = Number(snapshot.document?.width ?? 0)
+  const height = Number(snapshot.document?.height ?? 0)
+  const memoryPressure = snapshot.heap.jsHeapSizeLimit && snapshot.heap.usedJSHeapSize
+    ? snapshot.heap.usedJSHeapSize / snapshot.heap.jsHeapSizeLimit
+    : 0
+  const risk = [
+    documentExceedsCanvas(snapshot),
+    documentExceedsTexture(snapshot),
+    memoryPressure > 0.7,
+    (snapshot.autosave?.enabled === false && width > 0 && height > 0),
+  ].filter(Boolean).length
+  if (fallbacks.length >= 4 || risk >= 3) return { value: "high risk", status: "warn" as const }
+  if (fallbacks.length || risk) return { value: "watch", status: "info" as const }
+  return { value: "healthy", status: "ok" as const }
+}
+
+function autosaveValue(snapshot: BrowserDiagnosticsSnapshot) {
+  const autosave = snapshot.autosave
+  if (!autosave) return { value: "not sampled", status: "info" as const, detail: "Open the diagnostics panel in the browser to include preference and recovery-store status." }
+  const interval = autosave.intervalSec ? `${autosave.intervalSec}s` : "no interval"
+  return {
+    value: autosave.enabled ? `on / ${interval}` : "off",
+    status: autosave.enabled ? "ok" as const : "warn" as const,
+    detail: `${autosave.pendingRecoveryCount} recovery entr${autosave.pendingRecoveryCount === 1 ? "y" : "ies"} in ${autosave.storage}; ${autosave.dirtyDocumentCount} dirty document${autosave.dirtyDocumentCount === 1 ? "" : "s"}.`,
+  }
+}
+
+function heapHeadroomValue(snapshot: BrowserDiagnosticsSnapshot) {
+  const limit = snapshot.heap.jsHeapSizeLimit
+  const used = snapshot.heap.usedJSHeapSize
+  if (!snapshot.heap.supported || !limit || !used) {
+    return { value: "unavailable", status: "info" as const, detail: "Browser heap API is unavailable; declared editor allocations are still tracked." }
+  }
+  const ratio = used / limit
+  return {
+    value: `${Math.max(0, Math.round((1 - ratio) * 100))}% headroom`,
+    status: ratio > 0.85 ? "warn" as const : "ok" as const,
+    detail: `${formatBytes(used)} used of ${formatBytes(limit)}.`,
+  }
 }
 
 function tileLayerDescriptors(snapshot: BrowserDiagnosticsSnapshot): TileOnlyExportLayerDescriptor[] {
@@ -485,6 +539,48 @@ export function createBrowserDiagnosticsReport(snapshot: BrowserDiagnosticsSnaps
   ]
 
   const sections: BrowserDiagnosticSection[] = [
+    {
+      id: "health",
+      title: "Health Dashboard",
+      rows: [
+        {
+          label: "Document risk",
+          ...healthScore(fallbacks, snapshot),
+          detail: width && height
+            ? `${width.toLocaleString()} x ${height.toLocaleString()} px, ${snapshot.document?.bitDepth ?? 8}-bit ${snapshot.document?.colorMode ?? "RGB"}.`
+            : "No active document is open.",
+        },
+        {
+          label: "Memory",
+          ...heapHeadroomValue(snapshot),
+        },
+        {
+          label: "Tile cache",
+          value: tileDashboard
+            ? `${tileDashboard.tileColumns} x ${tileDashboard.tileRows} / ${tileDashboard.blockedCount} blocked`
+            : "no document",
+          status: tileDashboard?.blockedCount ? "warn" : "ok",
+          detail: tileDashboard
+            ? `${tileDashboard.safeCount} safe, ${tileDashboard.approximateCount} approximate, ${tileDashboard.blockedCount} blocked tile workflows.`
+            : "Open a document to compute tile-only workflow health.",
+        },
+        {
+          label: "Workers",
+          value: offscreenDiagnostic.active ? "worker previews active" : "main thread previews",
+          status: offscreenDiagnostic.active ? "ok" : "warn",
+          detail: offscreenDiagnostic.warning ?? offscreenDiagnostic.reason,
+        },
+        {
+          label: "WebGL limit",
+          value: snapshot.webgl.maxTextureSize ? `${snapshot.webgl.maxTextureSize}px texture` : "unavailable",
+          status: documentExceedsTexture(snapshot) ? "warn" : status(!!snapshot.webgl.maxTextureSize),
+        },
+        {
+          label: "Autosave",
+          ...autosaveValue(snapshot),
+        },
+      ],
+    },
     {
       id: "scale",
       title: "Scale Confidence",

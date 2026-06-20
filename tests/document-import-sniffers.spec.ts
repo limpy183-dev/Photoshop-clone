@@ -104,11 +104,11 @@ function bmpHeader(width: number, height: number) {
   ])
 }
 
-function isoBmffHeader(width: number, height: number) {
+function isoBmffHeader(width: number, height: number, brand = "avif") {
   return new Uint8Array([
     ...be32(16),
     ...ascii("ftyp"),
-    ...ascii("avif"),
+    ...ascii(brand),
     0, 0, 0, 0,
     ...be32(20),
     ...ascii("ispe"),
@@ -156,6 +156,14 @@ for (const fixture of [
     })
   })
 }
+
+test("sniffs HEIF dimensions before decoder import", () => {
+  expect(sniffRasterDimensions(isoBmffHeader(640, 480, "heic"))).toEqual({
+    width: 640,
+    height: 480,
+    format: "ISO-BMFF",
+  })
+})
 
 test("returns null for unknown or truncated raster headers", () => {
   expect(sniffRasterDimensions(new Uint8Array([1, 2, 3, 4]))).toBeNull()

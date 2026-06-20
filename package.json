@@ -8,9 +8,13 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test:smoke": "playwright test",
+    "test:smoke": "playwright test --grep @matrix-smoke",
+    "test:full": "playwright test --grep-invert @visual",
+    "test:full:shard": "playwright test --grep-invert @visual --shard",
+    "test:visual": "playwright test --grep @visual",
     "check:capabilities": "node scripts/check-capabilities.mjs",
-    "verify": "npm run lint && npm run typecheck && npm run check:capabilities && npm run build && npm run test:smoke"
+    "analyze:bundle": "node scripts/analyze-bundle.mjs",
+    "verify": "npm run lint && npm run typecheck && npm run check:capabilities && npm run build && npm run analyze:bundle && npm run test:smoke"
   },
   "dependencies": {
     "@abasb75/jpeg2000-decoder": "^2.5.4-f",
@@ -85,6 +89,7 @@
     "typescript-eslint": "^8.59.2"
   },
   "overrides": {
+    "esbuild": "0.28.1",
     "next": {
       "postcss": "8.5.14"
     }

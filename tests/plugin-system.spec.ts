@@ -6,6 +6,7 @@ import {
   PLUGIN_PACKAGE_FORMAT,
   describePluginHostCapabilities,
   describeNativeEightBfCompatibility,
+  buildPluginMarketplaceListing,
   buildPluginPackagePayload,
   buildPluginExportPayload,
   buildPluginIframeSrcDoc,
@@ -300,6 +301,63 @@ test("plugin manifest import normalizes browser-safe manifests and legacy descri
   ])
   expect(imported[0].panelHtml).toContain("<main>Panel</main>")
   expect(imported[0].panelHtml).not.toContain("parent.location")
+})
+
+test("plugin marketplace metadata simulates ratings dependencies and signed manifests", () => {
+  const [plugin] = normalizePluginImportPayload(
+    {
+      format: PLUGIN_MANIFEST_FORMAT,
+      version: 1,
+      plugins: [
+        {
+          name: "Marketplace Retouch Pack",
+          kind: "ux-plugin",
+          version: "3.2.1",
+          dependencies: ["browser-action-engine", "native 8bf fallback"],
+          marketplace: {
+            bundleId: "bundle.retouch.local",
+            rating: 4.7,
+            ratingsCount: 128,
+            signature: {
+              signed: true,
+              signer: "Local Test Store",
+              algorithm: "sha256",
+              digest: "abc123",
+              expectedDigest: "abc123",
+            },
+          },
+        },
+      ],
+    },
+    { fileSizeBytes: 2048, now: 1000, makeId: (prefix, index) => `${prefix}_${index}` },
+  )
+
+  expect(plugin).toMatchObject({
+    dependencies: ["browser-action-engine", "native 8bf fallback"],
+    marketplace: {
+      bundleId: "bundle.retouch.local",
+      rating: 4.7,
+      ratingsCount: 128,
+      signature: { signed: true, verified: true, signer: "Local Test Store" },
+      dependencyWarnings: ["native 8bf fallback may need a browser-safe adapter or local bundle fallback."],
+    },
+  })
+  expect(buildPluginMarketplaceListing([plugin])).toEqual([
+    expect.objectContaining({
+      bundleId: "bundle.retouch.local",
+      rating: 4.7,
+      dependencyWarnings: ["native 8bf fallback may need a browser-safe adapter or local bundle fallback."],
+      signature: expect.objectContaining({ verified: true }),
+    }),
+  ])
+  expect(pluginInstallReview(plugin)).toMatchObject({
+    marketplace: {
+      dependencies: ["browser-action-engine", "native 8bf fallback"],
+      dependencyWarnings: ["native 8bf fallback may need a browser-safe adapter or local bundle fallback."],
+      signature: { signed: true, verified: true, signer: "Local Test Store", algorithm: "sha256", digest: "abc123", reason: expect.any(String) },
+    },
+    capabilities: expect.arrayContaining(["Signed manifest verified", "1 dependency warning"]),
+  })
 })
 
 test("plugin package payloads round-trip manifests with local library assets", () => {

@@ -2,6 +2,8 @@ import { expect, test } from "@playwright/test"
 
 import {
   appendThreadReply,
+  createReviewPacketEntries,
+  createReviewPacketJson,
   createReviewReport,
   createReviewThread,
   normalizeAnnotationGeometry,
@@ -94,6 +96,35 @@ test("review report summarizes open resolved threaded and geometric annotations"
   expect(report).toContain("Resolved: 1")
   expect(report).toContain("Check contrast on mobile crop.")
   expect(report).toContain("Arrow 2, 3 -> 30, 12")
+})
+
+test("review packet export creates portable JSON and ZIP-ready entries", () => {
+  const doc = richFixtureDocument()
+  const open = createReviewThread({
+    id: "comment_open",
+    x: 18,
+    y: 20,
+    author: "Mira",
+    text: "Check contrast on mobile crop.",
+    color: "#38bdf8",
+    tags: ["Mobile"],
+    now: 1_800_000_000_000,
+    geometry: { kind: "pin", x: 18, y: 20 },
+  })
+  const packet = createReviewPacketJson({ ...doc, notes: [open] }, { generatedAt: "2026-05-25T10:00:00.000Z" })
+  const entries = createReviewPacketEntries({ ...doc, notes: [open] }, { generatedAt: "2026-05-25T10:00:00.000Z" })
+
+  expect(packet).toMatchObject({
+    format: "ps-review-packet",
+    summary: { total: 1, open: 1, annotations: 1 },
+    comments: [expect.objectContaining({ id: "comment_open", geometry: { kind: "pin", x: 18, y: 20 } })],
+  })
+  expect(entries.map((entry) => entry.name)).toEqual([
+    "Fixture Document/manifest.json",
+    "Fixture Document/review-packet.json",
+    "Fixture Document/review-report.md",
+  ])
+  expect(new TextDecoder().decode(entries[1].data)).toContain("Check contrast on mobile crop.")
 })
 
 test("asset library bundles preserve tags and support search across tags groups and payload", () => {

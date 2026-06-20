@@ -888,6 +888,37 @@ export function MenuBar({
     return true
   }
 
+  const preflightLargeDocumentImport = async (
+    file: File,
+    source: "open" | "place",
+    picked?: { handle?: ReadableFileHandle; permission?: PermissionState | "unsupported" },
+  ) => {
+    const dimensions = await inspectImportFileDimensions(file).catch(() => null)
+    if (!dimensions) return false
+    const parsedPsd = dimensions.kind === "psd" || dimensions.kind === "psb"
+      ? await inspectPsdRecoveryFile(file).catch(() => null)
+      : null
+    const plan = planLargeDocumentOpen({
+      fileName: file.name,
+      kind: parsedPsd?.kind ?? dimensions.kind,
+      width: parsedPsd?.width ?? dimensions.width,
+      height: parsedPsd?.height ?? dimensions.height,
+      layerCount: parsedPsd?.parsedStructure.layerCount ?? 1,
+      tileable: (parsedPsd?.kind ?? dimensions.kind) === "psb",
+      parsedStructure: parsedPsd?.parsedStructure,
+    })
+    if (plan.defaultMode === "full" && plan.fitsBrowserCanvas) return false
+    setLargeDocumentRecovery({
+      file,
+      picked,
+      plan,
+      source,
+      reason: "Advanced import wizard opened from header preflight before heavy decoder work.",
+    })
+    toast.info("Advanced import wizard opened before decoding the oversized file.")
+    return true
+  }
+
   const lifecycleForPickedFile = React.useCallback((
     file: File,
     picked: { handle?: ReadableFileHandle } | undefined,
@@ -1632,7 +1663,7 @@ export function MenuBar({
     const lifecycle = documentStatuses[doc.id]
     const report = createDocumentReport(doc, "Project Export")
     const docWithReport = { ...doc, reports: [report, ...(doc.reports ?? [])].slice(0, 12) }
-    const serialized = serializeProject(docWithReport)
+    const serialized = serializeProject(docWithReport, { pretty: false })
     // Capture the history index at serialization time so edits made while the
     // async file write is in flight are not marked as saved.
     const savedHistoryIndex = documentHistoryVersions[doc.id] ?? 0
@@ -1729,6 +1760,7 @@ export function MenuBar({
       const file = picked.file
       try {
         const photoshopFamily = /\.(?:psd|psb)$/i.test(file.name) || file.type === "image/vnd.adobe.photoshop"
+        if (await preflightLargeDocumentImport(file, "open", picked)) return
         if (photoshopFamily) {
           const doc = await deserializePsdFile(file)
           const kind = /\.psb$/i.test(file.name) ? "PSB" : "PSD"
@@ -1841,6 +1873,7 @@ export function MenuBar({
       const file = picked.file
       if (!activeDoc) return
       try {
+        if (await preflightLargeDocumentImport(file, "place", picked)) return
         const raster = await loadRasterCanvasFromFile(file)
         await placeRasterCanvas(file, raster.canvas, "Place Embedded", picked)
       } catch (err) {

@@ -1,4 +1,6 @@
 import { expect, test } from "@playwright/test"
+import fs from "node:fs"
+import path from "node:path"
 
 import {
   createLargeDocumentInspectionDocument,
@@ -136,4 +138,17 @@ test("browser diagnostics report canvas, GPU, memory, and fallback limits clearl
     expect.stringContaining("tile-only"),
     expect.stringContaining("reduced-scale"),
   ]))
+})
+
+test("advanced import wizard is wired before heavy decoder work", () => {
+  const menuSource = fs.readFileSync(path.join(process.cwd(), "components/photoshop/menu-bar.tsx"), "utf8")
+  const dialogSource = fs.readFileSync(path.join(process.cwd(), "components/photoshop/large-document-recovery-dialog.tsx"), "utf8")
+  const openIndex = menuSource.indexOf("preflightLargeDocumentImport(file, \"open\", picked)")
+  const placeIndex = menuSource.indexOf("preflightLargeDocumentImport(file, \"place\", picked)")
+
+  expect(menuSource).toContain("preflightLargeDocumentImport")
+  expect(openIndex).toBeLessThan(menuSource.indexOf("deserializePsdFile(file)", openIndex))
+  expect(placeIndex).toBeLessThan(menuSource.indexOf("loadRasterCanvasFromFile(file)", placeIndex))
+  expect(dialogSource).toContain("Advanced Import Wizard")
+  expect(dialogSource).toContain("Safe Preview / Inspect Only")
 })

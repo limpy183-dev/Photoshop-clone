@@ -1896,6 +1896,27 @@ function canvasDataUrl(canvas?: HTMLCanvasElement | null) {
   return canvas.toDataURL("image/png")
 }
 
+export interface ProjectSerializationOptions {
+  pretty?: boolean
+}
+
+export interface ProjectSerializationManifest {
+  format: "psprojson"
+  version: 2
+  documentId: string
+  documentName: string
+  width: number
+  height: number
+  layerCount: number
+  channelCount: number
+  inlineCanvasDataUrls: number
+  inlineCanvasBytesEstimate: number
+  highBitPayloads: number
+  jsonBytes: number
+  blockingRisk: "low" | "medium" | "high"
+  recommendations: string[]
+}
+
 function serializeSelection(selection: Selection) {
   const { mask, ...rest } = selection
   return { ...rest, maskDataUrl: canvasDataUrl(mask) }
@@ -1946,29 +1967,78 @@ function serializeLayer(layer: Layer) {
   }
 }
 
-export function serializeProject(doc: PsDocument) {
+function projectEnvelope(doc: PsDocument) {
   const { layers, channels, selection, quickMaskCanvas, ...rest } = doc
-  return JSON.stringify(
-    {
-      app: "Photoshop Web",
-      format: "psprojson",
-      version: 2,
-      savedAt: new Date().toISOString(),
-      savedWith: {
-        supports: ["adjustment-layers", "smart-filters", "asset-library", "export-presets", "layer-comps", "timeline", "video-layers", "3d-scenes", "plugins", "variable-data", "advanced-formats", "annotations", "guides", "slices", "round-trip-reports", "metadata", "color-management", "print-settings"],
-      },
-      document: {
-        ...rest,
-        highBitImageData: serializeHighBitImagePayload((doc as HighBitDocument).__highBitImageData),
-        selection: serializeSelection(selection),
-        quickMaskCanvasDataUrl: canvasDataUrl(quickMaskCanvas),
-        layers: layers.map(serializeLayer),
-        channels: (channels ?? []).map(serializeChannel),
-      },
+  return {
+    app: "Photoshop Web",
+    format: "psprojson",
+    version: 2,
+    savedAt: new Date().toISOString(),
+    savedWith: {
+      supports: ["adjustment-layers", "smart-filters", "asset-library", "export-presets", "layer-comps", "timeline", "video-layers", "3d-scenes", "plugins", "variable-data", "advanced-formats", "annotations", "guides", "slices", "round-trip-reports", "metadata", "color-management", "print-settings"],
     },
-    null,
-    2,
-  )
+    document: {
+      ...rest,
+      highBitImageData: serializeHighBitImagePayload((doc as HighBitDocument).__highBitImageData),
+      selection: serializeSelection(selection),
+      quickMaskCanvasDataUrl: canvasDataUrl(quickMaskCanvas),
+      layers: layers.map(serializeLayer),
+      channels: (channels ?? []).map(serializeChannel),
+    },
+  }
+}
+
+export function serializeProject(doc: PsDocument, options: ProjectSerializationOptions = {}) {
+  return JSON.stringify(projectEnvelope(doc), null, options.pretty === false ? 0 : 2)
+}
+
+export function serializeProjectCompact(doc: PsDocument) {
+  return serializeProject(doc, { pretty: false })
+}
+
+function encodedByteEstimate(dataUrl: string) {
+  const comma = dataUrl.indexOf(",")
+  const encoded = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl
+  return Math.floor((encoded.length * 3) / 4)
+}
+
+export function createProjectSerializationManifest(doc: PsDocument, serialized = serializeProjectCompact(doc)): ProjectSerializationManifest {
+  const canvasDataUrls = serialized.match(/data:image\/png;base64,[A-Za-z0-9+/=]+/g) ?? []
+  const highBitPayloads = (serialized.match(/"highBitImageData"\s*:/g) ?? []).length
+  const jsonBytes = new TextEncoder().encode(serialized).byteLength
+  const inlineCanvasBytesEstimate = canvasDataUrls.reduce((sum, dataUrl) => sum + encodedByteEstimate(dataUrl), 0)
+  const recommendations: string[] = []
+  if (canvasDataUrls.length) {
+    recommendations.push("Canvas payloads are embedded as PNG data URLs; prefer ZIP/package storage or worker serialization for large documents.")
+  }
+  if (inlineCanvasBytesEstimate > 10 * 1024 * 1024) {
+    recommendations.push("Inline canvas payloads exceed 10 MB; save and autosave should run outside the interactive path.")
+  }
+  if (highBitPayloads) {
+    recommendations.push("High-bit typed-array payloads are preserved separately from 8-bit preview canvases.")
+  }
+  const blockingRisk: ProjectSerializationManifest["blockingRisk"] =
+    jsonBytes > 25 * 1024 * 1024 || inlineCanvasBytesEstimate > 20 * 1024 * 1024
+      ? "high"
+      : jsonBytes > 5 * 1024 * 1024 || inlineCanvasBytesEstimate > 4 * 1024 * 1024
+        ? "medium"
+        : "low"
+  return {
+    format: "psprojson",
+    version: 2,
+    documentId: doc.id,
+    documentName: doc.name,
+    width: doc.width,
+    height: doc.height,
+    layerCount: doc.layers.length,
+    channelCount: doc.channels?.length ?? 0,
+    inlineCanvasDataUrls: canvasDataUrls.length,
+    inlineCanvasBytesEstimate,
+    highBitPayloads,
+    jsonBytes,
+    blockingRisk,
+    recommendations,
+  }
 }
 
 function parseProjectEnvelope(text: string) {

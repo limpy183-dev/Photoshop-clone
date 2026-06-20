@@ -371,7 +371,10 @@ function readHighBitUnit(data: HighBitImage["data"], storage: HighBitImage["stor
 }
 
 function writeHighBitUnit(data: HighBitImage["data"], storage: HighBitImage["storage"], index: number, value: number) {
-  const v = clamp(value)
+  const finite = Number.isFinite(value) ? value : 0
+  const v = storage === "float32"
+    ? (index % 4 === 3 ? clamp(finite) : Math.max(0, finite))
+    : clamp(finite)
   if (storage === "uint16") data[index] = Math.round(v * 65535)
   else if (storage === "uint8") data[index] = clamp8(v * 255)
   else data[index] = v
@@ -580,7 +583,7 @@ export function applyHighBitAdjustment(source: HighBitImage, adjustment: HighBit
     writeHighBitUnit(out, storage, i, r)
     writeHighBitUnit(out, storage, i + 1, g)
     writeHighBitUnit(out, storage, i + 2, b)
-    out[i + 3] = source.data[i + 3]
+    writeHighBitUnit(out, storage, i + 3, readHighBitUnit(source.data, storage, i + 3))
   }
   return cloneHighBitWithData(source, out)
 }

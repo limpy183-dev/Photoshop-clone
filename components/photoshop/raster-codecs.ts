@@ -1,4 +1,5 @@
 import { assertCanvasSize, canvasLimitLabel, canvasSizeError, clampCanvasSize } from "./canvas-limits"
+import { sniffRasterDimensions } from "./document-import-sniffers"
 import { planTiledBackingStore } from "./tile-store"
 import type { HighBitImage } from "./color-pipeline"
 import type { ContentCredential, TypographyEmbeddedFont } from "./types"
@@ -15,6 +16,19 @@ export interface DecodedRaster {
   imageData: ImageData
   warnings: string[]
   metadata?: Record<string, unknown>
+}
+
+type LibRawDecodeSettings = Record<string, unknown>
+
+interface LibRawDecoderInstance {
+  open(data: Uint8Array, settings?: LibRawDecodeSettings): unknown
+  metadata(full?: boolean): Record<string, unknown>
+  imageData(): Record<string, unknown>
+  delete?: () => void
+}
+
+interface LibRawRuntimeModule {
+  LibRaw: new () => LibRawDecoderInstance
 }
 
 export type TiffCompression = "none" | "lzw" | "deflate"
@@ -184,6 +198,17 @@ export interface HeicEncodeOptions extends Omit<HeifEncodeOptions, "encodeAvif">
   }>
 }
 
+export interface Jpeg2000EncodeCodec {
+  J2KEncoder: new () => {
+    getDecodedBuffer: (frameInfo: { bitsPerSample: number; componentCount: number; width: number; height: number; isSigned: boolean }) => Uint8Array
+    getEncodedBuffer: () => Uint8Array
+    encode: () => void
+    setDecompositions: (value: number) => void
+    setQuality: (reversible: boolean, quality: number) => void
+    delete?: () => void
+  }
+}
+
 export interface Jpeg2000EncodeOptions {
   quality?: number
   reversible?: boolean
@@ -197,6 +222,7 @@ export interface Jpeg2000EncodeOptions {
     iccProfile?: Uint8Array
     profileControls?: Record<string, string | number | boolean>
   }
+  openJpegCodec?: Jpeg2000EncodeCodec | Promise<Jpeg2000EncodeCodec>
 }
 
 export interface OpenExrEncodeOptions {
@@ -256,6 +282,25 @@ export interface ExrInspection {
 const textDecoder = new TextDecoder("ascii")
 const clamp8 = (value: number) => Math.max(0, Math.min(255, Math.round(value)))
 const EXR_FLOAT_TYPE = 1015 as const
+const TIFF_EXTENSIONS = new Set(["tif", "tiff"])
+const TIFF_COMPATIBLE_EXTENSIONS = new Set(["tif", "tiff", "dng"])
+const PNM_EXTENSIONS = new Set(["ppm", "pgm", "pbm", "pnm"])
+const TGA_EXTENSIONS = new Set(["tga", "vda", "icb", "vst"])
+const HEIF_EXTENSIONS = new Set(["heif", "heic", "hif"])
+const HEIF_BRANDS = new Set(["heic", "heif", "heix", "hevc", "hevx", "mif1", "msf1"])
+const JPEG2000_EXTENSIONS = new Set(["jp2", "j2k", "jpf", "jpx", "jpm"])
+const RAW_EXTENSIONS = new Set(["raw", "dng", "cr2", "nef", "arw"])
+
+interface AdvancedRasterSignature {
+  isTiff: boolean
+  isTiffCompatible: boolean
+  isPnm: boolean
+  isTga: boolean
+  isExr: boolean
+  isHeif: boolean
+  isJpeg2000: boolean
+  isRaw: boolean
+}
 
 function concatUint8(arrays: Uint8Array[]): Uint8Array {
   let total = 0
@@ -413,21 +458,68 @@ function extensionForName(name: string) {
   return name.split(".").pop()?.toLowerCase() ?? ""
 }
 
+function bufferHead(buffer: ArrayBuffer, length: number) {
+  return new Uint8Array(buffer, 0, Math.min(length, buffer.byteLength))
+}
+
+function hasTiffHeader(head: Uint8Array) {
+  return (
+    (head[0] === 0x49 && head[1] === 0x49 && head[2] === 42 && head[3] === 0) ||
+    (head[0] === 0x4d && head[1] === 0x4d && head[2] === 0 && head[3] === 42)
+  )
+}
+
+function hasPnmHeader(head: Uint8Array) {
+  return head[0] === 0x50 && head[1] >= 0x31 && head[1] <= 0x36
+}
+
+function hasExrHeader(head: Uint8Array) {
+  return head[0] === 0x76 && head[1] === 0x2f && head[2] === 0x31 && head[3] === 0x01
+}
+
+function hasHeifBrand(buffer: ArrayBuffer, head: Uint8Array) {
+  return head.length >= 12 && readAscii(buffer, 4, 4) === "ftyp" && HEIF_BRANDS.has(readAscii(buffer, 8, 4))
+}
+
+function hasJpeg2000Signature(head: Uint8Array) {
+  return (
+    (head[0] === 0xff && head[1] === 0x4f) ||
+    (head.length >= 12 && head[4] === 0x6a && head[5] === 0x50 && head[6] === 0x20 && head[7] === 0x20)
+  )
+}
+
+function sniffAdvancedRaster(buffer: ArrayBuffer, name = "", mime = ""): AdvancedRasterSignature {
+  const ext = extensionForName(name)
+  const head = bufferHead(buffer, 32)
+  const isTiff = hasTiffHeader(head) || TIFF_EXTENSIONS.has(ext)
+  const isPnm = PNM_EXTENSIONS.has(ext) || hasPnmHeader(head)
+  const isHeif = mime === "image/heic" || mime === "image/heif" || HEIF_EXTENSIONS.has(ext) || hasHeifBrand(buffer, head)
+  return {
+    isTiff,
+    isTiffCompatible: isTiff || TIFF_COMPATIBLE_EXTENSIONS.has(ext),
+    isPnm,
+    isTga: TGA_EXTENSIONS.has(ext),
+    isExr: ext === "exr" || hasExrHeader(head),
+    isHeif,
+    isJpeg2000: JPEG2000_EXTENSIONS.has(ext) || hasJpeg2000Signature(head),
+    isRaw: RAW_EXTENSIONS.has(ext),
+  }
+}
+
 function scaleSample(value: number, maxValue: number) {
   if (maxValue <= 0) return 0
   return clamp8((value / maxValue) * 255)
 }
 
-export function decodeAdvancedRasterBuffer(buffer: ArrayBuffer, name = ""): DecodedRaster | null {
-  const ext = extensionForName(name)
-  const head = new Uint8Array(buffer.slice(0, Math.min(16, buffer.byteLength)))
-  const isTiff =
-    (head[0] === 0x49 && head[1] === 0x49 && head[2] === 42 && head[3] === 0) ||
-    (head[0] === 0x4d && head[1] === 0x4d && head[2] === 0 && head[3] === 42)
-  if (isTiff || ["tif", "tiff"].includes(ext)) return decodeTiffBuffer(buffer)
-  if (["ppm", "pgm", "pbm", "pnm"].includes(ext) || (head[0] === 0x50 && head[1] >= 0x31 && head[1] <= 0x36)) return decodePnmBuffer(buffer)
-  if (["tga", "vda", "icb", "vst"].includes(ext)) return decodeTgaBuffer(buffer)
+function decodeSyncAdvancedRaster(buffer: ArrayBuffer, signature: AdvancedRasterSignature): DecodedRaster | null {
+  if (signature.isTiff) return decodeTiffBuffer(buffer)
+  if (signature.isPnm) return decodePnmBuffer(buffer)
+  if (signature.isTga) return decodeTgaBuffer(buffer)
   return null
+}
+
+export function decodeAdvancedRasterBuffer(buffer: ArrayBuffer, name = ""): DecodedRaster | null {
+  return decodeSyncAdvancedRaster(buffer, sniffAdvancedRaster(buffer, name))
 }
 
 export function inspectExrHeader(buffer: ArrayBuffer): ExrInspection {
@@ -529,37 +621,48 @@ function readExrDataWindow(buffer: ArrayBuffer): { width: number; height: number
 }
 
 export async function decodeAdvancedRasterBufferAsync(buffer: ArrayBuffer, name = "", mime = ""): Promise<DecodedRaster | null> {
-  const ext = extensionForName(name)
-  const head = new Uint8Array(buffer.slice(0, Math.min(32, buffer.byteLength)))
-  const isTiff =
-    (head[0] === 0x49 && head[1] === 0x49 && head[2] === 42 && head[3] === 0) ||
-    (head[0] === 0x4d && head[1] === 0x4d && head[2] === 0 && head[3] === 42)
-  const isExr = head[0] === 0x76 && head[1] === 0x2f && head[2] === 0x31 && head[3] === 0x01
-  const isHeif =
-    mime === "image/heic" ||
-    mime === "image/heif" ||
-    ["heif", "heic", "hif"].includes(ext) ||
-    (head.length >= 12 && readAscii(buffer, 4, 4) === "ftyp" && /^(heic|heif|heix|hevc|hevx|mif1|msf1)$/.test(readAscii(buffer, 8, 4)))
-  const isJpeg2000 =
-    ["jp2", "j2k", "jpf", "jpx", "jpm"].includes(ext) ||
-    (head[0] === 0xff && head[1] === 0x4f) ||
-    (head.length >= 12 && head[4] === 0x6a && head[5] === 0x50 && head[6] === 0x20 && head[7] === 0x20)
-  const isRaw = ["raw", "dng", "cr2", "nef", "arw"].includes(ext)
+  const signature = sniffAdvancedRaster(buffer, name, mime)
 
-  if (isExr || ext === "exr") return decodeExrBuffer(buffer)
-  if (isHeif) return decodeHeifBuffer(buffer)
-  if (isJpeg2000) return decodeJpeg2000Buffer(buffer)
-  if (isRaw) {
+  if (signature.isExr) return decodeExrBuffer(buffer)
+  if (signature.isHeif) return decodeHeifBuffer(buffer)
+  if (signature.isJpeg2000) return decodeJpeg2000Buffer(buffer)
+  if (signature.isRaw) {
     const raw = await decodeRawBuffer(buffer)
     if (raw) return raw
   }
-  if (isTiff || ["tif", "tiff", "dng"].includes(ext)) {
+  if (signature.isTiffCompatible) {
     const tiff = await decodeTiffWithUtif(buffer)
     if (tiff) return tiff
     const fallback = await decodeTiffBufferAsyncFallback(buffer).catch(() => null)
     if (fallback) return fallback
   }
-  return decodeAdvancedRasterBuffer(buffer, name)
+  return decodeSyncAdvancedRaster(buffer, signature)
+}
+
+let libRawRuntimeReady: Promise<LibRawRuntimeModule> | null = null
+const LIBRAW_RUNTIME_URL = "/vendor/libraw-wasm/libraw.js"
+
+type LibRawRuntimeFactory = (options?: Record<string, unknown>) => Promise<LibRawRuntimeModule>
+
+async function loadLibRawRuntime(): Promise<LibRawRuntimeModule> {
+  libRawRuntimeReady ??= import(/* webpackIgnore: true */ LIBRAW_RUNTIME_URL).then(async (module) => {
+    const createLibRawRuntime = (module as { default: LibRawRuntimeFactory }).default
+    return createLibRawRuntime({
+      print: () => undefined,
+      printErr: () => undefined,
+    })
+  })
+  return libRawRuntimeReady
+}
+
+function normalizeLibRawMetadata(metadata: Record<string, unknown>) {
+  if (Object.prototype.hasOwnProperty.call(metadata, "thumb_format")) {
+    const formats = ["unknown", "jpeg", "bitmap", "bitmap16", "layer", "rollei", "h265"]
+    metadata.thumb_format = formats[Number(metadata.thumb_format)] ?? "unknown"
+  }
+  if (Object.prototype.hasOwnProperty.call(metadata, "desc")) metadata.desc = String(metadata.desc).trim()
+  if (Object.prototype.hasOwnProperty.call(metadata, "timestamp")) metadata.timestamp = new Date(Number(metadata.timestamp))
+  return metadata
 }
 
 async function decodeTiffWithUtif(buffer: ArrayBuffer): Promise<DecodedRaster | null> {
@@ -663,6 +766,11 @@ async function decodeExrBuffer(buffer: ArrayBuffer): Promise<DecodedRaster | nul
 
 async function decodeHeifBuffer(buffer: ArrayBuffer): Promise<DecodedRaster | null> {
   try {
+    const headerBytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 1024 * 1024))
+    const dimensions = sniffRasterDimensions(headerBytes)
+    if (dimensions?.format === "ISO-BMFF") {
+      assertCanvasSize(dimensions.width, dimensions.height, "HEIF/HEIC image")
+    }
     const { decode } = await import("@discourse/heic")
     const image = await decode(buffer)
     assertCanvasSize(image.width, image.height, "HEIF/HEIC image")
@@ -844,16 +952,17 @@ async function decodeJpeg2000Buffer(buffer: ArrayBuffer): Promise<DecodedRaster 
 
 async function decodeRawBuffer(buffer: ArrayBuffer): Promise<DecodedRaster | null> {
   if (typeof Worker === "undefined") return null
+  let raw: LibRawDecoderInstance | null = null
   try {
-    const { default: LibRaw } = await import("libraw-wasm")
-    const raw = new LibRaw()
+    const runtime = await loadLibRawRuntime()
+    raw = new runtime.LibRaw()
     await raw.open(new Uint8Array(buffer), {
       outputBps: 8,
       outputColor: 1,
       useCameraWb: true,
       userQual: 3,
     })
-    const metadata = await raw.metadata(false) as Record<string, unknown>
+    const metadata = normalizeLibRawMetadata(await raw.metadata(false))
     // Preflight metadata dimensions before imageData() materialises the
     // full demosaiced pixel buffer.
     const metaWidth = Number(metadata.width ?? metadata.iwidth ?? (metadata.sizes as Record<string, unknown> | undefined)?.width ?? 0)
@@ -894,6 +1003,8 @@ async function decodeRawBuffer(buffer: ArrayBuffer): Promise<DecodedRaster | nul
     }
   } catch {
     return null
+  } finally {
+    raw?.delete?.()
   }
 }
 
@@ -3209,9 +3320,7 @@ export async function encodeHeicImageData(imageData: ImageData, options: HeicEnc
   return exactArrayBuffer(injectHeifUuidMetadata(concatUint8([ftyp, meta, mdat]), metadata))
 }
 
-let openJpegCodecReady: Promise<unknown> | null = null
-
-async function loadOpenJpegCodec(): Promise<{
+type OpenJpegCodec = Jpeg2000EncodeCodec & {
   J2KDecoder: new () => {
     getEncodedBuffer: (encodedBitStreamLength: number) => Uint8Array
     getDecodedBuffer: () => Uint8Array
@@ -3220,65 +3329,69 @@ async function loadOpenJpegCodec(): Promise<{
     getIsReversible: () => boolean
     getColorSpace: () => number
   }
-  J2KEncoder: new () => {
-    getDecodedBuffer: (frameInfo: { bitsPerSample: number; componentCount: number; width: number; height: number; isSigned: boolean }) => Uint8Array
-    getEncodedBuffer: () => Uint8Array
-    encode: () => void
-    setDecompositions: (value: number) => void
-    setQuality: (reversible: boolean, quality: number) => void
+}
+
+let openJpegCodecReady: Promise<unknown> | null = null
+let openJpegCodecWarmupError: unknown = null
+
+function isValidJpeg2000Codestream(encoded: Uint8Array) {
+  return encoded.length >= 32 && encoded[0] === 0xff && encoded[1] === 0x4f
+}
+
+function runJpeg2000WarmupEncode(codec: Jpeg2000EncodeCodec) {
+  const warm = new codec.J2KEncoder()
+  try {
+    warm.setDecompositions(1)
+    warm.setQuality(true, 1)
+    warm.getDecodedBuffer({ bitsPerSample: 8, componentCount: 3, width: 16, height: 16, isSigned: false }).fill(0)
+    warm.encode()
+    const encoded = bytesFromInput(warm.getEncodedBuffer())
+    if (!isValidJpeg2000Codestream(encoded)) throw new Error("JPEG 2000 warm-up produced an invalid codestream")
+  } finally {
+    warm.delete?.()
   }
-}> {
+}
+
+function warmOpenJpegCodec(codec: Jpeg2000EncodeCodec) {
+  let lastError: unknown = null
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      runJpeg2000WarmupEncode(codec)
+      openJpegCodecWarmupError = null
+      return
+    } catch (error) {
+      lastError = error
+    }
+  }
+  openJpegCodecWarmupError = lastError
+}
+
+async function loadOpenJpegCodec(): Promise<OpenJpegCodec> {
   if (!openJpegCodecReady) {
     openJpegCodecReady = (async () => {
       const mod = await import("@cornerstonejs/codec-openjpeg")
       const factory = (mod.default ?? mod) as unknown as (options?: Record<string, unknown>) => Promise<unknown>
-      const codec = (await factory({ print: () => undefined, printErr: () => undefined })) as {
-        J2KEncoder: new () => {
-          getDecodedBuffer: (frameInfo: { bitsPerSample: number; componentCount: number; width: number; height: number; isSigned: boolean }) => Uint8Array
-          encode: () => void
-          setDecompositions: (value: number) => void
-          setQuality: (reversible: boolean, quality: number) => void
-          delete?: () => void
-        }
-      }
+      const codec = (await factory({ print: () => undefined, printErr: () => undefined })) as OpenJpegCodec
       // This emscripten build fails its very first opj_start_compress for
       // some frame configurations (and crashes inside its own error-callback
-      // binding while reporting it). One successful warm-up encode reliably
-      // unlocks all subsequent encodes, so prime the module here and ignore
-      // any warm-up failure.
-      try {
-        const warm = new codec.J2KEncoder()
-        warm.setDecompositions(1)
-        warm.setQuality(true, 1)
-        warm.getDecodedBuffer({ bitsPerSample: 8, componentCount: 3, width: 16, height: 16, isSigned: false }).fill(0)
-        warm.encode()
-        warm.delete?.()
-      } catch {}
+      // binding while reporting it). Prime the module and remember repeated
+      // warm-up failures so a later encode error can include that context.
+      warmOpenJpegCodec(codec)
       return codec
     })()
   }
-  return openJpegCodecReady as Promise<{
-    J2KDecoder: new () => {
-      getEncodedBuffer: (encodedBitStreamLength: number) => Uint8Array
-      getDecodedBuffer: () => Uint8Array
-      decode: () => void
-      getFrameInfo: () => Jpeg2000FrameInfo
-      getIsReversible: () => boolean
-      getColorSpace: () => number
-    }
-    J2KEncoder: new () => {
-      getDecodedBuffer: (frameInfo: { bitsPerSample: number; componentCount: number; width: number; height: number; isSigned: boolean }) => Uint8Array
-      getEncodedBuffer: () => Uint8Array
-      encode: () => void
-      setDecompositions: (value: number) => void
-      setQuality: (reversible: boolean, quality: number) => void
-    }
-  }>
+  return openJpegCodecReady as Promise<OpenJpegCodec>
 }
 
-async function encodeJpeg2000Codestream(imageData: ImageData, options: Jpeg2000EncodeOptions = {}): Promise<Uint8Array> {
-  assertCanvasSize(imageData.width, imageData.height, "JPEG 2000 export")
-  const { J2KEncoder } = await loadOpenJpegCodec()
+async function jpeg2000EncodeCodec(options: Jpeg2000EncodeOptions): Promise<Jpeg2000EncodeCodec> {
+  return options.openJpegCodec ? await options.openJpegCodec : loadOpenJpegCodec()
+}
+
+function encodeJpeg2000CodestreamAttempt(
+  J2KEncoder: Jpeg2000EncodeCodec["J2KEncoder"],
+  imageData: ImageData,
+  options: Jpeg2000EncodeOptions,
+): Uint8Array {
   const encoder = new J2KEncoder()
   const componentCount = options.includeAlpha ? 4 : 3
   const frameInfo = {
@@ -3288,24 +3401,49 @@ async function encodeJpeg2000Codestream(imageData: ImageData, options: Jpeg2000E
     height: imageData.height,
     isSigned: false,
   }
-  encoder.setDecompositions(Math.max(0, Math.min(8, Math.round(options.decompositions ?? 0))))
-  encoder.setQuality(!!options.reversible, Math.max(1, Math.min(100, Math.round((options.quality ?? 1) <= 1 ? (options.quality ?? 1) * 100 : options.quality ?? 100))))
-  const decoded = encoder.getDecodedBuffer(frameInfo)
-  for (let p = 0, source = 0, target = 0; p < imageData.width * imageData.height; p++, source += 4, target += componentCount) {
-    decoded[target] = imageData.data[source]
-    decoded[target + 1] = imageData.data[source + 1]
-    decoded[target + 2] = imageData.data[source + 2]
-    if (componentCount === 4) decoded[target + 3] = imageData.data[source + 3]
+  try {
+    encoder.setDecompositions(Math.max(0, Math.min(8, Math.round(options.decompositions ?? 0))))
+    encoder.setQuality(!!options.reversible, Math.max(1, Math.min(100, Math.round((options.quality ?? 1) <= 1 ? (options.quality ?? 1) * 100 : options.quality ?? 100))))
+    const decoded = encoder.getDecodedBuffer(frameInfo)
+    for (let p = 0, source = 0, target = 0; p < imageData.width * imageData.height; p++, source += 4, target += componentCount) {
+      decoded[target] = imageData.data[source]
+      decoded[target + 1] = imageData.data[source + 1]
+      decoded[target + 2] = imageData.data[source + 2]
+      if (componentCount === 4) decoded[target + 3] = imageData.data[source + 3]
+    }
+    encoder.encode()
+    const encoded = bytesFromInput(encoder.getEncodedBuffer())
+    // The WASM encoder can fail without throwing, leaving a stale or empty
+    // buffer behind. A real codestream always opens with the SOC marker.
+    if (!isValidJpeg2000Codestream(encoded)) {
+      throw new Error("JPEG 2000 encoder produced an invalid codestream")
+    }
+    return encoded
+  } finally {
+    encoder.delete?.()
   }
-  encoder.encode()
-  const encoded = bytesFromInput(encoder.getEncodedBuffer())
-  // The WASM encoder can fail without throwing, leaving a stale or empty
-  // buffer behind. A real codestream always opens with the SOC+SIZ markers;
-  // anything else must surface as an error, not download as a valid file.
-  if (encoded.length < 32 || encoded[0] !== 0xff || encoded[1] !== 0x4f) {
-    throw new Error("JPEG 2000 encoder produced an invalid codestream")
+}
+
+function jpeg2000EncodeFailureMessage(lastError: unknown) {
+  const detail = lastError instanceof Error ? `: ${lastError.message}` : ""
+  const warmupDetail = openJpegCodecWarmupError instanceof Error
+    ? ` Warm-up also failed: ${openJpegCodecWarmupError.message}`
+    : ""
+  return `JPEG 2000 encoder failed after 2 attempts${detail}${warmupDetail}`
+}
+
+async function encodeJpeg2000Codestream(imageData: ImageData, options: Jpeg2000EncodeOptions = {}): Promise<Uint8Array> {
+  assertCanvasSize(imageData.width, imageData.height, "JPEG 2000 export")
+  const { J2KEncoder } = await jpeg2000EncodeCodec(options)
+  let lastError: unknown = null
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return encodeJpeg2000CodestreamAttempt(J2KEncoder, imageData, options)
+    } catch (error) {
+      lastError = error
+    }
   }
-  return encoded
+  throw new Error(jpeg2000EncodeFailureMessage(lastError))
 }
 
 function jpeg2000Box(type: string, data: Uint8Array): Uint8Array {

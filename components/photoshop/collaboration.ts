@@ -43,7 +43,31 @@ export interface ReviewSummary {
   replies: number
 }
 
+export interface ReviewPacketOptions extends ReviewReportOptions {
+  includeDocumentSummary?: boolean
+}
+
+export interface ReviewPacketEntry {
+  name: string
+  data: Uint8Array
+}
+
+export interface ReviewPacketManifest {
+  app: "Photoshop Web"
+  format: "ps-review-packet"
+  version: 1
+  generatedAt: string
+  document: {
+    name: string
+    width: number
+    height: number
+  }
+  summary: ReviewSummary
+  files: string[]
+}
+
 const GEOMETRY_KINDS = new Set(["pin", "rect", "ellipse", "arrow", "freehand"])
+const textEncoder = new TextEncoder()
 
 export function normalizeReviewTags(tags: unknown, limit = 12): string[] {
   if (!Array.isArray(tags)) return []
@@ -203,6 +227,78 @@ export function createReviewReport(doc: Pick<PsDocument, "name" | "notes" | "wid
   }
 
   return lines.join("\n").trimEnd()
+}
+
+function safePacketName(value: string) {
+  return value.replace(/\.[^.]+$/, "").replace(/[\\/:*?"<>|]+/g, "-").trim().slice(0, 80) || "document"
+}
+
+export function createReviewPacketJson(doc: Pick<PsDocument, "id" | "name" | "notes" | "width" | "height" | "metadata" | "guides" | "slices">, options: ReviewPacketOptions = {}) {
+  const generatedAt = options.generatedAt ?? new Date().toISOString()
+  return {
+    app: "Photoshop Web",
+    format: "ps-review-packet",
+    version: 1,
+    generatedAt,
+    document: {
+      id: doc.id,
+      name: doc.name,
+      width: doc.width,
+      height: doc.height,
+      metadata: options.includeDocumentSummary === false ? undefined : doc.metadata,
+      guides: options.includeDocumentSummary === false ? undefined : doc.guides,
+      slices: options.includeDocumentSummary === false ? undefined : doc.slices,
+    },
+    summary: reviewSummaryForDocument(doc),
+    comments: [...(doc.notes ?? [])].map((note) => ({
+      id: note.id,
+      kind: note.kind ?? "comment",
+      status: note.status ?? "open",
+      author: note.author,
+      text: note.text,
+      color: note.color,
+      x: note.x,
+      y: note.y,
+      tags: note.tags ?? [],
+      geometry: note.geometry,
+      replies: note.replies ?? [],
+      createdAt: note.createdAt,
+      updatedAt: note.updatedAt,
+      resolvedAt: note.resolvedAt,
+      resolvedBy: note.resolvedBy,
+    })),
+  }
+}
+
+export function createReviewPacketManifest(doc: Pick<PsDocument, "name" | "notes" | "width" | "height">, files: string[], options: ReviewPacketOptions = {}): ReviewPacketManifest {
+  return {
+    app: "Photoshop Web",
+    format: "ps-review-packet",
+    version: 1,
+    generatedAt: options.generatedAt ?? new Date().toISOString(),
+    document: {
+      name: doc.name,
+      width: doc.width,
+      height: doc.height,
+    },
+    summary: reviewSummaryForDocument(doc),
+    files,
+  }
+}
+
+export function createReviewPacketEntries(doc: Pick<PsDocument, "id" | "name" | "notes" | "width" | "height" | "metadata" | "guides" | "slices">, options: ReviewPacketOptions = {}): ReviewPacketEntry[] {
+  const base = safePacketName(doc.name)
+  const generatedAt = options.generatedAt ?? new Date().toISOString()
+  const reportName = "review-report.md"
+  const jsonName = "review-packet.json"
+  const manifestName = "manifest.json"
+  const packet = createReviewPacketJson(doc, { ...options, generatedAt })
+  const manifest = createReviewPacketManifest(doc, [manifestName, jsonName, reportName], { ...options, generatedAt })
+  return [
+    { name: `${base}/${manifestName}`, data: textEncoder.encode(JSON.stringify(manifest, null, 2)) },
+    { name: `${base}/${jsonName}`, data: textEncoder.encode(JSON.stringify(packet, null, 2)) },
+    { name: `${base}/${reportName}`, data: textEncoder.encode(createReviewReport(doc, { generatedAt })) },
+  ]
 }
 
 export function describeAnnotationGeometry(geometry: AnnotationGeometry): string {

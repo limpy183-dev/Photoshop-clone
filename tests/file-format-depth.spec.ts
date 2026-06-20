@@ -753,6 +753,51 @@ test("JPEG 2000 authoring writes JPX/JPM containers with alpha, ICC color boxes,
   expect(jpmText).toContain("Transparency mask")
 })
 
+test("JPEG 2000 export retries a transient first OpenJPEG encode failure", async () => {
+  installFixtureDom()
+  const source = new ImageData(new Uint8ClampedArray([
+    255, 0, 0, 255,
+    0, 255, 0, 255,
+    0, 0, 255, 255,
+    255, 255, 255, 255,
+  ]), 2, 2)
+  let attempts = 0
+  const codestream = new Uint8Array(40)
+  codestream[0] = 0xff
+  codestream[1] = 0x4f
+  codestream[2] = 0xff
+  codestream[3] = 0x51
+  class FlakyJpeg2000Encoder {
+    getDecodedBuffer(frameInfo: { width: number; height: number; componentCount: number }) {
+      return new Uint8Array(frameInfo.width * frameInfo.height * frameInfo.componentCount)
+    }
+
+    getEncodedBuffer() {
+      return codestream
+    }
+
+    encode() {
+      attempts += 1
+      if (attempts === 1) throw new Error("transient opj_start_compress failure")
+    }
+
+    setDecompositions() {}
+    setQuality() {}
+    delete() {}
+  }
+
+  const jpx = await encodeJpeg2000ImageData(source, {
+    container: "jpx",
+    includeAlpha: true,
+    openJpegCodec: { J2KEncoder: FlakyJpeg2000Encoder },
+  } as Parameters<typeof encodeJpeg2000ImageData>[1] & { openJpegCodec: unknown })
+  const text = new TextDecoder("latin1").decode(jpx)
+
+  expect(attempts).toBe(2)
+  expect(text).toContain("ftypjpx ")
+  expect(text).toContain("jp2c")
+})
+
 test("TIFF encoder authors document metadata, XMP, and EXIF-style directory tags", async () => {
   installFixtureDom()
   const source = new ImageData(new Uint8ClampedArray([

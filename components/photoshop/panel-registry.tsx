@@ -59,6 +59,9 @@ const BrushPanel = lazyPanel(
 const BrowserDiagnosticsPanel = lazyPanel(
   () => import("./panels/browser-diagnostics-panel").then((m) => ({ default: m.BrowserDiagnosticsPanel })),
 )
+const AccessibilityAuditPanel = lazyPanel(
+  () => import("./panels/accessibility-audit-panel").then((m) => ({ default: m.AccessibilityAuditPanel })),
+)
 const ChannelsPanel = lazyPanel(
   () => import("./panels/channels-panel").then((m) => ({ default: m.ChannelsPanel })),
 )
@@ -229,6 +232,7 @@ export const PANEL_DEFINITIONS: PhotoshopPanelDefinition[] = [
   { id: "paths", label: "Paths", stack: "lower", category: "Type and Vector", complexity: "standard", icon: PenTool, keywords: ["vector", "pen", "path"], render: () => <PathsPanel /> },
   { id: "history", label: "History", stack: "lower", category: "Core", complexity: "core", icon: History, keywords: ["undo", "states", "snapshot"], render: () => <HistoryPanel /> },
   { id: "browser-diagnostics", label: "Browser Diagnostics", stack: "lower", category: "Inspection and Guides", complexity: "specialized", icon: Activity, keywords: ["diagnostics", "capabilities", "browser", "canvas", "webgl", "opfs", "mediarecorder", "encoder", "heap", "fallback"], render: () => <BrowserDiagnosticsPanel /> },
+  { id: "accessibility-audit", label: "Accessibility Audit", stack: "lower", category: "Inspection and Guides", complexity: "specialized", icon: Activity, keywords: ["accessibility", "keyboard", "aria", "focus", "touch"], render: () => <AccessibilityAuditPanel /> },
   { id: "actions", label: "Actions", stack: "lower", category: "Motion and Automation", complexity: "standard", icon: Play, keywords: ["macro", "automation", "record"], render: () => <ActionsPanel /> },
   { id: "layer-comps", label: "Layer Comps", stack: "lower", category: "Core", complexity: "advanced", icon: Layers, keywords: ["compositions", "states", "presentation"], render: () => <LayerCompsPanel /> },
   { id: "clone-source", label: "Clone Source", stack: "lower", category: "Core", complexity: "advanced", icon: Stamp, keywords: ["clone", "stamp", "source"], render: () => <CloneSourcePanel /> },

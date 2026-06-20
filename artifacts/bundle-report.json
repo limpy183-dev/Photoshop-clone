@@ -1,0 +1,105 @@
+{
+  "generatedAt": "2026-06-20T13:26:26.919Z",
+  "budgets": {
+    "maxChunkBytes": 1500000,
+    "maxInitialJsBytes": 5000000
+  },
+  "totals": {
+    "chunkCount": 135,
+    "initialFiles": 5,
+    "initialJsBytes": 542230
+  },
+  "largest": [
+    {
+      "file": ".next/static/chunks/raster-decoders.b7cc3c262528a538.js",
+      "bytes": 1414672
+    },
+    {
+      "file": ".next/static/chunks/2247.5e10a4446e6b0a03.js",
+      "bytes": 1313399
+    },
+    {
+      "file": ".next/static/chunks/document-decoders.4f0a75ff52a86865.js",
+      "bytes": 767294
+    },
+    {
+      "file": ".next/static/chunks/8478.1157d0ca8f8cb00d.js",
+      "bytes": 242225
+    },
+    {
+      "file": ".next/static/chunks/5271.6aefab533c1fed83.js",
+      "bytes": 235215
+    },
+    {
+      "file": ".next/static/chunks/3794-ba2500baa4c52d55.js",
+      "bytes": 222757
+    },
+    {
+      "file": ".next/static/chunks/4bd1b696-e356ca5ba0218e27.js",
+      "bytes": 199870
+    },
+    {
+      "file": ".next/static/chunks/999.db50f54f1e26cac6.js",
+      "bytes": 194423
+    },
+    {
+      "file": ".next/static/chunks/framework-34a8c4228d7fd161.js",
+      "bytes": 189700
+    },
+    {
+      "file": ".next/static/chunks/6796.374976c7a4b4bc9b.js",
+      "bytes": 183923
+    },
+    {
+      "file": ".next/static/chunks/main-1c1476f9bafaf0ab.js",
+      "bytes": 132519
+    },
+    {
+      "file": ".next/static/chunks/7443.7f11349d9216ffd4.js",
+      "bytes": 130867
+    },
+    {
+      "file": ".next/static/chunks/919.c0b91a9afb25be4d.js",
+      "bytes": 117057
+    },
+    {
+      "file": ".next/static/chunks/polyfills-42372ed130431b0a.js",
+      "bytes": 112594
+    },
+    {
+      "file": ".next/static/chunks/9163-246ddcf38dadaa25.js",
+      "bytes": 84167
+    },
+    {
+      "file": ".next/static/chunks/67b122cf.0e2bd8837dac57f6.js",
+      "bytes": 83270
+    },
+    {
+      "file": ".next/static/chunks/4871.5c1c653fe387d8a6.js",
+      "bytes": 59508
+    },
+    {
+      "file": ".next/static/chunks/5063.7a22c1b6f8fe3557.js",
+      "bytes": 59194
+    },
+    {
+      "file": ".next/static/chunks/2690-91b1983e3e3258c6.js",
+      "bytes": 56609
+    },
+    {
+      "file": ".next/static/chunks/7379.900899465e3b2bf9.js",
+      "bytes": 53405
+    }
+  ],
+  "decoderChunks": [
+    {
+      "file": ".next/static/chunks/raster-decoders.b7cc3c262528a538.js",
+      "bytes": 1414672
+    },
+    {
+      "file": ".next/static/chunks/document-decoders.4f0a75ff52a86865.js",
+      "bytes": 767294
+    }
+  ],
+  "violations": []
+}

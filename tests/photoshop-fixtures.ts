@@ -103,12 +103,69 @@ class FixtureImageData {
   }
 }
 
+const FIXTURE_DOCUMENT_PATCHED = Symbol.for("photoshop.fixture.document-patched")
+const FIXTURE_DOCUMENT_ORIGINAL_CREATE_ELEMENT = Symbol.for("photoshop.fixture.original-create-element")
+const FIXTURE_DOCUMENT_PATCHED_CREATE_ELEMENT = Symbol.for("photoshop.fixture.patched-create-element")
+
 function fixtureStyleElement() {
   return {
     setAttribute: () => {},
     appendChild: () => {},
     style: {},
   } as unknown as HTMLElement
+}
+
+function canvasContextHasFixtureApis(canvas: HTMLCanvasElement) {
+  try {
+    const ctx = canvas.getContext("2d")
+    return !!ctx &&
+      typeof ctx.createImageData === "function" &&
+      typeof ctx.getImageData === "function" &&
+      typeof ctx.putImageData === "function"
+  } catch {
+    return false
+  }
+}
+
+function installFixtureDocumentCreateElement(fixtureDocument: Document) {
+  const patchedDocument = fixtureDocument as Document & {
+    [FIXTURE_DOCUMENT_PATCHED]?: boolean
+    [FIXTURE_DOCUMENT_ORIGINAL_CREATE_ELEMENT]?: Document["createElement"]
+    [FIXTURE_DOCUMENT_PATCHED_CREATE_ELEMENT]?: Document["createElement"]
+  }
+  const installedCreateElement = patchedDocument[FIXTURE_DOCUMENT_PATCHED_CREATE_ELEMENT]
+  if (patchedDocument[FIXTURE_DOCUMENT_PATCHED] && patchedDocument.createElement === installedCreateElement) {
+    try {
+      if (canvasContextHasFixtureApis(patchedDocument.createElement("canvas"))) return
+    } catch {}
+  }
+  if (patchedDocument.createElement !== installedCreateElement) {
+    patchedDocument[FIXTURE_DOCUMENT_ORIGINAL_CREATE_ELEMENT] =
+      typeof patchedDocument.createElement === "function" ? patchedDocument.createElement.bind(patchedDocument) : undefined
+  }
+  const fixtureCreateElement = ((tagName: string, options?: ElementCreationOptions) => {
+    const tag = tagName.toLowerCase()
+    const original = patchedDocument[FIXTURE_DOCUMENT_ORIGINAL_CREATE_ELEMENT]
+    if (tag === "canvas") {
+      try {
+        const canvas = original?.(tagName, options) as HTMLCanvasElement | undefined
+        if (canvas && canvasContextHasFixtureApis(canvas)) return canvas
+      } catch {}
+      return new FixtureCanvas() as unknown as HTMLCanvasElement
+    }
+    if (tag === "style") {
+      try {
+        return original?.(tagName, options) ?? fixtureStyleElement()
+      } catch {
+        return fixtureStyleElement()
+      }
+    }
+    if (original) return original(tagName, options)
+    throw new Error(`Unsupported fixture element: ${tagName}`)
+  }) as Document["createElement"]
+  patchedDocument.createElement = fixtureCreateElement
+  patchedDocument[FIXTURE_DOCUMENT_PATCHED_CREATE_ELEMENT] = fixtureCreateElement
+  patchedDocument[FIXTURE_DOCUMENT_PATCHED] = true
 }
 
 export function installFixtureDom() {
@@ -143,6 +200,7 @@ export function installFixtureDom() {
     }
     if (!fixtureDocument.head) fixtureDocument.head = head
   }
+  installFixtureDocumentCreateElement(globalThis.document)
   if (typeof globalThis.Image === "undefined") {
     ;(globalThis as typeof globalThis & { Image: typeof Image }).Image = FixtureImage as unknown as typeof Image
   }
@@ -165,6 +223,7 @@ export function fixtureCanvas(width = 32, height = 24, fill = "#3366cc") {
 }
 
 export function fixtureMask(width = 64, height = 48) {
+  installFixtureDom()
   const canvas = document.createElement("canvas")
   canvas.width = width
   canvas.height = height

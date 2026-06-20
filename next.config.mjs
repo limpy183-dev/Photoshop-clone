@@ -129,6 +129,31 @@ const nextConfig = {
         ...(config.resolve.alias ?? {}),
         fs: emptyNodeFs,
       }
+      config.optimization = config.optimization ?? {}
+      config.optimization.splitChunks = {
+        ...(config.optimization.splitChunks ?? {}),
+        cacheGroups: {
+          ...((config.optimization.splitChunks && config.optimization.splitChunks.cacheGroups) ?? {}),
+          rasterDecoders: {
+            // Keep libraw-wasm out of this shared chunk. Its Emscripten
+            // wrapper creates a module worker and an em-pthread worker; when
+            // both worker entries depend on this shared cache group, webpack
+            // reports a circular runtime chunk dependency.
+            test: /[\\/]node_modules[\\/](@discourse[\\/]heic|parse-exr|utif2|@abasb75[\\/]jpeg2000-decoder|@cornerstonejs[\\/]codec-openjpeg|@jsquash[\\/]jpeg)[\\/]/,
+            name: "raster-decoders",
+            chunks: "async",
+            priority: 40,
+            reuseExistingChunk: true,
+          },
+          documentDecoders: {
+            test: /[\\/]node_modules[\\/](pdf-lib|pdfjs-dist|dicom-parser)[\\/]/,
+            name: "document-decoders",
+            chunks: "async",
+            priority: 35,
+            reuseExistingChunk: true,
+          },
+        },
+      }
     }
     return config
   },

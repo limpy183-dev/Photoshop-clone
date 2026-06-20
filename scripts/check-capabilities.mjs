@@ -6,7 +6,8 @@
  * components/photoshop/advanced-subsystems.ts against the structured
  * capability records in components/photoshop/capabilities.ts and against
  * known encoder-availability invariants enforced by lower-level modules
- * (raster-codecs.ts, three-d-video-engine.ts, document-io.ts).
+ * (raster-codecs.ts, three-d-video-engine.ts plus its decomposed video
+ * module, document-io.ts).
  *
  * The script is a static, source-text scanner: it does not import the modules
  * (which depend on the Next bundler) — it reads the source as strings and
@@ -301,8 +302,8 @@ function buildRules(state) {
   }
 
   // Rule 4: video export capability says "MediaRecorder MP4/H.264 or WebM" -
-  // verify that VIDEO_EXPORT_PRESETS in three-d-video-engine.ts actually lists
-  // those mime types (or H.264-capable codecs).
+  // verify that VIDEO_EXPORT_PRESETS and mux MIME candidates in the video
+  // sources actually list those mime types (or H.264-capable codecs).
   const videoCap = capabilityById.get("video.export-presets-frame-animation")
   if (!videoCap) {
     rules.push({
@@ -315,7 +316,7 @@ function buildRules(state) {
     const claimsH264 = /H\.?264/i.test(videoCap.summary) || /MP4/i.test(videoCap.summary)
     const claimsWebm = /WebM/i.test(videoCap.summary)
     const claimsFallback = /fall back/i.test(videoCap.summary) || /ZIP frame/i.test(videoCap.summary) || /timeline-package/i.test(videoCap.summary)
-    const enginePath = "components/photoshop/three-d-video-engine.ts"
+    const videoSourceLocations = state.videoSourcePaths ?? ["components/photoshop/three-d-video-engine.ts"]
     const engineSource = state.video
     const enginePresetsHasH264 = /codec=avc1|codec=h264|h\.264|"video\/mp4"/i.test(engineSource)
     const enginePresetsHasWebm = /"video\/webm"/i.test(engineSource)
@@ -325,7 +326,7 @@ function buildRules(state) {
         severity: "error",
         ruleId: "video-h264-claim-vs-engine",
         message: "capability video.export-presets-frame-animation claims H.264/MP4 support but VIDEO_EXPORT_PRESETS does not list any avc1/H.264/video/mp4 codec.",
-        locations: [enginePath, "components/photoshop/capabilities.ts"],
+        locations: [...videoSourceLocations, "components/photoshop/capabilities.ts"],
       })
     }
     if (claimsWebm && !enginePresetsHasWebm) {
@@ -333,7 +334,7 @@ function buildRules(state) {
         severity: "error",
         ruleId: "video-webm-claim-vs-engine",
         message: "capability video.export-presets-frame-animation claims WebM support but VIDEO_EXPORT_PRESETS does not list video/webm.",
-        locations: [enginePath, "components/photoshop/capabilities.ts"],
+        locations: [...videoSourceLocations, "components/photoshop/capabilities.ts"],
       })
     }
     if (claimsFallback && !enginePresetsHasFallback) {
@@ -341,7 +342,7 @@ function buildRules(state) {
         severity: "error",
         ruleId: "video-fallback-claim-vs-engine",
         message: "capability video.export-presets-frame-animation claims a ZIP/timeline-package fallback but three-d-video-engine.ts does not emit a timeline-package plan.",
-        locations: [enginePath, "components/photoshop/capabilities.ts"],
+        locations: [...videoSourceLocations, "components/photoshop/capabilities.ts"],
       })
     }
   }
@@ -449,13 +450,18 @@ function buildRules(state) {
 function main() {
   const capabilitiesSrc = load("components/photoshop/capabilities.ts")
   const advancedSrc = load("components/photoshop/advanced-subsystems.ts")
-  const videoSrc = load("components/photoshop/three-d-video-engine.ts")
+  const videoSourcePaths = [
+    "components/photoshop/three-d-video-engine.ts",
+    "components/photoshop/three-d-video/video.ts",
+  ]
+  const videoSources = videoSourcePaths.map((path) => load(path))
   const documentIoSrc = load("components/photoshop/document-io.ts")
 
   const state = {
     capabilities: parseCapabilityRecords(capabilitiesSrc.text),
     advanced: parseAdvancedFormatCapabilities(advancedSrc.text),
-    video: videoSrc.text,
+    video: videoSources.map((source) => source.text).join("\n"),
+    videoSourcePaths,
     documentIo: documentIoSrc.text,
   }
 
