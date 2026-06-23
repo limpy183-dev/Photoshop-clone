@@ -1,6 +1,8 @@
 import type { PsDocument } from "./types"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
+import { dispatchPhotoshopEvent } from "./events"
 
-export const PREFERENCES_STORAGE_KEY = "ps-preferences"
+export const PREFERENCES_STORAGE_KEY = CLIENT_STORAGE_KEYS.preferences.key
 export const PREFERENCES_SCHEMA_VERSION = 5
 export const MAX_PREFERENCES_IMPORT_BYTES = 1024 * 1024
 export const MAX_IMPORTED_SCRATCH_DISKS = 32
@@ -1272,17 +1274,24 @@ export function togglePinnedFile(
     : [trimmed, ...current.pinnedFiles].slice(0, MAX_PINNED_FILES)
   const saved = savePreferencesToStorage({ ...current, pinnedFiles: next }, storages.write)
   if (typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent("ps-preferences-changed", { detail: saved }))
+    dispatchPhotoshopEvent("ps-preferences-changed", saved)
   }
   return saved.pinnedFiles
 }
 
 export function loadPreferencesFromStorage(storage?: Pick<Storage, "getItem">): PhotoshopPreferences {
-  const target = storage ?? (typeof window !== "undefined" ? window.localStorage : undefined)
-  if (!target) return clone(DEFAULT_PREFERENCES)
+  if (storage) {
+    try {
+      const raw = storage.getItem(PREFERENCES_STORAGE_KEY)
+      return raw ? parsePreferencesSet(raw) : clone(DEFAULT_PREFERENCES)
+    } catch {
+      return clone(DEFAULT_PREFERENCES)
+    }
+  }
+  const stored = readClientStorageJson(CLIENT_STORAGE_KEYS.preferences)
+  if (stored === null) return clone(DEFAULT_PREFERENCES)
   try {
-    const raw = target.getItem(PREFERENCES_STORAGE_KEY)
-    return raw ? parsePreferencesSet(raw) : clone(DEFAULT_PREFERENCES)
+    return parsePreferencesSet(stored)
   } catch {
     return clone(DEFAULT_PREFERENCES)
   }
@@ -1290,8 +1299,8 @@ export function loadPreferencesFromStorage(storage?: Pick<Storage, "getItem">): 
 
 export function savePreferencesToStorage(prefsInput: unknown, storage?: Pick<Storage, "setItem">): PhotoshopPreferences {
   const prefs = normalizePreferences(prefsInput)
-  const target = storage ?? (typeof window !== "undefined" ? window.localStorage : undefined)
-  if (target) target.setItem(PREFERENCES_STORAGE_KEY, serializePreferences(prefs))
+  if (storage) storage.setItem(PREFERENCES_STORAGE_KEY, serializePreferences(prefs))
+  else writeClientStorageJson(CLIENT_STORAGE_KEYS.preferences, prefs)
   return prefs
 }
 
@@ -1310,6 +1319,6 @@ export function recordHistoryLogEntryFromStorage(
   const entry = createHistoryLogEntry(label, prefs, meta)
   const next = appendHistoryLog(prefs, entry)
   savePreferencesToStorage(next)
-  window.dispatchEvent(new CustomEvent("ps-preferences-history-log-changed", { detail: next.historyLog }))
+  dispatchPhotoshopEvent("ps-preferences-history-log-changed", next.historyLog)
   return entry
 }

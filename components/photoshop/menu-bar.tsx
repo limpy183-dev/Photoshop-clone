@@ -25,9 +25,11 @@ import type { GapWorkflowKind } from "./gap-workflow-dialog"
 import type { SelectionOperation } from "./management-dialogs"
 import type { WorkflowPackId } from "./workflow-presets"
 import { WORKFLOW_PACKS } from "./workflow-presets"
-import { dispatchPhotoshopEvent } from "./events"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
 import { canPluginUsePermission, permissionsForPluginActionDescriptors } from "./plugin-system"
+import { DEFAULT_COLOR_MANAGEMENT } from "./menus/color-management-defaults"
 import { MenuDialogs, type AutoAlgorithmId } from "./menus/menu-dialogs"
+import { readWorkspaceLibrary } from "./workspace-layouts"
 
 import {
   PANEL_CATEGORIES,
@@ -92,18 +94,6 @@ import {
 
 const menuClass =
   "h-7 px-2 inline-flex items-center text-[12px] text-[var(--ps-text)] hover:bg-[var(--ps-tool-hover)] data-[state=open]:bg-[var(--ps-tool-active)] rounded-none outline-none cursor-default"
-
-const DEFAULT_COLOR_MANAGEMENT: ColorManagementSettings = {
-  assignedProfile: "sRGB IEC61966-2.1",
-  workingSpace: "sRGB IEC61966-2.1",
-  renderingIntent: "relative-colorimetric",
-  blackPointCompensation: true,
-  proofProfile: "None",
-  proofColors: false,
-  gamutWarning: false,
-  proofChannels: [],
-  proofPlateView: "composite",
-}
 
 const LINKED_SMART_OBJECT_POLL_MS = 30_000
 
@@ -222,12 +212,12 @@ export function MenuBar({
   const [colorLabelsOpen, setColorLabelsOpen] = React.useState(false)
   const [fitImageOpen, setFitImageOpen] = React.useState(false)
   const [exportAsOpen, setExportAsOpen] = React.useState(false)
-  const [exportAsInitial, setExportAsInitial] = React.useState<any>(undefined)
+  const [exportAsInitial, setExportAsInitial] = React.useState<unknown>(undefined)
   const [batchExportOpen, setBatchExportOpen] = React.useState(false)
-  const [batchExportInitial, setBatchExportInitial] = React.useState<any>(undefined)
+  const [batchExportInitial, setBatchExportInitial] = React.useState<unknown>(undefined)
   const [batchProcessingOpen, setBatchProcessingOpen] = React.useState(false)
   const [imageProcessorOpen, setImageProcessorOpen] = React.useState(false)
-  const [imageProcessorInitial, setImageProcessorInitial] = React.useState<any>(undefined)
+  const [imageProcessorInitial, setImageProcessorInitial] = React.useState<unknown>(undefined)
   const [cropAndStraightenOpen, setCropAndStraightenOpen] = React.useState(false)
   const [pdfImportOpen, setPdfImportOpen] = React.useState(false)
   const [documentReportOpen, setDocumentReportOpen] = React.useState(false)
@@ -279,18 +269,12 @@ export function MenuBar({
   const [largeDocumentRecoveryBusy, setLargeDocumentRecoveryBusy] = React.useState(false)
 
   const refreshWorkspaces = React.useCallback(() => {
-    try {
-      const parsed = JSON.parse(localStorage.getItem("ps-workspaces-v2") ?? localStorage.getItem("ps-workspaces-v1") ?? "[]")
-      setSavedWorkspaces(Array.isArray(parsed) ? parsed : [])
-    } catch {
-      setSavedWorkspaces([])
-    }
+    setSavedWorkspaces(readWorkspaceLibrary().map(({ name, savedAt }) => ({ name, savedAt })))
   }, [])
 
   React.useEffect(() => {
     refreshWorkspaces()
-    window.addEventListener("ps-workspaces-changed", refreshWorkspaces)
-    return () => window.removeEventListener("ps-workspaces-changed", refreshWorkspaces)
+    return addPhotoshopEventListener("ps-workspaces-changed", refreshWorkspaces)
   }, [refreshWorkspaces])
 
   const refreshRecents = React.useCallback(() => {
@@ -299,8 +283,7 @@ export function MenuBar({
 
   React.useEffect(() => {
     refreshRecents()
-    window.addEventListener("ps-recents-changed", refreshRecents)
-    return () => window.removeEventListener("ps-recents-changed", refreshRecents)
+    return addPhotoshopEventListener("ps-recents-changed", refreshRecents)
   }, [refreshRecents])
 
   const rememberDoc = React.useCallback((doc: NonNullable<typeof activeDoc>, kind: RecentDocument["kind"]) => {
@@ -334,15 +317,13 @@ export function MenuBar({
 
   // Allow other panels (e.g. Layers panel adjustment menu) to open filter dialogs
   React.useEffect(() => {
-    const handler = (e: CustomEvent<string>) => {
-      const id = e.detail
+    const handler = (id: string) => {
       if (typeof id === "string") {
         setOpenFilter(id)
         setLastFilter(id)
       }
     }
-    window.addEventListener("ps-open-filter", handler as EventListener)
-    return () => window.removeEventListener("ps-open-filter", handler as EventListener)
+    return addPhotoshopEventListener("ps-open-filter", handler)
   }, [])
 
   // Reselect via Cmd+Shift+D
@@ -352,15 +333,13 @@ export function MenuBar({
         dispatch({ type: "set-selection", selection: lastSelectionRef.current })
       }
     }
-    window.addEventListener("ps-reselect", handler)
-    return () => window.removeEventListener("ps-reselect", handler)
+    return addPhotoshopEventListener("ps-reselect", handler)
   }, [dispatch])
 
   // Open warp text dialog from options bar / shortcuts
   React.useEffect(() => {
     const handler = () => setWarpTextOpen(true)
-    window.addEventListener("ps-open-warp-text", handler)
-    return () => window.removeEventListener("ps-open-warp-text", handler)
+    return addPhotoshopEventListener("ps-open-warp-text", handler)
   }, [])
 
   React.useEffect(() => {
@@ -368,17 +347,17 @@ export function MenuBar({
     const cameraRawHandler = () => setCameraRawOpen(true)
     const preferencesHandler = () => setPreferencesOpen(true)
     const shortcutsHandler = () => setShortcutsOpen(true)
-    const exportAsHandler = (event: Event) => {
-      setExportAsInitial((event as CustomEvent).detail)
+    const exportAsHandler = (detail: unknown) => {
+      setExportAsInitial(detail)
       setExportAsOpen(true)
     }
-    const batchExportHandler = (event: Event) => {
-      setBatchExportInitial((event as CustomEvent).detail)
+    const batchExportHandler = (detail: unknown) => {
+      setBatchExportInitial(detail)
       setBatchExportOpen(true)
     }
     const batchProcessingHandler = () => setBatchProcessingOpen(true)
-    const imageProcessorHandler = (event: Event) => {
-      setImageProcessorInitial((event as CustomEvent).detail)
+    const imageProcessorHandler = (detail: unknown) => {
+      setImageProcessorInitial(detail)
       setImageProcessorOpen(true)
     }
     const reportHandler = () => setDocumentReportOpen(true)
@@ -402,99 +381,67 @@ export function MenuBar({
     const provenanceHandler = () => advancedHandler("provenance")
     const pluginsHandler = () => advancedHandler("plugins")
     const librariesHandler = () => advancedHandler("libraries")
-    const colorWorkflowHandler = (event?: Event) => {
-      const mode = (event as CustomEvent<{ mode?: ColorWorkflowMode }> | undefined)?.detail?.mode
+    const colorWorkflowHandler = (detail?: unknown) => {
+      const mode = (detail as { mode?: ColorWorkflowMode } | undefined)?.mode
       advancedHandler("color", mode ?? "assign")
     }
-    const colorModeHandler = (event: Event) => {
-      const detail = (event as CustomEvent<import("./color-mode-dialog").ColorModeDialogTarget>).detail
+    const colorModeHandler = (detail: import("./color-mode-dialog").ColorModeDialogTarget | undefined) => {
       if (detail) setColorModeTarget(detail)
     }
     const formatsHandler = () => advancedHandler("formats")
     const variablesHandler = () => advancedHandler("variables")
     const photomergeHandler = () => setPhotomergeOpen(true)
-    const gapWorkflowHandler = (event: Event) => {
-      const detail = (event as CustomEvent<GapWorkflowKind>).detail
+    const gapWorkflowHandler = (detail: string | { id?: string; mode?: string } | undefined) => {
       if (detail === "photomerge") {
         setPhotomergeOpen(true)
         return
       }
-      if (detail) setGapWorkflow(detail)
+      if (typeof detail === "string") setGapWorkflow(detail as GapWorkflowKind)
     }
-    const workflowPackHandler = (event: Event) => {
-      const detail = (event as CustomEvent<{ id?: WorkflowPackId } | WorkflowPackId>).detail
+    const workflowPackHandler = (detail: { id?: WorkflowPackId } | WorkflowPackId) => {
       const id = typeof detail === "string" ? detail : detail?.id
       if (id && WORKFLOW_PACKS.some((pack) => pack.id === id)) setWorkflowPack(id)
     }
-    const selectionOperationHandler = (event: Event) => {
-      const operation = (event as CustomEvent<SelectionOperation>).detail
+    const selectionOperationHandler = (detail: string) => {
+      const operation = detail as SelectionOperation
       if (operation) setSelectionOperation(operation)
     }
-    window.addEventListener("ps-open-filter-gallery", galleryHandler)
-    window.addEventListener("ps-open-camera-raw", cameraRawHandler)
-    window.addEventListener("ps-open-preferences", preferencesHandler)
-    window.addEventListener("ps-open-shortcuts", shortcutsHandler)
-    window.addEventListener("ps-open-export-as", exportAsHandler)
-    window.addEventListener("ps-open-batch-export", batchExportHandler)
-    window.addEventListener("ps-open-batch-processing", batchProcessingHandler)
-    window.addEventListener("ps-open-image-processor", imageProcessorHandler)
-    window.addEventListener("ps-open-document-report", reportHandler)
-    window.addEventListener("ps-open-preflight", preflightHandler)
-    window.addEventListener("ps-open-layer-comps", layerCompsHandler)
-    window.addEventListener("ps-open-select-and-mask", selectMaskHandler)
-    window.addEventListener("ps-open-recent-documents", recentManagerHandler)
-    window.addEventListener("ps-open-workspace-manager", workspaceManagerHandler)
-    window.addEventListener("ps-open-file-info", fileInfoHandler)
-    window.addEventListener("ps-open-algorithmic-operations", algorithmHandler)
-    window.addEventListener("ps-open-3d-workspace", threeDHandler)
-    window.addEventListener("ps-open-video-render", videoHandler)
-    window.addEventListener("ps-open-print-workflow", printHandler)
-    window.addEventListener("ps-open-device-preview", previewHandler)
-    window.addEventListener("ps-open-automation-workflow", automationHandler)
-    window.addEventListener("ps-open-provenance", provenanceHandler)
-    window.addEventListener("ps-open-plugin-manager", pluginsHandler)
-    window.addEventListener("ps-open-cloud-libraries", librariesHandler)
-    window.addEventListener("ps-open-color-management-workflow", colorWorkflowHandler)
-    window.addEventListener("ps-open-color-mode", colorModeHandler as EventListener)
-    window.addEventListener("ps-open-format-metadata", formatsHandler)
-    window.addEventListener("ps-open-variables", variablesHandler)
-    window.addEventListener("ps-open-photomerge", photomergeHandler)
-    window.addEventListener("ps-open-gap-workflow", gapWorkflowHandler as EventListener)
-    window.addEventListener("ps-open-workflow-pack", workflowPackHandler as EventListener)
-    window.addEventListener("ps-open-selection-operation", selectionOperationHandler as EventListener)
+    const removers = [
+      addPhotoshopEventListener("ps-open-filter-gallery", galleryHandler),
+      addPhotoshopEventListener("ps-open-camera-raw", cameraRawHandler),
+      addPhotoshopEventListener("ps-open-preferences", preferencesHandler),
+      addPhotoshopEventListener("ps-open-shortcuts", shortcutsHandler),
+      addPhotoshopEventListener("ps-open-export-as", exportAsHandler),
+      addPhotoshopEventListener("ps-open-batch-export", batchExportHandler),
+      addPhotoshopEventListener("ps-open-batch-processing", batchProcessingHandler),
+      addPhotoshopEventListener("ps-open-image-processor", imageProcessorHandler),
+      addPhotoshopEventListener("ps-open-document-report", reportHandler),
+      addPhotoshopEventListener("ps-open-preflight", preflightHandler),
+      addPhotoshopEventListener("ps-open-layer-comps", layerCompsHandler),
+      addPhotoshopEventListener("ps-open-select-and-mask", selectMaskHandler),
+      addPhotoshopEventListener("ps-open-recent-documents", recentManagerHandler),
+      addPhotoshopEventListener("ps-open-workspace-manager", workspaceManagerHandler),
+      addPhotoshopEventListener("ps-open-file-info", fileInfoHandler),
+      addPhotoshopEventListener("ps-open-algorithmic-operations", algorithmHandler),
+      addPhotoshopEventListener("ps-open-3d-workspace", threeDHandler),
+      addPhotoshopEventListener("ps-open-video-render", videoHandler),
+      addPhotoshopEventListener("ps-open-print-workflow", printHandler),
+      addPhotoshopEventListener("ps-open-device-preview", previewHandler),
+      addPhotoshopEventListener("ps-open-automation-workflow", automationHandler),
+      addPhotoshopEventListener("ps-open-provenance", provenanceHandler),
+      addPhotoshopEventListener("ps-open-plugin-manager", pluginsHandler),
+      addPhotoshopEventListener("ps-open-cloud-libraries", librariesHandler),
+      addPhotoshopEventListener("ps-open-color-management-workflow", colorWorkflowHandler),
+      addPhotoshopEventListener("ps-open-color-mode", (detail) => colorModeHandler(detail as import("./color-mode-dialog").ColorModeDialogTarget | undefined)),
+      addPhotoshopEventListener("ps-open-format-metadata", formatsHandler),
+      addPhotoshopEventListener("ps-open-variables", variablesHandler),
+      addPhotoshopEventListener("ps-open-photomerge", photomergeHandler),
+      addPhotoshopEventListener("ps-open-gap-workflow", gapWorkflowHandler),
+      addPhotoshopEventListener("ps-open-workflow-pack", (detail) => workflowPackHandler(detail as { id?: WorkflowPackId } | WorkflowPackId)),
+      addPhotoshopEventListener("ps-open-selection-operation", selectionOperationHandler),
+    ]
     return () => {
-      window.removeEventListener("ps-open-filter-gallery", galleryHandler)
-      window.removeEventListener("ps-open-camera-raw", cameraRawHandler)
-      window.removeEventListener("ps-open-preferences", preferencesHandler)
-      window.removeEventListener("ps-open-shortcuts", shortcutsHandler)
-      window.removeEventListener("ps-open-export-as", exportAsHandler)
-      window.removeEventListener("ps-open-batch-export", batchExportHandler)
-      window.removeEventListener("ps-open-batch-processing", batchProcessingHandler)
-      window.removeEventListener("ps-open-image-processor", imageProcessorHandler)
-      window.removeEventListener("ps-open-document-report", reportHandler)
-      window.removeEventListener("ps-open-preflight", preflightHandler)
-      window.removeEventListener("ps-open-layer-comps", layerCompsHandler)
-      window.removeEventListener("ps-open-select-and-mask", selectMaskHandler)
-      window.removeEventListener("ps-open-recent-documents", recentManagerHandler)
-      window.removeEventListener("ps-open-workspace-manager", workspaceManagerHandler)
-      window.removeEventListener("ps-open-file-info", fileInfoHandler)
-      window.removeEventListener("ps-open-algorithmic-operations", algorithmHandler)
-      window.removeEventListener("ps-open-3d-workspace", threeDHandler)
-      window.removeEventListener("ps-open-video-render", videoHandler)
-      window.removeEventListener("ps-open-print-workflow", printHandler)
-      window.removeEventListener("ps-open-device-preview", previewHandler)
-      window.removeEventListener("ps-open-automation-workflow", automationHandler)
-      window.removeEventListener("ps-open-provenance", provenanceHandler)
-      window.removeEventListener("ps-open-plugin-manager", pluginsHandler)
-      window.removeEventListener("ps-open-cloud-libraries", librariesHandler)
-      window.removeEventListener("ps-open-color-management-workflow", colorWorkflowHandler)
-      window.removeEventListener("ps-open-color-mode", colorModeHandler as EventListener)
-      window.removeEventListener("ps-open-format-metadata", formatsHandler)
-      window.removeEventListener("ps-open-variables", variablesHandler)
-      window.removeEventListener("ps-open-photomerge", photomergeHandler)
-      window.removeEventListener("ps-open-gap-workflow", gapWorkflowHandler as EventListener)
-      window.removeEventListener("ps-open-workflow-pack", workflowPackHandler as EventListener)
-      window.removeEventListener("ps-open-selection-operation", selectionOperationHandler as EventListener)
+      removers.forEach((remove) => remove())
     }
   }, [])
 
@@ -502,11 +449,11 @@ export function MenuBar({
   React.useEffect(() => {
     const sliceHandler = () => dispatch({ type: "clear-slices" })
     const rulerHandler = () => dispatch({ type: "set-measurement", m: null })
-    window.addEventListener("ps-clear-slices", sliceHandler)
-    window.addEventListener("ps-clear-ruler", rulerHandler)
+    const removeSlices = addPhotoshopEventListener("ps-clear-slices", sliceHandler)
+    const removeRuler = addPhotoshopEventListener("ps-clear-ruler", rulerHandler)
     return () => {
-      window.removeEventListener("ps-clear-slices", sliceHandler)
-      window.removeEventListener("ps-clear-ruler", rulerHandler)
+      removeSlices()
+      removeRuler()
     }
   }, [dispatch])
 
@@ -531,12 +478,10 @@ export function MenuBar({
   }, [executePurge])
   // Listen for cross-component purge requests (e.g. from command palette).
   React.useEffect(() => {
-    const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{ target: PurgeTarget }>).detail
+    const handler = (detail: { target: PurgeTarget }) => {
       if (detail?.target) runPurge(detail.target)
     }
-    window.addEventListener("ps-purge-request", handler as EventListener)
-    return () => window.removeEventListener("ps-purge-request", handler as EventListener)
+    return addPhotoshopEventListener("ps-purge-request", handler)
   }, [runPurge])
   const pendingPurgeCommand = pendingPurge ? PURGE_COMMANDS.find((c) => c.target === pendingPurge) : null
   const openAdvancedTab = (tab: AdvancedSubsystemTab, colorWorkflow: ColorWorkflowMode = "assign") => {
@@ -1624,8 +1569,7 @@ export function MenuBar({
   }, [activeLayer, revealSourceHandle])
 
   React.useEffect(() => {
-    const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{ docId?: string } | undefined>).detail
+    const handler = (detail: { docId?: string } | undefined) => {
       const docId = detail?.docId ?? activeDoc?.id ?? null
       if (!docId) {
         toast.info("Open a document before revealing its source.")
@@ -1633,8 +1577,7 @@ export function MenuBar({
       }
       openRevealSourceDialog(docId)
     }
-    window.addEventListener("ps-reveal-source", handler)
-    return () => window.removeEventListener("ps-reveal-source", handler)
+    return addPhotoshopEventListener("ps-reveal-source", handler)
   }, [openRevealSourceDialog, activeDoc?.id])
 
   const writeProjectHandle = async (handle: FileSystemFileHandleLike, text: string) => {
@@ -1729,11 +1672,10 @@ export function MenuBar({
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<{ docId?: string; mode?: SaveMode }>).detail
       void saveProjectDocument(detail?.docId, detail?.mode ?? "save").then((savedId) => {
-        window.dispatchEvent(new CustomEvent("ps-document-saved", { detail: { docId: savedId ?? detail?.docId, success: !!savedId } }))
+        dispatchPhotoshopEvent("ps-document-saved", { docId: savedId ?? detail?.docId, success: !!savedId })
       })
     }
-    window.addEventListener("ps-save-document", handler as EventListener)
-    return () => window.removeEventListener("ps-save-document", handler as EventListener)
+    return addPhotoshopEventListener("ps-save-document", (_detail, event) => handler(event))
   }, [saveProjectDocument])
 
   const openImageOrPsd = () => {
@@ -1786,8 +1728,7 @@ export function MenuBar({
   openImageOrPsdRef.current = openImageOrPsd
   React.useEffect(() => {
     const handler = () => openImageOrPsdRef.current()
-    window.addEventListener("ps-open-file", handler)
-    return () => window.removeEventListener("ps-open-file", handler)
+    return addPhotoshopEventListener("ps-open-file", handler)
   }, [])
 
   const saveProject = () => {
@@ -1955,7 +1896,7 @@ export function MenuBar({
   }
 
   const applyWorkspacePreset = (preset: WorkspacePresetId) => {
-    window.dispatchEvent(new CustomEvent("ps-apply-workspace-preset", { detail: { preset } }))
+    dispatchPhotoshopEvent("ps-apply-workspace-preset", { preset })
   }
 
   const openPanel = (id: string) => {
@@ -1973,9 +1914,7 @@ export function MenuBar({
   const runPluginCommandFromMenu = (plugin: PluginDescriptor, command: PluginCommandDescriptor) => {
     openAdvancedTab("plugins")
     window.setTimeout(() => {
-      window.dispatchEvent(new CustomEvent("ps-run-plugin-command", {
-        detail: { pluginId: plugin.id, commandId: command.id },
-      }))
+      dispatchPhotoshopEvent("ps-run-plugin-command", { pluginId: plugin.id, commandId: command.id })
     }, 80)
   }
 
@@ -2149,7 +2088,7 @@ export function MenuBar({
                   disabled={!activeDoc}
                   onSelect={() => {
                     if (!activeDoc) return
-                    window.dispatchEvent(new CustomEvent("ps-image-assets-generator-run", { detail: { docId: activeDoc.id } }))
+                    dispatchPhotoshopEvent("ps-image-assets-generator-run", { docId: activeDoc.id })
                   }}
                 >
                   Run Image Assets Now
@@ -2168,9 +2107,7 @@ export function MenuBar({
                     void (async () => {
                       try {
                         const directoryHandle = await picker()
-                        window.dispatchEvent(new CustomEvent("ps-image-assets-generator-directory", {
-                          detail: { docId: activeDoc.id, directoryHandle },
-                        }))
+                        dispatchPhotoshopEvent("ps-image-assets-generator-directory", { docId: activeDoc.id, directoryHandle })
                         dispatch({
                           type: "set-document-metadata",
                           metadata: {
@@ -2404,7 +2341,7 @@ export function MenuBar({
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
-              onSelect={() => window.dispatchEvent(new CustomEvent("ps-free-transform"))}
+              onSelect={() => dispatchPhotoshopEvent("ps-free-transform")}
               disabled={!activeLayer || activeLayer.locked}
             >
               Free Transform <DropdownMenuShortcut>⌘T</DropdownMenuShortcut>
@@ -2415,19 +2352,19 @@ export function MenuBar({
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>Transform</DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-transform-flip", { detail: "horizontal" }))} disabled={!activeLayer}>
+                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-transform-flip", "horizontal")} disabled={!activeLayer}>
                   Flip Horizontal
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-transform-flip", { detail: "vertical" }))} disabled={!activeLayer}>
+                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-transform-flip", "vertical")} disabled={!activeLayer}>
                   Flip Vertical
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-transform-rotate", { detail: 90 }))} disabled={!activeLayer}>
+                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-transform-rotate", 90)} disabled={!activeLayer}>
                   Rotate 90° CW
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-transform-rotate", { detail: -90 }))} disabled={!activeLayer}>
+                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-transform-rotate", -90)} disabled={!activeLayer}>
                   Rotate 90° CCW
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-transform-rotate", { detail: 180 }))} disabled={!activeLayer}>
+                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-transform-rotate", 180)} disabled={!activeLayer}>
                   Rotate 180°
                 </DropdownMenuItem>
               </DropdownMenuSubContent>
@@ -2449,28 +2386,28 @@ export function MenuBar({
                   Preset Manager…
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "brush" }))}>
+                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "brush")}>
                   Brushes Panel
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "swatches" }))}>
+                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "swatches")}>
                   Swatches Panel
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "gradients" }))}>
+                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "gradients")}>
                   Gradients Panel
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "patterns" }))}>
+                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "patterns")}>
                   Patterns Panel
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "styles" }))}>
+                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "styles")}>
                   Styles Panel
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "shapes" }))}>
+                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "shapes")}>
                   Shapes Panel
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "tool-presets" }))}>
+                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "tool-presets")}>
                   Tool Presets Panel
                 </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "assets" }))}>
+                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "assets")}>
                   Assets Panel
                 </DropdownMenuItem>
               </DropdownMenuSubContent>
@@ -3310,7 +3247,7 @@ export function MenuBar({
               Similar…
             </DropdownMenuItem>
             <DropdownMenuItem
-              onSelect={() => window.dispatchEvent(new CustomEvent("ps-transform-selection-begin"))}
+              onSelect={() => dispatchPhotoshopEvent("ps-transform-selection-begin")}
             >
               Transform Selection...
             </DropdownMenuItem>
@@ -3846,7 +3783,7 @@ export function MenuBar({
                   <DropdownMenuItem
                     key={workspace.name}
                     onSelect={() =>
-                      window.dispatchEvent(new CustomEvent("ps-apply-workspace", { detail: { name: workspace.name } }))
+                      dispatchPhotoshopEvent("ps-apply-workspace", { name: workspace.name })
                     }
                   >
                     {workspace.name}
@@ -3899,31 +3836,31 @@ export function MenuBar({
             <DropdownMenuItem>✓ Properties</DropdownMenuItem>
             <DropdownMenuItem>✓ History</DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "selection-studio" }))}>Selection Studio</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "guides" }))}>Guides</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "adjustments" }))}>Adjustments</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "assets" }))}>Assets</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "preset-manager" }))}>Preset Manager</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "libraries" }))}>Libraries</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "glyphs" }))}>Glyphs</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "styles" }))}>Styles</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "shapes" }))}>Shapes</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "tool-presets" }))}>Tool Presets</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "clone-source" }))}>Clone Source</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "timeline" }))}>Timeline</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "animation" }))}>Animation</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "comments" }))}>Comments</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "annotations" }))}>Annotations</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "notes" }))}>Notes</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "measurement-log" }))}>Measurement Log</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "slices" }))}>Slices</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "scripting" }))}>Scripting</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "learn" }))}>Learn</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "discover" }))}>Discover</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "selection-studio")}>Selection Studio</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "guides")}>Guides</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "adjustments")}>Adjustments</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "assets")}>Assets</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "preset-manager")}>Preset Manager</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "libraries")}>Libraries</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "glyphs")}>Glyphs</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "styles")}>Styles</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "shapes")}>Shapes</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "tool-presets")}>Tool Presets</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "clone-source")}>Clone Source</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "timeline")}>Timeline</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "animation")}>Animation</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "comments")}>Comments</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "annotations")}>Annotations</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "notes")}>Notes</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "measurement-log")}>Measurement Log</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "slices")}>Slices</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "scripting")}>Scripting</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "learn")}>Learn</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "discover")}>Discover</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => setLayerCompsOpen(true)}>
               Layer Comps…
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "layer-comps" }))}>
+            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "layer-comps")}>
               Layer Comps Panel
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => setColorLabelsOpen(true)}>
@@ -3931,7 +3868,7 @@ export function MenuBar({
             </DropdownMenuItem>
             <DropdownMenuItem>✓ Channels</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => {
-              window.dispatchEvent(new CustomEvent("ps-switch-panel", { detail: "paths" }))
+              dispatchPhotoshopEvent("ps-switch-panel", "paths")
             }}>Paths</DropdownMenuItem>
             */}
           </DropdownMenuContent>

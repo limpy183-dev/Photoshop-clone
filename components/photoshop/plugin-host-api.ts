@@ -25,6 +25,7 @@ import type {
   PsDocument,
   Selection,
 } from "./types"
+import { dispatchPhotoshopEvent } from "./events"
 
 /* --------------------------- Method names ------------------------------- */
 
@@ -376,10 +377,10 @@ async function runMethod(method: PluginHostMethod, args: Record<string, unknown>
       // needs index arithmetic. The dialog binds these via a custom event so
       // the host editor (which holds the history scheduler) performs the
       // actual jump. We just signal intent here.
-      if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("ps-plugin-host-undo", { detail: { pluginId } }))
+      if (typeof window !== "undefined") dispatchPhotoshopEvent("ps-plugin-host-undo", { pluginId })
       return { ok: true, requested: "undo" }
     case "history.redo":
-      if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("ps-plugin-host-redo", { detail: { pluginId } }))
+      if (typeof window !== "undefined") dispatchPhotoshopEvent("ps-plugin-host-redo", { pluginId })
       return { ok: true, requested: "redo" }
     case "history.snapshot": {
       const label = typeof args.label === "string" ? args.label : "Plugin Snapshot"

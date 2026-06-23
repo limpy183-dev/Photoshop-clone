@@ -22,14 +22,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Lint
-        run: npm run lint
+      - name: Strict lint
+        run: npm run lint:strict
 
       - name: Typecheck
         run: npm run typecheck
 
       - name: Capability reconciliation
         run: npm run check:capabilities
+
+      - name: Architecture budgets
+        run: npm run check:architecture
 
       - name: Build
         run: npm run build
@@ -41,7 +44,31 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Smoke tests
-        run: npm run test:smoke
+        run: npm run test:smoke:ci
+
+      - name: Collect changed files
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+          git diff --name-only "origin/${{ github.base_ref }}...HEAD" > .pr-changed-files.txt
+
+      - name: Select targeted PR tests
+        if: github.event_name == 'pull_request'
+        id: targeted-tests
+        run: npm run select:pr-tests -- .pr-changed-files.txt
+
+      - name: Targeted PR tests
+        if: github.event_name == 'pull_request' && steps.targeted-tests.outputs.count != '0'
+        shell: bash
+        run: |
+          while IFS= read -r command; do
+            if [ -n "$command" ]; then
+              echo "$command"
+              eval "$command"
+            fi
+          done <<'EOF'
+          ${{ steps.targeted-tests.outputs.commands }}
+          EOF
 
   full-playwright:
     if: github.event_name == 'push'

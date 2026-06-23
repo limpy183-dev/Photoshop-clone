@@ -19,6 +19,9 @@ import {
   Sparkles,
 } from "lucide-react"
 import { buildLearningIndex, type LearningIndexItem } from "./learning-index"
+import { withBasePath } from "@/lib/base-path"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
+import { addPhotoshopEventListener } from "./events"
 import {
   estimateDocumentMemoryMb,
   NEW_DOCUMENT_PRESET_GROUPS,
@@ -27,8 +30,6 @@ import {
 } from "./new-document-presets"
 import { readRecentDocuments, type RecentDocument } from "./recent-documents"
 import { STARTUP_IMAGE_IMPORT_PARAM, writeStartupImageImport } from "./startup-file-handoff"
-
-const PINNED_DOCUMENTS_KEY = "ps-pinned-documents-v1"
 
 const FEATURED_PRESET_NAMES = new Set([
   "Default Canvas",
@@ -66,16 +67,11 @@ function formatDate(value: number) {
 }
 
 function readPinnedDocumentIds() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(PINNED_DOCUMENTS_KEY) ?? "[]")
-    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : []
-  } catch {
-    return []
-  }
+  return readClientStorageJson(CLIENT_STORAGE_KEYS.pinnedDocuments)
 }
 
 function writePinnedDocumentIds(ids: string[]) {
-  localStorage.setItem(PINNED_DOCUMENTS_KEY, JSON.stringify([...new Set(ids)]))
+  writeClientStorageJson(CLIENT_STORAGE_KEYS.pinnedDocuments, [...new Set(ids)])
 }
 
 function useStartDocuments() {
@@ -90,10 +86,10 @@ function useStartDocuments() {
   React.useEffect(() => {
     refresh()
     const handleStorage = () => refresh()
-    window.addEventListener("ps-recents-changed", handleStorage)
+    const removeRecents = addPhotoshopEventListener("ps-recents-changed", handleStorage)
     window.addEventListener("storage", handleStorage)
     return () => {
-      window.removeEventListener("ps-recents-changed", handleStorage)
+      removeRecents()
       window.removeEventListener("storage", handleStorage)
     }
   }, [refresh])
@@ -151,7 +147,7 @@ export function StartWorkspace() {
         <aside className="border-r border-[var(--ps-divider)] bg-[#181818]">
           <div className="flex h-16 items-center justify-center border-b border-[var(--ps-divider)]">
             <img
-              src="/photoshop-web-logo.svg"
+              src={withBasePath("/photoshop-web-logo.svg")}
               alt="Photoshop web logo"
               className="h-9 w-9 rounded-sm"
               draggable={false}

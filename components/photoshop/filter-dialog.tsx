@@ -6,6 +6,7 @@ import { Slider } from "@/components/ui/slider"
 import { Button } from "@/components/ui/button"
 import { compositeLayer } from "./blend-modes"
 import { useEditor } from "./editor-context"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
 import {
   applyPlannedFilterFinal,
   applyPlannedFilterPreview,
@@ -95,57 +96,49 @@ export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
   }, [filterId, filter, activeDoc, selectedLayers, documents])
 
   React.useEffect(() => {
-    const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{ filterId?: string; params?: BlurGalleryParams }>).detail
+    const handler = (detail: { filterId?: string; params?: BlurGalleryParams }) => {
       if (!filter || !isBlurGalleryFilterId(filter.id) || detail?.filterId !== filter.id || !detail.params) return
       setParams((cur) => ({ ...cur, ...detail.params! }))
     }
-    window.addEventListener("ps-blur-gallery-overlay-change", handler)
-    return () => window.removeEventListener("ps-blur-gallery-overlay-change", handler)
+    return addPhotoshopEventListener("ps-blur-gallery-overlay-change", (detail) => handler(detail as { filterId?: string; params?: BlurGalleryParams }))
   }, [filter])
 
   React.useEffect(() => {
-    const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{ params?: LightingEffectsParams }>).detail
+    const handler = (detail: { params?: LightingEffectsParams }) => {
       if (!filter || filter.id !== "lighting-effects" || !detail?.params) return
       setParams((cur) => ({ ...cur, ...detail.params! }))
     }
-    window.addEventListener("ps-lighting-effects-overlay-change", handler)
-    return () => window.removeEventListener("ps-lighting-effects-overlay-change", handler)
+    return addPhotoshopEventListener("ps-lighting-effects-overlay-change", (detail) => handler(detail as { params?: LightingEffectsParams }))
   }, [filter])
 
   React.useEffect(() => {
     if (!filter || !activeDoc || !isBlurGalleryFilterId(filter.id)) {
-      window.dispatchEvent(new CustomEvent("ps-blur-gallery-overlay-state", { detail: null }))
+      dispatchPhotoshopEvent("ps-blur-gallery-overlay-state", null)
       return
     }
     const normalized = normalizeBlurGalleryParams(filter.id, params)
-    window.dispatchEvent(new CustomEvent("ps-blur-gallery-overlay-state", {
-      detail: {
-        filterId: filter.id,
-        params: normalized,
-        docId: activeDoc.id,
-      },
-    }))
+    dispatchPhotoshopEvent("ps-blur-gallery-overlay-state", {
+      filterId: filter.id,
+      params: normalized,
+      docId: activeDoc.id,
+    })
     return () => {
-      window.dispatchEvent(new CustomEvent("ps-blur-gallery-overlay-state", { detail: null }))
+      dispatchPhotoshopEvent("ps-blur-gallery-overlay-state", null)
     }
   }, [filter, params, activeDoc])
 
   React.useEffect(() => {
     if (!filter || !activeDoc || filter.id !== "lighting-effects") {
-      window.dispatchEvent(new CustomEvent("ps-lighting-effects-overlay-state", { detail: null }))
+      dispatchPhotoshopEvent("ps-lighting-effects-overlay-state", null)
       return
     }
     const normalized = normalizeLightingEffectsParams(params)
-    window.dispatchEvent(new CustomEvent("ps-lighting-effects-overlay-state", {
-      detail: {
-        params: normalized,
-        docId: activeDoc.id,
-      },
-    }))
+    dispatchPhotoshopEvent("ps-lighting-effects-overlay-state", {
+      params: normalized,
+      docId: activeDoc.id,
+    })
     return () => {
-      window.dispatchEvent(new CustomEvent("ps-lighting-effects-overlay-state", { detail: null }))
+      dispatchPhotoshopEvent("ps-lighting-effects-overlay-state", null)
     }
   }, [filter, params, activeDoc])
 

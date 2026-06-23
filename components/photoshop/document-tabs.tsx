@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { useEditor } from "./editor-context"
+import { dispatchPhotoshopEvent } from "./events"
 import { Copy, RotateCcw, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
@@ -128,11 +129,7 @@ export function DocumentTabs() {
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  onSelect={() =>
-                    window.dispatchEvent(
-                      new CustomEvent("ps-reveal-source", { detail: { docId: d.id } }),
-                    )
-                  }
+                  onSelect={() => dispatchPhotoshopEvent("ps-reveal-source", { docId: d.id })}
                 >
                   Reveal Source…
                 </DropdownMenuItem>

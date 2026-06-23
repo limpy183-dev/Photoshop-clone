@@ -18,6 +18,7 @@ import {
 import { toast } from "sonner"
 import { makeHistoryEntry, useEditor } from "./editor-context"
 import { deserializeProject } from "./document-io"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
 import { buildLearningIndex, runLearningIndexItem, type LearningIndexItem } from "./learning-index"
 import {
   estimateDocumentMemoryMb,
@@ -109,12 +110,12 @@ function useHomeData() {
     refresh()
     const handleRecents = () => setRecents(readRecentDocuments())
     const handlePrefs = () => setPinnedIds(loadPreferencesFromStorage().pinnedFiles)
-    window.addEventListener("ps-recents-changed", handleRecents)
-    window.addEventListener("ps-preferences-changed", handlePrefs)
+    const removeRecents = addPhotoshopEventListener("ps-recents-changed", handleRecents)
+    const removePreferences = addPhotoshopEventListener("ps-preferences-changed", handlePrefs)
     window.addEventListener("storage", refresh)
     return () => {
-      window.removeEventListener("ps-recents-changed", handleRecents)
-      window.removeEventListener("ps-preferences-changed", handlePrefs)
+      removeRecents()
+      removePreferences()
       window.removeEventListener("storage", refresh)
     }
   }, [refresh])
@@ -219,7 +220,7 @@ export function HomeWorkspace({ onOpenNew, onClose, onOpenFile }: HomeWorkspaceP
     // The menu-bar owns the File-System-Access pickers. Dispatching a
     // window event lets Home trigger the same flow without duplicating the
     // PSD/raster/project detection logic.
-    window.dispatchEvent(new CustomEvent("ps-open-file"))
+    dispatchPhotoshopEvent("ps-open-file")
   }, [onOpenFile])
 
   const categoryPresets = React.useMemo(() => presetsForCategory(category), [category])
@@ -414,7 +415,7 @@ export function HomeWorkspace({ onOpenNew, onClose, onOpenFile }: HomeWorkspaceP
               <button
                 type="button"
                 onClick={() => {
-                  window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "discover" }))
+                  dispatchPhotoshopEvent("ps-open-panel", "discover")
                   onClose?.()
                 }}
                 className="flex h-8 w-full items-center justify-center gap-2 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] text-[11px] text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]"

@@ -64,7 +64,7 @@ import {
 } from "@/components/ui/popover"
 import type { AdjustmentType, BlendMode, Layer, LayerKind, PsDocument } from "../types"
 import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop } from "../adjustment-layers"
-import { dispatchPhotoshopEvent } from "../events"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "../events"
 import type { MergedRenderChange } from "../render-bus"
 import { createLayerMetadata, layerMatchesQuery } from "../layer-workflows"
 import { copyLayerCss, copyLayerSvg } from "../vector-clipboard"
@@ -359,8 +359,7 @@ export function LayersPanel() {
         searchRef.current?.select()
       }, 0)
     }
-    window.addEventListener("ps-focus-layer-search", handler)
-    return () => window.removeEventListener("ps-focus-layer-search", handler)
+    return addPhotoshopEventListener("ps-focus-layer-search", (_detail, event) => handler(event))
   }, [])
 
   React.useEffect(() => {

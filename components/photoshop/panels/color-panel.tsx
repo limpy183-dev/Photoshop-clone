@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useEditor } from "../editor-context"
+import { useEditorSelector } from "../editor-context"
 import { hexToRgb } from "../color-utils"
 import { dispatchPhotoshopEvent } from "../events"
 function rgbToHex(r: number, g: number, b: number) {
@@ -65,7 +65,9 @@ function hsvToRgb(h: number, s: number, v: number) {
  * one — which is what was causing the perceived "lag".
  */
 export function ColorPanel() {
-  const { foreground, background, dispatch } = useEditor()
+  const foreground = useEditorSelector((editor) => editor.foreground)
+  const background = useEditorSelector((editor) => editor.background)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
 
   // Local HSV mirror of the global foreground color. Updates immediately
   // as the user drags so the UI stays in sync, while the global dispatch

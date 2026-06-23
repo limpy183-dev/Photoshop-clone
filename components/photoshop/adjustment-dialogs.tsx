@@ -29,6 +29,7 @@ import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { Checkbox } from "@/components/ui/checkbox"
 import { useEditor, makeCanvas } from "./editor-context"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
 import { compositeLayer } from "./blend-modes"
 import { FILTERS, HDR_TONING_PRESETS, AUTO_DEFAULTS, applyAutoAdjustment, type AutoAlgorithm, type AutoOptions } from "./filters"
 import { toast } from "sonner"
@@ -120,27 +121,14 @@ const SHADOWS_HIGHLIGHTS_FACTORY_DEFAULTS: ShadowsHighlightsState = {
   whiteClip: 0.01,
 }
 
-const SHADOWS_HIGHLIGHTS_PREFS_KEY = "ps.shadowsHighlights.defaults"
-
 function loadShadowsHighlightsDefaults(): ShadowsHighlightsState {
-  if (typeof window === "undefined") return SHADOWS_HIGHLIGHTS_FACTORY_DEFAULTS
-  try {
-    const raw = window.localStorage.getItem(SHADOWS_HIGHLIGHTS_PREFS_KEY)
-    if (!raw) return SHADOWS_HIGHLIGHTS_FACTORY_DEFAULTS
-    const parsed = JSON.parse(raw) as Partial<ShadowsHighlightsState>
-    return { ...SHADOWS_HIGHLIGHTS_FACTORY_DEFAULTS, ...parsed }
-  } catch {
-    return SHADOWS_HIGHLIGHTS_FACTORY_DEFAULTS
-  }
+  const parsed = readClientStorageJson(CLIENT_STORAGE_KEYS.shadowsHighlightsDefaults)
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return SHADOWS_HIGHLIGHTS_FACTORY_DEFAULTS
+  return { ...SHADOWS_HIGHLIGHTS_FACTORY_DEFAULTS, ...(parsed as Partial<ShadowsHighlightsState>) }
 }
 
 function saveShadowsHighlightsDefaults(state: ShadowsHighlightsState) {
-  if (typeof window === "undefined") return
-  try {
-    window.localStorage.setItem(SHADOWS_HIGHLIGHTS_PREFS_KEY, JSON.stringify(state))
-  } catch {
-    /* ignore quota errors */
-  }
+  writeClientStorageJson(CLIENT_STORAGE_KEYS.shadowsHighlightsDefaults, state)
 }
 
 export function ShadowsHighlightsDialog({
@@ -561,6 +549,7 @@ export function ReplaceColorDialog({
     setReplacementLightness(0)
     setResultHex("")
     setPickMode("add")
+    // Reset only when the dialog targets a new document; sample arrays are intentionally cleared, not replayed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, activeDoc?.id])
 
@@ -810,27 +799,14 @@ export function EqualizePromptDialog({
 /* 6. Auto Options                                                    */
 /* ------------------------------------------------------------------ */
 
-const AUTO_OPTIONS_PREFS_KEY = "ps.auto.options"
-
 function loadAutoDefaults(): AutoOptions {
-  if (typeof window === "undefined") return AUTO_DEFAULTS
-  try {
-    const raw = window.localStorage.getItem(AUTO_OPTIONS_PREFS_KEY)
-    if (!raw) return AUTO_DEFAULTS
-    const parsed = JSON.parse(raw) as Partial<AutoOptions>
-    return { ...AUTO_DEFAULTS, ...parsed }
-  } catch {
-    return AUTO_DEFAULTS
-  }
+  const parsed = readClientStorageJson(CLIENT_STORAGE_KEYS.autoOptionsDefaults)
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return AUTO_DEFAULTS
+  return { ...AUTO_DEFAULTS, ...(parsed as Partial<AutoOptions>) }
 }
 
 function saveAutoDefaults(opts: AutoOptions) {
-  if (typeof window === "undefined") return
-  try {
-    window.localStorage.setItem(AUTO_OPTIONS_PREFS_KEY, JSON.stringify(opts))
-  } catch {
-    /* ignore */
-  }
+  writeClientStorageJson(CLIENT_STORAGE_KEYS.autoOptionsDefaults, opts)
 }
 
 export function AutoOptionsDialog({

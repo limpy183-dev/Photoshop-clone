@@ -58,7 +58,7 @@ import {
   planWebGLCompositor,
 } from "./webgl-compositor"
 import { containsSelectionPoint, createSelectionHitTester, type SelectionHitTester } from "./selection-hit-testing"
-import { dispatchPhotoshopEvent } from "./events"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
 import {
   applyBlurGalleryKeyboardCommand,
   beginBlurGalleryInteraction,
@@ -328,10 +328,10 @@ export function CanvasView() {
       } catch {}
     }
     read()
-    window.addEventListener("ps-preferences-changed", read)
+    const removePreferences = addPhotoshopEventListener("ps-preferences-changed", read)
     window.addEventListener("storage", read)
     return () => {
-      window.removeEventListener("ps-preferences-changed", read)
+      removePreferences()
       window.removeEventListener("storage", read)
     }
   }, [])
@@ -381,7 +381,7 @@ export function CanvasView() {
 
   React.useEffect(() => {
     const coalescer = createRafCoalescer<MouseMoveDetail>((detail) => {
-      window.dispatchEvent(new CustomEvent("ps-mousemove", { detail }))
+      dispatchPhotoshopEvent("ps-mousemove", detail)
     })
     mouseMoveCoalescerRef.current = coalescer
     return () => {
@@ -2593,8 +2593,7 @@ export function CanvasView() {
         docId: detail.docId,
       })
     }
-    window.addEventListener("ps-blur-gallery-overlay-state", handler)
-    return () => window.removeEventListener("ps-blur-gallery-overlay-state", handler)
+    return addPhotoshopEventListener("ps-blur-gallery-overlay-state", (_detail, event) => handler(event))
   }, [])
 
   React.useEffect(() => {
@@ -2619,8 +2618,7 @@ export function CanvasView() {
         docId: detail.docId,
       })
     }
-    window.addEventListener("ps-lighting-effects-overlay-state", handler)
-    return () => window.removeEventListener("ps-lighting-effects-overlay-state", handler)
+    return addPhotoshopEventListener("ps-lighting-effects-overlay-state", (_detail, event) => handler(event))
   }, [blurGalleryOverlay])
 
   React.useEffect(() => {
@@ -2655,12 +2653,11 @@ export function CanvasView() {
         // canvas may have been disposed by the panel; ignore
       }
     }
-    window.addEventListener("ps-timeline-transition-overlay", handler)
-    return () => window.removeEventListener("ps-timeline-transition-overlay", handler)
+    return addPhotoshopEventListener("ps-timeline-transition-overlay", (_detail, event) => handler(event))
   }, [activeDoc?.id])
 
   const emitBlurGalleryParams = React.useCallback((filterId: BlurGalleryFilterId, params: BlurGalleryParams) => {
-    window.dispatchEvent(new CustomEvent("ps-blur-gallery-overlay-change", { detail: { filterId, params } }))
+    dispatchPhotoshopEvent("ps-blur-gallery-overlay-change", { filterId, params })
   }, [])
 
   const setBlurGalleryParams = React.useCallback((filterId: BlurGalleryFilterId, params: BlurGalleryParams) => {
@@ -2674,7 +2671,7 @@ export function CanvasView() {
   }, [activeDoc?.id, emitBlurGalleryParams])
 
   const emitLightingEffectsParams = React.useCallback((params: LightingEffectsParams) => {
-    window.dispatchEvent(new CustomEvent("ps-lighting-effects-overlay-change", { detail: { params } }))
+    dispatchPhotoshopEvent("ps-lighting-effects-overlay-change", { params })
   }, [])
 
   const setLightingEffectsParams = React.useCallback((params: LightingEffectsParams) => {
@@ -3504,7 +3501,7 @@ export function CanvasView() {
       rasterizeText(cv, layer.text!)
       dispatch({ type: "add-layer", layer })
       setTimeout(() => commit(vertical ? "Vertical Type" : "Type", [id]), 0)
-      window.dispatchEvent(new CustomEvent("ps-edit-text", { detail: { layerId: id } }))
+      dispatchPhotoshopEvent("ps-edit-text", { layerId: id })
       return
     }
 
@@ -3949,7 +3946,7 @@ export function CanvasView() {
     }
     const coalescer = mouseMoveCoalescerRef.current
     if (coalescer) coalescer.push(mouseDetail)
-    else window.dispatchEvent(new CustomEvent("ps-mousemove", { detail: mouseDetail }))
+    else dispatchPhotoshopEvent("ps-mousemove", mouseDetail)
 
     if (handleBlurGalleryPointerMove(pt)) {
       e.preventDefault()
@@ -4838,7 +4835,7 @@ export function CanvasView() {
     // edit text on double click
     const hit = autoPickLayer(activeDoc, pt)
     if (hit && hit.kind === "text") {
-      window.dispatchEvent(new CustomEvent("ps-edit-text", { detail: { layerId: hit.id } }))
+      dispatchPhotoshopEvent("ps-edit-text", { layerId: hit.id })
       return
     }
     if (hit && (hit.smartObject || hit.kind === "smart-object")) {
@@ -4960,9 +4957,10 @@ export function CanvasView() {
         requestRender()
       }
     }
-    window.addEventListener("ps-move-options-changed", moveOptionsHandler)
+    const removeMoveOptions = addPhotoshopEventListener("ps-move-options-changed", moveOptionsHandler)
     moveOptionsHandler()
-    return () => window.removeEventListener("ps-move-options-changed", moveOptionsHandler)
+    return removeMoveOptions
+    // Transform setup reads current refs and runtime options; adding beginTransform would resubscribe on every preview render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeLayer, tool, requestRender])
 
@@ -4977,8 +4975,7 @@ export function CanvasView() {
       if (!layer || layer.kind !== "text" || !layer.text) return
       setEditingText({ layerId: id, value: layer.text.content })
     }
-    window.addEventListener("ps-edit-text", handler)
-    return () => window.removeEventListener("ps-edit-text", handler)
+    return addPhotoshopEventListener("ps-edit-text", (_detail, event) => handler(event))
   }, [activeDoc])
 
   /* ---- color picker HUD (Alt+Shift+RightClick) ---- */
@@ -5012,8 +5009,7 @@ export function CanvasView() {
         pointerId: -1,
       })
     }
-    window.addEventListener("ps-open-color-picker-hud", open)
-    return () => window.removeEventListener("ps-open-color-picker-hud", open)
+    return addPhotoshopEventListener("ps-open-color-picker-hud", (_detail, event) => open(event))
   }, [foreground])
   React.useEffect(() => {
     if (!colorHud) return
@@ -5062,11 +5058,11 @@ export function CanvasView() {
     function cancel() {
       setSelectionTransformActive(false)
     }
-    window.addEventListener("ps-transform-selection-begin", begin)
-    window.addEventListener("ps-transform-selection-cancel", cancel)
+    const removeBegin = addPhotoshopEventListener("ps-transform-selection-begin", begin)
+    const removeCancel = addPhotoshopEventListener("ps-transform-selection-cancel", cancel)
     return () => {
-      window.removeEventListener("ps-transform-selection-begin", begin)
-      window.removeEventListener("ps-transform-selection-cancel", cancel)
+      removeBegin()
+      removeCancel()
     }
   }, [activeDoc])
   React.useEffect(() => {
@@ -5155,20 +5151,18 @@ export function CanvasView() {
       if (ov) ov.getContext("2d")!.clearRect(0, 0, ov.width, ov.height)
       requestRender()
     }
-    window.addEventListener("ps-free-transform", ftHandler)
-    window.addEventListener("ps-transform-flip", flipHandler)
-    window.addEventListener("ps-transform-rotate", rotateHandler)
-    window.addEventListener("ps-transform-set", setTransformHandler)
-    window.addEventListener("ps-transform-commit", commitTransformHandler)
-    window.addEventListener("ps-transform-cancel", cancelTransformHandler)
+    const removers = [
+      addPhotoshopEventListener("ps-free-transform", ftHandler),
+      addPhotoshopEventListener("ps-transform-flip", (_detail, event) => flipHandler(event)),
+      addPhotoshopEventListener("ps-transform-rotate", (_detail, event) => rotateHandler(event)),
+      addPhotoshopEventListener("ps-transform-set", (_detail, event) => setTransformHandler(event)),
+      addPhotoshopEventListener("ps-transform-commit", commitTransformHandler),
+      addPhotoshopEventListener("ps-transform-cancel", cancelTransformHandler),
+    ]
     return () => {
-      window.removeEventListener("ps-free-transform", ftHandler)
-      window.removeEventListener("ps-transform-flip", flipHandler)
-      window.removeEventListener("ps-transform-rotate", rotateHandler)
-      window.removeEventListener("ps-transform-set", setTransformHandler)
-      window.removeEventListener("ps-transform-commit", commitTransformHandler)
-      window.removeEventListener("ps-transform-cancel", cancelTransformHandler)
+      removers.forEach((remove) => remove())
     }
+    // Transform handlers are event entrypoints that read mutable refs; helper dependencies would churn global listeners per drag frame.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeDoc, activeLayer, commit, requestRender])
 
@@ -5184,8 +5178,7 @@ export function CanvasView() {
       }
       applyStageTransform()
     }
-    window.addEventListener("ps-navigator-pan", navigatorPanHandler)
-    return () => window.removeEventListener("ps-navigator-pan", navigatorPanHandler)
+    return addPhotoshopEventListener("ps-navigator-pan", (_detail, event) => navigatorPanHandler(event))
   }, [activeDoc, applyStageTransform, panRef, visualZoomRef])
 
   function commitTextEdit() {

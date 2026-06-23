@@ -4,6 +4,7 @@ import * as React from "react"
 import { toast } from "sonner"
 import { downloadBlob } from "./document-io"
 import { useEditor } from "./editor-context"
+import { addPhotoshopEventListener } from "./events"
 import {
   collectImageAssetGeneratorPlan,
   createImageAssetGeneratorReport,
@@ -190,8 +191,7 @@ export function ImageAssetsGeneratorRunner() {
         if (doc) void runGenerator(doc, "manual")
       })()
     }
-    window.addEventListener("ps-image-assets-generator-directory", onDirectory as EventListener)
-    return () => window.removeEventListener("ps-image-assets-generator-directory", onDirectory as EventListener)
+    return addPhotoshopEventListener("ps-image-assets-generator-directory", (_detail, event) => onDirectory(event))
   }, [runGenerator])
 
   React.useEffect(() => {
@@ -203,8 +203,7 @@ export function ImageAssetsGeneratorRunner() {
       if (!doc) return
       void runGenerator(doc, "manual")
     }
-    window.addEventListener("ps-image-assets-generator-run", onRun as EventListener)
-    return () => window.removeEventListener("ps-image-assets-generator-run", onRun as EventListener)
+    return addPhotoshopEventListener("ps-image-assets-generator-run", (_detail, event) => onRun(event))
   }, [runGenerator])
 
   React.useEffect(() => {
@@ -218,8 +217,7 @@ export function ImageAssetsGeneratorRunner() {
       if (!shouldRunImageAssetGenerator({ trigger: "save", plan, settings: doc.metadata?.imageAssetGenerator })) return
       void runGenerator(doc, "save")
     }
-    window.addEventListener("ps-document-saved", onSaved as EventListener)
-    return () => window.removeEventListener("ps-document-saved", onSaved as EventListener)
+    return addPhotoshopEventListener("ps-document-saved", (_detail, event) => onSaved(event))
   }, [runGenerator])
 
   React.useEffect(() => {

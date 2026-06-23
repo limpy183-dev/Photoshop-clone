@@ -2,10 +2,10 @@
 
 import * as React from "react"
 import { Brush, GripVertical, ImageDown, Layers, MousePointer2, SlidersHorizontal, Sparkles, Type } from "lucide-react"
-import { useEditor } from "./editor-context"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
+import { useActiveDocument, useActiveLayer, useEditorSelector } from "./editor-context"
 import { dispatchPhotoshopEvent } from "./events"
 
-const POSITION_KEY = "ps-contextual-task-bar-position"
 const DEFAULT_POSITION = { x: 28, y: 36 }
 
 function clamp(value: number, min: number, max: number) {
@@ -13,25 +13,23 @@ function clamp(value: number, min: number, max: number) {
 }
 
 export function ContextualTaskBar() {
-  const { activeDoc, activeLayer, tool, dispatch, commit } = useEditor()
+  const activeDoc = useActiveDocument()
+  const activeLayer = useActiveLayer()
+  const tool = useEditorSelector((editor) => editor.tool)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
   const barRef = React.useRef<HTMLDivElement>(null)
   const dragOffsetRef = React.useRef({ x: 0, y: 0 })
   const [position, setPosition] = React.useState(DEFAULT_POSITION)
   const [dragging, setDragging] = React.useState(false)
 
   React.useEffect(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(POSITION_KEY) ?? "null")
-      if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
-        setPosition({ x: saved.x, y: saved.y })
-      }
-    } catch {}
+    const saved = readClientStorageJson(CLIENT_STORAGE_KEYS.contextualTaskBarPosition)
+    if (saved) setPosition(saved)
   }, [])
 
   const savePosition = React.useCallback((next: { x: number; y: number }) => {
-    try {
-      localStorage.setItem(POSITION_KEY, JSON.stringify(next))
-    } catch {}
+    writeClientStorageJson(CLIENT_STORAGE_KEYS.contextualTaskBarPosition, next)
   }, [])
 
   const moveToPointer = React.useCallback((clientX: number, clientY: number) => {

@@ -16,6 +16,7 @@
  */
 
 import type { PluginActionDescriptor, PluginDescriptor } from "./types"
+import { dispatchPhotoshopEvent } from "./events"
 
 export const PLUGIN_LIFECYCLE_EVENT = "ps-plugin-lifecycle"
 export const PLUGIN_TEST_INPUT_EVENT = "ps-plugin-test-input"
@@ -40,7 +41,7 @@ export interface PluginLifecycleEvent {
 export function emitPluginLifecycle(pluginId: string, phase: PluginLifecyclePhase, detail?: unknown): void {
   if (typeof window === "undefined") return
   const event: PluginLifecycleEvent = { pluginId, phase, at: Date.now(), detail }
-  window.dispatchEvent(new CustomEvent(PLUGIN_LIFECYCLE_EVENT, { detail: event }))
+  dispatchPhotoshopEvent(PLUGIN_LIFECYCLE_EVENT, event)
 }
 
 /* --------------------------- Test harness ------------------------------- */

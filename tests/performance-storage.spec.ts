@@ -19,12 +19,33 @@ import {
   planProgressiveRender,
 } from "../components/photoshop/progressive-renderer"
 import {
+  exportRasterImageDataToBlob,
   planRasterExportExecution,
 } from "../components/photoshop/export-worker"
 import {
   getFilterWorkerSupport,
   isFilterWorkerSupported,
 } from "../components/photoshop/filter-worker"
+
+class TestImageData {
+  data: Uint8ClampedArray
+  width: number
+  height: number
+
+  constructor(dataOrWidth: Uint8ClampedArray | number, widthOrHeight: number, height?: number) {
+    if (typeof dataOrWidth === "number") {
+      this.width = dataOrWidth
+      this.height = widthOrHeight
+      this.data = new Uint8ClampedArray(this.width * this.height * 4)
+    } else {
+      this.data = dataOrWidth
+      this.width = widthOrHeight
+      this.height = height ?? Math.floor(dataOrWidth.length / 4 / widthOrHeight)
+    }
+  }
+}
+
+globalThis.ImageData = TestImageData as unknown as typeof ImageData
 
 test("offscreen canvas policy prefers detached worker surfaces and falls back for DOM canvases", () => {
   expect(canUseOffscreenCanvas({ OffscreenCanvasCtor: undefined })).toBe(false)
@@ -227,6 +248,24 @@ test("raster export planner uses worker/offscreen encoding for large supported e
     mode: "main-thread",
     reason: "small-export",
   })
+})
+
+test("raster export rejects an already-aborted request before allocating canvases", async () => {
+  const controller = new AbortController()
+  controller.abort()
+
+  await expect(exportRasterImageDataToBlob(
+    new ImageData(new Uint8ClampedArray([10, 20, 30, 255]), 1, 1),
+    {
+      format: "png",
+      scale: 1,
+      quality: 0.92,
+      transparent: true,
+      matte: "#ffffff",
+      signal: controller.signal,
+      timeoutMs: 50,
+    },
+  )).rejects.toThrow(/cancelled/i)
 })
 
 test("expensive blur and paint filters advertise worker support", () => {

@@ -1,21 +1,9 @@
 import { TOOL_LEARNING_SOURCES, type ToolLearningSource } from "./tool-help"
+import { dispatchPhotoshopEvent, type PhotoshopEventMap } from "./events"
 import { workflowPackLearningItems } from "./workflow-presets"
+import type { LearningIndexItem, LearningIndexType } from "./learning-types"
 
-export type LearningIndexType = "command" | "doc" | "filter" | "panel" | "tool" | "workflow"
-
-export interface LearningIndexItem {
-  id: string
-  type: LearningIndexType
-  title: string
-  category: string
-  description: string
-  keywords: string[]
-  action?: {
-    kind: "event" | "panel" | "filter"
-    target: string
-    detail?: unknown
-  }
-}
+export type { LearningIndexItem, LearningIndexType } from "./learning-types"
 
 export interface LearningPanelSource {
   id: string
@@ -169,14 +157,14 @@ export function searchLearningIndex(items: LearningIndexItem[], query: string, o
 export function runLearningIndexItem(item: LearningIndexItem) {
   if (typeof window === "undefined" || !item.action) return
   if (item.action.kind === "panel") {
-    window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: item.action.target }))
+    dispatchPhotoshopEvent("ps-open-panel", item.action.target)
     return
   }
   if (item.action.kind === "filter") {
-    window.dispatchEvent(new CustomEvent("ps-open-filter", { detail: item.action.target }))
+    dispatchPhotoshopEvent("ps-open-filter", item.action.target)
     return
   }
-  window.dispatchEvent(new CustomEvent(item.action.target, item.action.detail === undefined ? undefined : { detail: item.action.detail }))
+  dispatchPhotoshopEvent(item.action.target as keyof PhotoshopEventMap, item.action.detail as never)
 }
 
 function scoreLearningItem(item: LearningIndexItem, terms: string[]) {

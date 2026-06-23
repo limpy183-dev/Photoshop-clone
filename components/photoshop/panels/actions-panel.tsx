@@ -7,10 +7,10 @@ import { makeHistoryEntry, useEditor } from "../editor-context"
 import { canvasFromDataUrl, downloadText } from "../document-io"
 import { MAX_CANVAS_DIMENSION, MAX_PROJECT_LAYERS } from "../canvas-limits"
 import { cn } from "@/lib/utils"
+import { CLIENT_STORAGE_KEYS, readClientStorageString, writeClientStorageString } from "../client-storage"
 import type { CanvasPatch, HistoryEntry, LayerSnapshot, MacroAction, MacroStep, SmartFilter } from "../types"
 import { uid } from "../uid"
 import {
-  ACTION_PLAYBACK_SPEED_STORAGE_KEY,
   loadActionEnvelopes,
   normalizePlaybackSpeed,
   playbackSpeedToDelayMs,
@@ -182,12 +182,7 @@ export function buildInsertPathStep(entry: HistoryEntry, now = Date.now()): Macr
 }
 
 function readPlaybackSpeed(): ActionPlaybackSpeed {
-  if (typeof window === "undefined") return "normal"
-  try {
-    return normalizePlaybackSpeed(window.localStorage.getItem(ACTION_PLAYBACK_SPEED_STORAGE_KEY))
-  } catch {
-    return "normal"
-  }
+  return normalizePlaybackSpeed(readClientStorageString(CLIENT_STORAGE_KEYS.actionPlaybackSpeed))
 }
 
 function actionHasPath(entry: HistoryEntry) {
@@ -619,9 +614,7 @@ export function ActionsPanel() {
   }, [actions, selectedId])
 
   React.useEffect(() => {
-    try {
-      window.localStorage.setItem(ACTION_PLAYBACK_SPEED_STORAGE_KEY, playbackSpeed)
-    } catch {}
+    writeClientStorageString(CLIENT_STORAGE_KEYS.actionPlaybackSpeed, playbackSpeed)
   }, [playbackSpeed])
 
   React.useEffect(() => {

@@ -3,6 +3,7 @@
 import * as React from "react"
 import { toast } from "sonner"
 import { useEditor } from "../editor-context"
+import { dispatchPhotoshopEvent } from "../events"
 import { downloadBlob, downloadText } from "../document-io"
 import { Archive, Brush, CircleDot, Download, FolderOpen, Palette, Plus, Sparkles, Trash2, Upload } from "lucide-react"
 import type { AssetLibraryItem, BrushSettings, GradientSettings, ImageAssetGeneratorSettings, LayerStyle } from "../types"
@@ -175,9 +176,9 @@ export function AssetsPanel() {
     if (asset.kind === "export") {
       const payload = asset.payload as { dialog?: string; scope?: string }
       if (payload.dialog === "batch-export" || payload.scope) {
-        window.dispatchEvent(new CustomEvent("ps-open-batch-export", { detail: asset.payload }))
+        dispatchPhotoshopEvent("ps-open-batch-export", asset.payload)
       } else {
-        window.dispatchEvent(new CustomEvent("ps-open-export-as", { detail: { dialog: "export-as", ...payload } }))
+        dispatchPhotoshopEvent("ps-open-export-as", { dialog: "export-as", ...payload })
       }
     }
   }
@@ -231,9 +232,7 @@ export function AssetsPanel() {
     }
     try {
       const directoryHandle = await picker()
-      window.dispatchEvent(new CustomEvent("ps-image-assets-generator-directory", {
-        detail: { docId: activeDoc.id, directoryHandle },
-      }))
+      dispatchPhotoshopEvent("ps-image-assets-generator-directory", { docId: activeDoc.id, directoryHandle })
       setGeneratorSettings({ outputFolderName: directoryHandle.name ?? "Selected folder" })
       toast.success("Image asset folder connected")
     } catch (err) {

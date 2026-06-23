@@ -62,11 +62,11 @@ export default tseslint.config(
       "react-hooks": reactHooks,
     },
     rules: {
-      // Project-specific relaxations: this codebase has many `any`s in
-      // canvas / worker / PSD interop and a handful of `require()` calls
-      // for browser-only modules. Promoting these to errors would block
-      // the build without addressing real bugs, so they stay off.
-      "@typescript-eslint/no-explicit-any": "off",
+      // The codebase review found explicit `any` usage low enough to track
+      // as a warning. Current hits are mostly menu payload interop and
+      // Paper.js integration boundaries; keep this visible while burn-down
+      // happens without blocking normal local lint.
+      "@typescript-eslint/no-explicit-any": "warn",
       "@typescript-eslint/no-require-imports": "off",
 
       // Re-enabled at WARN level after the codebase review:

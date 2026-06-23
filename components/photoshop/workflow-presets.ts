@@ -1,5 +1,5 @@
 import type { ExportPresetPayload } from "./export-presets"
-import type { LearningIndexItem } from "./learning-index"
+import type { LearningIndexItem } from "./learning-types"
 import type { ToolId } from "./types"
 
 export const PHASE_TWO_WORKFLOW_PACK_IDS = [

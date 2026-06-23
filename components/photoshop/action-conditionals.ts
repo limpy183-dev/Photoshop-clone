@@ -18,6 +18,7 @@ import type {
   PsDocument,
   Selection,
 } from "./types"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, readClientStorageString, writeClientStorageJson } from "./client-storage"
 
 /* --------------------------- Conditions --------------------------------- */
 
@@ -86,37 +87,25 @@ export interface ActionEnvelope {
 export const ACTION_ENVELOPE_STORAGE_KEY = "ps-action-envelopes"
 
 export function loadActionEnvelopes(): Record<string, ActionEnvelope> {
-  if (typeof window === "undefined") return {}
-  try {
-    const raw = window.localStorage.getItem(ACTION_ENVELOPE_STORAGE_KEY)
-    if (!raw) return {}
-    const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== "object") return {}
-    const out: Record<string, ActionEnvelope> = {}
-    for (const [actionId, envelope] of Object.entries(parsed as Record<string, unknown>)) {
-      if (!envelope || typeof envelope !== "object") continue
-      const steps = (envelope as { steps?: unknown }).steps
-      if (!steps || typeof steps !== "object") continue
-      const normalised: Record<string, StepEnvelope> = {}
-      for (const [stepId, raw] of Object.entries(steps as Record<string, unknown>)) {
-        const env = normaliseEnvelope(raw)
-        if (env) normalised[stepId] = env
-      }
-      out[actionId] = { steps: normalised }
+  const parsed = readClientStorageJson(CLIENT_STORAGE_KEYS.actionEnvelopes)
+  if (!parsed || typeof parsed !== "object") return {}
+  const out: Record<string, ActionEnvelope> = {}
+  for (const [actionId, envelope] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!envelope || typeof envelope !== "object") continue
+    const steps = (envelope as { steps?: unknown }).steps
+    if (!steps || typeof steps !== "object") continue
+    const normalised: Record<string, StepEnvelope> = {}
+    for (const [stepId, raw] of Object.entries(steps as Record<string, unknown>)) {
+      const env = normaliseEnvelope(raw)
+      if (env) normalised[stepId] = env
     }
-    return out
-  } catch {
-    return {}
+    out[actionId] = { steps: normalised }
   }
+  return out
 }
 
 export function saveActionEnvelopes(envelopes: Record<string, ActionEnvelope>): void {
-  if (typeof window === "undefined") return
-  try {
-    window.localStorage.setItem(ACTION_ENVELOPE_STORAGE_KEY, JSON.stringify(envelopes))
-  } catch {
-    // localStorage may be full or unavailable; ignore.
-  }
+  writeClientStorageJson(CLIENT_STORAGE_KEYS.actionEnvelopes, envelopes)
 }
 
 function normaliseEnvelope(raw: unknown): StepEnvelope | null {
@@ -307,12 +296,7 @@ export function normalizePlaybackSpeed(value: unknown): ActionPlaybackSpeed {
 }
 
 export function readPlaybackSpeedDelayMs(): number {
-  if (typeof window === "undefined") return playbackSpeedToDelayMs("normal")
-  try {
-    return playbackSpeedToDelayMs(normalizePlaybackSpeed(window.localStorage.getItem(ACTION_PLAYBACK_SPEED_STORAGE_KEY)))
-  } catch {
-    return playbackSpeedToDelayMs("normal")
-  }
+  return playbackSpeedToDelayMs(normalizePlaybackSpeed(readClientStorageString(CLIENT_STORAGE_KEYS.actionPlaybackSpeed)))
 }
 
 /**

@@ -4,6 +4,10 @@ import path from "node:path"
 import { expect, test } from "@playwright/test"
 
 import {
+  COMMAND_REGISTRY,
+  commandsForSideEffect,
+} from "../components/photoshop/command-registry"
+import {
   PURGE_COMMANDS,
   formatPurgeStatus,
   planPurgeTargets,
@@ -26,6 +30,24 @@ test("purge command metadata exposes the Photoshop purge targets", () => {
     "Purge Video Cache",
   ])
   expect(planPurgeTargets("all")).toEqual(["undo", "clipboard", "histories", "video-cache"])
+})
+
+test("purge commands are backed by typed registry metadata", () => {
+  const purgeRegistryEntries = commandsForSideEffect("purge-cache")
+
+  expect(purgeRegistryEntries.map((command) => command.id)).toEqual(PURGE_COMMANDS.map((command) => command.id))
+  expect(purgeRegistryEntries.every((command) => command.group === "Edit")).toBe(true)
+  expect(purgeRegistryEntries.map((command) => command.telemetry.action)).toEqual([
+    "undo",
+    "clipboard",
+    "histories",
+    "all",
+    "video-cache",
+  ])
+  expect(purgeRegistryEntries.map((command) => command.testMetadata.surfaces)).toEqual(
+    PURGE_COMMANDS.map(() => ["menu", "palette"]),
+  )
+  expect(COMMAND_REGISTRY.some((command) => command.id === "edit-purge-all")).toBe(true)
 })
 
 test("purge status reports freed memory with stable units", () => {

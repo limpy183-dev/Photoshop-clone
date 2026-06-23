@@ -29,6 +29,7 @@ import {
   normalizeDropletImportPayload,
 } from "./advanced-subsystems-import-normalizers"
 import { useEditor, makeCanvas } from "./editor-context"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
 import { canvasToGifDataUrl, deserializePsdFile, downloadBlob, downloadDataUrl, downloadText, inspectImportFileDimensions, loadRasterCanvasFromFile, rasterMime, renderDocumentComposite } from "./document-io"
 import { assertCanvasSize } from "./canvas-limits"
 import { FILTERS } from "./filters"
@@ -1874,34 +1875,33 @@ function PluginWorkspace() {
       return
     }
     if (command.action.type === "post-message") {
-      window.dispatchEvent(new CustomEvent("ps-plugin-panel-command", {
-        detail: { pluginId: plugin.id, commandId: command.id, message: command.action.message },
-      }))
+      dispatchPhotoshopEvent("ps-plugin-panel-command", { pluginId: plugin.id, commandId: command.id, message: command.action.message })
       logRuntime(`Sent ${command.title} to ${plugin.name}`)
       return
     }
     if (command.action.type === "batch-play") {
-      window.dispatchEvent(new CustomEvent("ps-plugin-panel-command", {
-        detail: { pluginId: plugin.id, commandId: command.id, message: { runtime: "action", descriptors: command.action.descriptors } },
-      }))
+      dispatchPhotoshopEvent("ps-plugin-panel-command", {
+        pluginId: plugin.id,
+        commandId: command.id,
+        message: { runtime: "action", descriptors: command.action.descriptors },
+      })
       logRuntime(`Queued ${command.title} Action Manager descriptors for ${plugin.name}`)
       return
     }
-    window.dispatchEvent(new CustomEvent("ps-plugin-panel-command", {
-      detail: { pluginId: plugin.id, commandId: command.id, message: { runtime: "cep", source: command.action.source } },
-    }))
+    dispatchPhotoshopEvent("ps-plugin-panel-command", {
+      pluginId: plugin.id,
+      commandId: command.id,
+      message: { runtime: "cep", source: command.action.source },
+    })
     logRuntime(`Queued ${command.title} CEP script for ${plugin.name}`)
   }, [applyPluginFilter, logRuntime])
 
   React.useEffect(() => {
-    const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{ pluginId?: string; commandId?: string }>).detail
+    return addPhotoshopEventListener("ps-run-plugin-command", (detail) => {
       const plugin = plugins.find((item) => item.id === detail?.pluginId)
       const command = plugin?.commands?.find((item) => item.id === detail?.commandId)
       if (plugin && command) runPluginCommand(plugin, command)
-    }
-    window.addEventListener("ps-run-plugin-command", handler)
-    return () => window.removeEventListener("ps-run-plugin-command", handler)
+    })
   }, [plugins, runPluginCommand])
 
   const stageInstall = React.useCallback((nextPlugins: PluginDescriptor[], sourceLabel: string, assets: AssetLibraryItem[] = []) => {
@@ -2155,7 +2155,7 @@ function PluginWorkspace() {
                   <div className="mb-2 text-[11px] uppercase text-[var(--ps-text-dim)]">Host-rendered plugin UI</div>
                   <PluginUiRenderer
                     node={hostUi}
-                    onEvent={(event) => window.dispatchEvent(new CustomEvent("ps-plugin-host-ui-event", { detail: { pluginId: selected.id, event } }))}
+                    onEvent={(event) => dispatchPhotoshopEvent("ps-plugin-host-ui-event", { pluginId: selected.id, event })}
                   />
                 </div>
               ) : null}
@@ -2366,7 +2366,7 @@ function PluginIframeRuntime({
           return
         }
         if (request.method === "cep.dispatchEvent") {
-          window.dispatchEvent(new CustomEvent("ps-plugin-cep-event", { detail: { pluginId: plugin.id, event: safePluginJson(request.params) } }))
+          dispatchPhotoshopEvent("ps-plugin-cep-event", { pluginId: plugin.id, event: safePluginJson(request.params) })
           postPluginResponse(iframeRef.current, plugin, request.requestId, { ok: true, result: true })
           onLog(`${plugin.name} dispatched CEP event`)
           return
@@ -2447,21 +2447,19 @@ function PluginIframeRuntime({
   }, [activeDoc, activeLayer, applyPluginFilter, commit, dispatch, onLog, onUiTree, plugin, requestRender, runPluginCommand, storage, token])
 
   React.useEffect(() => {
-    const commandHandler = (event: Event) => {
-      const detail = (event as CustomEvent<{ pluginId?: string; commandId?: string; message?: unknown }>).detail
+    const commandHandler = (detail: { pluginId?: string; commandId?: string; message?: unknown }) => {
       if (detail?.pluginId !== plugin.id) return
       sendUiEvent({ componentId: "manifest-command", event: "command", commandId: detail.commandId, message: detail.message })
     }
-    const uiHandler = (event: Event) => {
-      const detail = (event as CustomEvent<{ pluginId?: string; event?: Record<string, unknown> }>).detail
-      if (detail?.pluginId !== plugin.id || !detail.event) return
+    const uiHandler = (detail: { pluginId?: string; event?: unknown }) => {
+      if (detail?.pluginId !== plugin.id || !isImportRecord(detail.event)) return
       sendUiEvent(detail.event)
     }
-    window.addEventListener("ps-plugin-panel-command", commandHandler)
-    window.addEventListener("ps-plugin-host-ui-event", uiHandler)
+    const removeCommand = addPhotoshopEventListener("ps-plugin-panel-command", commandHandler)
+    const removeUi = addPhotoshopEventListener("ps-plugin-host-ui-event", uiHandler)
     return () => {
-      window.removeEventListener("ps-plugin-panel-command", commandHandler)
-      window.removeEventListener("ps-plugin-host-ui-event", uiHandler)
+      removeCommand()
+      removeUi()
     }
   }, [plugin.id, sendUiEvent])
 

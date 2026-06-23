@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import {
   bestEffortPathString,
   revealSourceInBrowser,
@@ -69,7 +69,9 @@ export interface RevealSourceDialogProps {
  * "No source file" notice instead of a broken reveal button.
  */
 export function RevealSourceDialog({ open, onOpenChange, docId }: RevealSourceDialogProps) {
-  const { activeDoc, documents, documentStatuses } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const documents = useEditorSelector((editor) => editor.documents)
+  const documentStatuses = useEditorSelector((editor) => editor.documentStatuses)
 
   const targetDoc = React.useMemo(() => {
     if (docId) return documents.find((d) => d.id === docId) ?? null

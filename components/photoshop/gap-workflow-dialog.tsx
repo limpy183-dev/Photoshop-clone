@@ -27,6 +27,7 @@ import type { HighBitImage } from "./color-pipeline"
 import type { AlphaChannel, BlendMode, Layer } from "./types"
 import { selectionFromMask, selectionToMaskCanvas } from "./tool-helpers"
 import { uid } from "./uid"
+import { dispatchPhotoshopEvent } from "./events"
 
 export type GapWorkflowKind =
   | "apply-image"
@@ -746,7 +747,7 @@ export function GapWorkflowDialog({
               else if (workflow === "merge-channels") runMergeChannels()
               else if (workflow === "scripted-pattern") runPattern()
               else if (workflow === "image-assets") {
-                window.dispatchEvent(new CustomEvent("ps-open-batch-export", { detail: { scope: "visible-layers" } }))
+                dispatchPhotoshopEvent("ps-open-batch-export", { scope: "visible-layers" })
                 close()
               } else void runFileWorkflow()
             }}

@@ -62,10 +62,51 @@ export interface PathAnchorRef {
 
 const kappa = 0.5522847498
 
+interface PaperPointLike {
+  x: number
+  y: number
+}
+
+interface PaperSegmentLike {
+  point: PaperPointLike
+  handleIn: PaperPointLike
+  handleOut: PaperPointLike
+}
+
+interface PaperBooleanItemLike {
+  unite(operand: PaperBooleanItemLike, options: { insert: boolean }): PaperBooleanItemLike
+  subtract(operand: PaperBooleanItemLike, options: { insert: boolean }): PaperBooleanItemLike
+  intersect(operand: PaperBooleanItemLike, options: { insert: boolean }): PaperBooleanItemLike
+  exclude(operand: PaperBooleanItemLike, options: { insert: boolean }): PaperBooleanItemLike
+}
+
+interface PaperPathLike extends PaperBooleanItemLike {
+  className?: string
+  closed: boolean
+  segments: PaperSegmentLike[]
+  add(segment: unknown): void
+}
+
+interface PaperCompoundPathLike extends PaperBooleanItemLike {
+  className?: string
+  children: unknown[]
+  addChild(child: PaperPathLike): void
+}
+
+interface PaperScopeLike {
+  Point: new (x: number, y: number) => PaperPointLike
+  Segment: new (point: PaperPointLike, handleIn: PaperPointLike, handleOut: PaperPointLike) => unknown
+  Size: new (width: number, height: number) => unknown
+  Path: new (options: { insert: boolean }) => PaperPathLike
+  CompoundPath: new (options: { insert: boolean }) => PaperCompoundPathLike
+  project: { remove(): void }
+  setup(size: unknown): void
+}
+
 type PaperModule = {
-  PaperScope: new () => any
-  Path: new (...args: any[]) => any
-  CompoundPath: new (...args: any[]) => any
+  PaperScope: new () => PaperScopeLike
+  Path: new (...args: unknown[]) => PaperPathLike
+  CompoundPath: new (...args: unknown[]) => PaperCompoundPathLike
 }
 
 function getPaperModule(): PaperModule | null {
@@ -1109,15 +1150,15 @@ function resolveAxisAlignedRectBooleanPath(shape: ShapeProps): PathProps | null 
   return edgePathFromCells(filled, cols, rows, xs, ys)
 }
 
-function paperPoint(scope: any, point: { x: number; y: number }) {
+function paperPoint(scope: PaperScopeLike, point: { x: number; y: number }) {
   return new scope.Point(point.x, point.y)
 }
 
-function paperHandle(scope: any, anchor: { x: number; y: number }, handle: { x: number; y: number } | undefined) {
+function paperHandle(scope: PaperScopeLike, anchor: { x: number; y: number }, handle: { x: number; y: number } | undefined) {
   return handle ? new scope.Point(handle.x - anchor.x, handle.y - anchor.y) : new scope.Point(0, 0)
 }
 
-function pathToPaperItem(scope: any, path: PathProps): any | null {
+function pathToPaperItem(scope: PaperScopeLike, path: PathProps): PaperPathLike | PaperCompoundPathLike | null {
   const makePath = (single: PathProps) => {
     if (single.points.length < (single.closed ? 3 : 2)) return null
     const next = new scope.Path({ insert: false })
@@ -1134,7 +1175,7 @@ function pathToPaperItem(scope: any, path: PathProps): any | null {
 
   const children = [path, ...(path.subpaths ?? [])]
     .map(makePath)
-    .filter((child): child is any => !!child)
+    .filter((child): child is PaperPathLike => !!child)
   if (!children.length) return null
   if (children.length === 1) return children[0]
   const compound = new scope.CompoundPath({ insert: false })
@@ -1142,16 +1183,16 @@ function pathToPaperItem(scope: any, path: PathProps): any | null {
   return compound
 }
 
-function nonZeroHandle(handle: any) {
+function nonZeroHandle(handle: PaperPointLike) {
   return Math.abs(handle.x) > 0.001 || Math.abs(handle.y) > 0.001
 }
 
-function paperPathToPathProps(path: any): PathProps | null {
+function paperPathToPathProps(path: PaperPathLike): PathProps | null {
   if (path.segments.length < (path.closed ? 3 : 2)) return null
   return {
     closed: path.closed,
     source: "compound",
-    points: path.segments.map((segment: any) => {
+    points: path.segments.map((segment) => {
       const point: PathPoint = roundPoint({ x: segment.point.x, y: segment.point.y })
       if (nonZeroHandle(segment.handleIn)) {
         point.cp1 = roundedControl({
@@ -1171,13 +1212,17 @@ function paperPathToPathProps(path: any): PathProps | null {
   }
 }
 
-function paperItemToPathProps(paperModule: PaperModule, item: any): PathProps | null {
-  const isPaperPath = (candidate: any) => candidate instanceof paperModule.Path || candidate?.className === "Path"
-  const isCompoundPath = (candidate: any) => candidate instanceof paperModule.CompoundPath || candidate?.className === "CompoundPath"
+function paperItemToPathProps(paperModule: PaperModule, item: unknown): PathProps | null {
+  const isPaperPath = (candidate: unknown): candidate is PaperPathLike =>
+    candidate instanceof paperModule.Path ||
+    (typeof candidate === "object" && candidate !== null && "className" in candidate && candidate.className === "Path")
+  const isCompoundPath = (candidate: unknown): candidate is PaperCompoundPathLike =>
+    candidate instanceof paperModule.CompoundPath ||
+    (typeof candidate === "object" && candidate !== null && "className" in candidate && candidate.className === "CompoundPath")
   if (isPaperPath(item)) return paperPathToPathProps(item)
   if (isCompoundPath(item)) {
     const children = item.children
-      .filter((child: any): child is any => isPaperPath(child))
+      .filter((child): child is PaperPathLike => isPaperPath(child))
       .map(paperPathToPathProps)
       .filter((path: PathProps | null): path is PathProps => !!path)
       .sort((a: PathProps, b: PathProps) => Math.abs(pathArea(b.points)) - Math.abs(pathArea(a.points)))
@@ -1202,7 +1247,7 @@ function resolveBezierBooleanPath(shape: ShapeProps): PathProps | null {
       scope.project.remove()
       return null
     }
-    let result = components[0].item!
+    let result: PaperBooleanItemLike = components[0].item!
     for (let i = 1; i < components.length; i++) {
       const operand = components[i].item!
       const operation = components[i].operation

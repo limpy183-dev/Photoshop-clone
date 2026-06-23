@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useEditor } from "../editor-context"
 import { downloadText } from "../document-io"
+import { addPhotoshopEventListener } from "../events"
 import { uid } from "../uid"
 import {
   exportCustomShapeLibrary,
@@ -137,12 +138,10 @@ export function ShapesPanel() {
   const fileRef = React.useRef<HTMLInputElement>(null)
 
   React.useEffect(() => {
-    const sync = (event: Event) => {
-      const detail = (event as CustomEvent<ShapePresetEntry[]>).detail
-      setShapePresets(Array.isArray(detail) ? detail : readShapePresets())
+    const sync = (detail: unknown[]) => {
+      setShapePresets(Array.isArray(detail) ? detail as ShapePresetEntry[] : readShapePresets())
     }
-    window.addEventListener("ps-shape-presets-changed", sync)
-    return () => window.removeEventListener("ps-shape-presets-changed", sync)
+    return addPhotoshopEventListener("ps-shape-presets-changed", sync)
   }, [])
 
   if (!activeDoc) {

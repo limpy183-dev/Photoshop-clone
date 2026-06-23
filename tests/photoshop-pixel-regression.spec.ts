@@ -461,7 +461,7 @@ test("autosave follows the saved preference", async ({ page }) => {
 
   await page.evaluate(() => {
     localStorage.setItem("ps-preferences", JSON.stringify({ autoSave: true }))
-    window.dispatchEvent(new CustomEvent("ps-preferences-changed"))
+    window.dispatchEvent(new Event("ps-preferences-changed"))
   })
   await page.waitForFunction(() => {
     const raw = localStorage.getItem("ps-autosave-document-v1")

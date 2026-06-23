@@ -3,7 +3,8 @@
 import * as React from "react"
 import { Search, Type, Trash2 } from "lucide-react"
 import { Input } from "@/components/ui/input"
-import { useEditor } from "../editor-context"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "../client-storage"
+import { useEditorSelector } from "../editor-context"
 import { rasterizeText } from "../tool-helpers"
 import type { TextProps } from "../types"
 
@@ -46,7 +47,6 @@ const UNICODE_BLOCKS: UnicodeBlock[] = [
   { id: "dingbats", label: "Dingbats", start: 0x2700, end: 0x27bf },
 ]
 
-const RECENT_GLYPHS_KEY = "ps-glyphs-recent"
 const MAX_RECENT = 32
 const EMBEDDED_FONT_BLOCK_ID = "__embedded-font"
 const MAX_PARSED_FONT_GLYPHS = 4096
@@ -98,23 +98,13 @@ const UNICODE_NAMES: Record<string, string> = {
 }
 
 function readRecentGlyphs(): string[] {
-  if (typeof window === "undefined") return []
-  try {
-    const raw = localStorage.getItem(RECENT_GLYPHS_KEY)
-    if (!raw) return []
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return parsed.filter((entry): entry is string => typeof entry === "string" && entry.length > 0).slice(0, MAX_RECENT)
-  } catch {
-    return []
-  }
+  return readClientStorageJson(CLIENT_STORAGE_KEYS.recentGlyphs)
+    .filter((entry) => entry.length > 0)
+    .slice(0, MAX_RECENT)
 }
 
 function writeRecentGlyphs(list: string[]) {
-  if (typeof window === "undefined") return
-  try {
-    localStorage.setItem(RECENT_GLYPHS_KEY, JSON.stringify(list.slice(0, MAX_RECENT)))
-  } catch {}
+  writeClientStorageJson(CLIENT_STORAGE_KEYS.recentGlyphs, list.slice(0, MAX_RECENT))
 }
 
 /**
@@ -365,7 +355,10 @@ function sortedCodepoints(values: Set<number>) {
 }
 
 export function GlyphsPanel() {
-  const { activeLayer, activeDoc, dispatch, commit } = useEditor()
+  const activeLayer = useEditorSelector((editor) => editor.activeLayer)
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
   const [blockId, setBlockId] = React.useState<string>(UNICODE_BLOCKS[0].id)
   const [query, setQuery] = React.useState("")
   const [recent, setRecent] = React.useState<string[]>(() => readRecentGlyphs())

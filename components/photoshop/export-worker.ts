@@ -1,4 +1,4 @@
-import type { RasterExportOptions } from "./document-io"
+import type { RasterExportOptions } from "./document-io-types"
 
 type RasterWorkerFormat = RasterExportOptions["format"]
 
@@ -56,6 +56,18 @@ function rasterMimeForWorker(format: RasterWorkerFormat) {
   if (format === "avif") return "image/avif"
   if (format === "gif") return "image/gif"
   return "image/png"
+}
+
+function abortError(message: string) {
+  return new DOMException(message, "AbortError")
+}
+
+function timeoutError(message: string) {
+  return new DOMException(message, "TimeoutError")
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === "AbortError"
 }
 
 export function planRasterExportExecution(input: RasterExportExecutionInput): RasterExportExecutionPlan {
@@ -143,11 +155,44 @@ function getWorker() {
   }
 }
 
-function canvasToBlob(canvas: HTMLCanvasElement, format: RasterWorkerFormat, quality: number) {
+function canvasToBlob(
+  canvas: HTMLCanvasElement,
+  format: RasterWorkerFormat,
+  quality: number,
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+) {
   return new Promise<Blob>((resolve, reject) => {
+    if (options.signal?.aborted) {
+      reject(abortError("Raster export cancelled"))
+      return
+    }
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const cleanup = () => {
+      if (timer !== null) clearTimeout(timer)
+      options.signal?.removeEventListener("abort", onAbort)
+    }
+    const finishResolve = (blob: Blob) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(blob)
+    }
+    const finishReject = (error: Error) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(error)
+    }
+    const onAbort = () => finishReject(abortError("Raster export cancelled"))
+    options.signal?.addEventListener("abort", onAbort, { once: true })
+    if (typeof options.timeoutMs === "number") {
+      const timeoutMs = Math.max(1, Math.round(options.timeoutMs))
+      timer = setTimeout(() => finishReject(timeoutError(`Raster export timed out after ${timeoutMs}ms`)), timeoutMs)
+    }
     canvas.toBlob((blob) => {
-      if (blob) resolve(blob)
-      else reject(new Error("Canvas export returned no blob"))
+      if (blob) finishResolve(blob)
+      else finishReject(new Error("Canvas export returned no blob"))
     }, rasterMimeForWorker(format), quality)
   })
 }
@@ -156,6 +201,7 @@ export async function exportRasterImageDataToBlob(
   image: ImageData,
   options: RasterExportOptions,
 ): Promise<Blob> {
+  if (options.signal?.aborted) throw abortError("Raster export cancelled")
   const plan = planRasterExportExecution({
     width: image.width,
     height: image.height,
@@ -184,10 +230,43 @@ export async function exportRasterImageDataToBlob(
       }
       try {
         return await new Promise<Blob>((resolve, reject) => {
-          _pending.set(id, { resolve, reject })
+          let settled = false
+          let timer: ReturnType<typeof setTimeout> | null = null
+          const cleanup = () => {
+            if (timer !== null) clearTimeout(timer)
+            options.signal?.removeEventListener("abort", onAbort)
+          }
+          const settleReject = (error: Error) => {
+            if (settled) return
+            settled = true
+            _pending.delete(id)
+            cleanup()
+            reject(error)
+          }
+          const settleResolve = (blob: Blob) => {
+            if (settled) return
+            settled = true
+            _pending.delete(id)
+            cleanup()
+            resolve(blob)
+          }
+          const onAbort = () => settleReject(abortError("Raster export cancelled"))
+          _pending.set(id, { resolve: settleResolve, reject: settleReject })
+          if (options.signal) {
+            if (options.signal.aborted) {
+              settleReject(abortError("Raster export cancelled"))
+              return
+            }
+            options.signal.addEventListener("abort", onAbort, { once: true })
+          }
+          if (typeof options.timeoutMs === "number") {
+            const timeoutMs = Math.max(1, Math.round(options.timeoutMs))
+            timer = setTimeout(() => settleReject(timeoutError(`Raster export worker timed out after ${timeoutMs}ms`)), timeoutMs)
+          }
           worker.postMessage(request, [buffer])
         })
-      } catch {
+      } catch (error) {
+        if (isAbortError(error)) throw error
         _workerFailed = true
       }
     }
@@ -215,7 +294,10 @@ export async function exportRasterImageDataToBlob(
   outCtx.imageSmoothingEnabled = true
   outCtx.imageSmoothingQuality = "high"
   outCtx.drawImage(canvas, 0, 0, out.width, out.height)
-  return canvasToBlob(out, options.format, quality)
+  return canvasToBlob(out, options.format, quality, {
+    signal: options.signal,
+    timeoutMs: options.timeoutMs,
+  })
 }
 
 export function _resetRasterExportWorkerForTests() {

@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { makeCanvas, useEditor } from "./editor-context"
+import { dispatchPhotoshopEvent } from "./events"
 import type { AdjustmentType, ToolId } from "./types"
 import {
   effectiveShortcut,
@@ -155,7 +156,7 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
 
       if (isShortcut("timeline-split-frame")) {
         e.preventDefault()
-        window.dispatchEvent(new CustomEvent("ps-timeline-split-at-playhead"))
+        dispatchPhotoshopEvent("ps-timeline-split-at-playhead")
         return
       }
 
@@ -166,12 +167,12 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
       }
       if (isShortcut("file-save")) {
         e.preventDefault()
-        if (activeDoc) window.dispatchEvent(new CustomEvent("ps-save-document", { detail: { docId: activeDoc.id, mode: "save" } }))
+        if (activeDoc) dispatchPhotoshopEvent("ps-save-document", { docId: activeDoc.id, mode: "save" })
         return
       }
       if (isShortcut("file-saveas")) {
         e.preventDefault()
-        if (activeDoc) window.dispatchEvent(new CustomEvent("ps-save-document", { detail: { docId: activeDoc.id, mode: "save-as" } }))
+        if (activeDoc) dispatchPhotoshopEvent("ps-save-document", { docId: activeDoc.id, mode: "save-as" })
         return
       }
       if (isShortcut("file-close")) {
@@ -220,7 +221,7 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
       }
       if (isShortcut("edit-transform")) {
         e.preventDefault()
-        if (activeLayer) window.dispatchEvent(new CustomEvent("ps-free-transform"))
+        if (activeLayer) dispatchPhotoshopEvent("ps-free-transform")
         return
       }
 
@@ -251,12 +252,12 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
       }
       if (isShortcut("img-imgsize")) {
         e.preventDefault()
-        if (activeDoc) window.dispatchEvent(new CustomEvent("ps-open-image-size"))
+        if (activeDoc) dispatchPhotoshopEvent("ps-open-image-size")
         return
       }
       if (isShortcut("img-canvassize")) {
         e.preventDefault()
-        if (activeDoc) window.dispatchEvent(new CustomEvent("ps-open-canvas-size"))
+        if (activeDoc) dispatchPhotoshopEvent("ps-open-canvas-size")
         return
       }
 
@@ -279,7 +280,7 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
       }
       if (isShortcut("sel-reselect")) {
         e.preventDefault()
-        window.dispatchEvent(new CustomEvent("ps-reselect"))
+        dispatchPhotoshopEvent("ps-reselect")
         return
       }
 

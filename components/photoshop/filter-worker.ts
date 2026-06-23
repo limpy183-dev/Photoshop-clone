@@ -1477,6 +1477,75 @@ function runFilterOnMainThread(
   })
 }
 
+function abortError(message: string) {
+  return new DOMException(message, "AbortError")
+}
+
+function timeoutError(message: string) {
+  return new DOMException(message, "TimeoutError")
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === "AbortError"
+}
+
+interface CancellationOptions {
+  signal?: AbortSignal
+  timeoutMs?: number
+  abortMessage: string
+  timeoutMessage: string
+  onCancel?: () => void
+}
+
+function withCancellation<T>(operation: Promise<T>, options: CancellationOptions): Promise<T> {
+  if (options.signal?.aborted) {
+    options.onCancel?.()
+    return Promise.reject(abortError(options.abortMessage))
+  }
+
+  const timeoutMs = typeof options.timeoutMs === "number" ? Math.max(1, Math.round(options.timeoutMs)) : null
+  if (!options.signal && timeoutMs === null) return operation
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const cleanup = () => {
+      if (timer !== null) clearTimeout(timer)
+      if (options.signal) options.signal.removeEventListener("abort", onAbort)
+    }
+    const finishResolve = (value: T) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(value)
+    }
+    const finishReject = (error: unknown) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(error)
+    }
+    const onAbort = () => {
+      options.onCancel?.()
+      finishReject(abortError(options.abortMessage))
+    }
+
+    if (options.signal) options.signal.addEventListener("abort", onAbort, { once: true })
+    if (timeoutMs !== null) {
+      timer = setTimeout(() => {
+        options.onCancel?.()
+        finishReject(timeoutError(options.timeoutMessage))
+      }, timeoutMs)
+    }
+
+    operation.then(
+      (value) => finishResolve(value),
+      (error) => finishReject(error),
+    )
+  })
+}
+
 export interface FilterAsyncOptions {
   fallbackOnWorkerError?: boolean
   workerExecutor?: (
@@ -1485,6 +1554,7 @@ export interface FilterAsyncOptions {
     params: Record<string, number | string | boolean>,
   ) => Promise<ImageData>
   signal?: AbortSignal
+  timeoutMs?: number
   onProgress?: (event: FilterProgressEvent) => void
 }
 
@@ -1504,10 +1574,16 @@ export function applyFilterAsync(
   }
   if (isFilterWorkerSupported(filterId)) {
     if (options.workerExecutor) {
-      return options.workerExecutor(filterId, src, params).then((result) => {
+      return withCancellation(options.workerExecutor(filterId, src, params), {
+        signal: options.signal,
+        timeoutMs: options.timeoutMs,
+        abortMessage: "Filter processing cancelled",
+        timeoutMessage: `Filter worker timed out after ${Math.max(1, Math.round(options.timeoutMs ?? 0))}ms`,
+      }).then((result) => {
         options.onProgress?.({ completed: 1, total: 1, filterId })
         return result
       }).catch((err) => {
+        if (isAbortError(err)) throw err
         _workerFailed = true
         if (options.fallbackOnWorkerError === false) {
           throw err instanceof Error ? err : new Error(String(err))
@@ -1529,21 +1605,20 @@ export function applyFilterAsync(
         buffer,
         params,
       }
-      return new Promise<ImageData>((resolve, reject) => {
+      const workerPromise = new Promise<ImageData>((resolve, reject) => {
         _pending.set(id, { resolve, reject, progress: options.onProgress })
-        const onAbort = () => {
-          const entry = _pending.get(id)
-          if (entry) {
-            _pending.delete(id)
-            entry.reject(new DOMException("Filter processing cancelled", "AbortError"))
-          }
-        }
-        if (options.signal) {
-          if (options.signal.aborted) { onAbort(); return }
-          options.signal.addEventListener("abort", onAbort, { once: true })
-        }
         worker.postMessage(request, [buffer])
+      })
+      return withCancellation(workerPromise, {
+        signal: options.signal,
+        timeoutMs: options.timeoutMs,
+        abortMessage: "Filter processing cancelled",
+        timeoutMessage: `Filter worker timed out after ${Math.max(1, Math.round(options.timeoutMs ?? 0))}ms`,
+        onCancel: () => {
+          _pending.delete(id)
+        },
       }).catch((err) => {
+        if (isAbortError(err)) throw err
         _workerFailed = true
         if (options.fallbackOnWorkerError === false) {
           throw err instanceof Error ? err : new Error(String(err))
@@ -1560,6 +1635,11 @@ export interface FilterBatchOptions {
   onProgress?: (event: FilterProgressEvent) => void
   fallbackOnWorkerError?: boolean
   signal?: AbortSignal
+  timeoutMs?: number
+  workerExecutor?: (
+    src: ImageData,
+    operations: FilterBatchOperation[],
+  ) => Promise<ImageData>
 }
 
 export async function applyFilterBatch(
@@ -1576,6 +1656,28 @@ export async function applyFilterBatch(
 
   const canUseWorker = operations.every((operation) => isFilterWorkerSupported(operation.filterId))
   const canUseInlineWorker = operations.every((operation) => INLINE_WORKER_FILTER_SET.has(operation.filterId))
+  if (canUseWorker && options.workerExecutor) {
+    return withCancellation(options.workerExecutor(src, operations), {
+      signal: options.signal,
+      timeoutMs: options.timeoutMs,
+      abortMessage: "Filter batch cancelled",
+      timeoutMessage: `Filter batch worker timed out after ${Math.max(1, Math.round(options.timeoutMs ?? 0))}ms`,
+    }).then((result) => {
+      options.onProgress?.({
+        completed: operations.length,
+        total: operations.length,
+        filterId: operations[operations.length - 1]?.filterId ?? "",
+      })
+      return result
+    }).catch((err) => {
+      if (isAbortError(err)) throw err
+      _workerFailed = true
+      if (options.fallbackOnWorkerError === false) {
+        throw err instanceof Error ? err : new Error(String(err))
+      }
+      return runFilterBatchOnMainThread(src, operations, options.onProgress, options.signal)
+    })
+  }
   const worker = canUseWorker ? await getWorker(canUseInlineWorker ? operations[0]?.filterId : undefined) : null
   if (worker) {
     const id = _nextId++
@@ -1589,20 +1691,18 @@ export async function applyFilterBatch(
       buffer,
       params: {},
     }
-    return new Promise<ImageData>((resolve, reject) => {
+    const workerPromise = new Promise<ImageData>((resolve, reject) => {
       _pending.set(id, { resolve, reject, progress: options.onProgress })
-      const onAbort = () => {
-        const entry = _pending.get(id)
-        if (entry) {
-          _pending.delete(id)
-          entry.reject(new DOMException("Filter batch cancelled", "AbortError"))
-        }
-      }
-      if (options.signal) {
-        if (options.signal.aborted) { onAbort(); return }
-        options.signal.addEventListener("abort", onAbort, { once: true })
-      }
       worker.postMessage(request, [buffer])
+    })
+    return withCancellation(workerPromise, {
+      signal: options.signal,
+      timeoutMs: options.timeoutMs,
+      abortMessage: "Filter batch cancelled",
+      timeoutMessage: `Filter batch worker timed out after ${Math.max(1, Math.round(options.timeoutMs ?? 0))}ms`,
+      onCancel: () => {
+        _pending.delete(id)
+      },
     }).catch((err) => {
       if (err instanceof DOMException && err.name === "AbortError") throw err
       _workerFailed = true
@@ -1682,7 +1782,7 @@ export async function applyFilterTiled(
       }
       const filtered =
         options.useWorker && isFilterWorkerSupported(filterId)
-          ? await applyFilterAsync(filterId, tile, params)
+          ? await applyFilterAsync(filterId, tile, params, { signal: options.signal })
           : filter.apply(tile, params)
       const writeW = Math.min(tileSize, src.width - tileX)
       const writeH = Math.min(tileSize, src.height - tileY)

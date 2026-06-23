@@ -20,7 +20,7 @@ test("canvas hides the tool status strip by default and shows it once enabled", 
 
   await page.evaluate(() => {
     localStorage.setItem("ps-preferences", JSON.stringify({ toolBehavior: { showToolStatusHud: true } }))
-    window.dispatchEvent(new CustomEvent("ps-preferences-changed"))
+    window.dispatchEvent(new Event("ps-preferences-changed"))
   })
 
   const status = page.getByTestId("active-tool-status-strip")

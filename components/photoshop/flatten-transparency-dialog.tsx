@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useEditor } from "./editor-context"
+import { dispatchPhotoshopEvent } from "./events"
 import { layerHasPartialAlpha } from "./flatten-transparency"
 
 type Scope = "document" | "selected" | "visible"
@@ -190,7 +191,7 @@ export function FlattenTransparencyDialog({
                   className="underline underline-offset-2 hover:text-[var(--ps-text)]"
                   onClick={() => {
                     try {
-                      window.dispatchEvent(new CustomEvent("ps-open-preflight"))
+                      dispatchPhotoshopEvent("ps-open-preflight")
                     } catch {}
                   }}
                 >

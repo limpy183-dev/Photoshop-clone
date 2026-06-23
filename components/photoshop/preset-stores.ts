@@ -13,6 +13,8 @@
 // extracting them as a side-effect-free module that does not depend on the
 // React tree.
 
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson, type ClientStorageKey } from "./client-storage"
+import { dispatchPhotoshopEvent } from "./events"
 import type { AssetLibraryItem } from "./types"
 import {
   loadSwatches as loadStoredSwatches,
@@ -71,6 +73,11 @@ export function scopedStorageKey(base: string, docId?: string) {
   return docId ? `${base}:${docId}` : base
 }
 
+function scopedPatternStorageKey(docId?: string): ClientStorageKey<unknown[]> {
+  const descriptor = CLIENT_STORAGE_KEYS.patterns
+  return docId ? { ...descriptor, key: scopedStorageKey(descriptor.key, docId) } : descriptor
+}
+
 export function loadManagedSwatches(docId?: string): ManagerSwatchEntry[] {
   return loadStoredSwatches(docId).map((swatch, index) => ({
     ...swatch,
@@ -81,42 +88,28 @@ export function loadManagedSwatches(docId?: string): ManagerSwatchEntry[] {
 export function saveManagedSwatches(docId: string | undefined, swatches: ManagerSwatchEntry[]) {
   const next = saveStoredSwatches(swatches, docId)
   if (typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent("ps-swatches-changed", { detail: { docId, swatches: next } }))
+    dispatchPhotoshopEvent("ps-swatches-changed", { docId, swatches: next })
   }
   return next
 }
 
 export function loadManagedGradients(): ManagerGradientEntry[] {
-  if (typeof window === "undefined") return []
-  try {
-    return normalizeGradients(JSON.parse(localStorage.getItem(GRADIENT_STORAGE_KEY) ?? "[]"))
-  } catch {
-    return []
-  }
+  return normalizeGradients(readClientStorageJson(CLIENT_STORAGE_KEYS.gradients))
 }
 
 export function saveManagedGradients(gradients: ManagerGradientEntry[]) {
-  if (typeof window === "undefined") return
-  localStorage.setItem(GRADIENT_STORAGE_KEY, JSON.stringify(gradients))
-  window.dispatchEvent(new CustomEvent("ps-gradients-changed", { detail: { gradients } }))
+  writeClientStorageJson(CLIENT_STORAGE_KEYS.gradients, gradients)
+  dispatchPhotoshopEvent("ps-gradients-changed", { gradients })
 }
 
 export function loadManagedPatterns(docId?: string): ManagerPatternEntry[] {
-  if (typeof window === "undefined") return []
-  try {
-    const raw =
-      localStorage.getItem(scopedStorageKey(PATTERN_STORAGE_KEY, docId)) ??
-      localStorage.getItem(PATTERN_STORAGE_KEY)
-    return normalizePatterns(raw ? JSON.parse(raw) : [])
-  } catch {
-    return []
-  }
+  const scoped = readClientStorageJson(scopedPatternStorageKey(docId))
+  return normalizePatterns(scoped.length || !docId ? scoped : readClientStorageJson(CLIENT_STORAGE_KEYS.patterns))
 }
 
 export function saveManagedPatterns(docId: string | undefined, patterns: ManagerPatternEntry[]) {
-  if (typeof window === "undefined") return
-  localStorage.setItem(scopedStorageKey(PATTERN_STORAGE_KEY, docId), JSON.stringify(patterns))
-  window.dispatchEvent(new CustomEvent("ps-patterns-changed", { detail: { docId, patterns } }))
+  writeClientStorageJson(scopedPatternStorageKey(docId), patterns)
+  dispatchPhotoshopEvent("ps-patterns-changed", { docId, patterns })
 }
 
 export function loadManagedShapes(): ShapePresetEntry[] {

@@ -20,6 +20,7 @@ import {
   normalizePluginUiTree,
   permissionsForPluginActionDescriptors,
   pluginInstallReview,
+  safePluginJson,
   validatePluginPanelRequest,
   type PluginPanelRequest,
 } from "../components/photoshop/plugin-system"
@@ -502,6 +503,38 @@ test("plugin storage patches are namespaced and bounded", () => {
   expect(createPluginStoragePatch(next, "plug_a", { operation: "clear" }).plug_a).toEqual({})
 })
 
+test("plugin storage quota exhaustion leaves the existing namespace unchanged", () => {
+  const fullNamespace = Object.fromEntries(Array.from({ length: 128 }, (_, index) => [`key_${index}`, index]))
+  const current = { plug_quota: fullNamespace }
+
+  expect(createPluginStoragePatch(current, "plug_quota", { operation: "set", key: "new_key", value: true })).toEqual(current)
+
+  const oversized = createPluginStoragePatch(
+    { plug_quota: {} },
+    "plug_quota",
+    { operation: "set", key: "large", value: Array.from({ length: 256 }, () => "x".repeat(4_000)) },
+  )
+  expect(oversized.plug_quota).toEqual({})
+})
+
+test("safe plugin JSON strips dangerous keys and over-depth payloads", () => {
+  const nested = { a: { b: { c: { d: { e: { f: { tooDeep: true } } } } } } }
+  const manyItems = Array.from({ length: 300 }, (_, index) => index)
+  const cleaned = safePluginJson({
+    ok: "x".repeat(4_100),
+    "__proto__": { polluted: true },
+    nested,
+    manyItems,
+    fn: () => undefined,
+  }) as Record<string, unknown>
+
+  expect(cleaned.ok).toBe("x".repeat(4_000))
+  expect(Object.prototype.hasOwnProperty.call(cleaned, "__proto__")).toBe(false)
+  expect(cleaned.nested).toEqual({ a: { b: { c: { d: {} } } } })
+  expect(cleaned.manyItems).toHaveLength(256)
+  expect(cleaned).not.toHaveProperty("fn")
+})
+
 test("plugin UI tree normalization keeps only supported components and events", () => {
   expect(
     normalizePluginUiTree({
@@ -542,6 +575,7 @@ test("iframe srcdoc injects a sandbox API bootstrap without granting same-origin
   expect(srcDoc).toContain("CSInterface")
   expect(srcDoc).toContain("cep.evalScript")
   expect(srcDoc).toContain("eightBf")
+  expect(srcDoc).toContain('parent.postMessage({ channel, pluginId, token, requestId, method, params }, "*")')
   expect(srcDoc).toContain("<main>Plugin</main>")
 })
 
@@ -557,7 +591,62 @@ test("message validation requires source window, plugin id, token, and known met
   }
 
   expect(validatePluginPanelRequest(valid, { pluginId: "plug_panel", token: "secret-token", source, eventSource: source })).toEqual(valid)
+  expect(validatePluginPanelRequest({ ...valid, channel: "wrong" }, { pluginId: "plug_panel", token: "secret-token", source, eventSource: source })).toBeNull()
+  expect(validatePluginPanelRequest({ ...valid, pluginId: "other" }, { pluginId: "plug_panel", token: "secret-token", source, eventSource: source })).toBeNull()
   expect(validatePluginPanelRequest({ ...valid, token: "wrong" }, { pluginId: "plug_panel", token: "secret-token", source, eventSource: source })).toBeNull()
   expect(validatePluginPanelRequest({ ...valid, method: "window.eval" }, { pluginId: "plug_panel", token: "secret-token", source, eventSource: source })).toBeNull()
+  expect(validatePluginPanelRequest(valid, { pluginId: "plug_panel", token: "secret-token", source: null, eventSource: source })).toBeNull()
   expect(validatePluginPanelRequest(valid, { pluginId: "plug_panel", token: "secret-token", source, eventSource: {} as Window })).toBeNull()
+})
+
+test("message validation rejects abusive request ids and bounds sanitized params", () => {
+  const source = {} as Window
+  const base: PluginPanelRequest = {
+    channel: "photoshop-web-plugin",
+    pluginId: "plug_panel",
+    token: "secret-token",
+    requestId: "req_1",
+    method: "storage.set",
+    params: {},
+  }
+
+  expect(validatePluginPanelRequest({ ...base, requestId: "" }, { pluginId: "plug_panel", token: "secret-token", source, eventSource: source })).toBeNull()
+  expect(validatePluginPanelRequest({ ...base, requestId: "x".repeat(81) }, { pluginId: "plug_panel", token: "secret-token", source, eventSource: source })).toBeNull()
+
+  const accepted = validatePluginPanelRequest(
+    {
+      ...base,
+      params: {
+        key: "large",
+        value: Array.from({ length: 300 }, (_, index) => ({ index, payload: "x".repeat(8) })),
+      },
+    },
+    { pluginId: "plug_panel", token: "secret-token", source, eventSource: source },
+  )
+
+  expect((accepted?.params as { value?: unknown[] } | undefined)?.value).toHaveLength(256)
+})
+
+test("message validation sanitizes accepted params before host dispatch", () => {
+  const source = {} as Window
+  const request = validatePluginPanelRequest(
+    {
+      channel: "photoshop-web-plugin",
+      pluginId: "plug_panel",
+      token: "secret-token",
+      requestId: "req_depth",
+      method: "storage.set",
+      params: {
+        key: "prefs",
+        value: { a: { b: { c: { d: { e: { f: { stripped: true } } } } } } },
+        constructor: { polluted: true },
+      },
+    },
+    { pluginId: "plug_panel", token: "secret-token", source, eventSource: source },
+  )
+
+  expect(request?.params).toEqual({
+    key: "prefs",
+    value: { a: { b: { c: { d: {} } } } },
+  })
 })

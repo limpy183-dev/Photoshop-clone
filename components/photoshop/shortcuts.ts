@@ -1,4 +1,6 @@
 import type * as React from "react"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, removeClientStorageItem, writeClientStorageJson } from "./client-storage"
+import { dispatchPhotoshopEvent } from "./events"
 
 export interface Shortcut {
   id: string
@@ -7,7 +9,7 @@ export interface Shortcut {
   category: string
 }
 
-export const SHORTCUT_STORAGE_KEY = "ps-custom-shortcuts"
+export const SHORTCUT_STORAGE_KEY = CLIENT_STORAGE_KEYS.customShortcuts.key
 
 export const DEFAULT_SHORTCUTS: Shortcut[] = [
   // File
@@ -116,22 +118,17 @@ export function validShortcutOverrides(value: unknown): Record<string, string> {
 
 export function loadCustomShortcuts(): Record<string, string> {
   if (typeof window === "undefined") return {}
-  try {
-    const saved = localStorage.getItem(SHORTCUT_STORAGE_KEY)
-    return saved ? validShortcutOverrides(JSON.parse(saved)) : {}
-  } catch {
-    return {}
-  }
+  return validShortcutOverrides(readClientStorageJson(CLIENT_STORAGE_KEYS.customShortcuts))
 }
 
 export function saveCustomShortcuts(overrides: Record<string, string>) {
   try {
     if (Object.keys(overrides).length === 0) {
-      localStorage.removeItem(SHORTCUT_STORAGE_KEY)
+      removeClientStorageItem(CLIENT_STORAGE_KEYS.customShortcuts)
     } else {
-      localStorage.setItem(SHORTCUT_STORAGE_KEY, JSON.stringify(overrides))
+      writeClientStorageJson(CLIENT_STORAGE_KEYS.customShortcuts, overrides)
     }
-    window.dispatchEvent(new CustomEvent("ps-shortcuts-changed", { detail: overrides }))
+    dispatchPhotoshopEvent("ps-shortcuts-changed", overrides)
   } catch {}
 }
 

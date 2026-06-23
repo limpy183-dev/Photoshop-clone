@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "../client-storage"
 import { useEditor } from "../editor-context"
 import { BookOpen, Plus, Trash2, Download, Upload, RotateCcw, X } from "lucide-react"
 import { downloadText } from "../document-io"
@@ -18,7 +19,6 @@ import {
   type SwatchEntry,
 } from "../swatches-store"
 
-const RECENT_SWATCHES_KEY = "ps-recent-swatches"
 const MAX_RECENT_SWATCHES = 12
 
 export interface LocalColorBook {
@@ -68,18 +68,11 @@ export function mergeRecentSwatch(recent: readonly SwatchEntry[], swatch: Swatch
 }
 
 function loadRecentSwatches(): SwatchEntry[] {
-  if (typeof window === "undefined") return []
-  try {
-    return normalizeSwatches(JSON.parse(localStorage.getItem(RECENT_SWATCHES_KEY) ?? "[]")).slice(0, MAX_RECENT_SWATCHES)
-  } catch {
-    return []
-  }
+  return normalizeSwatches(readClientStorageJson(CLIENT_STORAGE_KEYS.recentSwatches)).slice(0, MAX_RECENT_SWATCHES)
 }
 
 function saveRecentSwatches(swatches: SwatchEntry[]) {
-  try {
-    localStorage.setItem(RECENT_SWATCHES_KEY, JSON.stringify(swatches.slice(0, MAX_RECENT_SWATCHES)))
-  } catch {}
+  writeClientStorageJson(CLIENT_STORAGE_KEYS.recentSwatches, swatches.slice(0, MAX_RECENT_SWATCHES))
 }
 
 export function SwatchesPanel() {

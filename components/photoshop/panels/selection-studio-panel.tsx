@@ -3,6 +3,7 @@
 import * as React from "react"
 import { toast } from "sonner"
 import { useEditor } from "../editor-context"
+import { dispatchPhotoshopEvent } from "../events"
 import {
   focusAreaMask,
   selectionFromMask,
@@ -123,7 +124,7 @@ export function SelectionStudioPanel() {
             <PanelButton label="Sky" disabled={!activeLayer} title="Offline sky-extraction heuristic (Local). No ML model bundled; diagnostics report nativeAiParity=false." onClick={() => autoMask("sky")} />
             <PanelButton label="Background" disabled={!activeLayer} title="Offline background-extraction heuristic (Local). No ML model bundled; diagnostics report nativeAiParity=false." onClick={() => autoMask("background")} />
             <PanelButton label="Focus Area" disabled={!activeLayer} title="Offline focus/depth heuristic (Local). No ML model bundled; diagnostics report nativeAiParity=false." onClick={() => autoMask("focus")} />
-            <PanelButton label="Mask..." disabled={!activeDoc} onClick={() => window.dispatchEvent(new CustomEvent("ps-open-select-and-mask"))} />
+            <PanelButton label="Mask..." disabled={!activeDoc} onClick={() => dispatchPhotoshopEvent("ps-open-select-and-mask")} />
             <PanelButton label="To Path" disabled={!activeLayer || !hasSelection} onClick={makePathFromSelection} />
           </div>
           <div className="grid grid-cols-2 gap-1">

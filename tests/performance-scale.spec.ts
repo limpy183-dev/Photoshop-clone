@@ -9,6 +9,7 @@ import {
 } from "../components/photoshop/performance-engine"
 import {
   applyFilterAsync,
+  applyFilterBatch,
   planExpensiveFilterTiling,
   planWorkerFallback,
 } from "../components/photoshop/filter-worker"
@@ -112,6 +113,56 @@ test("worker fallback plan and applyFilterAsync use registry fallback after work
   })
 
   expect(Array.from(result.data)).toEqual([245, 235, 225, 255])
+})
+
+test("async filter worker options time out and clean abort listeners after completion", async () => {
+  const src = imageData(1, 1, [10, 20, 30, 255])
+
+  await expect(applyFilterAsync("invert", src, {}, {
+    fallbackOnWorkerError: false,
+    timeoutMs: 5,
+    workerExecutor: () => new Promise(() => {}),
+  })).rejects.toThrow(/timed out/i)
+
+  const controller = new AbortController()
+  let addCount = 0
+  let removeCount = 0
+  const originalAdd = controller.signal.addEventListener.bind(controller.signal)
+  const originalRemove = controller.signal.removeEventListener.bind(controller.signal)
+  controller.signal.addEventListener = ((
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | AddEventListenerOptions,
+  ) => {
+    if (type === "abort") addCount += 1
+    return originalAdd(type, listener, options)
+  }) as AbortSignal["addEventListener"]
+  controller.signal.removeEventListener = ((
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | EventListenerOptions,
+  ) => {
+    if (type === "abort") removeCount += 1
+    return originalRemove(type, listener, options)
+  }) as AbortSignal["removeEventListener"]
+
+  await applyFilterAsync("invert", src, {}, {
+    signal: controller.signal,
+    workerExecutor: async () => new ImageData(new Uint8ClampedArray(src.data), src.width, src.height),
+  })
+
+  expect(addCount).toBe(1)
+  expect(removeCount).toBe(1)
+})
+
+test("batched filter execution supports timeout cancellation", async () => {
+  const src = imageData(1, 1, [10, 20, 30, 255])
+
+  await expect(applyFilterBatch(src, [{ filterId: "invert", params: {} }], {
+    fallbackOnWorkerError: false,
+    timeoutMs: 1,
+    workerExecutor: () => new Promise(() => {}),
+  })).rejects.toThrow(/timed out/i)
 })
 
 test("expensive filters and merge workflows get tiled plans with overlap and yields", () => {

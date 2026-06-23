@@ -7,6 +7,7 @@ import { toast } from "sonner"
 import { planAutosaveDocuments, planIncrementalAutosave, type IncrementalAutosaveManifest } from "./autosave-planner"
 import { deserializeProject, serializeProject } from "./document-io"
 import { useEditor } from "./editor-context"
+import { addPhotoshopEventListener } from "./events"
 import { writeScratchBlob } from "./opfs-scratch"
 import { loadPreferencesFromStorage } from "./preferences-engine"
 import { clearAutosave, readAutosaves, readAutosavesAsync, removeAutosave, writeAutosaves, type AutosaveDocument } from "./recent-documents"
@@ -153,10 +154,10 @@ export function AutosaveRecovery() {
   React.useEffect(() => {
     const refresh = () => setPrefs(autosavePreferences())
     refresh()
-    window.addEventListener("ps-preferences-changed", refresh)
+    const removePreferences = addPhotoshopEventListener("ps-preferences-changed", refresh)
     window.addEventListener("storage", refresh)
     return () => {
-      window.removeEventListener("ps-preferences-changed", refresh)
+      removePreferences()
       window.removeEventListener("storage", refresh)
     }
   }, [])

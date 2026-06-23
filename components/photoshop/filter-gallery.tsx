@@ -132,7 +132,7 @@ export function FilterGalleryDialog({
 
   React.useEffect(() => {
     if (!open || typeof window === "undefined") return
-    const loaded = loadSmartFilterStackPresets(window.localStorage)
+    const loaded = loadSmartFilterStackPresets()
     setPresets(loaded)
     setSelectedPresetId((current) => current || loaded[0]?.id || "")
   }, [open])
@@ -315,7 +315,7 @@ export function FilterGalleryDialog({
 
   const persistPresets = (next: SmartFilterStackPreset[]) => {
     setPresets(next)
-    if (typeof window !== "undefined") saveSmartFilterStackPresets(next, window.localStorage)
+    if (typeof window !== "undefined") saveSmartFilterStackPresets(next)
   }
 
   const savePreset = () => {

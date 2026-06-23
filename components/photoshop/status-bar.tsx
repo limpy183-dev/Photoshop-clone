@@ -4,7 +4,7 @@ import * as React from "react"
 import { X } from "lucide-react"
 import { describeDocumentColorHonesty } from "./color-pipeline"
 import { createExportLimitationReport, type ExportFormat } from "./document-io"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import { planFilterPreviewExecution } from "./filter-preview"
 import { createHeapMemoryMonitor, formatMemoryUsage, getGlobalMemoryBudget, planRuntimeMemoryPressure, type RuntimeMemoryPressurePlan } from "./memory-budget"
 import { detectOffscreenCanvasCapabilities, diagnoseOffscreenCanvasTransfer } from "./offscreen-canvas"
@@ -12,6 +12,7 @@ import { loadPreferencesFromStorage, summarizePerformancePolicy, type Performanc
 import { createTileOnlyCapabilityDashboard, type TileOnlyCapabilityDashboard } from "./tile-only-pipeline"
 import { requestCanvasZoom } from "./zoom-events"
 import { diagnoseBrowserLargeDocumentLimits, type BrowserLargeDocumentDiagnostics } from "./large-document"
+import { addPhotoshopEventListener } from "./events"
 
 function BrowserDiagnosticsBadge({ diagnostics }: { diagnostics: BrowserLargeDocumentDiagnostics | null }) {
   if (!diagnostics) return null
@@ -82,7 +83,10 @@ function PerformanceConfidenceBadge({
 }
 
 export function StatusBar({ onHide }: { onHide?: () => void }) {
-  const { activeDoc, tool, brush, foreground } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const tool = useEditorSelector((editor) => editor.tool)
+  const brush = useEditorSelector((editor) => editor.brush)
+  const foreground = useEditorSelector((editor) => editor.foreground)
   const [zoomInput, setZoomInput] = React.useState("")
   const [memoryUsage, setMemoryUsage] = React.useState("")
   const [runtimePressure, setRuntimePressure] = React.useState<RuntimeMemoryPressurePlan | null>(null)
@@ -182,17 +186,14 @@ export function StatusBar({ onHide }: { onHide?: () => void }) {
   React.useEffect(() => {
     const refreshPreferences = () => setPrefs(loadPreferencesFromStorage())
     refreshPreferences()
-    window.addEventListener("ps-preferences-changed", refreshPreferences)
-    return () => window.removeEventListener("ps-preferences-changed", refreshPreferences)
+    return addPhotoshopEventListener("ps-preferences-changed", refreshPreferences)
   }, [])
 
   React.useEffect(() => {
-    const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{ format?: ExportFormat | null }>).detail ?? {}
+    const handler = (detail: { format?: ExportFormat | null }) => {
       setActiveExportFormat(detail.format ?? null)
     }
-    window.addEventListener("ps-active-export-format", handler as EventListener)
-    return () => window.removeEventListener("ps-active-export-format", handler as EventListener)
+    return addPhotoshopEventListener("ps-active-export-format", (detail) => handler(detail as { format?: ExportFormat | null }))
   }, [])
 
   React.useEffect(() => {

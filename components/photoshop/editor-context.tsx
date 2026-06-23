@@ -1,15 +1,6 @@
 "use client"
 
 import * as React from "react"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { Button } from "@/components/ui/button"
 import type {
   AlphaChannel,
   AdvancedBlending,
@@ -82,6 +73,9 @@ import { loadPreferencesFromStorage, recordHistoryLogEntryFromStorage } from "./
 import { createHistoryJumpScheduler, type HistoryJumpScheduler } from "./history-jump-scheduler"
 import { isAdjustmentNoop } from "./adjustment-layers"
 import { RenderBus, type MergedRenderChange, type RenderChange } from "./render-bus"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
+import { createEditorSelectorStore, EditorSelectorContext, type EditorSelectorStore } from "./editor-selector-store"
+import { EditorCloseDialog } from "./editor-close-dialog"
 import {
   borderSelectionMask,
   contractSelectionMask,
@@ -3667,8 +3661,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
         setCloseRequest((current) => current ? { ...current, saving: false } : current)
       }
     }
-    window.addEventListener("ps-document-saved", handler as EventListener)
-    return () => window.removeEventListener("ps-document-saved", handler as EventListener)
+    return addPhotoshopEventListener("ps-document-saved", (_detail, event) => handler(event))
   }, [finishPendingClose])
 
   React.useEffect(() => {
@@ -3775,6 +3768,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
       }
     }
     if (canvasesReplaced) requestRender()
+    // One-time persisted document hydration; dispatch and requestRender are stable provider callbacks during mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -4682,13 +4676,20 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     setFilterPreview,
   ])
 
+  const selectorStoreRef = React.useRef<EditorSelectorStore<EditorContextValue> | null>(null)
+  if (!selectorStoreRef.current) selectorStoreRef.current = createEditorSelectorStore(value)
+  React.useLayoutEffect(() => {
+    selectorStoreRef.current?.setSnapshot(value)
+  }, [value])
+  const selectorStore = selectorStoreRef.current
+
   const closeTarget = closeRequest
     ? state.documents.find((doc) => doc.id === closeRequest.currentId) ?? null
     : null
   const savePendingClose = () => {
     if (!closeTarget) return
     setCloseRequest((current) => current ? { ...current, saving: true } : current)
-    window.dispatchEvent(new CustomEvent("ps-save-document", { detail: { docId: closeTarget.id, mode: "save", reason: "close" } }))
+    dispatchPhotoshopEvent("ps-save-document", { docId: closeTarget.id, mode: "save", reason: "close" })
   }
   const discardPendingClose = () => {
     if (!closeTarget) return
@@ -4697,32 +4698,21 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <EditorRenderContext.Provider value={renderContextValue}>
+    <EditorSelectorContext.Provider value={selectorStore}>
     <EditorContext.Provider value={value}>
       {children}
-      <Dialog open={!!closeTarget} onOpenChange={(open) => {
-        if (!open && !closeRequest?.saving) setCloseRequest(null)
-      }}>
-        <DialogContent className="max-w-[420px] border-[var(--ps-divider)] bg-[var(--ps-panel)] text-[var(--ps-text)]">
-          <DialogHeader>
-            <DialogTitle>Save changes to {closeTarget?.name ?? "document"}?</DialogTitle>
-            <DialogDescription className="text-[12px] text-[var(--ps-text-dim)]">
-              Closing without saving will discard changes made since the last save in this browser session.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCloseRequest(null)} disabled={closeRequest?.saving}>
-              Cancel
-            </Button>
-            <Button variant="outline" onClick={discardPendingClose} disabled={closeRequest?.saving}>
-              Don't Save
-            </Button>
-            <Button onClick={savePendingClose} disabled={closeRequest?.saving}>
-              {closeRequest?.saving ? "Saving..." : "Save"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <EditorCloseDialog
+        documentName={closeTarget?.name ?? null}
+        saving={closeRequest?.saving}
+        onOpenChange={(open) => {
+          if (!open && !closeRequest?.saving) setCloseRequest(null)
+        }}
+        onCancel={() => setCloseRequest(null)}
+        onDiscard={discardPendingClose}
+        onSave={savePendingClose}
+      />
     </EditorContext.Provider>
+    </EditorSelectorContext.Provider>
     </EditorRenderContext.Provider>
   )
 }
@@ -4731,6 +4721,94 @@ export function useEditor() {
   const ctx = React.useContext(EditorContext)
   if (!ctx) throw new Error("useEditor must be used within EditorProvider")
   return ctx
+}
+
+export function useEditorSelector<T>(selector: (value: EditorContextValue) => T): T {
+  const store = React.useContext(EditorSelectorContext) as EditorSelectorStore<EditorContextValue> | null
+  if (!store) throw new Error("useEditorSelector must be used within EditorProvider")
+  return React.useSyncExternalStore(
+    store.subscribe,
+    () => selector(store.getSnapshot()),
+    () => selector(store.getSnapshot()),
+  )
+}
+
+export function useActiveDocument() {
+  return useEditorSelector((editor) => editor.activeDoc)
+}
+
+export function useActiveLayer() {
+  return useEditorSelector((editor) => editor.activeLayer)
+}
+
+export function useToolState() {
+  const {
+    activeSmartFilterMaskTarget,
+    background,
+    brush,
+    cloneSource,
+    eraser,
+    foreground,
+    gradient,
+    paintBucket,
+    selectionOptions,
+    symmetry,
+    tool,
+    transform,
+  } = useEditor()
+  return React.useMemo(
+    () => ({
+      activeSmartFilterMaskTarget,
+      background,
+      brush,
+      cloneSource,
+      eraser,
+      foreground,
+      gradient,
+      paintBucket,
+      selectionOptions,
+      symmetry,
+      tool,
+      transform,
+    }),
+    [
+      activeSmartFilterMaskTarget,
+      background,
+      brush,
+      cloneSource,
+      eraser,
+      foreground,
+      gradient,
+      paintBucket,
+      selectionOptions,
+      symmetry,
+      tool,
+      transform,
+    ],
+  )
+}
+
+export function useDocumentLifecycle(docId?: string | null) {
+  return useEditorSelector((editor) => {
+    const id = docId ?? editor.activeDocId
+    return id ? editor.documentStatuses[id] : undefined
+  })
+}
+
+export function useHistoryState(docId?: string | null) {
+  const { activeDocId, documentHistoryVersions, history, historyIndex, snapshots } = useEditor()
+  const id = docId ?? activeDocId
+  const isActiveDocument = !!id && id === activeDocId
+  return React.useMemo(
+    () => ({
+      docId: id ?? null,
+      entries: isActiveDocument ? history : [],
+      index: isActiveDocument ? historyIndex : -1,
+      snapshots: isActiveDocument ? snapshots : [],
+      version: id ? documentHistoryVersions[id] ?? 0 : 0,
+    }),
+    [documentHistoryVersions, history, historyIndex, id, isActiveDocument, snapshots],
+  )
 }
 
 export function useRenderSubscription(cb: (change: MergedRenderChange) => void) {

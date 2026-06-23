@@ -1,10 +1,11 @@
 import type { BlendMode } from "./types"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
 import {
   normalizeSmartFilterMaskDensity,
   normalizeSmartFilterMaskFeather,
 } from "./smart-filter-masks"
 
-export const SMART_FILTER_PRESET_STORAGE_KEY = "ps-filter-gallery-stack-presets-v1"
+export const SMART_FILTER_PRESET_STORAGE_KEY = CLIENT_STORAGE_KEYS.smartFilterStackPresets.key
 
 export interface SmartFilterStackEntryLike {
   id?: string
@@ -154,8 +155,8 @@ export function normalizeSmartFilterStackPresets(raw: unknown): SmartFilterStack
   return out
 }
 
-export function loadSmartFilterStackPresets(storage: Pick<Storage, "getItem"> | null | undefined): SmartFilterStackPreset[] {
-  if (!storage) return []
+export function loadSmartFilterStackPresets(storage?: Pick<Storage, "getItem"> | null): SmartFilterStackPreset[] {
+  if (!storage) return normalizeSmartFilterStackPresets(readClientStorageJson(CLIENT_STORAGE_KEYS.smartFilterStackPresets))
   try {
     const raw = storage.getItem(SMART_FILTER_PRESET_STORAGE_KEY)
     return normalizeSmartFilterStackPresets(raw ? JSON.parse(raw) : [])
@@ -166,10 +167,14 @@ export function loadSmartFilterStackPresets(storage: Pick<Storage, "getItem"> | 
 
 export function saveSmartFilterStackPresets(
   presets: SmartFilterStackPreset[],
-  storage: Pick<Storage, "setItem"> | null | undefined,
+  storage?: Pick<Storage, "setItem"> | null,
 ) {
-  if (!storage) return
-  storage.setItem(SMART_FILTER_PRESET_STORAGE_KEY, JSON.stringify(normalizeSmartFilterStackPresets(presets)))
+  const normalized = normalizeSmartFilterStackPresets(presets)
+  if (storage) {
+    storage.setItem(SMART_FILTER_PRESET_STORAGE_KEY, JSON.stringify(normalized))
+  } else {
+    writeClientStorageJson(CLIENT_STORAGE_KEYS.smartFilterStackPresets, normalized)
+  }
 }
 
 export const SMART_FILTER_PRESET_EXPORT_VERSION = 1

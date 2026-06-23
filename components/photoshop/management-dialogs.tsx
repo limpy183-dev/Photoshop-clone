@@ -19,6 +19,7 @@ import { selectionToMaskCanvas } from "./tool-helpers"
 import { WORKSPACE_PRESET_OPTIONS, type WorkspacePresetId } from "./panel-registry"
 import type { RecentDocument } from "./recent-documents"
 import { downloadText } from "./document-io"
+import { dispatchPhotoshopEvent } from "./events"
 import {
   mergeWorkspaceLibraries,
   normalizeWorkspaceLibrary,
@@ -187,18 +188,18 @@ export function WorkspaceManagerDialog({
   const save = () => {
     const trimmed = name.trim()
     if (!trimmed) return
-    window.dispatchEvent(new CustomEvent("ps-save-workspace", { detail: { name: trimmed } }))
+    dispatchPhotoshopEvent("ps-save-workspace", { name: trimmed })
     toast.success("Workspace saved")
     refreshSoon()
   }
   const applyPreset = (preset: WorkspacePresetId) => {
-    window.dispatchEvent(new CustomEvent("ps-apply-workspace-preset", { detail: { preset } }))
+    dispatchPhotoshopEvent("ps-apply-workspace-preset", { preset })
   }
   const applySaved = (workspaceName: string) => {
-    window.dispatchEvent(new CustomEvent("ps-apply-workspace", { detail: { name: workspaceName } }))
+    dispatchPhotoshopEvent("ps-apply-workspace", { name: workspaceName })
   }
   const deleteSaved = (workspaceName: string) => {
-    window.dispatchEvent(new CustomEvent("ps-delete-workspace", { detail: { name: workspaceName } }))
+    dispatchPhotoshopEvent("ps-delete-workspace", { name: workspaceName })
     toast.success("Workspace deleted")
     refreshSoon()
   }
@@ -454,6 +455,7 @@ export function SaveSelectionDialog({
     setSpotColor("#ff3b30")
     setSpotOpacity(50)
     setInvert(false)
+    // Initialize create-channel form only when opening for a new active document; channel count changes should not reset user input.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeDoc?.id, open])
 
@@ -689,6 +691,7 @@ export function LoadSelectionDialog({
     setSourceDocId(activeDoc?.id ?? "")
     setMode("replace")
     setInvert(false)
+    // Initialize load-selection form on open/document change; source channel changes are handled by the channel-id effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeDoc?.id, open])
 
@@ -696,11 +699,13 @@ export function LoadSelectionDialog({
     const first = channels[0]
     setChannelId(first?.id ?? "")
     setRename(first?.name ?? "")
+    // Reset selection when the source document or channel count changes; channel object identity changes should not overwrite edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceDocId, channels.length])
 
   React.useEffect(() => {
     if (selected) setRename(selected.name)
+    // Rename mirrors the selected channel id; name-only edits on the same id should not clobber typed text.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id])
 

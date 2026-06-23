@@ -1,6 +1,14 @@
 "use client"
 
 import { loadPreferencesFromStorage } from "./preferences-engine"
+import {
+  browserLocalStorage,
+  readClientStorageJson,
+  removeClientStorageItem,
+  writeClientStorageJson,
+  type ClientStorageKey,
+} from "./client-storage"
+import { dispatchPhotoshopEvent } from "./events"
 
 export interface RecentDocument {
   id: string
@@ -22,6 +30,27 @@ export interface AutosaveDocument extends RecentDocument {
 const RECENTS_KEY = "ps-recent-documents-v1"
 export const AUTOSAVE_KEY = "ps-autosave-document-v1"
 export const AUTOSAVE_COLLECTION_KEY = "ps-autosave-documents-v2"
+const RECENTS_STORAGE: ClientStorageKey<unknown[]> = {
+  key: RECENTS_KEY,
+  version: 1,
+  privacy: "project-data",
+  description: "Recent project/image documents, including serialized project snapshots and thumbnails.",
+  fallback: [],
+}
+const AUTOSAVE_STORAGE: ClientStorageKey<unknown | null> = {
+  key: AUTOSAVE_KEY,
+  version: 1,
+  privacy: "autosave",
+  description: "Legacy single-document autosave recovery payload.",
+  fallback: null,
+}
+const AUTOSAVE_COLLECTION_STORAGE: ClientStorageKey<unknown[]> = {
+  key: AUTOSAVE_COLLECTION_KEY,
+  version: 2,
+  privacy: "autosave",
+  description: "Autosave recovery collection for multiple open documents.",
+  fallback: [],
+}
 const MAX_RECENTS = 8
 const MAX_STORED_DOCUMENT_CHARS = 8_000_000
 const RECENT_KINDS = new Set<RecentDocument["kind"]>(["project", "psd", "image", "autosave"])
@@ -119,7 +148,7 @@ function canUseIDB() {
 /* =================== localStorage helpers =================== */
 
 function canUseStorage() {
-  return typeof window !== "undefined" && typeof window.localStorage !== "undefined"
+  return !!browserLocalStorage()
 }
 
 function recentDocumentsLimit() {
@@ -134,16 +163,12 @@ function recentDocumentsLimit() {
 
 export function readRecentDocuments(): RecentDocument[] {
   if (!canUseStorage()) return []
-  try {
-    const parsed = JSON.parse(localStorage.getItem(RECENTS_KEY) ?? "[]")
-    if (!Array.isArray(parsed)) return []
-    return parsed
-      .map(normalizeRecentDocument)
-      .filter((item): item is RecentDocument => !!item)
-      .sort((a, b) => b.updatedAt - a.updatedAt)
-  } catch {
-    return []
-  }
+  const parsed = readClientStorageJson(RECENTS_STORAGE)
+  if (!Array.isArray(parsed)) return []
+  return parsed
+    .map(normalizeRecentDocument)
+    .filter((item): item is RecentDocument => !!item)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
 export function rememberRecentDocument(entry: Omit<RecentDocument, "id" | "updatedAt"> & { id?: string; updatedAt?: number; thumbnail?: string }) {
@@ -151,8 +176,8 @@ export function rememberRecentDocument(entry: Omit<RecentDocument, "id" | "updat
   try {
     const limit = recentDocumentsLimit()
     if (limit === 0) {
-      localStorage.removeItem(RECENTS_KEY)
-      window.dispatchEvent(new CustomEvent("ps-recents-changed"))
+      removeClientStorageItem(RECENTS_STORAGE)
+      dispatchPhotoshopEvent("ps-recents-changed")
       return
     }
     if (entry.serialized.length > MAX_STORED_DOCUMENT_CHARS) {
@@ -171,8 +196,9 @@ export function rememberRecentDocument(entry: Omit<RecentDocument, "id" | "updat
       thumbnail: safeThumbnail(entry.thumbnail),
     }
     const recents = readRecentDocuments().filter((item) => item.id !== id && item.name !== next.name)
-    localStorage.setItem(RECENTS_KEY, JSON.stringify([next, ...recents].slice(0, limit)))
-    window.dispatchEvent(new CustomEvent("ps-recents-changed"))
+    const result = writeClientStorageJson(RECENTS_STORAGE, [next, ...recents].slice(0, limit))
+    if (!result.ok) throw result.error ?? new Error(result.reason)
+    dispatchPhotoshopEvent("ps-recents-changed")
   } catch {
     pruneRecentDocuments()
   }
@@ -180,8 +206,8 @@ export function rememberRecentDocument(entry: Omit<RecentDocument, "id" | "updat
 
 export function removeRecentDocument(id: string) {
   if (!canUseStorage()) return
-  localStorage.setItem(RECENTS_KEY, JSON.stringify(readRecentDocuments().filter((item) => item.id !== id)))
-  window.dispatchEvent(new CustomEvent("ps-recents-changed"))
+  writeClientStorageJson(RECENTS_STORAGE, readRecentDocuments().filter((item) => item.id !== id))
+  dispatchPhotoshopEvent("ps-recents-changed")
 }
 
 export function pruneRecentDocuments() {
@@ -189,22 +215,17 @@ export function pruneRecentDocuments() {
   try {
     const limit = recentDocumentsLimit()
     if (limit === 0) {
-      localStorage.removeItem(RECENTS_KEY)
+      removeClientStorageItem(RECENTS_STORAGE)
       return
     }
     const recents = readRecentDocuments().slice(0, Math.max(1, Math.floor(limit / 2)))
-    localStorage.setItem(RECENTS_KEY, JSON.stringify(recents))
+    writeClientStorageJson(RECENTS_STORAGE, recents)
   } catch { }
 }
 
 export function readAutosave(): RecentDocument | null {
   if (!canUseStorage()) return null
-  try {
-    const parsed = JSON.parse(localStorage.getItem(AUTOSAVE_KEY) ?? "null")
-    return normalizeRecentDocument(parsed)
-  } catch {
-    return null
-  }
+  return normalizeRecentDocument(readClientStorageJson(AUTOSAVE_STORAGE))
 }
 
 /**
@@ -215,15 +236,13 @@ export function readAutosaves(): AutosaveDocument[] {
   // Try IndexedDB asynchronously — for the synchronous API we still read localStorage as a baseline.
   // Callers that need the IDB data can use readAutosavesAsync().
   if (!canUseStorage()) return []
-  try {
-    const parsed = JSON.parse(localStorage.getItem(AUTOSAVE_COLLECTION_KEY) ?? "[]")
-    if (Array.isArray(parsed)) {
-      return parsed
-        .map(normalizeAutosaveDocument)
-        .filter((item): item is AutosaveDocument => !!item)
-        .sort((a, b) => b.updatedAt - a.updatedAt)
-    }
-  } catch {}
+  const parsed = readClientStorageJson(AUTOSAVE_COLLECTION_STORAGE)
+  if (Array.isArray(parsed)) {
+    return parsed
+      .map(normalizeAutosaveDocument)
+      .filter((item): item is AutosaveDocument => !!item)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+  }
   const legacy = readAutosave()
   return legacy ? [{ ...legacy, kind: "autosave", documentId: legacy.id }] : []
 }
@@ -271,9 +290,9 @@ export function writeAutosaves(entries: Array<Omit<AutosaveDocument, "id" | "kin
     try {
       const lsPayload = payload.filter((entry) => entry.serialized.length <= MAX_STORED_DOCUMENT_CHARS)
       if (lsPayload.length) {
-        localStorage.setItem(AUTOSAVE_COLLECTION_KEY, JSON.stringify(lsPayload))
-        localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(lsPayload[0]))
-        storedLocally = true
+        const collectionResult = writeClientStorageJson(AUTOSAVE_COLLECTION_STORAGE, lsPayload)
+        const legacyResult = writeClientStorageJson(AUTOSAVE_STORAGE, lsPayload[0])
+        if (collectionResult.ok || legacyResult.ok) storedLocally = true
       }
     } catch {}
   }
@@ -285,7 +304,7 @@ export function writeAutosave(entry: Omit<RecentDocument, "id" | "kind" | "updat
   if (!canUseStorage()) return
   try {
     if (entry.serialized.length > MAX_STORED_DOCUMENT_CHARS) {
-      localStorage.removeItem(AUTOSAVE_KEY)
+      removeClientStorageItem(AUTOSAVE_STORAGE)
       return
     }
     const payload: RecentDocument = {
@@ -295,9 +314,9 @@ export function writeAutosave(entry: Omit<RecentDocument, "id" | "kind" | "updat
       serialized: entry.serialized,
       updatedAt: Date.now(),
     }
-    localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(payload))
+    writeClientStorageJson(AUTOSAVE_STORAGE, payload)
   } catch {
-    localStorage.removeItem(AUTOSAVE_KEY)
+    removeClientStorageItem(AUTOSAVE_STORAGE)
   }
 }
 
@@ -307,8 +326,8 @@ export function clearAutosave() {
     clearAutosaveIDB().catch(() => {})
   }
   if (!canUseStorage()) return
-  localStorage.removeItem(AUTOSAVE_KEY)
-  localStorage.removeItem(AUTOSAVE_COLLECTION_KEY)
+  removeClientStorageItem(AUTOSAVE_STORAGE)
+  removeClientStorageItem(AUTOSAVE_COLLECTION_STORAGE)
 }
 
 /** Remove a single document's autosave from both IndexedDB and localStorage. */
@@ -320,12 +339,12 @@ export function removeAutosave(documentId: string) {
   try {
     const remaining = readAutosaves().filter((entry) => entry.documentId !== documentId)
     if (!remaining.length) {
-      localStorage.removeItem(AUTOSAVE_COLLECTION_KEY)
-      localStorage.removeItem(AUTOSAVE_KEY)
+      removeClientStorageItem(AUTOSAVE_COLLECTION_STORAGE)
+      removeClientStorageItem(AUTOSAVE_STORAGE)
       return
     }
-    localStorage.setItem(AUTOSAVE_COLLECTION_KEY, JSON.stringify(remaining))
-    localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(remaining[0]))
+    writeClientStorageJson(AUTOSAVE_COLLECTION_STORAGE, remaining)
+    writeClientStorageJson(AUTOSAVE_STORAGE, remaining[0])
   } catch {}
 }
 

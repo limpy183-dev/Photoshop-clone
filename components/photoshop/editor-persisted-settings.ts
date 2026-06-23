@@ -1,6 +1,7 @@
 import type { BrushSettings, GradientSettings, SymmetrySettings } from "./types"
+import { CLIENT_STORAGE_KEYS, browserLocalStorage, readClientStorageJson, writeClientStorageJson } from "./client-storage"
 
-export const EDITOR_SETTINGS_KEY = "ps-editor-settings"
+export const EDITOR_SETTINGS_KEY = CLIENT_STORAGE_KEYS.editorSettings.key
 
 export interface PersistedEditorState {
   foreground: string
@@ -27,8 +28,7 @@ const PERSISTED_MAX_KEYS = 128
 
 function storageOrGlobal(storage?: Storage): Storage | undefined {
   if (storage) return storage
-  if (typeof window === "undefined") return undefined
-  return window.localStorage
+  return browserLocalStorage() ?? undefined
 }
 
 function sanitizePersistedSetting(value: unknown, depth = 0): unknown {
@@ -172,20 +172,14 @@ export function loadPersistedEditorSettings(
 ): Partial<PersistedEditorState> {
   const targetStorage = storageOrGlobal(storage)
   if (!targetStorage) return {}
-  try {
-    const raw = targetStorage.getItem(EDITOR_SETTINGS_KEY)
-    if (!raw) return {}
-    const parsed = JSON.parse(raw)
-    return filterPersistedEditorSettingsForHydration(parsed, defaults)
-  } catch {
-    return {}
-  }
+  const parsed = readClientStorageJson(CLIENT_STORAGE_KEYS.editorSettings, { storage: targetStorage })
+  return filterPersistedEditorSettingsForHydration(parsed, defaults)
 }
 
 export function savePersistedEditorSettings(state: PersistedEditorState, storage?: Storage) {
   const targetStorage = storageOrGlobal(storage)
   if (!targetStorage) return
-  try {
-    targetStorage.setItem(EDITOR_SETTINGS_KEY, JSON.stringify(serializePersistedEditorSettings(state)))
-  } catch {}
+  writeClientStorageJson(CLIENT_STORAGE_KEYS.editorSettings, serializePersistedEditorSettings(state), {
+    storage: targetStorage,
+  })
 }

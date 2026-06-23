@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson } from "./client-storage"
 import { useEditor, makeDocument, makeCanvas } from "./editor-context"
 import { canvasSizeError, clampCanvasSize } from "./canvas-limits"
 import { createHighBitImageFromImageData, type HighBitImage } from "./color-pipeline"
@@ -38,13 +39,11 @@ type BackgroundChoice = "white" | "black" | "transparent" | "foreground" | "back
 type DocumentWithHighBitSource = PsDocument & { __highBitImageData?: HighBitImage }
 
 function readDefaultBackgroundPreference() {
-  try {
-    const raw = typeof window !== "undefined" ? localStorage.getItem("ps-preferences") : null
-    if (raw) {
-      const p = JSON.parse(raw)
-      if (typeof p?.defaultBackground === "string" && p.defaultBackground !== "#ffffff") return p.defaultBackground as string
-    }
-  } catch {}
+  const prefs = readClientStorageJson(CLIENT_STORAGE_KEYS.preferences)
+  if (prefs && typeof prefs === "object" && !Array.isArray(prefs)) {
+    const defaultBackground = (prefs as { defaultBackground?: unknown }).defaultBackground
+    if (typeof defaultBackground === "string" && defaultBackground !== "#ffffff") return defaultBackground
+  }
   return null
 }
 

@@ -6,6 +6,7 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useEditor } from "./editor-context"
+import { dispatchPhotoshopCustomEvent, dispatchPhotoshopEvent } from "./events"
 import { selectionToMaskCanvas } from "./tool-helpers"
 import {
   WORKFLOW_PACKS,
@@ -41,14 +42,13 @@ export function WorkflowPackDialog({
       return
     }
     if (action.kind === "panel") {
-      window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: action.panel }))
+      dispatchPhotoshopEvent("ps-open-panel", action.panel)
       onOpenChange(false)
       return
     }
     if (action.kind === "event") {
-      window.dispatchEvent(action.detail === undefined
-        ? new CustomEvent(action.event)
-        : new CustomEvent(action.event, { detail: action.detail }))
+      if (action.detail === undefined) dispatchPhotoshopCustomEvent(action.event)
+      else dispatchPhotoshopCustomEvent(action.event, action.detail)
       onOpenChange(false)
       return
     }

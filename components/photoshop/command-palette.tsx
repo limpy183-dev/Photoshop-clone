@@ -22,6 +22,7 @@ import {
   type CommandUsageMap,
 } from "./command-ranking"
 import { WORKFLOW_PACKS } from "./workflow-presets"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
 
 interface CommandPaletteProps {
   open: boolean
@@ -102,39 +103,24 @@ function permissionsForPluginCommand(command: PluginCommandDescriptor): PluginPe
   return []
 }
 
-const RECENT_COMMANDS_KEY = "ps-command-palette-recent"
 const RECENT_COMMANDS_LIMIT = 24
 
 function loadRecentCommands(): string[] {
   if (typeof window === "undefined") return []
-  try {
-    const raw = localStorage.getItem(RECENT_COMMANDS_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return parsed.filter((id): id is string => typeof id === "string").slice(0, RECENT_COMMANDS_LIMIT)
-  } catch {
-    return []
-  }
+  return readClientStorageJson(CLIENT_STORAGE_KEYS.recentCommands).slice(0, RECENT_COMMANDS_LIMIT)
 }
 
 function recordRecentCommand(id: string) {
   if (typeof window === "undefined") return
-  try {
-    const current = loadRecentCommands().filter((existing) => existing !== id)
-    current.unshift(id)
-    localStorage.setItem(RECENT_COMMANDS_KEY, JSON.stringify(current.slice(0, RECENT_COMMANDS_LIMIT)))
-  } catch {
-    /* ignore quota errors */
-  }
+  const current = loadRecentCommands().filter((existing) => existing !== id)
+  current.unshift(id)
+  writeClientStorageJson(CLIENT_STORAGE_KEYS.recentCommands, current.slice(0, RECENT_COMMANDS_LIMIT))
 }
 
 function runPluginCommandFromPalette(plugin: PluginDescriptor, command: PluginCommandDescriptor) {
-  window.dispatchEvent(new CustomEvent("ps-open-plugin-manager"))
+  dispatchPhotoshopEvent("ps-open-plugin-manager")
   window.setTimeout(() => {
-    window.dispatchEvent(new CustomEvent("ps-run-plugin-command", {
-      detail: { pluginId: plugin.id, commandId: command.id },
-    }))
+    dispatchPhotoshopEvent("ps-run-plugin-command", { pluginId: plugin.id, commandId: command.id })
   }, 80)
 }
 
@@ -216,7 +202,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         title: "Find Layers",
         run: () => {
           dispatchPhotoshopEvent("ps-open-panel", "layers")
-          window.setTimeout(() => window.dispatchEvent(new CustomEvent("ps-focus-layer-search")), 0)
+          window.setTimeout(() => dispatchPhotoshopEvent("ps-focus-layer-search"), 0)
           close()
         },
       },
@@ -227,7 +213,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         disabled: !!needsLayer,
         disabledReason: needsLayer,
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-filter-gallery"))
+          dispatchPhotoshopEvent("ps-open-filter-gallery")
           close()
         },
       },
@@ -238,7 +224,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         disabled: !!needsLayer,
         disabledReason: needsLayer,
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-camera-raw"))
+          dispatchPhotoshopEvent("ps-open-camera-raw")
           close()
         },
       },
@@ -249,7 +235,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         disabled: !!needsDocument,
         disabledReason: needsDocument,
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-batch-export"))
+          dispatchPhotoshopEvent("ps-open-batch-export")
           close()
         },
       },
@@ -258,7 +244,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "File",
         title: "Batch Processing",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-batch-processing"))
+          dispatchPhotoshopEvent("ps-open-batch-processing")
           close()
         },
       },
@@ -267,7 +253,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "File",
         title: "Image Processor",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-image-processor"))
+          dispatchPhotoshopEvent("ps-open-image-processor")
           close()
         },
       },
@@ -278,7 +264,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         hint: pack.category,
         searchText: `${pack.title} ${pack.shortTitle} ${pack.summary} ${pack.expectedOutput} ${pack.keywords.join(" ")}`,
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-workflow-pack", { detail: { id: pack.id } }))
+          dispatchPhotoshopEvent("ps-open-workflow-pack", { id: pack.id })
           close()
         },
       })),
@@ -287,7 +273,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "File",
         title: "Photomerge",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-photomerge"))
+          dispatchPhotoshopEvent("ps-open-photomerge")
           close()
         },
       },
@@ -309,7 +295,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         disabled: !!needsDocument,
         disabledReason: needsDocument,
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-batch-export", { detail: { scope: "slices" } }))
+          dispatchPhotoshopEvent("ps-open-batch-export", { scope: "slices" })
           close()
         },
       },
@@ -320,7 +306,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         disabled: !!needsDocument,
         disabledReason: needsDocument,
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-batch-export", { detail: { scope: "visible-layers" } }))
+          dispatchPhotoshopEvent("ps-open-batch-export", { scope: "visible-layers" })
           close()
         },
       },
@@ -331,7 +317,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         disabled: !!needsDocument,
         disabledReason: needsDocument,
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-batch-export", { detail: { scope: "sprite-layers" } }))
+          dispatchPhotoshopEvent("ps-open-batch-export", { scope: "sprite-layers" })
           close()
         },
       },
@@ -342,7 +328,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         disabled: !!needsDocument,
         disabledReason: needsDocument,
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-document-report"))
+          dispatchPhotoshopEvent("ps-open-document-report")
           close()
         },
       },
@@ -353,7 +339,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         disabled: !!needsDocument,
         disabledReason: needsDocument,
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-preflight"))
+          dispatchPhotoshopEvent("ps-open-preflight")
           close()
         },
       },
@@ -362,7 +348,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "File",
         title: "Recent Documents",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-recent-documents"))
+          dispatchPhotoshopEvent("ps-open-recent-documents")
           close()
         },
       },
@@ -406,7 +392,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         disabled: !!needsDocument,
         disabledReason: needsDocument,
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-file-info"))
+          dispatchPhotoshopEvent("ps-open-file-info")
           close()
         },
       },
@@ -418,7 +404,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         disabled: !!needsDocument,
         disabledReason: needsDocument,
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-reveal-source"))
+          dispatchPhotoshopEvent("ps-reveal-source")
           close()
         },
       },
@@ -427,7 +413,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "3D",
         title: "3D Workspace",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-3d-workspace"))
+          dispatchPhotoshopEvent("ps-open-3d-workspace")
           close()
         },
       },
@@ -436,7 +422,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Video",
         title: "Video Timeline and Render",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-video-render"))
+          dispatchPhotoshopEvent("ps-open-video-render")
           close()
         },
       },
@@ -445,7 +431,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "File",
         title: "Print Setup and Proof",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-print-workflow"))
+          dispatchPhotoshopEvent("ps-open-print-workflow")
           close()
         },
       },
@@ -454,7 +440,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "View",
         title: "Device Preview",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-device-preview"))
+          dispatchPhotoshopEvent("ps-open-device-preview")
           close()
         },
       },
@@ -463,7 +449,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "File",
         title: "Droplets, Script Events, and Conditional Actions",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-automation-workflow"))
+          dispatchPhotoshopEvent("ps-open-automation-workflow")
           close()
         },
       },
@@ -472,7 +458,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "File",
         title: "Content Credentials",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-provenance"))
+          dispatchPhotoshopEvent("ps-open-provenance")
           close()
         },
       },
@@ -481,7 +467,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Edit",
         title: "Algorithmic Operations",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-algorithmic-operations"))
+          dispatchPhotoshopEvent("ps-open-algorithmic-operations")
           close()
         },
       },
@@ -490,7 +476,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Paths",
         title: "Path Boolean, Offset, Simplify, and Outline",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-algorithmic-operations"))
+          dispatchPhotoshopEvent("ps-open-algorithmic-operations")
           close()
         },
       },
@@ -499,7 +485,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Composite",
         title: "Auto-Align, Auto-Blend, Content-Aware Scale, Generative Fill",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-algorithmic-operations"))
+          dispatchPhotoshopEvent("ps-open-algorithmic-operations")
           close()
         },
       },
@@ -508,7 +494,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Image",
         title: "Shift Channels, Apply Image, Calculations, and Gradient Map",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-algorithmic-operations"))
+          dispatchPhotoshopEvent("ps-open-algorithmic-operations")
           close()
         },
       },
@@ -517,7 +503,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Image",
         title: "Apply Image",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-gap-workflow", { detail: "apply-image" }))
+          dispatchPhotoshopEvent("ps-open-gap-workflow", "apply-image")
           close()
         },
       },
@@ -526,7 +512,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Image",
         title: "Calculations",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-gap-workflow", { detail: "calculations" }))
+          dispatchPhotoshopEvent("ps-open-gap-workflow", "calculations")
           close()
         },
       },
@@ -535,7 +521,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Image",
         title: "Split Channels",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-gap-workflow", { detail: "split-channels" }))
+          dispatchPhotoshopEvent("ps-open-gap-workflow", "split-channels")
           close()
         },
       },
@@ -544,7 +530,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Image",
         title: "Merge Channels",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-gap-workflow", { detail: "merge-channels" }))
+          dispatchPhotoshopEvent("ps-open-gap-workflow", "merge-channels")
           close()
         },
       },
@@ -553,7 +539,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Image",
         title: "Color Table",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-color-mode", { detail: "ColorTable" }))
+          dispatchPhotoshopEvent("ps-open-color-mode", "ColorTable")
           close()
         },
       },
@@ -562,7 +548,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "View",
         title: "Scripted Patterns and Procedural Textures",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-algorithmic-operations"))
+          dispatchPhotoshopEvent("ps-open-algorithmic-operations")
           close()
         },
       },
@@ -571,7 +557,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Plugins",
         title: "Plugin Manager",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-plugin-manager"))
+          dispatchPhotoshopEvent("ps-open-plugin-manager")
           close()
         },
       },
@@ -580,7 +566,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Plugins",
         title: "Creative Cloud Libraries, Stock, and Fonts",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-cloud-libraries"))
+          dispatchPhotoshopEvent("ps-open-cloud-libraries")
           close()
         },
       },
@@ -589,7 +575,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Image",
         title: "Assign Profile, Convert Profile, and Color Modes",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-color-management-workflow"))
+          dispatchPhotoshopEvent("ps-open-color-management-workflow")
           close()
         },
       },
@@ -598,7 +584,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "File",
         title: "RAW, DNG, DICOM, EXR, HDR, PSB, and Metadata",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-format-metadata"))
+          dispatchPhotoshopEvent("ps-open-format-metadata")
           close()
         },
       },
@@ -607,7 +593,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "File",
         title: "Variable Data Sets",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-variables"))
+          dispatchPhotoshopEvent("ps-open-variables")
           close()
         },
       },
@@ -616,7 +602,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Window",
         title: "Layer Comps",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-layer-comps"))
+          dispatchPhotoshopEvent("ps-open-layer-comps")
           close()
         },
       },
@@ -625,7 +611,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Window",
         title: "Workspace Manager",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-workspace-manager"))
+          dispatchPhotoshopEvent("ps-open-workspace-manager")
           close()
         },
       },
@@ -634,7 +620,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Edit",
         title: "Preferences",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-preferences"))
+          dispatchPhotoshopEvent("ps-open-preferences")
           close()
         },
       },
@@ -643,12 +629,12 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Edit",
         title: "Keyboard Shortcuts",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-shortcuts"))
+          dispatchPhotoshopEvent("ps-open-shortcuts")
           close()
         },
       },
       ...PURGE_COMMANDS.map((command): CommandItem => ({
-        id: `edit-${command.target}`,
+        id: command.id,
         group: command.group,
         title: command.label,
         searchText: command.searchText,
@@ -701,7 +687,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         disabled: !!needsSelection,
         disabledReason: needsSelection,
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-select-and-mask"))
+          dispatchPhotoshopEvent("ps-open-select-and-mask")
           close()
         },
       },
@@ -710,7 +696,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Select",
         title: "Expand Selection",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-selection-operation", { detail: "expand" }))
+          dispatchPhotoshopEvent("ps-open-selection-operation", "expand")
           close()
         },
       },
@@ -719,7 +705,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Select",
         title: "Contract Selection",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-selection-operation", { detail: "contract" }))
+          dispatchPhotoshopEvent("ps-open-selection-operation", "contract")
           close()
         },
       },
@@ -728,7 +714,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Select",
         title: "Border Selection",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-selection-operation", { detail: "border" }))
+          dispatchPhotoshopEvent("ps-open-selection-operation", "border")
           close()
         },
       },
@@ -737,7 +723,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Select",
         title: "Smooth Selection",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-selection-operation", { detail: "smooth" }))
+          dispatchPhotoshopEvent("ps-open-selection-operation", "smooth")
           close()
         },
       },
@@ -746,7 +732,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         group: "Select",
         title: "Feather Selection",
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-selection-operation", { detail: "feather" }))
+          dispatchPhotoshopEvent("ps-open-selection-operation", "feather")
           close()
         },
       },
@@ -876,7 +862,7 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         disabled: !!needsLayer,
         disabledReason: needsLayer,
         run: () => {
-          window.dispatchEvent(new CustomEvent("ps-open-filter", { detail: filter.id }))
+          dispatchPhotoshopEvent("ps-open-filter", filter.id)
           close()
         },
       })

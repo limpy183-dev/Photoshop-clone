@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { CLIENT_STORAGE_KEYS, readClientStorageString } from "./client-storage"
 import { useEditor } from "./editor-context"
 import { useMounted } from "./use-mounted"
 import { requestCanvasZoom } from "./zoom-events"
@@ -57,6 +58,7 @@ import {
 import { cn } from "@/lib/utils"
 import type { CustomShapeId, GradientStop, PathHandleMode, QuickMaskPaintMode, TextAntiAliasMode, ToolId } from "./types"
 import { WORKSPACE_PRESET_OPTIONS, type WorkspacePresetId } from "./panel-registry"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
 
 const Divider = () => <div className="w-px h-5 bg-[var(--ps-divider)] mx-2" />
 
@@ -95,27 +97,23 @@ export function OptionsBar() {
   const [workspace, setWorkspace] = React.useState<WorkspacePresetId>("essentials")
 
   React.useEffect(() => {
-    try {
-      const saved = localStorage.getItem("ps-current-workspace-preset") as WorkspacePresetId | null
-      if (saved && WORKSPACE_PRESET_OPTIONS.some((preset) => preset.id === saved)) {
-        setWorkspace(saved)
-        if (workspaceRef.current) workspaceRef.current.value = saved
-      }
-    } catch {}
-    const handler = (event: Event) => {
-      const preset = String((event as CustomEvent).detail?.preset ?? "") as WorkspacePresetId
+    const saved = readClientStorageString(CLIENT_STORAGE_KEYS.currentWorkspacePreset) as WorkspacePresetId | null
+    if (saved && WORKSPACE_PRESET_OPTIONS.some((preset) => preset.id === saved)) {
+      setWorkspace(saved)
+      if (workspaceRef.current) workspaceRef.current.value = saved
+    }
+    return addPhotoshopEventListener("ps-workspace-preset-changed", (detail) => {
+      const preset = String(detail?.preset ?? "") as WorkspacePresetId
       if (WORKSPACE_PRESET_OPTIONS.some((option) => option.id === preset)) {
         setWorkspace(preset)
         if (workspaceRef.current) workspaceRef.current.value = preset
       }
-    }
-    window.addEventListener("ps-workspace-preset-changed", handler)
-    return () => window.removeEventListener("ps-workspace-preset-changed", handler)
+    })
   }, [])
 
   const applyWorkspace = React.useCallback((preset: WorkspacePresetId) => {
     setWorkspace(preset)
-    window.dispatchEvent(new CustomEvent("ps-apply-workspace-preset", { detail: { preset } }))
+    dispatchPhotoshopEvent("ps-apply-workspace-preset", { preset })
   }, [])
 
   return (
@@ -582,7 +580,7 @@ export function OptionsBar() {
         <Divider />
         <button
           className="h-6 px-2 border border-[var(--ps-divider)] rounded-sm hover:bg-[var(--ps-tool-hover)]"
-          onClick={() => window.dispatchEvent(new CustomEvent("ps-free-transform"))}
+          onClick={() => dispatchPhotoshopEvent("ps-free-transform")}
           disabled={!activeLayer || activeLayer.locked}
         >
           Free Transform
@@ -972,7 +970,7 @@ export function OptionsBar() {
         <Divider />
         <button
           className="h-6 px-2 border border-[var(--ps-divider)] rounded-sm hover:bg-[var(--ps-tool-hover)]"
-          onClick={() => window.dispatchEvent(new CustomEvent("ps-open-warp-text"))}
+          onClick={() => dispatchPhotoshopEvent("ps-open-warp-text")}
           disabled={!activeLayer || activeLayer.kind !== "text"}
         >
           Warp Text…
@@ -1345,7 +1343,7 @@ export function OptionsBar() {
         <Divider />
         <button
           className="h-6 px-2 border border-[var(--ps-divider)] rounded-sm hover:bg-[var(--ps-tool-hover)]"
-          onClick={() => window.dispatchEvent(new CustomEvent("ps-clear-slices"))}
+          onClick={() => dispatchPhotoshopEvent("ps-clear-slices")}
         >
           Clear Slices
         </button>
@@ -1361,7 +1359,7 @@ export function OptionsBar() {
         <Divider />
         <button
           className="h-6 px-2 border border-[var(--ps-divider)] rounded-sm hover:bg-[var(--ps-tool-hover)]"
-          onClick={() => window.dispatchEvent(new CustomEvent("ps-clear-ruler"))}
+          onClick={() => dispatchPhotoshopEvent("ps-clear-ruler")}
         >
           Clear
         </button>
@@ -1498,7 +1496,7 @@ export function OptionsBar() {
       }
       setDraft(next)
       if (canTransform) {
-        window.dispatchEvent(new CustomEvent("ps-transform-set", { detail: next }))
+        dispatchPhotoshopEvent("ps-transform-set", next)
       }
     }
 
@@ -1525,8 +1523,8 @@ export function OptionsBar() {
           className="h-6 px-2 border border-[var(--ps-divider)] rounded-sm hover:bg-[var(--ps-tool-hover)] disabled:opacity-40"
           onClick={() => {
             if (!canTransform) return
-            window.dispatchEvent(new CustomEvent("ps-free-transform"))
-            window.dispatchEvent(new CustomEvent("ps-transform-set", { detail: draft }))
+            dispatchPhotoshopEvent("ps-free-transform")
+            dispatchPhotoshopEvent("ps-transform-set", draft)
           }}
           disabled={!canTransform}
         >
@@ -1585,14 +1583,14 @@ export function OptionsBar() {
         <Divider />
         <button
           className="h-6 px-2 border border-[var(--ps-divider)] rounded-sm hover:bg-[var(--ps-tool-hover)] disabled:opacity-40"
-          onClick={() => window.dispatchEvent(new CustomEvent("ps-transform-commit"))}
+          onClick={() => dispatchPhotoshopEvent("ps-transform-commit")}
           disabled={!canTransform}
         >
           Apply
         </button>
         <button
           className="h-6 px-2 border border-[var(--ps-divider)] rounded-sm hover:bg-[var(--ps-tool-hover)] disabled:opacity-40"
-          onClick={() => window.dispatchEvent(new CustomEvent("ps-transform-cancel"))}
+          onClick={() => dispatchPhotoshopEvent("ps-transform-cancel")}
           disabled={!canTransform}
         >
           Cancel
@@ -1600,14 +1598,14 @@ export function OptionsBar() {
         <Divider />
         <button
           className="h-6 px-2 border border-[var(--ps-divider)] rounded-sm hover:bg-[var(--ps-tool-hover)] disabled:opacity-40"
-          onClick={() => window.dispatchEvent(new CustomEvent("ps-transform-flip", { detail: "horizontal" }))}
+          onClick={() => dispatchPhotoshopEvent("ps-transform-flip", "horizontal")}
           disabled={!canTransform}
         >
           Flip H
         </button>
         <button
           className="h-6 px-2 border border-[var(--ps-divider)] rounded-sm hover:bg-[var(--ps-tool-hover)] disabled:opacity-40"
-          onClick={() => window.dispatchEvent(new CustomEvent("ps-transform-flip", { detail: "vertical" }))}
+          onClick={() => dispatchPhotoshopEvent("ps-transform-flip", "vertical")}
           disabled={!canTransform}
         >
           Flip V
@@ -1629,35 +1627,35 @@ export function OptionsBar() {
       <>
         <button
           className="h-6 px-2 border border-[var(--ps-divider)] rounded-sm hover:bg-[var(--ps-tool-hover)]"
-          onClick={() => window.dispatchEvent(new CustomEvent("ps-transform-flip", { detail: "horizontal" }))}
+          onClick={() => dispatchPhotoshopEvent("ps-transform-flip", "horizontal")}
           disabled={!activeLayer || activeLayer.locked}
         >
           Flip Horizontal
         </button>
         <button
           className="h-6 px-2 border border-[var(--ps-divider)] rounded-sm hover:bg-[var(--ps-tool-hover)]"
-          onClick={() => window.dispatchEvent(new CustomEvent("ps-transform-flip", { detail: "vertical" }))}
+          onClick={() => dispatchPhotoshopEvent("ps-transform-flip", "vertical")}
           disabled={!activeLayer || activeLayer.locked}
         >
           Flip Vertical
         </button>
         <button
           className="h-6 px-2 border border-[var(--ps-divider)] rounded-sm hover:bg-[var(--ps-tool-hover)]"
-          onClick={() => window.dispatchEvent(new CustomEvent("ps-transform-rotate", { detail: 90 }))}
+          onClick={() => dispatchPhotoshopEvent("ps-transform-rotate", 90)}
           disabled={!activeLayer || activeLayer.locked}
         >
           Rotate 90° CW
         </button>
         <button
           className="h-6 px-2 border border-[var(--ps-divider)] rounded-sm hover:bg-[var(--ps-tool-hover)]"
-          onClick={() => window.dispatchEvent(new CustomEvent("ps-transform-rotate", { detail: -90 }))}
+          onClick={() => dispatchPhotoshopEvent("ps-transform-rotate", -90)}
           disabled={!activeLayer || activeLayer.locked}
         >
           Rotate 90° CCW
         </button>
         <button
           className="h-6 px-2 border border-[var(--ps-divider)] rounded-sm hover:bg-[var(--ps-tool-hover)]"
-          onClick={() => window.dispatchEvent(new CustomEvent("ps-transform-rotate", { detail: 180 }))}
+          onClick={() => dispatchPhotoshopEvent("ps-transform-rotate", 180)}
           disabled={!activeLayer || activeLayer.locked}
         >
           Rotate 180°

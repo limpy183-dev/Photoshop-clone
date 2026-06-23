@@ -14,6 +14,7 @@
 
 import { parseAutomationWorkflowImportPayload, parseSafeDslCommands, type AutomationWorkflow } from "./automation-engine"
 import type { Droplet } from "./automation-store"
+import { dispatchPhotoshopEvent } from "./events"
 import type { AssetLibraryItem, MacroAction } from "./types"
 
 export const DROPLET_BUNDLE_FORMAT = "ps-droplet-bundle"
@@ -245,7 +246,7 @@ export function attachDropletDropzone(element: HTMLElement, onBundle: (bundle: D
       const text = await file.text()
       const bundle = parseDropletBundle(text)
       onBundle(bundle, file)
-      window.dispatchEvent(new CustomEvent(DROPLET_DROP_EVENT, { detail: { bundle, fileName: file.name } }))
+      dispatchPhotoshopEvent(DROPLET_DROP_EVENT, { bundle, fileName: file.name })
     } catch {
       // Silently ignore malformed drops; caller can show their own error UI
       // via a separate file picker if they need richer feedback.

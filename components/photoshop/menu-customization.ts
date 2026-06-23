@@ -8,6 +8,9 @@
  * here before drawing each menu.
  */
 
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
+import { dispatchPhotoshopEvent } from "./events"
+
 export const MENU_CUSTOMIZATION_STORAGE_KEY = "ps-menu-customization"
 
 /**
@@ -38,26 +41,13 @@ export const DEFAULT_MENU_CUSTOMIZATION: MenuCustomization = {
 /* --------------------------- Persistence -------------------------------- */
 
 export function loadMenuCustomization(): MenuCustomization {
-  if (typeof window === "undefined") return { ...DEFAULT_MENU_CUSTOMIZATION }
-  try {
-    const raw = window.localStorage.getItem(MENU_CUSTOMIZATION_STORAGE_KEY)
-    if (!raw) return { ...DEFAULT_MENU_CUSTOMIZATION }
-    const parsed = JSON.parse(raw)
-    return normaliseMenuCustomization(parsed)
-  } catch {
-    return { ...DEFAULT_MENU_CUSTOMIZATION }
-  }
+  return normaliseMenuCustomization(readClientStorageJson(CLIENT_STORAGE_KEYS.menuCustomization))
 }
 
 export function saveMenuCustomization(value: MenuCustomization): void {
-  if (typeof window === "undefined") return
-  try {
-    const safe = normaliseMenuCustomization({ ...value, updatedAt: Date.now() })
-    window.localStorage.setItem(MENU_CUSTOMIZATION_STORAGE_KEY, JSON.stringify(safe))
-    window.dispatchEvent(new CustomEvent("ps-menu-customization-changed"))
-  } catch {
-    // ignore
-  }
+  const safe = normaliseMenuCustomization({ ...value, updatedAt: Date.now() })
+  writeClientStorageJson(CLIENT_STORAGE_KEYS.menuCustomization, safe)
+  dispatchPhotoshopEvent("ps-menu-customization-changed")
 }
 
 const ID_PATTERN = /^[A-Za-z0-9 _.\-/]{1,200}$/
@@ -158,36 +148,22 @@ export interface MenuPreset {
 export const MENU_PRESETS_STORAGE_KEY = "ps-menu-presets"
 
 export function loadMenuPresets(): MenuPreset[] {
-  if (typeof window === "undefined") return []
-  try {
-    const raw = window.localStorage.getItem(MENU_PRESETS_STORAGE_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    const out: MenuPreset[] = []
-    for (const item of parsed) {
-      if (!item || typeof item !== "object") continue
-      const rec = item as Record<string, unknown>
-      if (typeof rec.id !== "string" || typeof rec.name !== "string") continue
-      out.push({
-        id: rec.id.slice(0, 64),
-        name: rec.name.slice(0, 80),
-        customization: normaliseMenuCustomization(rec.customization),
-      })
-    }
-    return out.slice(0, 32)
-  } catch {
-    return []
+  const out: MenuPreset[] = []
+  for (const item of readClientStorageJson(CLIENT_STORAGE_KEYS.menuPresets)) {
+    if (!item || typeof item !== "object") continue
+    const rec = item as Record<string, unknown>
+    if (typeof rec.id !== "string" || typeof rec.name !== "string") continue
+    out.push({
+      id: rec.id.slice(0, 64),
+      name: rec.name.slice(0, 80),
+      customization: normaliseMenuCustomization(rec.customization),
+    })
   }
+  return out.slice(0, 32)
 }
 
 export function saveMenuPresets(presets: MenuPreset[]): void {
-  if (typeof window === "undefined") return
-  try {
-    window.localStorage.setItem(MENU_PRESETS_STORAGE_KEY, JSON.stringify(presets.slice(0, 32)))
-  } catch {
-    // ignore
-  }
+  writeClientStorageJson(CLIENT_STORAGE_KEYS.menuPresets, presets.slice(0, 32))
 }
 
 export function addMenuPreset(presets: MenuPreset[], name: string, customization: MenuCustomization): MenuPreset[] {

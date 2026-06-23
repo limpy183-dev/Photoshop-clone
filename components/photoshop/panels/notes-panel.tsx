@@ -16,13 +16,14 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { useEditor } from "../editor-context"
+import { CLIENT_STORAGE_KEYS, readClientStorageString, writeClientStorageString } from "../client-storage"
+import { useEditorSelector } from "../editor-context"
+import { dispatchPhotoshopEvent } from "../events"
 import { uid } from "../uid"
 import { appendThreadReply } from "../collaboration"
 import type { Note } from "../types"
 
 const DEFAULT_AUTHOR = "You"
-const AUTHOR_STORAGE_KEY = "ps-notes-author"
 
 type SortMode = "newest" | "oldest" | "author"
 type DateBucket = "all" | "today" | "week" | "month"
@@ -35,17 +36,11 @@ interface NoteListFilter {
 }
 
 function readAuthor() {
-  if (typeof window === "undefined") return DEFAULT_AUTHOR
-  try {
-    return localStorage.getItem(AUTHOR_STORAGE_KEY) ?? DEFAULT_AUTHOR
-  } catch {
-    return DEFAULT_AUTHOR
-  }
+  return readClientStorageString(CLIENT_STORAGE_KEYS.notesAuthor) ?? DEFAULT_AUTHOR
 }
 
 function writeAuthor(name: string) {
-  if (typeof window === "undefined") return
-  try { localStorage.setItem(AUTHOR_STORAGE_KEY, name) } catch {}
+  writeClientStorageString(CLIENT_STORAGE_KEYS.notesAuthor, name)
 }
 
 function formatTime(value: number | undefined) {
@@ -98,7 +93,9 @@ function filterAndSortNotes(notes: readonly Note[], filter: NoteListFilter): Not
 }
 
 export function NotesPanel() {
-  const { activeDoc, dispatch, commit } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
   const [author, setAuthor] = React.useState<string>(readAuthor)
   const [draft, setDraft] = React.useState("")
   const [authorFilter, setAuthorFilter] = React.useState<string>("all")
@@ -148,7 +145,7 @@ export function NotesPanel() {
 
   const focusNote = (note: Note) => {
     if (typeof window === "undefined") return
-    window.dispatchEvent(new CustomEvent("ps-navigator-pan", { detail: { x: note.x, y: note.y } }))
+    dispatchPhotoshopEvent("ps-navigator-pan", { x: note.x, y: note.y })
   }
 
   const startEdit = (note: Note) => {

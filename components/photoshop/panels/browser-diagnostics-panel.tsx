@@ -11,7 +11,7 @@ import {
   type BrowserDiagnosticsReport,
 } from "../browser-diagnostics"
 import { downloadText } from "../document-io"
-import { useEditor } from "../editor-context"
+import { useEditorSelector } from "../editor-context"
 import { loadPreferencesFromStorage } from "../preferences-engine"
 import { readAutosaves } from "../recent-documents"
 import { createTileOnlyCapabilityDashboard, type TileOnlyCapabilityDashboard, type TileOnlyCapabilityStatus } from "../tile-only-pipeline"
@@ -140,7 +140,8 @@ function TileOnlyDashboard({ dashboard }: { dashboard: TileOnlyCapabilityDashboa
 }
 
 export function BrowserDiagnosticsPanel() {
-  const { activeDoc, documentStatuses } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const documentStatuses = useEditorSelector((editor) => editor.documentStatuses)
   const [report, setReport] = React.useState<BrowserDiagnosticsReport | null>(null)
   const [loading, setLoading] = React.useState(false)
   const [message, setMessage] = React.useState("")

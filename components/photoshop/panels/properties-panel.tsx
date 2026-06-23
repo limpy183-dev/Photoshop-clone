@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { useEditor, makeCanvas, useRenderSubscription } from "../editor-context"
+import { dispatchPhotoshopEvent } from "../events"
 import type { MergedRenderChange } from "../render-bus"
 import { FILTERS, type FilterParam } from "../filters"
 import { Slider } from "@/components/ui/slider"
@@ -362,7 +363,7 @@ function LayerSection({
             <button
               type="button"
               className="text-[10px] normal-case text-[var(--ps-text)] hover:text-[var(--ps-accent)]"
-              onClick={() => window.dispatchEvent(new CustomEvent("ps-open-filter-gallery"))}
+              onClick={() => dispatchPhotoshopEvent("ps-open-filter-gallery")}
             >
               Edit
             </button>
@@ -401,7 +402,7 @@ function LayerSection({
                     setDraggedSmartFilterId(null)
                   }}
                   onDragEnd={() => setDraggedSmartFilterId(null)}
-                  onDoubleClick={() => window.dispatchEvent(new CustomEvent("ps-open-filter-gallery"))}
+                  onDoubleClick={() => dispatchPhotoshopEvent("ps-open-filter-gallery")}
                 >
                   <div className="flex items-center gap-1">
                     <button

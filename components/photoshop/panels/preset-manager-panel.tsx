@@ -15,8 +15,10 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson, type ClientStorageKey } from "../client-storage"
 import { downloadText } from "../document-io"
 import { useEditor } from "../editor-context"
+import { dispatchPhotoshopEvent } from "../events"
 import type {
   AssetLibraryItem,
   BrushPreset,
@@ -100,8 +102,6 @@ type ToolPresetPayload = {
   background?: string
 }
 
-const GRADIENT_STORAGE_KEY = "ps-gradients"
-const PATTERN_STORAGE_KEY = "ps-patterns"
 const MAX_UNIFIED_IMPORT_BYTES = 2 * 1024 * 1024
 
 const HEX_OR_RGBA = /^(#[0-9a-f]{3,8}|rgba?\([^()]{1,80}\))$/i
@@ -793,15 +793,20 @@ function applyAssetPreset(
   } else if (kind === "export") {
     const payload = getPayloadRecord(item.payload)
     if (payload.dialog === "batch-export" || payload.scope) {
-      window.dispatchEvent(new CustomEvent("ps-open-batch-export", { detail: item.payload }))
+      dispatchPhotoshopEvent("ps-open-batch-export", item.payload)
     } else {
-      window.dispatchEvent(new CustomEvent("ps-open-export-as", { detail: { dialog: "export-as", ...payload } }))
+      dispatchPhotoshopEvent("ps-open-export-as", { dialog: "export-as", ...payload })
     }
   }
 }
 
 function scopedStorageKey(base: string, docId?: string) {
   return docId ? `${base}:${docId}` : base
+}
+
+function scopedPatternStorageKey(docId?: string): ClientStorageKey<unknown[]> {
+  const descriptor = CLIENT_STORAGE_KEYS.patterns
+  return docId ? { ...descriptor, key: scopedStorageKey(descriptor.key, docId) } : descriptor
 }
 
 function loadSwatches(docId?: string): ManagerSwatchEntry[] {
@@ -814,16 +819,15 @@ function loadSwatches(docId?: string): ManagerSwatchEntry[] {
 function saveSwatches(docId: string | undefined, swatches: ManagerSwatchEntry[]) {
   try {
     const next = saveStoredSwatches(swatches, docId)
-    window.dispatchEvent(new CustomEvent("ps-swatches-changed", { detail: { docId, swatches: next } }))
+    dispatchPhotoshopEvent("ps-swatches-changed", { docId, swatches: next })
   } catch {
     toast.error("Swatch library is too large to save locally.")
   }
 }
 
 function loadGradients(): ManagerGradientEntry[] {
-  if (typeof window === "undefined") return []
   try {
-    return normalizeGradients(JSON.parse(localStorage.getItem(GRADIENT_STORAGE_KEY) ?? "[]"))
+    return normalizeGradients(readClientStorageJson(CLIENT_STORAGE_KEYS.gradients))
   } catch {
     return []
   }
@@ -831,18 +835,17 @@ function loadGradients(): ManagerGradientEntry[] {
 
 function saveGradients(gradients: ManagerGradientEntry[]) {
   try {
-    localStorage.setItem(GRADIENT_STORAGE_KEY, JSON.stringify(gradients))
-    window.dispatchEvent(new CustomEvent("ps-gradients-changed", { detail: { gradients } }))
+    writeClientStorageJson(CLIENT_STORAGE_KEYS.gradients, gradients)
+    dispatchPhotoshopEvent("ps-gradients-changed", { gradients })
   } catch {
     toast.error("Gradient library is too large to save locally.")
   }
 }
 
 function loadPatterns(docId?: string): ManagerPatternEntry[] {
-  if (typeof window === "undefined") return []
   try {
-    const raw = localStorage.getItem(scopedStorageKey(PATTERN_STORAGE_KEY, docId)) ?? localStorage.getItem(PATTERN_STORAGE_KEY)
-    return normalizePatterns(raw ? JSON.parse(raw) : [])
+    const scoped = readClientStorageJson(scopedPatternStorageKey(docId))
+    return normalizePatterns(scoped.length || !docId ? scoped : readClientStorageJson(CLIENT_STORAGE_KEYS.patterns))
   } catch {
     return []
   }
@@ -850,8 +853,8 @@ function loadPatterns(docId?: string): ManagerPatternEntry[] {
 
 function savePatterns(docId: string | undefined, patterns: ManagerPatternEntry[]) {
   try {
-    localStorage.setItem(scopedStorageKey(PATTERN_STORAGE_KEY, docId), JSON.stringify(patterns))
-    window.dispatchEvent(new CustomEvent("ps-patterns-changed", { detail: { docId, patterns } }))
+    writeClientStorageJson(scopedPatternStorageKey(docId), patterns)
+    dispatchPhotoshopEvent("ps-patterns-changed", { docId, patterns })
   } catch {
     toast.error("Pattern library is too large to save locally.")
   }

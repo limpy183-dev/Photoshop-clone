@@ -10,11 +10,10 @@
 // tampered string can't expand into arbitrary editor state.
 
 import * as React from "react"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson, type ClientStorageKey } from "./client-storage"
 import { validateDsl } from "./command-dsl"
+import { dispatchPhotoshopEvent } from "./events"
 import type { AutomationWorkflow } from "./automation-engine"
-
-const MACROS_KEY = "ps-command-macros"
-const DROPLETS_KEY = "ps-droplets"
 
 const MAX_MACROS = 64
 const MAX_DROPLETS = 64
@@ -130,55 +129,43 @@ function sanitizeDroplet(value: unknown): Droplet | null {
   }
 }
 
-function readStore<T>(key: string, sanitize: (value: unknown) => T | null, max: number): T[] {
-  if (typeof window === "undefined") return []
-  try {
-    const raw = window.localStorage.getItem(key)
-    if (!raw) return []
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    const out: T[] = []
-    for (const entry of parsed.slice(0, max)) {
-      const cleaned = sanitize(entry)
-      if (cleaned) out.push(cleaned)
-    }
-    return out
-  } catch {
-    return []
+function readStore<T>(descriptor: ClientStorageKey<unknown[]>, sanitize: (value: unknown) => T | null, max: number): T[] {
+  const parsed = readClientStorageJson(descriptor)
+  const out: T[] = []
+  for (const entry of parsed.slice(0, max)) {
+    const cleaned = sanitize(entry)
+    if (cleaned) out.push(cleaned)
   }
+  return out
 }
 
-function writeStore<T>(key: string, values: T[]) {
-  if (typeof window === "undefined") return
-  try {
-    window.localStorage.setItem(key, JSON.stringify(values))
-  } catch {
-    /* quota errors swallowed */
-  }
+function writeStore<T>(descriptor: ClientStorageKey<unknown[]>, values: T[]) {
+  writeClientStorageJson(descriptor, values)
 }
 
 export function loadMacros(): CommandMacro[] {
-  return readStore(MACROS_KEY, sanitizeMacro, MAX_MACROS)
+  return readStore(CLIENT_STORAGE_KEYS.legacyCommandMacros, sanitizeMacro, MAX_MACROS)
 }
 
 export function loadDroplets(): Droplet[] {
-  return readStore(DROPLETS_KEY, sanitizeDroplet, MAX_DROPLETS)
+  return readStore(CLIENT_STORAGE_KEYS.droplets, sanitizeDroplet, MAX_DROPLETS)
 }
 
 export function saveMacros(macros: CommandMacro[]) {
-  writeStore(MACROS_KEY, macros.slice(0, MAX_MACROS))
+  writeStore(CLIENT_STORAGE_KEYS.legacyCommandMacros, macros.slice(0, MAX_MACROS))
 }
 
 export function saveDroplets(droplets: Droplet[]) {
-  writeStore(DROPLETS_KEY, droplets.slice(0, MAX_DROPLETS))
+  writeStore(CLIENT_STORAGE_KEYS.droplets, droplets.slice(0, MAX_DROPLETS))
 }
 
 const MACRO_EVENT = "ps-command-macros-changed"
 const DROPLET_EVENT = "ps-droplets-changed"
+type AutomationStoreEvent = typeof MACRO_EVENT | typeof DROPLET_EVENT
 
-function notify(event: string) {
+function notify(event: AutomationStoreEvent) {
   if (typeof window === "undefined") return
-  window.dispatchEvent(new CustomEvent(event))
+  dispatchPhotoshopEvent(event)
 }
 
 export interface CommandMacrosApi {
@@ -194,11 +181,15 @@ export function useCommandMacros(): CommandMacrosApi {
 
   React.useEffect(() => {
     const handler = () => setMacros(loadMacros())
+    const storageHandler = (event: StorageEvent) => {
+      if (event.key === CLIENT_STORAGE_KEYS.legacyCommandMacros.key) handler()
+    }
     window.addEventListener(MACRO_EVENT, handler)
-    window.addEventListener("storage", (event) => {
-      if (event.key === MACROS_KEY) handler()
-    })
-    return () => window.removeEventListener(MACRO_EVENT, handler)
+    window.addEventListener("storage", storageHandler)
+    return () => {
+      window.removeEventListener(MACRO_EVENT, handler)
+      window.removeEventListener("storage", storageHandler)
+    }
   }, [])
 
   const persist = React.useCallback((next: CommandMacro[]) => {
@@ -278,11 +269,15 @@ export function useDroplets(): DropletsApi {
 
   React.useEffect(() => {
     const handler = () => setDroplets(loadDroplets())
+    const storageHandler = (event: StorageEvent) => {
+      if (event.key === CLIENT_STORAGE_KEYS.droplets.key) handler()
+    }
     window.addEventListener(DROPLET_EVENT, handler)
-    window.addEventListener("storage", (event) => {
-      if (event.key === DROPLETS_KEY) handler()
-    })
-    return () => window.removeEventListener(DROPLET_EVENT, handler)
+    window.addEventListener("storage", storageHandler)
+    return () => {
+      window.removeEventListener(DROPLET_EVENT, handler)
+      window.removeEventListener("storage", storageHandler)
+    }
   }, [])
 
   const persist = React.useCallback((next: Droplet[]) => {

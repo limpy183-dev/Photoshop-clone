@@ -1,0 +1,22 @@
+{
+  "rawPhotoshopEvents": {
+    "max": 0
+  },
+  "rawPhotoshopListeners": {
+    "max": 0
+  },
+  "oversizeFiles": {
+    "max": 25,
+    "maxLines": 1500
+  },
+  "useEditorImports": {
+    "max": 74
+  },
+  "topLargestFiles": {
+    "count": 10,
+    "maxTotalLines": 36108
+  },
+  "directClientStorage": {
+    "max": 0
+  }
+}

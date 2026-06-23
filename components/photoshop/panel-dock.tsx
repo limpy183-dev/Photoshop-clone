@@ -31,12 +31,9 @@ import {
   type WorkspacePanelPreset,
   type WorkspacePresetId,
 } from "./panel-registry"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, readClientStorageString, writeClientStorageJson, writeClientStorageString } from "./client-storage"
 import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
 
-const DOCK_STATE_KEY = "ps-panel-dock-state-v2"
-const WORKSPACES_KEY = "ps-workspaces-v2"
-const LEGACY_WORKSPACES_KEY = "ps-workspaces-v1"
-const CURRENT_WORKSPACE_KEY = "ps-current-workspace-preset"
 const TOP_MIN_HEIGHT = 78
 const BOTTOM_MIN_HEIGHT = 78
 const SPLITTER_HEIGHT = 12
@@ -87,13 +84,8 @@ function normalizePinned(stack: PanelStack, ids: unknown, fallback: readonly str
 }
 
 function readDockState(): SavedDockState | null {
-  if (typeof window === "undefined") return null
-  try {
-    const parsed = JSON.parse(localStorage.getItem(DOCK_STATE_KEY) ?? "null")
-    return parsed && typeof parsed === "object" ? parsed : null
-  } catch {
-    return null
-  }
+  const parsed = readClientStorageJson(CLIENT_STORAGE_KEYS.panelDockState)
+  return parsed && typeof parsed === "object" ? parsed as SavedDockState : null
 }
 
 function normalizeWorkspaceLayout(input: unknown): WorkspaceLayout | null {
@@ -124,21 +116,18 @@ function normalizeWorkspaceLayout(input: unknown): WorkspaceLayout | null {
 }
 
 function readWorkspaces(): WorkspaceLayout[] {
-  if (typeof window === "undefined") return []
-  for (const key of [WORKSPACES_KEY, LEGACY_WORKSPACES_KEY]) {
-    try {
-      const parsed = JSON.parse(localStorage.getItem(key) ?? "[]")
-      if (Array.isArray(parsed) && parsed.length) {
-        return parsed.map(normalizeWorkspaceLayout).filter(Boolean) as WorkspaceLayout[]
-      }
-    } catch {}
+  for (const descriptor of [CLIENT_STORAGE_KEYS.workspaces, CLIENT_STORAGE_KEYS.legacyWorkspaces]) {
+    const parsed = readClientStorageJson(descriptor)
+    if (Array.isArray(parsed) && parsed.length) {
+      return parsed.map(normalizeWorkspaceLayout).filter(Boolean) as WorkspaceLayout[]
+    }
   }
   return []
 }
 
 function writeWorkspaces(workspaces: WorkspaceLayout[]) {
-  localStorage.setItem(WORKSPACES_KEY, JSON.stringify(workspaces))
-  window.dispatchEvent(new CustomEvent("ps-workspaces-changed", { detail: workspaces }))
+  writeClientStorageJson(CLIENT_STORAGE_KEYS.workspaces, workspaces)
+  dispatchPhotoshopEvent("ps-workspaces-changed", workspaces)
 }
 
 function presetToLayout(preset: WorkspacePanelPreset): WorkspaceLayout {
@@ -157,10 +146,8 @@ function presetToLayout(preset: WorkspacePanelPreset): WorkspaceLayout {
 }
 
 function setCurrentWorkspacePreset(id: WorkspacePresetId) {
-  try {
-    localStorage.setItem(CURRENT_WORKSPACE_KEY, id)
-  } catch {}
-  window.dispatchEvent(new CustomEvent("ps-workspace-preset-changed", { detail: { preset: id } }))
+  writeClientStorageString(CLIENT_STORAGE_KEYS.currentWorkspacePreset, id)
+  dispatchPhotoshopEvent("ps-workspace-preset-changed", { preset: id })
 }
 
 function moveItem(ids: string[], id: string, delta: number) {
@@ -328,11 +315,9 @@ export function PanelDock({ width, overlay }: { width?: number; overlay?: boolea
         setRecentPanels(saved.recentPanels.map(String).filter((id) => panelById(id)).slice(0, 10))
       }
     } else {
-      try {
-        const savedSplit = localStorage.getItem("ps-panel-split")
-        const parsed = Number(savedSplit)
-        if (Number.isFinite(parsed)) setTopHeight(Math.max(TOP_MIN_HEIGHT, parsed))
-      } catch {}
+      const savedSplit = readClientStorageString(CLIENT_STORAGE_KEYS.panelSplit)
+      const parsed = Number(savedSplit)
+      if (Number.isFinite(parsed)) setTopHeight(Math.max(TOP_MIN_HEIGHT, parsed))
     }
     hydratedRef.current = true
   }, [clampTopHeight])
@@ -345,18 +330,16 @@ export function PanelDock({ width, overlay }: { width?: number; overlay?: boolea
 
   React.useEffect(() => {
     if (!hydratedRef.current) return
-    try {
-      localStorage.setItem(DOCK_STATE_KEY, JSON.stringify({
-        topHeight,
-        topActive,
-        bottomActive,
-        upperPinned,
-        lowerPinned,
-        mode,
-        upperHidden,
-        recentPanels,
-      }))
-    } catch {}
+    writeClientStorageJson(CLIENT_STORAGE_KEYS.panelDockState, {
+      topHeight,
+      topActive,
+      bottomActive,
+      upperPinned,
+      lowerPinned,
+      mode,
+      upperHidden,
+      recentPanels,
+    })
   }, [topHeight, topActive, bottomActive, upperPinned, lowerPinned, mode, upperHidden, recentPanels])
 
   React.useEffect(() => {
@@ -400,18 +383,18 @@ export function PanelDock({ width, overlay }: { width?: number; overlay?: boolea
       setCurrentWorkspacePreset(preset.id)
     }
     const removeOpenPanelListener = addPhotoshopEventListener("ps-open-panel", openPanel)
-    window.addEventListener("ps-switch-panel", switchPanel)
-    window.addEventListener("ps-save-workspace", saveWorkspace)
-    window.addEventListener("ps-apply-workspace", applyWorkspace)
-    window.addEventListener("ps-delete-workspace", deleteWorkspace)
-    window.addEventListener("ps-apply-workspace-preset", applyPreset)
+    const removeSwitchPanel = addPhotoshopEventListener("ps-switch-panel", (_detail, event) => switchPanel(event))
+    const removeSaveWorkspace = addPhotoshopEventListener("ps-save-workspace", (_detail, event) => saveWorkspace(event))
+    const removeApplyWorkspace = addPhotoshopEventListener("ps-apply-workspace", (_detail, event) => applyWorkspace(event))
+    const removeDeleteWorkspace = addPhotoshopEventListener("ps-delete-workspace", (_detail, event) => deleteWorkspace(event))
+    const removeApplyPreset = addPhotoshopEventListener("ps-apply-workspace-preset", (_detail, event) => applyPreset(event))
     return () => {
       removeOpenPanelListener()
-      window.removeEventListener("ps-switch-panel", switchPanel)
-      window.removeEventListener("ps-save-workspace", saveWorkspace)
-      window.removeEventListener("ps-apply-workspace", applyWorkspace)
-      window.removeEventListener("ps-delete-workspace", deleteWorkspace)
-      window.removeEventListener("ps-apply-workspace-preset", applyPreset)
+      removeSwitchPanel()
+      removeSaveWorkspace()
+      removeApplyWorkspace()
+      removeDeleteWorkspace()
+      removeApplyPreset()
     }
   }, [activatePanel, applyLayout])
 
@@ -436,9 +419,7 @@ export function PanelDock({ width, overlay }: { width?: number; overlay?: boolea
   const saveTopHeight = React.useCallback(() => {
     resizingSplitRef.current = false
     rawTopHeightRef.current = topHeightRef.current
-    try {
-      localStorage.setItem("ps-panel-split", String(topHeightRef.current))
-    } catch {}
+    writeClientStorageString(CLIENT_STORAGE_KEYS.panelSplit, String(topHeightRef.current))
   }, [])
 
   const resizePanelSplit = React.useCallback(

@@ -29,6 +29,7 @@ import {
 } from "@/components/photoshop/document-io"
 import { requestCanvasZoom } from "@/components/photoshop/zoom-events"
 import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "@/components/photoshop/events"
+import { CLIENT_STORAGE_KEYS, readClientStorageString, writeClientStorageString } from "@/components/photoshop/client-storage"
 import { buildLearningIndex, runLearningIndexItem } from "@/components/photoshop/learning-index"
 import { findNewDocumentPreset } from "@/components/photoshop/new-document-presets"
 import { readRecentDocuments, rememberRecentDocument } from "@/components/photoshop/recent-documents"
@@ -81,8 +82,6 @@ const ColorPickerDialog = React.lazy(() =>
 const ColorPickerHud = React.lazy(() =>
   import("@/components/photoshop/color-picker-dialog").then((m) => ({ default: m.ColorPickerHud })),
 )
-
-const STATUS_BAR_VISIBILITY_KEY = "ps-status-bar-visible"
 
 type WorkspaceContextMenu = {
   x: number
@@ -161,31 +160,25 @@ function Workspace() {
   }, [activeDoc])
 
   React.useEffect(() => {
-    try {
-      const saved = localStorage.getItem(STATUS_BAR_VISIBILITY_KEY)
-      if (saved !== null) setStatusBarVisible(saved !== "false")
-    } catch {}
+    const saved = readClientStorageString(CLIENT_STORAGE_KEYS.statusBarVisible)
+    if (saved !== null) setStatusBarVisible(saved !== "false")
   }, [])
 
   const setStatusBarVisibility = React.useCallback((visible: boolean) => {
     setStatusBarVisible(visible)
-    try {
-      localStorage.setItem(STATUS_BAR_VISIBILITY_KEY, visible ? "true" : "false")
-    } catch {}
+    writeClientStorageString(CLIENT_STORAGE_KEYS.statusBarVisible, visible ? "true" : "false")
   }, [])
 
   const toggleStatusBarVisibility = React.useCallback(() => {
     setStatusBarVisible((visible) => {
       const next = !visible
-      try {
-        localStorage.setItem(STATUS_BAR_VISIBILITY_KEY, next ? "true" : "false")
-      } catch {}
+      writeClientStorageString(CLIENT_STORAGE_KEYS.statusBarVisible, next ? "true" : "false")
       return next
     })
   }, [])
 
   const saveDockWidth = React.useCallback(() => {
-    try { localStorage.setItem("ps-dock-width", String(dockWidthRef.current)) } catch {}
+    writeClientStorageString(CLIENT_STORAGE_KEYS.dockWidth, String(dockWidthRef.current))
   }, [])
 
   const resizeDock = React.useCallback((delta: number) => {
@@ -193,9 +186,8 @@ function Workspace() {
   }, [])
 
   React.useEffect(() => {
-    try {
-      const saved = localStorage.getItem("ps-dock-width")
-      if (saved) {
+    const saved = readClientStorageString(CLIENT_STORAGE_KEYS.dockWidth)
+    if (saved) {
         const value = Number(saved)
         // If the stored width is below the minimum (340), restore the
         // default (380) instead of silently clamping up — clamping would
@@ -205,7 +197,6 @@ function Workspace() {
           setDockWidth(value)
         }
       }
-    } catch {}
 
     return addPhotoshopEventListener("ps-set-dock-width", (detail) => {
       const nextWidth = Number(detail)
@@ -290,11 +281,11 @@ function Workspace() {
     const imageSizeHandler = () => setImageSizeOpen(true)
     const canvasSizeHandler = () => setCanvasSizeOpen(true)
 
-    window.addEventListener("ps-open-image-size", imageSizeHandler)
-    window.addEventListener("ps-open-canvas-size", canvasSizeHandler)
+    const removeImageSize = addPhotoshopEventListener("ps-open-image-size", imageSizeHandler)
+    const removeCanvasSize = addPhotoshopEventListener("ps-open-canvas-size", canvasSizeHandler)
     return () => {
-      window.removeEventListener("ps-open-image-size", imageSizeHandler)
-      window.removeEventListener("ps-open-canvas-size", canvasSizeHandler)
+      removeImageSize()
+      removeCanvasSize()
     }
   }, [])
 
@@ -321,11 +312,10 @@ function Workspace() {
     }
 
     applyPreferences(loadPreferencesFromStorage())
-    const preferencesHandler = (event: Event) => {
-      applyPreferences((event as CustomEvent<unknown>).detail ?? loadPreferencesFromStorage())
+    const preferencesHandler = (detail: unknown) => {
+      applyPreferences(detail ?? loadPreferencesFromStorage())
     }
-    window.addEventListener("ps-preferences-changed", preferencesHandler)
-    return () => window.removeEventListener("ps-preferences-changed", preferencesHandler)
+    return addPhotoshopEventListener("ps-preferences-changed", preferencesHandler)
   }, [activeDocId, dispatch])
 
   return (

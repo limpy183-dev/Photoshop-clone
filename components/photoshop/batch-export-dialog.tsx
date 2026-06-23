@@ -26,6 +26,7 @@ import {
   type CompatibilityManifestEntry,
 } from "./document-io"
 import { useEditor, makeCanvas } from "./editor-context"
+import { dispatchPhotoshopEvent } from "./events"
 import { canvasSizeError } from "./canvas-limits"
 import type { BrowserRasterExportFormat } from "./document-io"
 import type { Layer, PsDocument, Slice, TimelineFrame } from "./types"
@@ -248,15 +249,11 @@ export function BatchExportDialog({
   // warnings reactively. Clears when the dialog closes.
   React.useEffect(() => {
     if (!open) return
-    window.dispatchEvent(
-      new CustomEvent("ps-active-export-format", {
-        detail: { format, source: "batch-export" },
-      }),
-    )
+    dispatchPhotoshopEvent("ps-active-export-format", { format, source: "batch-export" })
   }, [format, open])
   React.useEffect(() => {
     if (open) return
-    window.dispatchEvent(new CustomEvent("ps-active-export-format", { detail: { format: null, source: "batch-export" } }))
+    dispatchPhotoshopEvent("ps-active-export-format", { format: null, source: "batch-export" })
   }, [open])
 
   const applyAlternative = React.useCallback((alternative: ExportAlternative) => {
@@ -264,17 +261,15 @@ export function BatchExportDialog({
       setFormat(alternative.format)
       return
     }
-    window.dispatchEvent(new CustomEvent("ps-open-export-as", {
-      detail: {
-        dialog: "export-as",
-        format: alternative.format,
-        scale: Math.round(scale * 100),
-        quality: Math.round(quality * 100),
-        transparent,
-        matte,
-        includeMetadata: alternative.format === "metadata-json" ? true : undefined,
-      },
-    }))
+    dispatchPhotoshopEvent("ps-open-export-as", {
+      dialog: "export-as",
+      format: alternative.format,
+      scale: Math.round(scale * 100),
+      quality: Math.round(quality * 100),
+      transparent,
+      matte,
+      includeMetadata: alternative.format === "metadata-json" ? true : undefined,
+    })
     onOpenChange(false)
   }, [matte, onOpenChange, quality, scale, transparent])
 

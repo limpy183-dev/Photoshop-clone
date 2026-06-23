@@ -19,6 +19,7 @@ import {
 } from "../color-pipeline"
 import type { BlendMode, Layer, PsDocument } from "../types"
 import { requestCanvasZoom } from "../zoom-events"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent, type PhotoshopEventMap } from "../events"
 import { smartFilterMaskAmountAt, smartFilterMaskToImageData } from "../smart-filter-masks"
 
 function makePanelCanvas(w: number, h: number) {
@@ -210,7 +211,7 @@ export function NavigatorPanel() {
             const dispatchPan = (clientX: number, clientY: number) => {
               const x = ((clientX - rect.left) / rect.width) * activeDoc.width
               const y = ((clientY - rect.top) / rect.height) * activeDoc.height
-              window.dispatchEvent(new CustomEvent("ps-navigator-pan", { detail: { x, y } }))
+              dispatchPhotoshopEvent("ps-navigator-pan", { x, y })
             }
             dispatchPan(e.clientX, e.clientY)
           }}
@@ -220,7 +221,7 @@ export function NavigatorPanel() {
             const rect = c.getBoundingClientRect()
             const x = ((e.clientX - rect.left) / rect.width) * activeDoc.width
             const y = ((e.clientY - rect.top) / rect.height) * activeDoc.height
-            window.dispatchEvent(new CustomEvent("ps-navigator-pan", { detail: { x, y } }))
+            dispatchPhotoshopEvent("ps-navigator-pan", { x, y })
           }}
           onPointerUp={(e) => {
             const c = e.currentTarget
@@ -619,22 +620,19 @@ export function InfoPanel() {
       setHighBitReadout(highBitImage ? readHighBitPixel(highBitImage, x, y) : null)
       setHighBitComparison(highBitImage ? compareHighBitPixelToPreview(highBitImage, previewImageData, x, y) : null)
     }
-    window.addEventListener("ps-mousemove", handler)
-    return () => window.removeEventListener("ps-mousemove", handler)
+    return addPhotoshopEventListener("ps-mousemove", (_detail, event) => handler(event))
   }, [])
 
   React.useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent<{ kind: string } & Record<string, number>>).detail
+    const handler = (detail: PhotoshopEventMap["ps-tool-info"]) => {
       if (!detail) return
       if (detail.kind === "clear") {
         setToolInfo(null)
         return
       }
-      setToolInfo(detail as never)
+      setToolInfo(detail)
     }
-    window.addEventListener("ps-tool-info", handler)
-    return () => window.removeEventListener("ps-tool-info", handler)
+    return addPhotoshopEventListener("ps-tool-info", handler)
   }, [])
 
   const hsb = rgbToHsb(rgba[0], rgba[1], rgba[2])

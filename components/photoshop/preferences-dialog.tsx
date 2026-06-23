@@ -14,7 +14,9 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
+import { CLIENT_STORAGE_KEYS, removeClientStorageItem } from "./client-storage"
 import { downloadText } from "./document-io"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
 import {
   DEFAULT_CALIBRATION_CSS_PIXELS,
   DEFAULT_CALIBRATION_LINE_MM,
@@ -22,7 +24,6 @@ import {
   MAX_PREFERENCES_IMPORT_BYTES,
   PREFERENCE_IMPORT_SECTIONS,
   PREFERENCE_SECTION_LABELS,
-  PREFERENCES_STORAGE_KEY,
   type FileHandlingPreferences,
   type GpuPreferences,
   type HistoryLogPreferences,
@@ -296,8 +297,7 @@ export function PreferencesDialog({
   React.useEffect(() => {
     if (!open) return
     const refreshHistory = () => setPrefs(loadPreferencesFromStorage())
-    window.addEventListener("ps-preferences-history-log-changed", refreshHistory)
-    return () => window.removeEventListener("ps-preferences-history-log-changed", refreshHistory)
+    return addPhotoshopEventListener("ps-preferences-history-log-changed", refreshHistory)
   }, [open])
 
   const performancePolicy = React.useMemo(() => summarizePerformancePolicy(prefs), [prefs])
@@ -364,7 +364,7 @@ export function PreferencesDialog({
   const save = () => {
     try {
       const normalized = savePreferencesToStorage(prefs)
-      window.dispatchEvent(new CustomEvent("ps-preferences-changed", { detail: normalized }))
+      dispatchPhotoshopEvent("ps-preferences-changed", normalized)
     } catch {}
     onOpenChange(false)
   }
@@ -373,8 +373,8 @@ export function PreferencesDialog({
     const defaults = resetPreferencesSet()
     setPrefs(defaults)
     try {
-      localStorage.removeItem(PREFERENCES_STORAGE_KEY)
-      window.dispatchEvent(new CustomEvent("ps-preferences-changed", { detail: defaults }))
+      removeClientStorageItem(CLIENT_STORAGE_KEYS.preferences)
+      dispatchPhotoshopEvent("ps-preferences-changed", defaults)
     } catch {}
     resetTechPreviewFlagsAll()
   }

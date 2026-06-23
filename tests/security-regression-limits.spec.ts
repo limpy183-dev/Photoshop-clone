@@ -12,6 +12,16 @@ import {
   assertFileSize,
   clampCanvasSize,
 } from "../components/photoshop/canvas-limits"
+import {
+  clearClientStorageByPrivacy,
+  getClientStorageRegistry,
+  readClientStorageJson,
+  readClientStorageString,
+  registerClientStorageKey,
+  writeClientStorageJson,
+  writeClientStorageString,
+  type ClientStorageKey,
+} from "../components/photoshop/client-storage"
 import { canvasFromDataUrl, deserializeProject } from "../components/photoshop/document-io"
 import { filterPersistedSettingsForHydration } from "../components/photoshop/editor-context"
 import { readRecentDocuments } from "../components/photoshop/recent-documents"
@@ -34,6 +44,30 @@ function serializedLayer(id: string) {
     locked: false,
     opacity: 1,
     blendMode: "normal",
+  }
+}
+
+function memoryStorage(initial?: Record<string, string>): Storage {
+  const data = new Map(Object.entries(initial ?? {}))
+  return {
+    get length() {
+      return data.size
+    },
+    clear() {
+      data.clear()
+    },
+    getItem(key: string) {
+      return data.get(key) ?? null
+    },
+    key(index: number) {
+      return [...data.keys()][index] ?? null
+    },
+    removeItem(key: string) {
+      data.delete(key)
+    },
+    setItem(key: string, value: string) {
+      data.set(key, value)
+    },
   }
 }
 
@@ -162,6 +196,127 @@ test("recent documents strip bidi controls from display and file names", () => {
       value: originalLocalStorage,
     })
   }
+})
+
+test("client storage adapter applies schema fallback and reports quota failures", () => {
+  const descriptor: ClientStorageKey<{ saved: boolean }> = {
+    key: "ps-test-storage",
+    version: 1,
+    privacy: "preference",
+    description: "Test storage descriptor",
+    fallback: { saved: false },
+  }
+  const storage = memoryStorage({ [descriptor.key]: "{not-json" })
+  expect(readClientStorageJson(descriptor, { storage })).toEqual({ saved: false })
+
+  expect(writeClientStorageJson(descriptor, { saved: true }, { storage })).toEqual({ ok: true })
+  expect(readClientStorageJson(descriptor, { storage })).toEqual({ saved: true })
+
+  const quotaStorage = {
+    ...memoryStorage(),
+    setItem() {
+      throw new DOMException("Quota exceeded", "QuotaExceededError")
+    },
+  } as Storage
+  expect(writeClientStorageJson(descriptor, { saved: true }, { storage: quotaStorage })).toMatchObject({
+    ok: false,
+    reason: "quota",
+  })
+})
+
+test("client storage string helper preserves legacy raw string values", () => {
+  const descriptor: ClientStorageKey<string | null> = {
+    key: "ps-test-string-storage",
+    version: 1,
+    privacy: "preference",
+    description: "Test string storage descriptor",
+    fallback: null,
+    parse(value: unknown) {
+      return typeof value === "string" ? value : null
+    },
+  }
+  const storage = memoryStorage({ [descriptor.key]: "false" })
+
+  expect(readClientStorageString(descriptor, { storage })).toBe("false")
+  expect(writeClientStorageString(descriptor, "true", { storage })).toEqual({ ok: true })
+  expect(storage.getItem(descriptor.key)).toBe("true")
+})
+
+test("client storage registry validates payload schemas and clears by privacy class", () => {
+  const descriptor = registerClientStorageKey({
+    key: "ps-test-registered-storage",
+    version: 1,
+    privacy: "diagnostic",
+    description: "Registered storage descriptor",
+    fallback: { enabled: false },
+    parse(value: unknown) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return null
+      const enabled = (value as { enabled?: unknown }).enabled
+      return typeof enabled === "boolean" ? { enabled } : null
+    },
+  })
+
+  const storage = memoryStorage({
+    [descriptor.key]: JSON.stringify({ enabled: true }),
+    "ps-test-registered-storage-invalid": JSON.stringify({ enabled: "yes" }),
+  })
+  expect(getClientStorageRegistry().some((entry) => entry.key === descriptor.key)).toBe(true)
+  expect(readClientStorageJson(descriptor, { storage })).toEqual({ enabled: true })
+  expect(readClientStorageJson({
+    ...descriptor,
+    key: "ps-test-registered-storage-invalid",
+  }, { storage })).toEqual({ enabled: false })
+
+  expect(clearClientStorageByPrivacy("diagnostic", { storage })).toEqual({ ok: true })
+  expect(storage.getItem(descriptor.key)).toBeNull()
+})
+
+test("client storage registry covers editor preference, preset, automation, and project key families", () => {
+  const registry = getClientStorageRegistry()
+  const byKey = new Map(registry.map((entry) => [entry.key, entry]))
+
+  for (const key of [
+    "ps-preferences",
+    "ps-custom-shortcuts",
+    "ps-command-palette-recent",
+    "ps-command-palette-usage-v1",
+    "ps-panel-dock-state-v2",
+    "ps-current-workspace-preset",
+    "ps-status-bar-visible",
+    "ps-panel-split",
+    "ps-contextual-task-bar-position",
+    "ps-editor-settings",
+    "ps.shadowsHighlights.defaults",
+    "ps.auto.options",
+    "ps-notes-author",
+    "ps-measurement-log-prefs",
+    "ps-workspaces-v2",
+    "ps-menu-customization",
+    "ps-menu-presets",
+    "ps-pinned-documents-v1",
+    "ps-swatches",
+    "ps-recent-swatches",
+    "ps-gradients",
+    "ps-patterns",
+    "ps-shape-presets",
+    "ps-filter-gallery-stack-presets-v1",
+    "ps-glyphs-recent",
+    "ps.cameraRaw.userPresets.v1",
+    "ps.cameraRaw.snapshots.v1",
+    "ps-contact-sheet-presets-v1",
+    "ps-action-envelopes",
+    "ps-action-playback-speed",
+    "ps-command-macros-v1",
+    "ps-automation-workflows-v1",
+    "ps-command-macros",
+    "ps-droplets",
+  ]) {
+    expect(byKey.get(key), key).toBeTruthy()
+  }
+
+  expect(new Set(registry.map((entry) => entry.privacy))).toEqual(
+    new Set(["preference", "project-data", "autosave", "preset-library", "automation-plugin", "diagnostic"]),
+  )
 })
 
 test("persisted editor settings drop keys outside the saved settings schema", () => {

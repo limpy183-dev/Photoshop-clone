@@ -4,7 +4,7 @@ import * as React from "react"
 import { Compass, Filter, Lightbulb, MousePointer2, Search, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { useEditor } from "../editor-context"
+import { useEditorSelector } from "../editor-context"
 import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "../events"
 import { FILTERS } from "../filters"
 import { contextualHelpForTool } from "../contextual-help"
@@ -41,7 +41,8 @@ function writeQuery(value: string) {
 }
 
 export function DiscoverPanel() {
-  const { tool, activeDoc } = useEditor()
+  const tool = useEditorSelector((editor) => editor.tool)
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
   const [query, setQuery] = React.useState<string>(readQuery)
   const [typeFilter, setTypeFilter] = React.useState<TypeFilter>("all")
   const [highlightId, setHighlightId] = React.useState<string | null>(null)

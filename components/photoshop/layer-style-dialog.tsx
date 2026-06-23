@@ -552,7 +552,10 @@ function mergeStyle(base: LayerStyle, incoming: LayerStyle | undefined) {
     if (key === "blending") continue
     const current = (incoming as Record<string, unknown>)[key]
     if (!current) continue
-    next[key] = mergeEffect((base as Record<string, unknown>)[key] as Record<string, unknown>, current as Record<string, unknown>) as any
+    ;(next as Partial<Record<EffectKey, unknown>>)[key] = mergeEffect(
+      (base as Record<string, unknown>)[key] as Record<string, unknown>,
+      current as Record<string, unknown>,
+    )
   }
   return next as LayerStyle
 }

@@ -11,6 +11,8 @@
  * per-origin gallery of images and reusable assets the user collects.
  */
 
+import { dispatchPhotoshopEvent } from "./events"
+
 export interface LibraryAssetRecord {
   id: string
   name: string
@@ -188,7 +190,7 @@ export function subscribeLibraryChange(handler: () => void): () => void {
 
 function emitChange() {
   if (typeof window === "undefined") return
-  window.dispatchEvent(new CustomEvent(CHANGE_EVENT))
+  dispatchPhotoshopEvent(CHANGE_EVENT)
 }
 
 /**

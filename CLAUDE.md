@@ -8,12 +8,17 @@ Before proposing work on features marked impossible in the browser (Adobe cloud/
 
 ```bash
 npm run dev          # Start dev server on http://localhost:3000
+npm run doctor       # Check Node/npm/Playwright setup
 npm run build        # Production build
 npm run lint         # ESLint
 npm run typecheck    # TypeScript check (no emit)
-npm run test:smoke   # Playwright browser tests
-npm run verify       # typecheck + build + smoke tests (full validation)
+npm run check:architecture # import-cycle and architecture budgets
+npm run test:smoke   # fast desktop/mobile Playwright smoke matrix
+npm run verify       # lint + typecheck + capability + architecture + build + bundle + smoke
 ```
+
+Use Node 22 to match CI. On Windows PowerShell setups that block `npm.ps1`,
+run commands through `npm.cmd`, for example `npm.cmd run verify`.
 
 Run a single Playwright test file:
 ```bash

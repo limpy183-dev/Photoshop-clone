@@ -19,6 +19,7 @@ import { Slider } from "@/components/ui/slider"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
 import { assertFileSize, canvasSizeError, MAX_RASTER_FILE_BYTES } from "./canvas-limits"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
 import {
   CONTACT_SHEET_PAGE_PRESETS,
   CONTACT_SHEET_TEMPLATES,
@@ -74,29 +75,26 @@ interface ImportedImage extends ContactSheetRenderable {
   order: number
 }
 
-const CONTACT_SHEET_PRESETS_KEY = "ps-contact-sheet-presets-v1"
 const MAX_CONTACT_SHEET_PRESETS = 20
 
 function safeName(name: string) {
   return name.replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "-").replace(/^-+|-+$/g, "") || "contact-sheet"
 }
 
+function isSavedContactSheetPreset(item: unknown): item is SavedContactSheetPreset {
+  if (!item || typeof item !== "object") return false
+  const preset = item as Partial<SavedContactSheetPreset>
+  return Boolean(preset.id && preset.name && preset.settings)
+}
+
 function readSavedContactSheetPresets(): SavedContactSheetPreset[] {
-  if (typeof window === "undefined") return []
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(CONTACT_SHEET_PRESETS_KEY) ?? "[]")
-    if (!Array.isArray(parsed)) return []
-    return parsed
-      .filter((item): item is SavedContactSheetPreset => Boolean(item?.id && item?.name && item?.settings))
-      .slice(0, MAX_CONTACT_SHEET_PRESETS)
-  } catch {
-    return []
-  }
+  return readClientStorageJson(CLIENT_STORAGE_KEYS.contactSheetPresets)
+    .filter(isSavedContactSheetPreset)
+    .slice(0, MAX_CONTACT_SHEET_PRESETS)
 }
 
 function writeSavedContactSheetPresets(presets: readonly SavedContactSheetPreset[]) {
-  if (typeof window === "undefined") return
-  window.localStorage.setItem(CONTACT_SHEET_PRESETS_KEY, JSON.stringify(presets.slice(0, MAX_CONTACT_SHEET_PRESETS)))
+  writeClientStorageJson(CLIENT_STORAGE_KEYS.contactSheetPresets, presets.slice(0, MAX_CONTACT_SHEET_PRESETS))
 }
 
 function readFileAsDataUrl(file: File) {

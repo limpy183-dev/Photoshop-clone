@@ -1,12 +1,21 @@
-export type PurgeTarget = "undo" | "clipboard" | "histories" | "all" | "video-cache"
-export type ConcretePurgeTarget = Exclude<PurgeTarget, "all">
+import {
+  EDIT_PURGE_COMMANDS,
+  type ConcretePurgeTarget,
+  type PhotoshopCommandDefinition,
+  type PurgeTarget,
+} from "./command-registry"
+
+export type { ConcretePurgeTarget, PurgeTarget }
 
 export interface PurgeCommandDefinition {
+  id: string
   target: PurgeTarget
   label: string
   menuLabel: string
   group: "Edit"
   searchText: string
+  telemetry: PhotoshopCommandDefinition["telemetry"]
+  testMetadata: PhotoshopCommandDefinition["testMetadata"]
 }
 
 export interface PurgeResult {
@@ -15,43 +24,21 @@ export interface PurgeResult {
   details: string[]
 }
 
-export const PURGE_COMMANDS: PurgeCommandDefinition[] = [
-  {
-    target: "undo",
-    label: "Purge Undo",
-    menuLabel: "Undo",
+export const PURGE_COMMANDS: PurgeCommandDefinition[] = EDIT_PURGE_COMMANDS.map((command) => {
+  if (command.sideEffect.type !== "purge-cache") {
+    throw new Error(`Unexpected side effect for purge command: ${command.id}`)
+  }
+  return {
+    id: command.id,
+    target: command.sideEffect.target,
+    label: command.label,
+    menuLabel: command.menuLabel ?? command.label,
     group: "Edit",
-    searchText: "purge undo clear undo history memory",
-  },
-  {
-    target: "clipboard",
-    label: "Purge Clipboard",
-    menuLabel: "Clipboard",
-    group: "Edit",
-    searchText: "purge clipboard clear copy paste memory",
-  },
-  {
-    target: "histories",
-    label: "Purge Histories",
-    menuLabel: "Histories",
-    group: "Edit",
-    searchText: "purge histories clear history snapshots undo redo memory",
-  },
-  {
-    target: "all",
-    label: "Purge All",
-    menuLabel: "All",
-    group: "Edit",
-    searchText: "purge all clear undo clipboard histories video cache previews tiles memory",
-  },
-  {
-    target: "video-cache",
-    label: "Purge Video Cache",
-    menuLabel: "Video Cache",
-    group: "Edit",
-    searchText: "purge video cache clear timeline thumbnails poster frames memory",
-  },
-]
+    searchText: command.searchText ?? "",
+    telemetry: command.telemetry,
+    testMetadata: command.testMetadata,
+  }
+})
 
 const COMMAND_BY_TARGET = new Map(PURGE_COMMANDS.map((command) => [command.target, command]))
 

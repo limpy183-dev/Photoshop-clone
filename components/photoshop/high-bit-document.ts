@@ -12,6 +12,7 @@ import {
 } from "./color-pipeline"
 import { resolveColorReplacementPixel, type BrushRgba } from "./brush-engine"
 import { getFilter, type FilterContext } from "./filters"
+import { DIRECT_HIGH_BIT_ADJUSTMENTS, HIGH_BIT_BLUR_FILTERS, HIGH_BIT_SHARPEN_FILTERS } from "./high-bit-filter-sets"
 import type { SelectionImageSource } from "./selection-algorithms"
 import type { BlendMode, Layer, PsDocument } from "./types"
 
@@ -91,38 +92,6 @@ export interface CreateHighBitEditingSurfaceInput {
   background?: string
   layers?: HighBitEditingSurfaceLayer[]
 }
-
-const DIRECT_ADJUSTMENTS = new Set<HighBitAdjustment["type"]>([
-  "brightness-contrast",
-  "levels",
-  "curves",
-  "exposure",
-  "invert",
-  "channel-mixer",
-  "grayscale",
-  "desaturate",
-  "posterize",
-  "threshold",
-])
-
-const BLUR_FILTERS = new Set([
-  "blur",
-  "blur-more",
-  "average",
-  "average-blur",
-  "box-blur",
-  "gaussian-blur",
-  "motion-blur",
-  "smart-blur",
-  "surface-blur",
-  "shape-blur",
-  "lens-blur",
-  "field-blur",
-  "iris-blur",
-  "tilt-shift",
-])
-
-const SHARPEN_FILTERS = new Set(["sharpen", "sharpen-more", "unsharp-mask", "smart-sharpen"])
 
 function clamp(value: number, min = 0, max = 1) {
   return Math.max(min, Math.min(max, value))
@@ -876,7 +845,7 @@ export function applyHighBitFilter(
       preservePrecision: true,
     })
   }
-  if (DIRECT_ADJUSTMENTS.has(filterId as HighBitAdjustment["type"])) {
+  if (DIRECT_HIGH_BIT_ADJUSTMENTS.has(filterId as HighBitAdjustment["type"])) {
     return applyHighBitAdjustment(source, { type: filterId as HighBitAdjustment["type"], params })
   }
   if (filterId === "average" || filterId === "average-blur") return averageBlur(source)
@@ -896,7 +865,7 @@ export function applyHighBitFilter(
       numberParam(params, "centerY", 50),
     )
   }
-  if (BLUR_FILTERS.has(filterId)) {
+  if (HIGH_BIT_BLUR_FILTERS.has(filterId)) {
     const radius = filterId === "blur" ? 1 : filterId === "blur-more" ? 2 : numberParam(params, "radius", numberParam(params, "blur", 2))
     return boxBlur(source, radius)
   }
@@ -914,7 +883,7 @@ export function applyHighBitFilter(
       String(params.remove ?? "gaussian"),
     )
   }
-  if (SHARPEN_FILTERS.has(filterId)) {
+  if (HIGH_BIT_SHARPEN_FILTERS.has(filterId)) {
     return sharpen(source, filterId === "sharpen-more" ? 90 : numberParam(params, "amount", 50))
   }
   if (filterId === "find-edges") return findEdges(source)

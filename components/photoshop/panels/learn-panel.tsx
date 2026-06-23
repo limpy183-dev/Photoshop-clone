@@ -3,8 +3,8 @@
 import * as React from "react"
 import { BookOpen, ChevronRight, Keyboard, Lightbulb, Layers, MousePointer2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { useEditor } from "../editor-context"
-import { dispatchPhotoshopEvent } from "../events"
+import { useEditorSelector } from "../editor-context"
+import { dispatchPhotoshopCustomEvent, dispatchPhotoshopEvent } from "../events"
 import { computeContextualHelp, type HelpTip } from "../contextual-help"
 import { FILTERS } from "../filters"
 import {
@@ -90,7 +90,8 @@ const LEARN_GUIDES: LearnGuide[] = [
 ]
 
 export function LearnPanel() {
-  const { tool, activeDoc } = useEditor()
+  const tool = useEditorSelector((editor) => editor.tool)
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
   const [activeGuideId, setActiveGuideId] = React.useState(LEARN_GUIDES[0].id)
   const help = React.useMemo(
     () => computeContextualHelp({
@@ -164,7 +165,7 @@ export function LearnPanel() {
                 className="mt-2 h-6 gap-1 px-2 text-[10px]"
                 onClick={() => {
                   if (activeGuide.action) {
-                    window.dispatchEvent(new CustomEvent(activeGuide.action.event, { detail: activeGuide.action.detail }))
+                    dispatchPhotoshopCustomEvent(activeGuide.action.event, activeGuide.action.detail)
                     return
                   }
                   if (activeGuide.relatedPanel) dispatchPhotoshopEvent("ps-open-panel", activeGuide.relatedPanel)

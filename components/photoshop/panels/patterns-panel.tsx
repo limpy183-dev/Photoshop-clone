@@ -3,8 +3,10 @@
 import * as React from "react"
 import { Download, Plus, RotateCcw, Trash2, Upload, X } from "lucide-react"
 import { toast } from "sonner"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson, type ClientStorageKey } from "../client-storage"
 import { downloadText } from "../document-io"
 import { useEditor } from "../editor-context"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "../events"
 import { Input } from "@/components/ui/input"
 
 interface PatternEntry {
@@ -17,7 +19,6 @@ interface PatternEntry {
   createdAt?: number
 }
 
-const STORAGE_KEY = "ps-patterns"
 const DEFAULT_GROUP = "User"
 const MAX_PATTERNS = 128
 const MAX_PATTERN_FILE_BYTES = 4 * 1024 * 1024
@@ -25,7 +26,12 @@ const MAX_PATTERN_DIMENSION = 4096
 const MAX_PATTERN_DATA_URL_LENGTH = 4_000_000
 
 function scopedStorageKey(docId: string | undefined) {
-  return docId ? `${STORAGE_KEY}:${docId}` : STORAGE_KEY
+  return docId ? `${CLIENT_STORAGE_KEYS.patterns.key}:${docId}` : CLIENT_STORAGE_KEYS.patterns.key
+}
+
+function scopedPatternStorageKey(docId?: string): ClientStorageKey<unknown[]> {
+  const descriptor = CLIENT_STORAGE_KEYS.patterns
+  return docId ? { ...descriptor, key: scopedStorageKey(docId) } : descriptor
 }
 
 function isSafePatternDataURL(value: string) {
@@ -81,11 +87,9 @@ function normalizePatterns(value: unknown): PatternEntry[] {
 }
 
 function loadPatterns(docId?: string): PatternEntry[] {
-  if (typeof window === "undefined") return []
   try {
-    const scoped = docId ? localStorage.getItem(scopedStorageKey(docId)) : null
-    const saved = scoped ?? localStorage.getItem(STORAGE_KEY)
-    return saved ? normalizePatterns(JSON.parse(saved)) : []
+    const scoped = readClientStorageJson(scopedPatternStorageKey(docId))
+    return normalizePatterns(scoped.length || !docId ? scoped : readClientStorageJson(CLIENT_STORAGE_KEYS.patterns))
   } catch {
     return []
   }
@@ -93,8 +97,8 @@ function loadPatterns(docId?: string): PatternEntry[] {
 
 function persistPatterns(patterns: PatternEntry[], docId?: string) {
   try {
-    localStorage.setItem(scopedStorageKey(docId), JSON.stringify(patterns))
-    window.dispatchEvent(new CustomEvent("ps-patterns-changed", { detail: { docId, patterns } }))
+    writeClientStorageJson(scopedPatternStorageKey(docId), patterns)
+    dispatchPhotoshopEvent("ps-patterns-changed", { docId, patterns })
   } catch {
     toast.error("Pattern library is too large to save locally.")
   }
@@ -125,13 +129,11 @@ export function PatternsPanel() {
   }, [activeDoc?.id])
 
   React.useEffect(() => {
-    const syncPatterns = (event: Event) => {
-      const detail = (event as CustomEvent<{ docId?: string; patterns?: unknown }>).detail
+    const syncPatterns = (detail: { docId?: string; patterns?: unknown }) => {
       if (detail?.docId && detail.docId !== activeDoc?.id) return
       setPatterns(normalizePatterns(detail?.patterns ?? loadPatterns(activeDoc?.id)))
     }
-    window.addEventListener("ps-patterns-changed", syncPatterns)
-    return () => window.removeEventListener("ps-patterns-changed", syncPatterns)
+    return addPhotoshopEventListener("ps-patterns-changed", syncPatterns)
   }, [activeDoc?.id])
 
   const save = React.useCallback((value: PatternEntry[]) => {

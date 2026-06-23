@@ -1,3 +1,6 @@
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson, type ClientStorageKey } from "./client-storage"
+import { dispatchPhotoshopEvent } from "./events"
+
 export interface SwatchEntry {
   color: string
   name?: string
@@ -29,6 +32,11 @@ const MAX_GROUP_LENGTH = 40
 
 export function scopedSwatchStorageKey(docId: string | undefined) {
   return docId ? `${SWATCH_STORAGE_KEY}:${docId}` : SWATCH_STORAGE_KEY
+}
+
+function scopedSwatchStorageDescriptor(docId?: string): ClientStorageKey<unknown[]> {
+  const descriptor = CLIENT_STORAGE_KEYS.swatches
+  return docId ? { ...descriptor, key: scopedSwatchStorageKey(docId) } : descriptor
 }
 
 export function normalizeSwatches(value: unknown): SwatchEntry[] {
@@ -64,26 +72,15 @@ export function normalizeSwatches(value: unknown): SwatchEntry[] {
 }
 
 export function loadSwatches(docId?: string): SwatchEntry[] {
-  if (typeof window === "undefined") return DEFAULT_SWATCHES
-  try {
-    const scoped = docId ? localStorage.getItem(scopedSwatchStorageKey(docId)) : null
-    const saved = scoped ?? localStorage.getItem(SWATCH_STORAGE_KEY)
-    return saved ? normalizeSwatches(JSON.parse(saved)) : DEFAULT_SWATCHES
-  } catch {
-    return DEFAULT_SWATCHES
-  }
+  const scoped = readClientStorageJson(scopedSwatchStorageDescriptor(docId))
+  const saved = scoped.length || !docId ? scoped : readClientStorageJson(CLIENT_STORAGE_KEYS.swatches)
+  return saved.length ? normalizeSwatches(saved) : DEFAULT_SWATCHES
 }
 
 export function saveSwatches(swatches: SwatchEntry[], docId?: string): SwatchEntry[] {
   const next = normalizeSwatches(swatches)
-  if (typeof window !== "undefined") {
-    try {
-      localStorage.setItem(scopedSwatchStorageKey(docId), JSON.stringify(next))
-      window.dispatchEvent(new CustomEvent(SWATCHES_UPDATED_EVENT, { detail: { docId, swatches: next } }))
-    } catch {
-      // Ignore localStorage quota and blocked-storage errors.
-    }
-  }
+  writeClientStorageJson(scopedSwatchStorageDescriptor(docId), next)
+  dispatchPhotoshopEvent(SWATCHES_UPDATED_EVENT, { docId, swatches: next })
   return next
 }
 

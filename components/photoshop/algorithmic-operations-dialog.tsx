@@ -39,6 +39,7 @@ import { applyPromptInpaintImageData, buildGenerativeFillPlan } from "./generati
 import { findReplaceTextLayers } from "./typography-engine"
 import type { AssetLibraryItem, CountMarker, Layer, PathProps, PrintSettings, TextProps } from "./types"
 import { uid } from "./uid"
+import { dispatchPhotoshopEvent } from "./events"
 
 type TabId =
   | "paths"
@@ -691,7 +692,7 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
                   <Button size="sm" onClick={() => runAutoAlign("edges")}>Auto-Align Edges</Button>
                   <Button size="sm" onClick={() => runAutoAlign("features")}>Auto-Align Features</Button>
                   <Button size="sm" onClick={runAutoBlend}>Auto-Blend Layers</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-photomerge"))}>Stitch Panorama</Button>
+                  <Button size="sm" variant="secondary" onClick={() => dispatchPhotoshopEvent("ps-open-photomerge")}>Stitch Panorama</Button>
                 </ButtonGrid>
                 <ControlGrid>
                   <NumberField label="Scale %" value={scalePct} onChange={setScalePct} min={20} max={140} />
@@ -854,10 +855,10 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
             {activeDoc && tab === "animation" && (
               <Section title="Animation & Video" note="Video import/render lives in the video workspace; these add algorithmic onion skinning and motion blur.">
                 <ButtonGrid>
-                  <Button size="sm" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-video-render"))}>Video Timeline</Button>
+                  <Button size="sm" onClick={() => dispatchPhotoshopEvent("ps-open-video-render")}>Video Timeline</Button>
                   <Button size="sm" variant="secondary" onClick={createOnionSkin}>Create Onion Skin Layer</Button>
                   <Button size="sm" variant="secondary" onClick={applyMotionBlur}>Apply Motion Blur</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "timeline" }))}>Timeline Panel</Button>
+                  <Button size="sm" variant="secondary" onClick={() => dispatchPhotoshopEvent("ps-open-panel", "timeline")}>Timeline Panel</Button>
                 </ButtonGrid>
               </Section>
             )}
@@ -871,7 +872,7 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
                   <Button size="sm" onClick={transformSelection}>Transform Selection</Button>
                   <Button size="sm" variant="secondary" onClick={quickSelection}>Quick Selection from Layer</Button>
                   <Button size="sm" variant="secondary" onClick={focusArea}>Focus Area Selection</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-select-and-mask"))}>Select and Mask</Button>
+                  <Button size="sm" variant="secondary" onClick={() => dispatchPhotoshopEvent("ps-open-select-and-mask")}>Select and Mask</Button>
                 </ButtonGrid>
               </Section>
             )}
@@ -881,7 +882,7 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
                   <Button size="sm" onClick={recordMeasurement}>Record Measurement</Button>
                   <Button size="sm" variant="secondary" onClick={autoCount}>Auto Count Components</Button>
                   <Button size="sm" variant="secondary" onClick={() => dispatch({ type: "set-tool", tool: "ruler" })}>Ruler Tool</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "measurement-log" }))}>Measurement Log Panel</Button>
+                  <Button size="sm" variant="secondary" onClick={() => dispatchPhotoshopEvent("ps-open-panel", "measurement-log")}>Measurement Log Panel</Button>
                 </ButtonGrid>
               </Section>
             )}
@@ -889,7 +890,7 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
               <Section title="Print Features" note="Print setup, print preview, print marks, bleed, paper size, and proof-print options.">
                 <ButtonGrid>
                   <Button size="sm" onClick={setPrintDefaults}>Apply Print Setup</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-print-workflow"))}>Print Preview Workspace</Button>
+                  <Button size="sm" variant="secondary" onClick={() => dispatchPhotoshopEvent("ps-open-print-workflow")}>Print Preview Workspace</Button>
                 </ButtonGrid>
               </Section>
             )}
@@ -900,10 +901,10 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
                   <Button size="sm" variant="secondary" onClick={applyChannelMixer}>Channel Mixer</Button>
                   <Button size="sm" variant="secondary" onClick={applyGradientMap}>Gradient Map</Button>
                   <Button size="sm" variant="secondary" onClick={runSoftProof}>Soft Proof / Gamut</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-gap-workflow", { detail: "apply-image" }))}>Apply Image</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-gap-workflow", { detail: "calculations" }))}>Calculations</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-gap-workflow", { detail: "split-channels" }))}>Split Channels</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-gap-workflow", { detail: "merge-channels" }))}>Merge Channels</Button>
+                  <Button size="sm" variant="secondary" onClick={() => dispatchPhotoshopEvent("ps-open-gap-workflow", "apply-image")}>Apply Image</Button>
+                  <Button size="sm" variant="secondary" onClick={() => dispatchPhotoshopEvent("ps-open-gap-workflow", "calculations")}>Calculations</Button>
+                  <Button size="sm" variant="secondary" onClick={() => dispatchPhotoshopEvent("ps-open-gap-workflow", "split-channels")}>Split Channels</Button>
+                  <Button size="sm" variant="secondary" onClick={() => dispatchPhotoshopEvent("ps-open-gap-workflow", "merge-channels")}>Merge Channels</Button>
                 </ButtonGrid>
                 <label className="mt-3 flex items-center gap-2 text-[11px]">
                   <Checkbox checked={gamutWarning} onCheckedChange={(value) => setGamutWarning(value === true)} />
@@ -919,11 +920,11 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
               <Section title="Automation & Scripting" note="Actions, batch processing, image processor, contact sheets, variables, and datasets are connected to existing execution flows.">
                 <ButtonGrid>
                   <Button size="sm" onClick={() => createAction("Algorithm Action")}>Recordable Action</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-automation-workflow"))}>Droplets / Script Events</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-batch-processing"))}>Batch Processing</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-image-processor"))}>Image Processor</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-variables"))}>Variables / Data Sets</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-gap-workflow", { detail: "pdf-presentation" }))}>PDF Presentation</Button>
+                  <Button size="sm" variant="secondary" onClick={() => dispatchPhotoshopEvent("ps-open-automation-workflow")}>Droplets / Script Events</Button>
+                  <Button size="sm" variant="secondary" onClick={() => dispatchPhotoshopEvent("ps-open-batch-processing")}>Batch Processing</Button>
+                  <Button size="sm" variant="secondary" onClick={() => dispatchPhotoshopEvent("ps-open-image-processor")}>Image Processor</Button>
+                  <Button size="sm" variant="secondary" onClick={() => dispatchPhotoshopEvent("ps-open-variables")}>Variables / Data Sets</Button>
+                  <Button size="sm" variant="secondary" onClick={() => dispatchPhotoshopEvent("ps-open-gap-workflow", "pdf-presentation")}>PDF Presentation</Button>
                 </ButtonGrid>
               </Section>
             )}
@@ -932,8 +933,8 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
                 <ButtonGrid>
                   <Button size="sm" onClick={convertSmartObject}>Convert to Smart Object</Button>
                   <Button size="sm" variant="secondary" onClick={() => editSmartObject(activeLayer)}>Edit Contents</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-3d-workspace"))}>3D Workspace</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-3d-workspace"))}>3D Text / Materials</Button>
+                  <Button size="sm" variant="secondary" onClick={() => dispatchPhotoshopEvent("ps-open-3d-workspace")}>3D Workspace</Button>
+                  <Button size="sm" variant="secondary" onClick={() => dispatchPhotoshopEvent("ps-open-3d-workspace")}>3D Text / Materials</Button>
                 </ButtonGrid>
                 <label className="mt-3 flex cursor-pointer items-center justify-between rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-3 py-2 text-[11px]">
                   <span>Replace Contents from image file</span>
@@ -944,10 +945,10 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
             {activeDoc && tab === "workspace" && (
               <Section title="Workspace & UI Improvements" note="Custom workspaces, menu/shortcut management, preset assets, and tool presets are routed from one place.">
                 <ButtonGrid>
-                  <Button size="sm" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-workspace-manager"))}>Workspace Manager</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-shortcuts"))}>Shortcut Customization</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "tool-presets" }))}>Tool Presets</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "preset-manager" }))}>Preset Manager</Button>
+                  <Button size="sm" onClick={() => dispatchPhotoshopEvent("ps-open-workspace-manager")}>Workspace Manager</Button>
+                  <Button size="sm" variant="secondary" onClick={() => dispatchPhotoshopEvent("ps-open-shortcuts")}>Shortcut Customization</Button>
+                  <Button size="sm" variant="secondary" onClick={() => dispatchPhotoshopEvent("ps-open-panel", "tool-presets")}>Tool Presets</Button>
+                  <Button size="sm" variant="secondary" onClick={() => dispatchPhotoshopEvent("ps-open-panel", "preset-manager")}>Preset Manager</Button>
                 </ButtonGrid>
               </Section>
             )}
@@ -956,7 +957,7 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
                 <ButtonGrid>
                   <Button size="sm" onClick={() => createHistorySnapshot("Algorithm Snapshot")}>Create Snapshot</Button>
                   <Button size="sm" variant="secondary" onClick={exportHistoryLog}>Export History Log</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-panel", { detail: "history" }))}>History Panel</Button>
+                  <Button size="sm" variant="secondary" onClick={() => dispatchPhotoshopEvent("ps-open-panel", "history")}>History Panel</Button>
                 </ButtonGrid>
               </Section>
             )}
@@ -968,7 +969,7 @@ export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: bool
                   <Button size="sm" variant="secondary" onClick={() => createTextureLayer("cross-weave")}>Cross Weave</Button>
                   <Button size="sm" variant="secondary" onClick={() => createTextureLayer("clouds")}>Cloud Texture</Button>
                   <Button size="sm" variant="secondary" onClick={definePattern}>Define Pattern</Button>
-                  <Button size="sm" variant="secondary" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-gap-workflow", { detail: "scripted-pattern" }))}>Scripted Patterns</Button>
+                  <Button size="sm" variant="secondary" onClick={() => dispatchPhotoshopEvent("ps-open-gap-workflow", "scripted-pattern")}>Scripted Patterns</Button>
                 </ButtonGrid>
               </Section>
             )}

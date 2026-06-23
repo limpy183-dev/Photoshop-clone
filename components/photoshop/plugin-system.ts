@@ -1185,6 +1185,9 @@ export function buildPluginIframeSrcDoc({
   });
   function request(method, params) {
     const requestId = "req_" + (++seq);
+    // Sandbox srcdoc frames have an opaque origin, so the host cannot target a
+    // concrete origin here. validatePluginPanelRequest still requires the exact
+    // iframe Window source, plugin id, token, channel, and allow-listed method.
     parent.postMessage({ channel, pluginId, token, requestId, method, params }, "*");
     return new Promise((resolve, reject) => pending.set(requestId, { resolve, reject }));
   }

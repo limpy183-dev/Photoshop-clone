@@ -41,9 +41,8 @@ export interface RichTooltipProps {
   /** Optional list of usage steps shown beneath the header. */
   steps?: string[]
   /**
-   * Topic id to send with `ps-open-learn`. When set, a "Learn more" button is
-   * rendered that fires `window.dispatchEvent(new CustomEvent("ps-open-learn",
-   * { detail: { topic } }))`. Omit to hide the button.
+   * Topic id to send with `ps-open-learn`. When set, a "Learn more" button
+   * dispatches the typed event helper with `{ topic }`. Omit to hide the button.
    */
   learnTopic?: string
   /** Override the "Learn more" label. Defaults to "Learn more". */

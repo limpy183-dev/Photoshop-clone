@@ -1,11 +1,14 @@
-// Recent picker colors persisted in localStorage.
+// Recent picker colors persisted in registered client storage.
 //
 // We deliberately keep this outside `PhotoshopPreferences` (which has a schema
-// version and a heavy normalize/migration surface) — the list is a small,
+// version and a heavy normalize/migration surface). The list is a small,
 // disposable convenience: most-recently-used at index 0, capped at MAX_RECENT,
 // and identical colors collapse instead of duplicating.
 
-export const RECENT_COLORS_STORAGE_KEY = "ps-recent-colors"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
+import { dispatchPhotoshopEvent } from "./events"
+
+export const RECENT_COLORS_STORAGE_KEY = CLIENT_STORAGE_KEYS.recentColors.key
 export const RECENT_COLORS_UPDATED_EVENT = "ps-recent-colors-updated"
 export const MAX_RECENT_COLORS = 24
 
@@ -35,24 +38,14 @@ export function normalizeRecentColors(input: unknown): string[] {
 
 export function loadRecentColors(): string[] {
   if (typeof window === "undefined") return []
-  try {
-    const raw = localStorage.getItem(RECENT_COLORS_STORAGE_KEY)
-    if (!raw) return []
-    return normalizeRecentColors(JSON.parse(raw))
-  } catch {
-    return []
-  }
+  return normalizeRecentColors(readClientStorageJson(CLIENT_STORAGE_KEYS.recentColors))
 }
 
 export function saveRecentColors(colors: string[]): string[] {
   const next = normalizeRecentColors(colors)
   if (typeof window !== "undefined") {
-    try {
-      localStorage.setItem(RECENT_COLORS_STORAGE_KEY, JSON.stringify(next))
-      window.dispatchEvent(new CustomEvent(RECENT_COLORS_UPDATED_EVENT, { detail: next }))
-    } catch {
-      // Ignore quota / blocked storage — recents are a convenience only.
-    }
+    writeClientStorageJson(CLIENT_STORAGE_KEYS.recentColors, next)
+    dispatchPhotoshopEvent("ps-recent-colors-updated", next)
   }
   return next
 }

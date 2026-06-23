@@ -16,7 +16,9 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "../client-storage"
 import { useEditor } from "../editor-context"
+import { dispatchPhotoshopEvent } from "../events"
 import { downloadText } from "../document-io"
 import { uid } from "../uid"
 import type { AssetLibraryItem } from "../types"
@@ -46,7 +48,6 @@ interface MeasurementLogPreferences {
   defaultLabel: string
 }
 
-const STORAGE_KEY = "ps-measurement-log-prefs"
 const DEFAULT_PREFS: MeasurementLogPreferences = {
   unit: "px",
   pixelsPerUnit: 1,
@@ -55,27 +56,19 @@ const DEFAULT_PREFS: MeasurementLogPreferences = {
 }
 
 function readPrefs(): MeasurementLogPreferences {
-  if (typeof window === "undefined") return DEFAULT_PREFS
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return DEFAULT_PREFS
-    const parsed = JSON.parse(raw)
-    return {
-      unit: (parsed.unit as RulerUnit) ?? DEFAULT_PREFS.unit,
-      pixelsPerUnit: Number(parsed.pixelsPerUnit) || DEFAULT_PREFS.pixelsPerUnit,
-      calibrationSource: typeof parsed.calibrationSource === "string" ? parsed.calibrationSource : DEFAULT_PREFS.calibrationSource,
-      defaultLabel: typeof parsed.defaultLabel === "string" ? parsed.defaultLabel : DEFAULT_PREFS.defaultLabel,
-    }
-  } catch {
-    return DEFAULT_PREFS
+  const parsed = readClientStorageJson(CLIENT_STORAGE_KEYS.measurementLogPreferences)
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return DEFAULT_PREFS
+  const prefs = parsed as Partial<MeasurementLogPreferences>
+  return {
+    unit: prefs.unit ?? DEFAULT_PREFS.unit,
+    pixelsPerUnit: Number(prefs.pixelsPerUnit) || DEFAULT_PREFS.pixelsPerUnit,
+    calibrationSource: typeof prefs.calibrationSource === "string" ? prefs.calibrationSource : DEFAULT_PREFS.calibrationSource,
+    defaultLabel: typeof prefs.defaultLabel === "string" ? prefs.defaultLabel : DEFAULT_PREFS.defaultLabel,
   }
 }
 
 function writePrefs(prefs: MeasurementLogPreferences) {
-  if (typeof window === "undefined") return
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs))
-  } catch {}
+  writeClientStorageJson(CLIENT_STORAGE_KEYS.measurementLogPreferences, prefs)
 }
 
 function isMeasurementPayload(value: unknown): value is MeasurementPayload {
@@ -302,7 +295,7 @@ export function MeasurementLogPanel() {
     if (typeof window === "undefined") return
     const x = (payload.x1 + payload.x2) / 2
     const y = (payload.y1 + payload.y2) / 2
-    window.dispatchEvent(new CustomEvent("ps-navigator-pan", { detail: { x, y } }))
+    dispatchPhotoshopEvent("ps-navigator-pan", { x, y })
     dispatch({ type: "set-measurement", m: { x1: payload.x1, y1: payload.y1, x2: payload.x2, y2: payload.y2 } })
   }
 

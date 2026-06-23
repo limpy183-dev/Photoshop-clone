@@ -1,4 +1,6 @@
 import type { CustomShapeId } from "./types"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
+import { dispatchPhotoshopEvent } from "./events"
 
 export interface ShapePresetEntry {
   id: string
@@ -28,19 +30,13 @@ export const DEFAULT_SHAPE_PRESETS: ShapePresetEntry[] = [
 ]
 
 export function readShapePresets(): ShapePresetEntry[] {
-  if (typeof window === "undefined") return DEFAULT_SHAPE_PRESETS
-  try {
-    const raw = localStorage.getItem(SHAPE_PRESETS_STORAGE_KEY)
-    return raw ? normalizeShapePresets(JSON.parse(raw)) : DEFAULT_SHAPE_PRESETS
-  } catch {
-    return DEFAULT_SHAPE_PRESETS
-  }
+  const saved = readClientStorageJson(CLIENT_STORAGE_KEYS.shapePresets)
+  return saved.length ? normalizeShapePresets(saved) : DEFAULT_SHAPE_PRESETS
 }
 
 export function writeShapePresets(shapes: readonly ShapePresetEntry[]) {
-  if (typeof window === "undefined") return
-  localStorage.setItem(SHAPE_PRESETS_STORAGE_KEY, JSON.stringify(shapes))
-  window.dispatchEvent(new CustomEvent("ps-shape-presets-changed", { detail: shapes }))
+  writeClientStorageJson(CLIENT_STORAGE_KEYS.shapePresets, [...shapes])
+  dispatchPhotoshopEvent("ps-shape-presets-changed", [...shapes])
 }
 
 export function normalizeShapePresets(value: unknown): ShapePresetEntry[] {

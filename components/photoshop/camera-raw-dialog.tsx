@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
 import { useEditor } from "./editor-context"
 import {
   CAMERA_RAW_LENS_PROFILES,
@@ -52,39 +53,24 @@ const LABELS: Record<BasicCameraRawKey, string> = {
   saturation: "Saturation",
 }
 
-const CAMERA_RAW_PRESET_STORAGE = "ps.cameraRaw.userPresets.v1"
-const CAMERA_RAW_SNAPSHOT_STORAGE = "ps.cameraRaw.snapshots.v1"
-
 function applyCameraRaw(src: ImageData, settings: CameraRawSettings) {
   return applyCameraRawImageData(src, settings)
 }
 
 function readStoredPresets() {
-  if (typeof window === "undefined") return []
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(CAMERA_RAW_PRESET_STORAGE) || "[]")
-    return Array.isArray(parsed) ? parsed as CameraRawPreset[] : []
-  } catch {
-    return []
-  }
+  return readClientStorageJson(CLIENT_STORAGE_KEYS.cameraRawUserPresets).slice(0, 80) as CameraRawPreset[]
 }
 
 function readStoredSnapshots() {
-  if (typeof window === "undefined") return []
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(CAMERA_RAW_SNAPSHOT_STORAGE) || "[]")
-    return Array.isArray(parsed) ? parsed as CameraRawSnapshot[] : []
-  } catch {
-    return []
-  }
+  return readClientStorageJson(CLIENT_STORAGE_KEYS.cameraRawSnapshots).slice(0, 80) as CameraRawSnapshot[]
 }
 
 function storePresets(presets: CameraRawPreset[]) {
-  if (typeof window !== "undefined") window.localStorage.setItem(CAMERA_RAW_PRESET_STORAGE, JSON.stringify(presets.slice(0, 80)))
+  writeClientStorageJson(CLIENT_STORAGE_KEYS.cameraRawUserPresets, presets.slice(0, 80))
 }
 
 function storeSnapshots(snapshots: CameraRawSnapshot[]) {
-  if (typeof window !== "undefined") window.localStorage.setItem(CAMERA_RAW_SNAPSHOT_STORAGE, JSON.stringify(snapshots.slice(0, 80)))
+  writeClientStorageJson(CLIENT_STORAGE_KEYS.cameraRawSnapshots, snapshots.slice(0, 80))
 }
 
 export function CameraRawDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {

@@ -4,13 +4,19 @@ import * as React from "react"
 import { Check, Eye, Plus, RotateCcw, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { useEditor } from "../editor-context"
+import { useEditorSelector } from "../editor-context"
 import { buildRetouchingFeedbackModel } from "../retouch-feedback"
 import type { CloneSourcePreset } from "../types"
 import { uid } from "../uid"
 
 export function CloneSourcePanel() {
-  const { activeDoc, activeLayer, tool, brush, cloneSource, dispatch, commit } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const activeLayer = useEditorSelector((editor) => editor.activeLayer)
+  const tool = useEditorSelector((editor) => editor.tool)
+  const brush = useEditorSelector((editor) => editor.brush)
+  const cloneSource = useEditorSelector((editor) => editor.cloneSource)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
   const [name, setName] = React.useState("")
 
   if (!activeDoc) return null

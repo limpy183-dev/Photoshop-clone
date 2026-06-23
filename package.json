@@ -2,19 +2,34 @@
   "name": "browser-photoshop-editor",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "npm@11.5.2",
+  "engines": {
+    "node": ">=22 <23"
+  },
   "scripts": {
+    "predev": "npm run check:node",
     "dev": "next dev",
+    "prebuild": "npm run check:node",
     "build": "next build --webpack",
     "start": "next start",
+    "preverify": "npm run check:node",
+    "check:node": "node scripts/ensure-node-22.mjs",
+    "doctor": "node scripts/doctor.mjs",
     "lint": "eslint .",
+    "lint:strict": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
-    "test:smoke": "playwright test --grep @matrix-smoke",
+    "test:smoke": "playwright test --config=playwright.smoke.config.ts",
+    "test:smoke:local": "playwright test --config=playwright.smoke.config.ts",
+    "test:smoke:ci": "playwright test --config=playwright.smoke.config.ts --workers=1",
+    "test:static-export:smoke": "playwright test --config=playwright.static.config.ts",
     "test:full": "playwright test --grep-invert @visual",
     "test:full:shard": "playwright test --grep-invert @visual --shard",
     "test:visual": "playwright test --grep @visual",
     "check:capabilities": "node scripts/check-capabilities.mjs",
+    "check:architecture": "node scripts/check-architecture.mjs",
+    "select:pr-tests": "node scripts/select-pr-tests.mjs",
     "analyze:bundle": "node scripts/analyze-bundle.mjs",
-    "verify": "npm run lint && npm run typecheck && npm run check:capabilities && npm run build && npm run analyze:bundle && npm run test:smoke"
+    "verify": "npm run lint && npm run typecheck && npm run check:capabilities && npm run check:architecture && npm run build && npm run analyze:bundle && npm run test:smoke"
   },
   "dependencies": {
     "@abasb75/jpeg2000-decoder": "^2.5.4-f",

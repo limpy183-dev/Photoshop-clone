@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react"
 import { useEditor } from "../editor-context"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "../events"
 import {
   downloadBlob,
   downloadDataUrl,
@@ -226,11 +227,7 @@ export function TimelinePanel() {
     let timeoutId = 0
     const docId = activeDoc.id
     const dispatchOverlay = (canvas: HTMLCanvasElement | null) => {
-      window.dispatchEvent(
-        new CustomEvent("ps-timeline-transition-overlay", {
-          detail: { canvas, docId },
-        }),
-      )
+      dispatchPhotoshopEvent("ps-timeline-transition-overlay", { canvas, docId })
     }
     const stepFrame = () => {
       if (cancelled) return
@@ -277,9 +274,7 @@ export function TimelinePanel() {
       if (rafId) window.cancelAnimationFrame(rafId)
       if (timeoutId) window.clearTimeout(timeoutId)
       // Clear the overlay when playback stops.
-      window.dispatchEvent(
-        new CustomEvent("ps-timeline-transition-overlay", { detail: { canvas: null, docId } }),
-      )
+      dispatchPhotoshopEvent("ps-timeline-transition-overlay", { canvas: null, docId })
     }
   }, [playing, activeDoc, frames, effectiveIndex, applyFrame])
 
@@ -413,8 +408,7 @@ export function TimelinePanel() {
         splitSelectedTimelineFrame()
       }
     }
-    window.addEventListener("ps-timeline-split-at-playhead", handler)
-    return () => window.removeEventListener("ps-timeline-split-at-playhead", handler)
+    return addPhotoshopEventListener("ps-timeline-split-at-playhead", handler)
     // splitSelectedTimelineFrame is defined later in this component; we rebind on each render
     // intentionally so the latest splitSelectedTimelineFrame closure is invoked.
   })

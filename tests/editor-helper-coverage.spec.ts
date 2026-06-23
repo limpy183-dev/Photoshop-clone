@@ -48,6 +48,7 @@ import {
   saveManagedPatterns,
   scopedStorageKey,
 } from "../components/photoshop/preset-stores"
+import { addPhotoshopEventListener } from "../components/photoshop/events"
 import { createDocumentFromPreset } from "../components/photoshop/startup-documents"
 import {
   GENERIC_TOOLTIP_CONTENT,
@@ -259,10 +260,11 @@ test("menu visibility and ordering helpers are immutable and bounded at list edg
 
 test("menu customization persistence emits changes and preset helpers add and remove entries", () => {
   let changes = 0
-  window.addEventListener("ps-menu-customization-changed", () => changes++)
+  const removeChanges = addPhotoshopEventListener("ps-menu-customization-changed", () => changes++)
   saveMenuCustomization({ hidden: ["View/Grid"], ordered: {} })
 
   expect(changes).toBe(1)
+  removeChanges()
   expect(loadMenuCustomization()).toMatchObject({ hidden: ["View/Grid"], ordered: {} })
   expect(localStorage.getItem(MENU_CUSTOMIZATION_STORAGE_KEY)).toContain("updatedAt")
 
@@ -319,10 +321,11 @@ test("pattern normalization validates data URLs, dimensions, storage scope, and 
   expect(scopedStorageKey(PATTERN_STORAGE_KEY, "doc-1")).toBe(`${PATTERN_STORAGE_KEY}:doc-1`)
 
   const events: unknown[] = []
-  window.addEventListener("ps-patterns-changed", (event) => events.push((event as CustomEvent).detail))
+  const removePatterns = addPhotoshopEventListener("ps-patterns-changed", (detail) => events.push(detail))
   saveManagedPatterns("doc-1", normalizePatterns([{ dataURL: validData, width: 4, height: 5 }]))
   expect(loadManagedPatterns("doc-1")).toMatchObject([{ width: 4, height: 5 }])
   expect(events).toHaveLength(1)
+  removePatterns()
 })
 
 test("managed gradient storage and asset-kind validation cover accepted families", () => {

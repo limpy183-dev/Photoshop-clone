@@ -5,6 +5,8 @@ import {
   type PanelDockMode,
   type PanelStack,
 } from "./panel-registry"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
+import { dispatchPhotoshopEvent } from "./events"
 
 export const WORKSPACES_KEY = "ps-workspaces-v2"
 export const LEGACY_WORKSPACES_KEY = "ps-workspaces-v1"
@@ -107,20 +109,16 @@ export function serializeWorkspaceLibrary(workspaces: readonly WorkspaceLayout[]
 }
 
 export function readWorkspaceLibrary(): WorkspaceLayout[] {
-  if (typeof window === "undefined") return []
-  for (const key of [WORKSPACES_KEY, LEGACY_WORKSPACES_KEY]) {
-    try {
-      const parsed = JSON.parse(localStorage.getItem(key) ?? "[]")
-      const workspaces = normalizeWorkspaceLibrary(parsed)
-      if (workspaces.length) return workspaces
-    } catch {}
+  for (const descriptor of [CLIENT_STORAGE_KEYS.workspaces, CLIENT_STORAGE_KEYS.legacyWorkspaces]) {
+    const parsed = readClientStorageJson(descriptor)
+    const workspaces = normalizeWorkspaceLibrary(parsed)
+    if (workspaces.length) return workspaces
   }
   return []
 }
 
 export function writeWorkspaceLibrary(workspaces: readonly WorkspaceLayout[]) {
-  if (typeof window === "undefined") return
   const normalized = normalizeWorkspaceLibrary(workspaces)
-  localStorage.setItem(WORKSPACES_KEY, JSON.stringify(normalized))
-  window.dispatchEvent(new CustomEvent("ps-workspaces-changed", { detail: normalized }))
+  writeClientStorageJson(CLIENT_STORAGE_KEYS.workspaces, normalized)
+  dispatchPhotoshopEvent("ps-workspaces-changed", normalized)
 }

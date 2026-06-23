@@ -39,6 +39,7 @@ import {
   type CompatibilityManifestEntry,
   type ExportFormat,
 } from "./document-io"
+import { dispatchPhotoshopEvent } from "./events"
 import type { RasterExportMetadata, TiffCompression } from "./raster-codecs"
 import { canvasSizeError } from "./canvas-limits"
 import { cn } from "@/lib/utils"
@@ -439,15 +440,11 @@ export function ExportAsDialog({
   // format change, and clear the override on close.
   React.useEffect(() => {
     if (!open) return
-    window.dispatchEvent(
-      new CustomEvent("ps-active-export-format", {
-        detail: { format, source: "export-as" },
-      }),
-    )
+    dispatchPhotoshopEvent("ps-active-export-format", { format, source: "export-as" })
   }, [format, open])
   React.useEffect(() => {
     if (open) return
-    window.dispatchEvent(new CustomEvent("ps-active-export-format", { detail: { format: null, source: "export-as" } }))
+    dispatchPhotoshopEvent("ps-active-export-format", { format: null, source: "export-as" })
   }, [open])
 
   if (!activeDoc) return null
@@ -772,7 +769,7 @@ export function ExportAsDialog({
                   variant="outline"
                   className="h-7 shrink-0 text-[11px]"
                   onClick={() => {
-                    window.dispatchEvent(new CustomEvent("ps-open-preflight"))
+                    dispatchPhotoshopEvent("ps-open-preflight")
                     onOpenChange(false)
                   }}
                 >

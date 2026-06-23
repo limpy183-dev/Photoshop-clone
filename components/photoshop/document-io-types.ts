@@ -38,6 +38,8 @@ export interface RasterExportOptions {
   netpbmSourceMaxValue?: number
   includeMetadata?: boolean
   metadata?: RasterExportMetadata
+  signal?: AbortSignal
+  timeoutMs?: number
 }
 
 export interface SvgExportOptions {

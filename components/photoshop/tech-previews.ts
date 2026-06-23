@@ -1,6 +1,8 @@
 "use client"
 
 import * as React from "react"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
+import { dispatchPhotoshopEvent } from "./events"
 
 /**
  * Technology Previews registry.
@@ -26,7 +28,7 @@ import * as React from "react"
  * certified CMM behavior, or codecs beyond what the browser exposes.
  */
 
-export const TECH_PREVIEW_STORAGE_KEY = "ps-tech-preview-flags"
+export const TECH_PREVIEW_STORAGE_KEY = CLIENT_STORAGE_KEYS.techPreviewFlags.key
 export const TECH_PREVIEW_SCHEMA_VERSION = 1
 export const TECH_PREVIEW_EVENT = "ps-tech-preview-flags-changed"
 export const MAX_TECH_PREVIEW_IMPORT_BYTES = 32 * 1024
@@ -215,27 +217,17 @@ export function normalizeTechPreviewFlags(input: unknown): TechPreviewFlagsState
   return result
 }
 
-function readStorage(): Storage | null {
-  if (typeof window === "undefined") return null
-  try {
-    return window.localStorage
-  } catch {
-    return null
-  }
-}
-
 /** Load the current flags from localStorage, or fall back to defaults. */
 export function loadTechPreviewFlags(storage?: Pick<Storage, "getItem">): TechPreviewFlagsState {
-  const target = storage ?? readStorage()
-  if (!target) return defaultTechPreviewFlags()
-  try {
-    const raw = target.getItem(TECH_PREVIEW_STORAGE_KEY)
-    if (!raw) return defaultTechPreviewFlags()
-    const parsed = JSON.parse(raw)
-    return normalizeTechPreviewFlags(parsed)
-  } catch {
-    return defaultTechPreviewFlags()
+  if (storage) {
+    try {
+      const raw = storage.getItem(TECH_PREVIEW_STORAGE_KEY)
+      return normalizeTechPreviewFlags(raw ? JSON.parse(raw) : null)
+    } catch {
+      return defaultTechPreviewFlags()
+    }
   }
+  return normalizeTechPreviewFlags(readClientStorageJson(CLIENT_STORAGE_KEYS.techPreviewFlags))
 }
 
 /** Persist the supplied flags to localStorage. */
@@ -244,22 +236,22 @@ export function saveTechPreviewFlags(
   storage?: Pick<Storage, "setItem">,
 ): TechPreviewFlagsState {
   const normalized = normalizeTechPreviewFlags(flags)
-  const target = storage ?? readStorage()
-  if (target) {
+  const payload: TechPreviewExport = {
+    schemaVersion: TECH_PREVIEW_SCHEMA_VERSION,
+    exportedAt: new Date().toISOString(),
+    flags: normalized,
+  }
+  if (storage) {
     try {
-      const payload: TechPreviewExport = {
-        schemaVersion: TECH_PREVIEW_SCHEMA_VERSION,
-        exportedAt: new Date().toISOString(),
-        flags: normalized,
-      }
-      target.setItem(TECH_PREVIEW_STORAGE_KEY, JSON.stringify(payload))
+      storage.setItem(TECH_PREVIEW_STORAGE_KEY, JSON.stringify(payload))
     } catch {
       // Storage quota or disabled — silently drop, in-memory state still wins for this session.
     }
   }
+  if (!storage) writeClientStorageJson(CLIENT_STORAGE_KEYS.techPreviewFlags, payload)
   if (typeof window !== "undefined") {
     try {
-      window.dispatchEvent(new CustomEvent(TECH_PREVIEW_EVENT, { detail: normalized }))
+      dispatchPhotoshopEvent(TECH_PREVIEW_EVENT, normalized)
     } catch {
       // Older browsers may not support CustomEvent; ignore.
     }

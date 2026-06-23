@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { downloadText } from "./document-io"
+import { dispatchPhotoshopEvent } from "./events"
 import { useEditor, makeCanvas } from "./editor-context"
 import { capabilityWarningsForDocument } from "./capabilities"
 import { supportedIccProfileNames } from "./color-pipeline"
@@ -574,7 +575,7 @@ export function PreflightDialog({ open, onOpenChange }: { open: boolean; onOpenC
           )}
         </div>
         <DialogFooter>
-          <Button variant="outline" size="sm" onClick={() => window.dispatchEvent(new CustomEvent("ps-open-document-report"))}>
+          <Button variant="outline" size="sm" onClick={() => dispatchPhotoshopEvent("ps-open-document-report")}>
             Round-Trip Inspector
           </Button>
           <Button variant="outline" size="sm" onClick={exportJson}>

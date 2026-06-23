@@ -1568,3 +1568,20 @@ test("advanced import inspection reports partial advanced decodes with signature
   expect(report.technical.join("\n")).toContain("JPEG 2000 JP2 signature box detected")
   expect(report.technical.join("\n")).toContain("Partial JPEG 2000 import report")
 })
+
+test("advanced raster async decoders fail closed for malformed HEIF and JP2 payloads", async () => {
+  const corruptHeif = new Uint8Array([
+    ...mp4Box("ftyp", new Uint8Array([...ascii("heic"), 0, 0, 0, 0, ...ascii("heic"), ...ascii("mif1")])),
+    ...mp4Box("mdat", new Uint8Array([1, 2, 3, 4, 5, 6])),
+  ])
+  const corruptJp2 = new Uint8Array([
+    0, 0, 0, 12,
+    0x6a, 0x50, 0x20, 0x20,
+    0x0d, 0x0a, 0x87, 0x0a,
+    0, 0, 0, 8,
+    ...ascii("ftyp"),
+  ])
+
+  await expect(decodeAdvancedRasterBufferAsync(corruptHeif.buffer, "corrupt.heic", "image/heic")).resolves.toBeNull()
+  await expect(decodeAdvancedRasterBufferAsync(corruptJp2.buffer, "corrupt.jp2", "image/jp2")).resolves.toBeNull()
+})

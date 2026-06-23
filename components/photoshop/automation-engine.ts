@@ -2,6 +2,7 @@ import { FILTERS } from "./filters"
 import type { BrowserRasterExportFormat } from "./document-io"
 import type { BrushSettings, Layer, ToolId } from "./types"
 import { uid } from "./uid"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
 
 export type AutomationOperation =
   | "none"
@@ -480,16 +481,9 @@ export function safeFilename(name: string) {
   )
 }
 
-function parseStoredArray(raw: string | null): unknown[] {
-  if (!raw) return []
-  const parsed: unknown = JSON.parse(raw)
-  return Array.isArray(parsed) ? parsed : isRecord(parsed) && Array.isArray(parsed.items) ? parsed.items : []
-}
-
 export function loadCommandMacros(): CommandMacro[] {
-  if (typeof localStorage === "undefined") return []
   try {
-    return parseStoredArray(localStorage.getItem(COMMAND_MACROS_STORAGE_KEY)).slice(0, MAX_MACROS).map((item, index) => {
+    return readClientStorageJson(CLIENT_STORAGE_KEYS.commandMacros).slice(0, MAX_MACROS).map((item, index) => {
       if (!isRecord(item)) throw new Error("Invalid macro")
       const source = stringArg(item.source, "macro source")
       parseSafeDslCommands(source)
@@ -508,22 +502,19 @@ export function loadCommandMacros(): CommandMacro[] {
 }
 
 export function saveCommandMacros(macros: CommandMacro[]) {
-  if (typeof localStorage === "undefined") return
-  localStorage.setItem(COMMAND_MACROS_STORAGE_KEY, JSON.stringify(macros.slice(0, MAX_MACROS)))
+  writeClientStorageJson(CLIENT_STORAGE_KEYS.commandMacros, macros.slice(0, MAX_MACROS))
 }
 
 export function loadAutomationWorkflows(): AutomationWorkflow[] {
-  if (typeof localStorage === "undefined") return []
   try {
-    return parseStoredArray(localStorage.getItem(AUTOMATION_WORKFLOWS_STORAGE_KEY)).slice(0, MAX_WORKFLOWS).map(parseAutomationWorkflowImportPayload)
+    return readClientStorageJson(CLIENT_STORAGE_KEYS.automationWorkflows).slice(0, MAX_WORKFLOWS).map(parseAutomationWorkflowImportPayload)
   } catch {
     return []
   }
 }
 
 export function saveAutomationWorkflows(workflows: AutomationWorkflow[]) {
-  if (typeof localStorage === "undefined") return
-  localStorage.setItem(AUTOMATION_WORKFLOWS_STORAGE_KEY, JSON.stringify(workflows.slice(0, MAX_WORKFLOWS)))
+  writeClientStorageJson(CLIENT_STORAGE_KEYS.automationWorkflows, workflows.slice(0, MAX_WORKFLOWS))
 }
 
 export function macroToWorkflow(macro: CommandMacro, output: Partial<AutomationOutputPreset> = {}): AutomationWorkflow {

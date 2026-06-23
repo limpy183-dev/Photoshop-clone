@@ -15,6 +15,7 @@ import {
   exportPreferencesSet,
   formatHistoryLog,
   importPreferenceSections,
+  loadPreferencesFromStorage,
   normalizePreferences,
   parsePreferencesSet,
   resetPreferencesSet,
@@ -346,6 +347,28 @@ test("validates preference imports with specific schema errors", () => {
   expect(() => parsePreferencesSet({ rulerGrid: { printResolution: "300" } })).toThrow(/rulerGrid\.printResolution must be a number/i)
   expect(() => parsePreferencesSet({ toolBehavior: { cursorStyle: "giant" } })).toThrow(/toolBehavior\.cursorStyle must be one of/i)
   expect(() => parsePreferencesSet({ technologyPreviews: { webgpuAcceleration: "yes" } })).toThrow(/technologyPreviews\.webgpuAcceleration must be a boolean/i)
+})
+
+test("loads default preferences when browser storage is empty or invalid", () => {
+  expect(loadPreferencesFromStorage()).toEqual(DEFAULT_PREFERENCES)
+
+  const originalWindow = globalThis.window
+  try {
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        localStorage: {
+          getItem: () => JSON.stringify([]),
+        },
+      },
+    })
+    expect(loadPreferencesFromStorage()).toEqual(DEFAULT_PREFERENCES)
+  } finally {
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: originalWindow,
+    })
+  }
 })
 
 test("normalizes technology preview feature flags with per-toggle help and risk text", () => {

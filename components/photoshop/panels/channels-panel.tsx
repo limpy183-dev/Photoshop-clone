@@ -3,7 +3,7 @@
 import * as React from "react"
 import { Copy, Droplet, Eye, Layers, Plus, Trash2, Wand2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { useEditor, makeCanvas } from "../editor-context"
+import { makeCanvas, useEditorSelector } from "../editor-context"
 import { renderDocumentComposite } from "../document-io"
 import type { AlphaChannel, PsDocument, Selection } from "../types"
 import { cn } from "@/lib/utils"
@@ -14,7 +14,10 @@ type PreviewChannel = "rgb" | "red" | "green" | "blue" | string
 type LoadMode = "replace" | "add" | "subtract" | "intersect"
 
 export function ChannelsPanel() {
-  const { activeDoc, activeLayer, dispatch, commit } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const activeLayer = useEditorSelector((editor) => editor.activeLayer)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
   const [preview, setPreview] = React.useState<PreviewChannel>("rgb")
   const [loadMode, setLoadMode] = React.useState<LoadMode>("replace")
 

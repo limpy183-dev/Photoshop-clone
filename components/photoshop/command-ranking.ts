@@ -1,3 +1,5 @@
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
+
 export interface RankableCommand {
   id: string
   group: string
@@ -9,7 +11,7 @@ export interface RankableCommand {
 
 export type CommandUsageMap = Record<string, { count: number; lastUsed: number }>
 
-export const COMMAND_USAGE_STORAGE_KEY = "ps-command-palette-usage-v1"
+export const COMMAND_USAGE_STORAGE_KEY = CLIENT_STORAGE_KEYS.commandPaletteUsage.key
 
 const GROUP_PRIORITY: Record<string, number> = {
   Tools: 90,
@@ -118,28 +120,10 @@ export function recordCommandPaletteUsage(usage: CommandUsageMap, id: string, no
 
 export function loadCommandPaletteUsage(): CommandUsageMap {
   if (typeof window === "undefined") return {}
-  try {
-    const parsed = JSON.parse(localStorage.getItem(COMMAND_USAGE_STORAGE_KEY) ?? "{}")
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {}
-    const usage: CommandUsageMap = {}
-    for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
-      if (!value || typeof value !== "object") continue
-      const record = value as Record<string, unknown>
-      if (typeof record.count !== "number" || typeof record.lastUsed !== "number") continue
-      usage[id] = {
-        count: Math.max(0, Math.min(999, Math.round(record.count))),
-        lastUsed: Number.isFinite(record.lastUsed) ? record.lastUsed : 0,
-      }
-    }
-    return usage
-  } catch {
-    return {}
-  }
+  return readClientStorageJson(CLIENT_STORAGE_KEYS.commandPaletteUsage)
 }
 
 export function saveCommandPaletteUsage(usage: CommandUsageMap) {
   if (typeof window === "undefined") return
-  try {
-    localStorage.setItem(COMMAND_USAGE_STORAGE_KEY, JSON.stringify(usage))
-  } catch {}
+  writeClientStorageJson(CLIENT_STORAGE_KEYS.commandPaletteUsage, usage)
 }

@@ -3,8 +3,10 @@
 import * as React from "react"
 import { Copy, Download, Plus, RotateCcw, Upload, X } from "lucide-react"
 import { toast } from "sonner"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "../client-storage"
 import { downloadText } from "../document-io"
 import { useEditor } from "../editor-context"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "../events"
 import { Input } from "@/components/ui/input"
 import { gradientStopsToEditorStops, mergeById, normalizeGradientPresets } from "../asset-libraries"
 
@@ -26,7 +28,6 @@ interface GradientTrackBox {
   width: number
 }
 
-const STORAGE_KEY = "ps-gradients"
 const MAX_USER_GRADIENTS = 64
 const MAX_STOPS = 16
 const MAX_GRADIENT_FILE_BYTES = 256 * 1024
@@ -143,10 +144,8 @@ function normalizeUserGradients(value: unknown): GradientPreset[] {
 }
 
 function loadUserGradients(): GradientPreset[] {
-  if (typeof window === "undefined") return []
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    return raw ? normalizeUserGradients(JSON.parse(raw)) : []
+    return normalizeUserGradients(readClientStorageJson(CLIENT_STORAGE_KEYS.gradients))
   } catch {
     return []
   }
@@ -154,8 +153,8 @@ function loadUserGradients(): GradientPreset[] {
 
 function persistUserGradients(gradients: GradientPreset[]) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(gradients))
-    window.dispatchEvent(new CustomEvent("ps-gradients-changed", { detail: { gradients } }))
+    writeClientStorageJson(CLIENT_STORAGE_KEYS.gradients, gradients)
+    dispatchPhotoshopEvent("ps-gradients-changed", { gradients })
   } catch {
     toast.error("Gradient library is too large to save locally.")
   }
@@ -202,12 +201,10 @@ export function GradientsPanel() {
   }, [])
 
   React.useEffect(() => {
-    const syncGradients = (event: Event) => {
-      const detail = (event as CustomEvent<{ gradients?: unknown }>).detail
+    const syncGradients = (detail: { gradients?: unknown }) => {
       setUserGradients(normalizeUserGradients(detail?.gradients ?? loadUserGradients()))
     }
-    window.addEventListener("ps-gradients-changed", syncGradients)
-    return () => window.removeEventListener("ps-gradients-changed", syncGradients)
+    return addPhotoshopEventListener("ps-gradients-changed", syncGradients)
   }, [])
 
   const allGradients = React.useMemo(() => [...DEFAULT_GRADIENTS, ...userGradients], [userGradients])

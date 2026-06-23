@@ -164,8 +164,8 @@ The core state lives in the editor context and is mutated through typed actions.
 
 ### Requirements
 
-- Node.js 20+ recommended.
-- npm.
+- Node.js 22 (`.nvmrc` / `.node-version` match CI).
+- npm 11.5.x or the package-manager version declared in `package.json`.
 - A modern Chromium-based browser for the best Canvas and Playwright behavior.
 
 ### Install
@@ -200,10 +200,20 @@ npm run start
 | `npm run dev` | Start the Next.js development server. |
 | `npm run build` | Build the production app. |
 | `npm run start` | Serve the production build. |
+| `npm run doctor` | Check local Node/npm/Playwright setup. |
 | `npm run lint` | Run ESLint across the repository. |
+| `npm run lint:strict` | Run ESLint with `--max-warnings=0` for warning burn-down work. |
 | `npm run typecheck` | Run TypeScript without emitting output. |
-| `npm run test:smoke` | Run the Playwright test suite. |
-| `npm run verify` | Run typecheck, production build, and Playwright smoke tests. |
+| `npm run check:architecture` | Enforce import-cycle, raw Photoshop event/listener, file-size, and `useEditor` budgets. |
+| `npm run test:smoke` | Run the fast desktop/mobile Playwright smoke matrix. |
+| `npm run test:static-export:smoke` | Smoke-test an existing GitHub Pages-style `out/` export. |
+| `npm run verify` | Run lint, typecheck, capability checks, architecture budgets, build, bundle analysis, and smoke tests. |
+
+## Deployment Persistence
+
+The bundled marketing API storage writes to `.data/*.jsonl` and is intended for
+local/demo use. Production deployments need a durable storage and shared
+rate-limit adapter; see [docs/deployment-persistence.md](docs/deployment-persistence.md).
 
 ## Testing
 
@@ -218,6 +228,12 @@ npm run typecheck
 # Lint only
 npm run lint
 
+# Architecture budgets only
+npm run check:architecture
+
+# Fast smoke matrix
+npm run test:smoke
+
 # Production build
 npm run build
 
@@ -230,6 +246,9 @@ npx playwright test tests/canvas-interaction-performance.spec.ts
 npx playwright test tests/filter-fidelity-golden.spec.ts
 npx playwright test tests/psd-roundtrip-fixtures.spec.ts
 ```
+
+On Windows PowerShell installations where script execution blocks `npm.ps1`,
+use `npm.cmd` for the same commands, for example `npm.cmd run test:smoke`.
 
 Representative test coverage includes:
 

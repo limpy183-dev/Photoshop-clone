@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson } from "./client-storage"
 import {
   MousePointer2,
   Square,
@@ -40,7 +41,7 @@ import {
 } from "lucide-react"
 import { useEditor } from "./editor-context"
 import type { ToolId } from "./types"
-import { dispatchPhotoshopEvent } from "./events"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
 import { getToolHelp } from "./tool-help"
 import { RichTooltip, DEFAULT_RICH_TOOLTIP_DELAY_MS } from "./rich-tooltip"
 import { GENERIC_TOOLTIP_CONTENT, getToolTooltipEntry } from "./tool-tooltip-content"
@@ -211,19 +212,17 @@ const DEFAULT_PREFS: ToolTooltipPreferences = {
 }
 
 function readToolTooltipPrefs(): ToolTooltipPreferences {
-  try {
-    const raw = typeof window === "undefined" ? null : localStorage.getItem("ps-preferences")
-    if (raw) {
-      const parsed = JSON.parse(raw)
-      return {
-        showTooltips: typeof parsed?.showTooltips === "boolean" ? parsed.showTooltips : true,
-        delayMs:
-          typeof parsed?.tooltipDelayMs === "number" && parsed.tooltipDelayMs >= 0
-            ? parsed.tooltipDelayMs
-            : DEFAULT_RICH_TOOLTIP_DELAY_MS,
-      }
+  const parsed = readClientStorageJson(CLIENT_STORAGE_KEYS.preferences)
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const prefs = parsed as { showTooltips?: unknown; tooltipDelayMs?: unknown }
+    return {
+      showTooltips: typeof prefs.showTooltips === "boolean" ? prefs.showTooltips : true,
+      delayMs:
+        typeof prefs.tooltipDelayMs === "number" && prefs.tooltipDelayMs >= 0
+          ? prefs.tooltipDelayMs
+          : DEFAULT_RICH_TOOLTIP_DELAY_MS,
     }
-  } catch {}
+  }
   return DEFAULT_PREFS
 }
 
@@ -247,10 +246,10 @@ export function ToolPalette() {
   React.useEffect(() => {
     const read = () => setPrefs(readToolTooltipPrefs())
     read()
-    window.addEventListener("ps-preferences-changed", read)
+    const removePreferences = addPhotoshopEventListener("ps-preferences-changed", read)
     window.addEventListener("storage", read)
     return () => {
-      window.removeEventListener("ps-preferences-changed", read)
+      removePreferences()
       window.removeEventListener("storage", read)
     }
   }, [])

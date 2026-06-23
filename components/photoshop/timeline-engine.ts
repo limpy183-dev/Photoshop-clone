@@ -1,6 +1,6 @@
 "use client"
 
-import { renderDocumentComposite } from "./document-io"
+import { renderDocumentComposite } from "./document-rendering"
 import type {
   BlendMode,
   FrameEasing,
