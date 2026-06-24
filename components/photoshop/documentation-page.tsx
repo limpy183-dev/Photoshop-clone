@@ -19,6 +19,7 @@ import {
   Sparkles,
   Wrench,
 } from "lucide-react"
+import { withBasePath } from "@/lib/base-path"
 
 type FigureFit = "wide" | "dialog" | "panel" | "tall"
 
@@ -1404,7 +1405,7 @@ export function DocumentationPage({ section }: { section: DocumentationSection }
             <div className="border-b border-[var(--ps-divider)] px-4 py-4">
               <Link href="/" className="inline-flex items-center gap-2 text-[13px] font-semibold text-white">
                 <img
-                  src="/photoshop-web-logo.svg"
+                  src={withBasePath("/photoshop-web-logo.svg")}
                   alt="Photoshop web logo"
                   className="h-7 w-7 rounded-sm"
                   draggable={false}
@@ -1667,7 +1668,7 @@ function DocumentationFigureCard({ figure }: { figure: DocumentationFigure }) {
         <div className="flex items-center justify-center border-r border-[var(--ps-divider)] bg-[#080808] p-3 max-lg:border-b max-lg:border-r-0">
           <img
             data-testid="documentation-figure-image"
-            src={figure.src}
+            src={withBasePath(figure.src)}
             alt={figure.alt}
             loading="lazy"
             className={`h-auto w-auto max-w-full object-contain ${figureHeightClass[figure.fit]}`}

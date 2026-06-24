@@ -14,6 +14,20 @@ test("static export serves the start workspace with basePath assets", async ({ p
   await expect(page.locator('img[alt="Photoshop web logo"]')).toBeVisible()
 })
 
+test("static export prefixes documentation screenshots with the basePath", async ({ page }) => {
+  await page.goto(`${basePath}/documentation/start-workspace/`)
+
+  await expect(page.getByRole("heading", { name: "Start workspace", exact: true })).toBeVisible()
+  await expect(page.locator('img[alt="Photoshop web logo"]')).toHaveAttribute(
+    "src",
+    `${basePath}/photoshop-web-logo.svg`,
+  )
+  await expect(page.getByTestId("documentation-figure-image").first()).toHaveAttribute(
+    "src",
+    `${basePath}/documentation/home-start-workspace.png`,
+  )
+})
+
 test("static export marketing page disables backend-dependent forms", async ({ page }) => {
   await page.goto(`${basePath}/marketing/`)
 
