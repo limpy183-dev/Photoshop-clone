@@ -2120,12 +2120,23 @@ function dataUrlToBytes(dataUrl: string) {
   return bytes
 }
 
+function pdfJsStandardFontDataUrl() {
+  if (typeof process === "undefined" || !process.versions?.node || typeof process.cwd !== "function") return undefined
+  return `${process.cwd().replace(/\\/g, "/")}/node_modules/pdfjs-dist/standard_fonts/`
+}
+
 export async function decodePdfPages(file: File, options: { maxWidth?: number; maxPages?: number } = {}): Promise<DecodedPdfPage[]> {
   assertAdvancedFileSize(file, ADVANCED_FILE_LIMITS.rasterBytes, "PDF file")
   const maxWidth = options.maxWidth ?? 2048
   const data = new Uint8Array(await file.arrayBuffer())
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs")
-  const loadingTask = pdfjs.getDocument({ data, useWorkerFetch: false, isEvalSupported: false } as never)
+  const standardFontDataUrl = pdfJsStandardFontDataUrl()
+  const loadingTask = pdfjs.getDocument({
+    data,
+    useWorkerFetch: false,
+    isEvalSupported: false,
+    ...(standardFontDataUrl ? { standardFontDataUrl } : {}),
+  } as never)
   const pdf = await loadingTask.promise
   const count = Math.min(pdf.numPages, Math.max(1, options.maxPages ?? pdf.numPages))
   const pages: DecodedPdfPage[] = []

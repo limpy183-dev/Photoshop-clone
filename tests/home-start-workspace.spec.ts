@@ -22,9 +22,10 @@ test("book navigation opens the standalone documentation guide", async ({ page }
   await expect(documentationLink).toHaveAttribute("href", "/documentation")
   await expect(page.getByRole("region", { name: "Documentation" })).toHaveCount(0)
 
-  await documentationLink.click()
-
-  await expect(page).toHaveURL(/\/documentation\/start-workspace$/)
+  await Promise.all([
+    page.waitForURL(/\/documentation\/start-workspace$/, { timeout: 30000 }),
+    documentationLink.click(),
+  ])
   await expect(page.getByRole("heading", { name: "Start workspace", exact: true })).toBeVisible()
   await expect(page.getByRole("navigation", { name: "Documentation sections" }).getByRole("link", { name: "Editor workspace" })).toHaveAttribute(
     "href",

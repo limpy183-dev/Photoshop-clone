@@ -60,8 +60,7 @@ class FixtureCanvas {
   }
 
   toDataURL() {
-    const payload = btoa(JSON.stringify({ width: this.width, height: this.height, fill: this.fill }))
-    return `data:image/png;base64,${payload}`
+    return `data:image/png;base64,${fixturePngBase64(this.width, this.height)}`
   }
 }
 
@@ -74,14 +73,69 @@ class FixtureImage {
   set src(value: string) {
     try {
       const payload = value.split(",")[1] ?? ""
-      const parsed = JSON.parse(atob(payload))
-      this.naturalWidth = Number(parsed.width) || 1
-      this.naturalHeight = Number(parsed.height) || 1
+      const bytes = bytesFromBase64(payload)
+      const dimensions = sniffFixturePngDimensions(bytes)
+      if (!dimensions) throw new Error("Unsupported fixture image")
+      this.naturalWidth = dimensions.width
+      this.naturalHeight = dimensions.height
       setTimeout(() => this.onload?.(), 0)
     } catch {
       setTimeout(() => this.onerror?.(), 0)
     }
   }
+}
+
+function fixturePngBase64(width: number, height: number) {
+  const bytes = new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    0, 0, 0, 13,
+    0x49, 0x48, 0x44, 0x52,
+    ...be32(width),
+    ...be32(height),
+    8, 6, 0, 0, 0,
+    0, 0, 0, 0,
+  ])
+  let binary = ""
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary)
+}
+
+function bytesFromBase64(payload: string) {
+  const binary = atob(payload)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return bytes
+}
+
+function be32(value: number) {
+  const normalized = Math.max(1, Math.round(value))
+  return [
+    (normalized >> 24) & 255,
+    (normalized >> 16) & 255,
+    (normalized >> 8) & 255,
+    normalized & 255,
+  ]
+}
+
+function readUint32BE(bytes: Uint8Array, offset: number) {
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(offset, false)
+}
+
+function sniffFixturePngDimensions(bytes: Uint8Array) {
+  if (
+    bytes.length < 24 ||
+    bytes[0] !== 0x89 ||
+    bytes[1] !== 0x50 ||
+    bytes[2] !== 0x4e ||
+    bytes[3] !== 0x47 ||
+    bytes[12] !== 0x49 ||
+    bytes[13] !== 0x48 ||
+    bytes[14] !== 0x44 ||
+    bytes[15] !== 0x52
+  ) {
+    return null
+  }
+  return { width: readUint32BE(bytes, 16), height: readUint32BE(bytes, 20) }
 }
 
 class FixtureImageData {

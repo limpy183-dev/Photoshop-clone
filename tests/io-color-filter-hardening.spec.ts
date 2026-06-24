@@ -10,12 +10,9 @@ import { applyFilterAsync, applyFilterTiled, getFilterWorkerSupport, isFilterWor
 import { richFixtureDocument } from "./photoshop-fixtures"
 import type { Page } from "@playwright/test"
 
-async function openCommand(page: Page, query: string) {
-  await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
-  await page.locator("body").click({ position: { x: 20, y: 20 } })
-  await page.keyboard.press(process.platform === "darwin" ? "Meta+K" : "Control+K")
-  await page.getByPlaceholder("Search tools, filters, panels, and commands").fill(query)
-  await page.keyboard.press("Enter")
+async function openEditor(page: Page, url = "/editor") {
+  await page.goto(url, { waitUntil: "load" })
+  await expect(page.locator("[data-canvas-stage]")).toBeVisible({ timeout: 30000 })
 }
 
 class TestImageData {
@@ -99,14 +96,10 @@ test("document color honesty warns about metadata modes versus browser canvas re
 
 test("status bar exposes color and bit-depth honesty warning for non-RGB or high-bit documents", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/editor")
-  await openCommand(page, "New Document")
-  await expect(page.getByRole("dialog", { name: "New Document" })).toBeVisible()
-  await page.getByRole("button", { name: /Photo 6 x 4 in/ }).click()
-  await page.getByRole("button", { name: "Create" }).click()
-
-  await expect(page.getByText("High-bit edit path | Preview: 8-bit | Document: 16-bit")).toBeVisible()
-  await expect(page.getByText("Precision warning")).toBeVisible()
+  await openEditor(page, "/editor?preset=Photo+6+x+4+in")
+  await expect(page.getByRole("tab", { name: /Photo 6 x 4 in.*RGB\/16/ })).toBeVisible({ timeout: 30000 })
+  await expect(page.getByText("High-bit edit path | Preview: 8-bit | Document: 16-bit")).toBeVisible({ timeout: 30000 })
+  await expect(page.getByText("Precision warning")).toBeVisible({ timeout: 30000 })
 })
 
 test("expanded worker filters include Gaussian blur with a fixed golden output", async () => {

@@ -101,3 +101,21 @@ test("routes configured document dirty actions to the active document only", () 
   expect(dirtyDocIdsForAction({ type: "set-tool" }, state())).toEqual([])
   expect(dirtyDocIdsForAction({ type: "set-layer-opacity" }, state({ activeDocId: null }))).toEqual([])
 })
+
+test("routes plugin storage changes as active document mutations", () => {
+  const before = state()
+  const after = state({
+    documents: [{ ...docA }, docB],
+  })
+
+  expect(dirtyDocIdsForAction({ type: "set-plugin-storage" }, before, after)).toEqual([docA.id])
+})
+
+test("does not dirty routed documents when reducer leaves document identity unchanged", () => {
+  const before = state()
+  const after = state({
+    documents: before.documents,
+  })
+
+  expect(dirtyDocIdsForAction({ type: "remove-layer" }, before, after)).toEqual([])
+})

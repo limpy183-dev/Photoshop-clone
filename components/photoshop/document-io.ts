@@ -164,6 +164,14 @@ import type {
   RasterExportOptions,
   SvgExportOptions,
 } from "./document-io-types"
+import {
+  createProjectSanitizationReport,
+  PROJECT_PAYLOAD_LIMITS,
+  safeJsonArray,
+  safeJsonObject,
+  SAFE_JSON_DEFAULT_LIMITS,
+  type ProjectSanitizationDiagnostics,
+} from "./project-json-sanitizer"
 
 export type {
   AnimationExportFormat,
@@ -1504,138 +1512,6 @@ function cleanOptionalCssColor(value: unknown): string | undefined {
   return isSafeSvgColor(value) ? value : undefined
 }
 
-/**
- * Reject keys that JavaScript treats specially during property access /
- * assignment so a malicious JSON payload cannot pollute the prototype
- * chain when the result is later passed through Object.assign or a
- * lodash deep-merge.
- */
-const PROJECT_RESERVED_KEYS = new Set([
-  "__proto__",
-  "constructor",
-  "prototype",
-])
-
-/**
- * Best-effort recursive sanitiser for project-format JSON values whose
- * shape we do not strictly validate (slices, notes, asset libraries,
- * style/gradient/character/paragraph presets, etc.). The result preserves
- * the original structure within bounds:
- *   - drops `__proto__` / `constructor` / `prototype` keys and any key
- *     whose name does not match a sensible identifier pattern,
- *   - bounds string length, array length, and object size,
- *   - bounds nesting depth,
- *   - drops non-finite numbers and unsupported types (functions, symbols,
- *     bigints).
- *
- * Pure data passes through unchanged; nothing structural is rewritten.
- */
-type SafeJsonLimits = {
-  maxString: number
-  maxArray: number
-  maxKeys: number
-  maxDepth: number
-}
-
-const SAFE_JSON_DEFAULT_LIMITS: SafeJsonLimits = {
-  maxString: 4000,
-  maxArray: 1024,
-  maxKeys: 256,
-  maxDepth: 6,
-}
-
-// Raised limits for project fields that legitimately carry large payloads
-// (metadata.psdNativeSource base64, asset library fonts/ICC profiles,
-// timeline frame thumbnails, plugin storage). Truncating these silently
-// corrupts the document on the next save.
-const PROJECT_PAYLOAD_LIMITS: SafeJsonLimits = {
-  maxString: 16_000_000,
-  maxArray: 10_000,
-  maxKeys: 4096,
-  maxDepth: 12,
-}
-
-const SAFE_JSON_KEY = /^[A-Za-z0-9_\-:.]{1,64}$/
-
-function safeJsonValue(
-  value: unknown,
-  depth = 0,
-  limits: SafeJsonLimits = SAFE_JSON_DEFAULT_LIMITS,
-  state: { truncated: boolean } = { truncated: false },
-): unknown {
-  if (value === null) return null
-  const type = typeof value
-  if (type === "string") {
-    if ((value as string).length > limits.maxString) state.truncated = true
-    return (value as string).slice(0, limits.maxString)
-  }
-  if (type === "boolean") return value
-  if (type === "number") {
-    return Number.isFinite(value as number) ? value : undefined
-  }
-  if (type === "function" || type === "symbol" || type === "bigint" || type === "undefined") {
-    return undefined
-  }
-  if (depth >= limits.maxDepth) {
-    state.truncated = true
-    return undefined
-  }
-  if (Array.isArray(value)) {
-    if (value.length > limits.maxArray) state.truncated = true
-    const out: unknown[] = []
-    for (const item of value.slice(0, limits.maxArray)) {
-      const next = safeJsonValue(item, depth + 1, limits, state)
-      if (next !== undefined) out.push(next)
-    }
-    return out
-  }
-  if (type === "object") {
-    const out: Record<string, unknown> = {}
-    let keysCopied = 0
-    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
-      if (keysCopied >= limits.maxKeys) {
-        state.truncated = true
-        break
-      }
-      if (PROJECT_RESERVED_KEYS.has(key)) continue
-      if (!SAFE_JSON_KEY.test(key)) continue
-      const cleaned = safeJsonValue(nested, depth + 1, limits, state)
-      if (cleaned === undefined) continue
-      out[key] = cleaned
-      keysCopied += 1
-    }
-    return out
-  }
-  return undefined
-}
-
-function warnIfTruncated(state: { truncated: boolean }, field?: string) {
-  if (!state.truncated) return
-  console.warn(`Project field "${field ?? "value"}" exceeded sanitiser limits and was truncated on load.`)
-}
-
-/**
- * Convenience wrappers around safeJsonValue for the typed PsDocument
- * fields that are pure-data passthroughs (no DOM/CSS sinks). Each helper
- * returns `undefined` when the input is not array/object as appropriate.
- */
-function safeJsonArray<T>(value: unknown, limits: SafeJsonLimits = SAFE_JSON_DEFAULT_LIMITS, field?: string): T[] | undefined {
-  const state = { truncated: false }
-  const cleaned = safeJsonValue(value, 0, limits, state)
-  warnIfTruncated(state, field)
-  return Array.isArray(cleaned) ? (cleaned as T[]) : undefined
-}
-
-function safeJsonObject<T extends object>(value: unknown, limits: SafeJsonLimits = SAFE_JSON_DEFAULT_LIMITS, field?: string): T | undefined {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined
-  const state = { truncated: false }
-  const cleaned = safeJsonValue(value, 0, limits, state)
-  warnIfTruncated(state, field)
-  return cleaned && typeof cleaned === "object" && !Array.isArray(cleaned)
-    ? (cleaned as T)
-    : undefined
-}
-
 /** True if `set.has(value)`, narrowing `value` to the set's element type. */
 function isAllowedEnum<T extends string>(value: unknown, allowed: ReadonlySet<T>): value is T {
   return typeof value === "string" && (allowed as ReadonlySet<string>).has(value)
@@ -1878,6 +1754,23 @@ function parseProjectEnvelope(text: string) {
   }
 }
 
+function bytesFromProjectDataUrl(dataUrl: string) {
+  try {
+    return dataUrlToBytes(dataUrl)
+  } catch {
+    throw new Error("Project contains malformed canvas image data")
+  }
+}
+
+function preflightProjectCanvasDataUrl(dataUrl: string) {
+  const bytes = bytesFromProjectDataUrl(dataUrl)
+  const dimensions = sniffRasterDimensions(bytes)
+  if (!dimensions) {
+    throw new Error("Project contains unsupported or malformed canvas image data")
+  }
+  return assertCanvasSize(dimensions.width, dimensions.height, "Project image")
+}
+
 export function canvasFromDataUrl(dataUrl: string | null | undefined, w: number, h: number) {
   return new Promise<HTMLCanvasElement>((resolve, reject) => {
     const canvas = makeIoCanvas(w, h)
@@ -1889,10 +1782,21 @@ export function canvasFromDataUrl(dataUrl: string | null | undefined, w: number,
       reject(new Error("Project contains unsupported or oversized canvas image data"))
       return
     }
+    let preflightSize: { width: number; height: number }
+    try {
+      preflightSize = preflightProjectCanvasDataUrl(dataUrl)
+    } catch (error) {
+      reject(error)
+      return
+    }
     const img = new Image()
     img.onload = () => {
       try {
-        const size = assertCanvasSize(img.naturalWidth || w, img.naturalHeight || h, "Project image")
+        const size = assertCanvasSize(
+          img.naturalWidth || preflightSize.width || w,
+          img.naturalHeight || preflightSize.height || h,
+          "Project image",
+        )
         canvas.width = size.width
         canvas.height = size.height
         canvas.getContext("2d")!.drawImage(img, 0, 0)
@@ -1990,6 +1894,7 @@ export async function deserializeProject(text: string): Promise<PsDocument> {
     Number(source.height) || 800,
     "Project canvas",
   )
+  const sanitizationDiagnostics: ProjectSanitizationDiagnostics = { truncatedFields: [] }
   if (!Array.isArray(source.layers) || source.layers.length === 0) {
     throw new Error("Project does not contain any layers")
   }
@@ -2082,14 +1987,15 @@ export async function deserializeProject(text: string): Promise<PsDocument> {
   const validatedDocumentHighBit = documentHighBit && documentHighBit.width === width && documentHighBit.height === height
     ? documentHighBit
     : undefined
+  const documentName = cleanText(source.name, "Loaded Project")
 
   // Construct the result via an explicit allow-list. Every field is either
   // typed-and-validated (the dangerous ones — colors, anything that can
   // hit a CSS sink) or shape-bounded via safeJsonValue (non-DOM metadata
   // like notes, slices, asset libraries, etc.).
-  return {
+  const doc = {
     id: uid("doc"),
-    name: cleanText(source.name, "Loaded Project"),
+    name: documentName,
     width,
     height,
     zoom: clampNumber(source.zoom, 0.05, 64, 1),
@@ -2132,46 +2038,48 @@ export async function deserializeProject(text: string): Promise<PsDocument> {
     // asset libraries/timeline frames are normalised again at use sites).
     // safeJsonValue drops __proto__/constructor/prototype keys, bounds
     // string/array/object size, and rejects non-finite numbers.
-    notes: safeJsonArray<NonNullable<PsDocument["notes"]>[number]>(source.notes),
-    slices: safeJsonArray<NonNullable<PsDocument["slices"]>[number]>(source.slices) ?? [],
+    notes: safeJsonArray<NonNullable<PsDocument["notes"]>[number]>(source.notes, SAFE_JSON_DEFAULT_LIMITS, "notes", sanitizationDiagnostics),
+    slices: safeJsonArray<NonNullable<PsDocument["slices"]>[number]>(source.slices, SAFE_JSON_DEFAULT_LIMITS, "slices", sanitizationDiagnostics) ?? [],
     selectedSliceId: typeof source.selectedSliceId === "string"
       ? cleanText(source.selectedSliceId, "", 120) || undefined
       : undefined,
-    counts: safeJsonArray<NonNullable<PsDocument["counts"]>[number]>(source.counts),
+    counts: safeJsonArray<NonNullable<PsDocument["counts"]>[number]>(source.counts, SAFE_JSON_DEFAULT_LIMITS, "counts", sanitizationDiagnostics),
     countGroup: typeof source.countGroup === "string"
       ? cleanText(source.countGroup, "", 80) || undefined
       : undefined,
-    colorSamplers: safeJsonArray<NonNullable<PsDocument["colorSamplers"]>[number]>(source.colorSamplers),
-    comps: safeJsonArray<NonNullable<PsDocument["comps"]>[number]>(source.comps),
+    colorSamplers: safeJsonArray<NonNullable<PsDocument["colorSamplers"]>[number]>(source.colorSamplers, SAFE_JSON_DEFAULT_LIMITS, "colorSamplers", sanitizationDiagnostics),
+    comps: safeJsonArray<NonNullable<PsDocument["comps"]>[number]>(source.comps, PROJECT_PAYLOAD_LIMITS, "comps", sanitizationDiagnostics),
     measurement: cleanMeasurement(source.measurement),
     rulerUnits: isAllowedEnum(source.rulerUnits, ALLOWED_RULER_UNITS)
       ? source.rulerUnits
       : undefined,
     rulerOrigin: cleanRulerOrigin(source.rulerOrigin),
     globalLight: cleanGlobalLight(source.globalLight),
-    patternLibrary: safeJsonArray<NonNullable<PsDocument["patternLibrary"]>[number]>(source.patternLibrary),
-    stylePresets: safeJsonArray<NonNullable<PsDocument["stylePresets"]>[number]>(source.stylePresets),
-    gradientPresets: safeJsonArray<NonNullable<PsDocument["gradientPresets"]>[number]>(source.gradientPresets),
-    characterStyles: safeJsonObject<NonNullable<PsDocument["characterStyles"]>>(source.characterStyles),
-    paragraphStyles: safeJsonObject<NonNullable<PsDocument["paragraphStyles"]>>(source.paragraphStyles),
-    assetLibrary: safeJsonArray<NonNullable<PsDocument["assetLibrary"]>[number]>(source.assetLibrary, PROJECT_PAYLOAD_LIMITS, "assetLibrary"),
-    timelineFrames: safeJsonArray<NonNullable<PsDocument["timelineFrames"]>[number]>(source.timelineFrames, PROJECT_PAYLOAD_LIMITS, "timelineFrames"),
-    plugins: safeJsonArray<NonNullable<PsDocument["plugins"]>[number]>(source.plugins, PROJECT_PAYLOAD_LIMITS, "plugins"),
-    pluginStorage: safeJsonObject<NonNullable<PsDocument["pluginStorage"]>>(source.pluginStorage, PROJECT_PAYLOAD_LIMITS, "pluginStorage"),
-    variableDataSets: safeJsonArray<NonNullable<PsDocument["variableDataSets"]>[number]>(source.variableDataSets),
-    modeSettings: safeJsonObject<DocumentModeSettings>(source.modeSettings),
+    patternLibrary: safeJsonArray<NonNullable<PsDocument["patternLibrary"]>[number]>(source.patternLibrary, SAFE_JSON_DEFAULT_LIMITS, "patternLibrary", sanitizationDiagnostics),
+    stylePresets: safeJsonArray<NonNullable<PsDocument["stylePresets"]>[number]>(source.stylePresets, SAFE_JSON_DEFAULT_LIMITS, "stylePresets", sanitizationDiagnostics),
+    gradientPresets: safeJsonArray<NonNullable<PsDocument["gradientPresets"]>[number]>(source.gradientPresets, SAFE_JSON_DEFAULT_LIMITS, "gradientPresets", sanitizationDiagnostics),
+    characterStyles: safeJsonObject<NonNullable<PsDocument["characterStyles"]>>(source.characterStyles, SAFE_JSON_DEFAULT_LIMITS, "characterStyles", sanitizationDiagnostics),
+    paragraphStyles: safeJsonObject<NonNullable<PsDocument["paragraphStyles"]>>(source.paragraphStyles, SAFE_JSON_DEFAULT_LIMITS, "paragraphStyles", sanitizationDiagnostics),
+    assetLibrary: safeJsonArray<NonNullable<PsDocument["assetLibrary"]>[number]>(source.assetLibrary, PROJECT_PAYLOAD_LIMITS, "assetLibrary", sanitizationDiagnostics),
+    timelineFrames: safeJsonArray<NonNullable<PsDocument["timelineFrames"]>[number]>(source.timelineFrames, PROJECT_PAYLOAD_LIMITS, "timelineFrames", sanitizationDiagnostics),
+    plugins: safeJsonArray<NonNullable<PsDocument["plugins"]>[number]>(source.plugins, PROJECT_PAYLOAD_LIMITS, "plugins", sanitizationDiagnostics),
+    pluginStorage: safeJsonObject<NonNullable<PsDocument["pluginStorage"]>>(source.pluginStorage, PROJECT_PAYLOAD_LIMITS, "pluginStorage", sanitizationDiagnostics),
+    variableDataSets: safeJsonArray<NonNullable<PsDocument["variableDataSets"]>[number]>(source.variableDataSets, SAFE_JSON_DEFAULT_LIMITS, "variableDataSets", sanitizationDiagnostics),
+    modeSettings: safeJsonObject<DocumentModeSettings>(source.modeSettings, SAFE_JSON_DEFAULT_LIMITS, "modeSettings", sanitizationDiagnostics),
     // reports are generated at runtime (createDocumentReport); we never
     // restore them from a project file, since they reference the freshly
     // loaded layer canvases and the source-of-truth lives in editor state.
     reports: undefined,
-    metadata: safeJsonObject<DocumentMetadata>(source.metadata, PROJECT_PAYLOAD_LIMITS, "metadata"),
-    colorManagement: safeJsonObject<NonNullable<PsDocument["colorManagement"]>>(source.colorManagement),
-    printSettings: safeJsonObject<NonNullable<PsDocument["printSettings"]>>(source.printSettings),
+    metadata: safeJsonObject<DocumentMetadata>(source.metadata, PROJECT_PAYLOAD_LIMITS, "metadata", sanitizationDiagnostics),
+    colorManagement: safeJsonObject<NonNullable<PsDocument["colorManagement"]>>(source.colorManagement, SAFE_JSON_DEFAULT_LIMITS, "colorManagement", sanitizationDiagnostics),
+    printSettings: safeJsonObject<NonNullable<PsDocument["printSettings"]>>(source.printSettings, SAFE_JSON_DEFAULT_LIMITS, "printSettings", sanitizationDiagnostics),
     smartObjectParent: cleanSmartObjectParent(source.smartObjectParent),
     dpi: typeof source.dpi === "number" && Number.isFinite(source.dpi)
       ? Math.max(1, Math.min(9999, source.dpi))
       : undefined,
   } satisfies PsDocument
+  const sanitizationReport = createProjectSanitizationReport(documentName, sanitizationDiagnostics)
+  return sanitizationReport ? { ...doc, reports: [sanitizationReport] } : doc
 }
 
 function psdColorToHex(color: unknown, fallback = "#ffffff") {

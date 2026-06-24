@@ -1,12 +1,34 @@
 import { expect, type Page, test } from "@playwright/test"
 
+const commandShortcut = process.platform === "darwin" ? "Meta+K" : "Control+K"
+const commandSearchPlaceholder = "Search tools, filters, panels, and commands"
+
+async function openEditor(page: Page) {
+  await page.goto("/editor", { waitUntil: "load" })
+  await expect(page.locator("[data-canvas-stage]")).toBeVisible({ timeout: 30000 })
+}
+
 async function openCommand(page: Page, query: string) {
+  await expect(page.locator("[data-canvas-stage]")).toBeVisible({ timeout: 30000 })
+  const search = page.getByPlaceholder(commandSearchPlaceholder)
   await page.locator("body").click({ position: { x: 20, y: 20 } })
-  await page.keyboard.press(process.platform === "darwin" ? "Meta+K" : "Control+K")
-  await expect(page.getByPlaceholder("Search tools, filters, panels, and commands")).toBeVisible()
-  await page.getByPlaceholder("Search tools, filters, panels, and commands").fill(query)
+
+  for (let attempt = 0; attempt < 2 && !(await search.isVisible().catch(() => false)); attempt++) {
+    await page.keyboard.press(commandShortcut)
+    if (attempt === 0) {
+      try {
+        await expect(search).toBeVisible({ timeout: 5000 })
+      } catch {
+        continue
+      }
+    } else {
+      await expect(search).toBeVisible({ timeout: 10000 })
+    }
+  }
+
+  await search.fill(query)
   await page.keyboard.press("Enter")
-  await expect(page.getByText("Command Palette")).toBeHidden()
+  await expect(page.getByRole("dialog", { name: "Command Palette" })).toBeHidden()
 }
 
 async function selectToolFromGroup(page: Page, groupName: string | RegExp, toolName: string) {
@@ -26,7 +48,7 @@ async function selectToolFromGroup(page: Page, groupName: string | RegExp, toolN
 
 async function canvasScreenPoint(page: Page, x: number, y: number) {
   const stage = page.locator("[data-canvas-stage]")
-  await expect(stage).toBeVisible()
+  await expect(stage).toBeVisible({ timeout: 30000 })
   const box = await stage.boundingBox()
   if (!box) throw new Error("Canvas stage is not measurable")
   return { x: box.x + x, y: box.y + y }
@@ -48,8 +70,7 @@ async function clickCanvas(page: Page, point: { x: number; y: number }) {
 
 test("canvas creation tools commit useful document state", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/editor")
-  await expect(page.locator("[data-canvas-stage]")).toBeVisible()
+  await openEditor(page)
 
   await selectToolFromGroup(page, /Rectangle Tool|Custom Shape Tool/, "Custom Shape Tool")
   await dragOnCanvas(page, { x: 120, y: 120 }, { x: 230, y: 220 })
@@ -72,8 +93,7 @@ test("canvas creation tools commit useful document state", async ({ page }) => {
 
 test("new first-class tools commit local editable state", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/editor")
-  await expect(page.locator("[data-canvas-stage]")).toBeVisible()
+  await openEditor(page)
 
   await openCommand(page, "Vertical Type Tool")
   await clickCanvas(page, { x: 150, y: 150 })
@@ -110,8 +130,7 @@ test("new first-class tools commit local editable state", async ({ page }) => {
 
 test("advanced tool options expose polygon, magnetic, quick selection, and slice export controls", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/editor")
-  await expect(page.locator("[data-canvas-stage]")).toBeVisible()
+  await openEditor(page)
 
   await openCommand(page, "Polygon Tool")
   await expect(page.getByText("Star")).toBeVisible()
@@ -153,8 +172,7 @@ test("advanced tool options expose polygon, magnetic, quick selection, and slice
 
 test("lock image pixels blocks gradient strokes on the active layer", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/editor")
-  await expect(page.locator("[data-canvas-stage]")).toBeVisible()
+  await openEditor(page)
 
   await page.getByLabel("Lower panel picker").selectOption("layers")
   await page.getByRole("button", { name: "Lock image pixels" }).click()
@@ -173,8 +191,7 @@ test("lock image pixels blocks gradient strokes on the active layer", async ({ p
 
 test("brush strokes repaint the visible composite canvas", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/editor")
-  await expect(page.locator("[data-canvas-stage]")).toBeVisible()
+  await openEditor(page)
 
   await openCommand(page, "Brush Tool")
   await dragOnCanvas(page, { x: 120, y: 120 }, { x: 280, y: 190 })

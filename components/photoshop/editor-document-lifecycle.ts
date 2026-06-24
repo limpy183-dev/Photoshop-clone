@@ -103,6 +103,7 @@ const DOCUMENT_DIRTY_ACTIONS = new Set([
   "set-print-settings",
   "set-document-mode-settings",
   "set-plugins",
+  "set-plugin-storage",
   "set-variable-data-sets",
   "add-document-report",
   "clear-document-reports",
@@ -212,19 +213,37 @@ export function withDocumentLifecyclePatch<T extends Pick<EditorDocumentLifecycl
   }
 }
 
+type DirtyRoutingState = Pick<EditorDocumentLifecycleHost, "activeDocId"> & Partial<Pick<EditorDocumentLifecycleHost, "documents">>
+
+function changedDocumentIds(
+  docIds: readonly string[],
+  before: DirtyRoutingState,
+  after?: DirtyRoutingState,
+) {
+  const unique = [...new Set(docIds)]
+  if (!after?.documents || !before.documents) return unique
+  return unique.filter((docId) => {
+    const beforeDoc = before.documents?.find((doc) => doc.id === docId)
+    const afterDoc = after.documents?.find((doc) => doc.id === docId)
+    return beforeDoc !== afterDoc
+  })
+}
+
 export function dirtyDocIdsForAction(
   action: EditorDirtyActionLike,
-  state: Pick<EditorDocumentLifecycleHost, "activeDocId">,
+  state: DirtyRoutingState,
+  nextState?: DirtyRoutingState,
 ) {
   if (action.type === "move-layers-to-document") {
-    return action.copy ? [action.targetDocId].filter(Boolean) as string[] : [action.sourceDocId, action.targetDocId].filter(Boolean) as string[]
+    const ids = action.copy ? [action.targetDocId].filter(Boolean) as string[] : [action.sourceDocId, action.targetDocId].filter(Boolean) as string[]
+    return changedDocumentIds(ids, state, nextState)
   }
-  if (action.type === "update-smart-object-parent") return action.parentDocId ? [action.parentDocId] : []
-  if (action.type === "apply-linked-smart-object-sync") return action.docId ? [action.docId] : []
+  if (action.type === "update-smart-object-parent") return action.parentDocId ? changedDocumentIds([action.parentDocId], state, nextState) : []
+  if (action.type === "apply-linked-smart-object-sync") return action.docId ? changedDocumentIds([action.docId], state, nextState) : []
   if (action.type === "save-selection" || action.type === "update-channel") {
     const targetId = action.targetDocId ?? state.activeDocId
-    return targetId ? [targetId] : []
+    return targetId ? changedDocumentIds([targetId], state, nextState) : []
   }
   if (!DOCUMENT_DIRTY_ACTIONS.has(action.type)) return []
-  return state.activeDocId ? [state.activeDocId] : []
+  return state.activeDocId ? changedDocumentIds([state.activeDocId], state, nextState) : []
 }

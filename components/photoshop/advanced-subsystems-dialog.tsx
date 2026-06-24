@@ -2216,10 +2216,12 @@ function PluginIframeRuntime({
   onLog: (message: string) => void
 }) {
   const iframeRef = React.useRef<HTMLIFrameElement>(null)
+  const seenRequestIdsRef = React.useRef<Set<string>>(new Set())
   const [token, setToken] = React.useState(() => uid("plugintoken"))
   const [runtimeState, setRuntimeState] = React.useState<"booting" | "ready" | "error">("booting")
   const [reloadKey, setReloadKey] = React.useState(0)
   React.useEffect(() => {
+    seenRequestIdsRef.current.clear()
     setToken(uid("plugintoken"))
     setRuntimeState("booting")
     onUiTree(null)
@@ -2241,6 +2243,7 @@ function PluginIframeRuntime({
         token,
         source: iframeRef.current?.contentWindow ?? null,
         eventSource: event.source,
+        seenRequestIds: seenRequestIdsRef.current,
       })
       if (!request) return
       const required = permissionForPanelMethod(request.method)

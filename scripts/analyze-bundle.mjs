@@ -140,6 +140,88 @@ function readChunkSourceMapOwnership(chunks) {
   return ownership
 }
 
+function normalizeStatsChunkFile(file) {
+  const normalized = toPosix(String(file)).replace(/^\/+/, "")
+  if (normalized.startsWith(".next/")) return normalized
+  if (normalized.startsWith("static/")) return `.next/${normalized}`
+  if (normalized.startsWith("chunks/")) return `.next/static/${normalized}`
+  return normalized
+}
+
+function normalizeWebpackStatsModuleName(value) {
+  const normalized = normalizeSourcemapSource(String(value).replace(/^.*!/, ""))
+  return normalized.replace(/^\.\//, "")
+}
+
+function collectWebpackStatsModules(modules, out) {
+  if (!Array.isArray(modules)) return
+  for (const item of modules) {
+    if (!item || typeof item !== "object") continue
+    const rawName = item.nameForCondition ?? item.name ?? item.identifier
+    if (typeof rawName === "string") {
+      const normalized = normalizeWebpackStatsModuleName(rawName)
+      if (
+        normalized.startsWith("components/") ||
+        normalized.startsWith("app/") ||
+        normalized.startsWith("lib/") ||
+        normalized.startsWith("node_modules/")
+      ) {
+        out.add(normalized)
+      }
+    }
+    collectWebpackStatsModules(item.modules, out)
+  }
+}
+
+function readWebpackStatsOwnership(chunks) {
+  const candidates = [
+    process.env.BUNDLE_WEBPACK_STATS_PATH,
+    resolve(root, "artifacts/webpack-stats.json"),
+    resolve(root, ".next/webpack-stats.json"),
+    resolve(root, ".next/stats-client.json"),
+  ].filter(Boolean)
+  const wantedFiles = new Set(chunks.map((chunk) => chunk.file))
+
+  for (const statsPath of candidates) {
+    if (!existsSync(statsPath)) continue
+    try {
+      const stats = JSON.parse(readFileSync(statsPath, "utf8"))
+      const modulesByChunk = new Map()
+      for (const module of stats.modules ?? []) {
+        for (const chunkId of module.chunks ?? []) {
+          const key = String(chunkId)
+          const modules = modulesByChunk.get(key) ?? []
+          modules.push(module)
+          modulesByChunk.set(key, modules)
+        }
+      }
+
+      const ownership = new Map()
+      for (const chunk of stats.chunks ?? []) {
+        if (!chunk || typeof chunk !== "object") continue
+        const files = (chunk.files ?? []).map(normalizeStatsChunkFile).filter((file) => wantedFiles.has(file))
+        if (!files.length) continue
+        const modules = new Set()
+        collectWebpackStatsModules(chunk.modules, modules)
+        for (const key of [chunk.id, chunk.name, ...(chunk.names ?? [])]) {
+          collectWebpackStatsModules(modulesByChunk.get(String(key)), modules)
+        }
+        for (const file of files) {
+          ownership.set(file, {
+            file,
+            statsPath: relative(root, statsPath).split("\\").join("/"),
+            modules,
+          })
+        }
+      }
+      return ownership
+    } catch {
+      // Webpack stats are optional and may be produced by different tooling.
+    }
+  }
+  return new Map()
+}
+
 if (!existsSync(chunkRoot)) {
   console.error("Bundle analysis requires a completed Next build: .next/static/chunks was not found.")
   process.exit(2)
@@ -162,10 +244,12 @@ const overBudget = chunks.filter((chunk) => chunk.bytes > maxChunkBytes)
 const decoderChunks = chunks.filter((chunk) => /decoder|raster|raw|heic|j2k|openjpeg|exr|tiff|wasm/i.test(chunk.file))
 const clientReferenceOwnership = readClientReferenceManifests()
 const sourcemapOwnership = readChunkSourceMapOwnership(largest)
+const webpackStatsOwnership = readWebpackStatsOwnership(largest)
 const chunkOwnership = largest.map((chunk) => {
   const manifestPath = chunk.file.replace(/^\.next\//, "")
   const owner = clientReferenceOwnership.get(manifestPath)
   const sourcemapOwner = sourcemapOwnership.get(chunk.file)
+  const webpackStatsOwner = webpackStatsOwnership.get(chunk.file)
   return {
     file: chunk.file,
     bytes: chunk.bytes,
@@ -175,9 +259,13 @@ const chunkOwnership = largest.map((chunk) => {
     moduleSampleCount: owner?.modules.size ?? 0,
     sourcemapModuleSamples: sourcemapOwner ? [...sourcemapOwner.modules].sort().slice(0, 12) : [],
     sourcemapModuleSampleCount: sourcemapOwner?.modules.size ?? 0,
+    webpackStatsModuleSamples: webpackStatsOwner ? [...webpackStatsOwner.modules].sort().slice(0, 12) : [],
+    webpackStatsModuleSampleCount: webpackStatsOwner?.modules.size ?? 0,
+    webpackStatsPath: webpackStatsOwner?.statsPath,
     ownershipSources: [
       ...(owner ? ["client-reference-manifest"] : []),
       ...(sourcemapOwner ? ["sourcemap"] : []),
+      ...(webpackStatsOwner ? ["webpack-stats"] : []),
     ],
   }
 })

@@ -1,15 +1,38 @@
-import { expect, test } from "@playwright/test"
+import { expect, test, type Page } from "@playwright/test"
 
-async function openCommand(page: import("@playwright/test").Page, query: string) {
+const commandShortcut = process.platform === "darwin" ? "Meta+K" : "Control+K"
+const commandSearchPlaceholder = "Search tools, filters, panels, and commands"
+
+async function openEditor(page: Page) {
+  await page.goto("/editor", { waitUntil: "load" })
+  await expect(page.locator("[data-canvas-stage]")).toBeVisible({ timeout: 30000 })
+}
+
+async function openCommand(page: Page, query: string) {
+  await expect(page.locator("[data-canvas-stage]")).toBeVisible({ timeout: 30000 })
+  const search = page.getByPlaceholder(commandSearchPlaceholder)
   await page.locator("body").click({ position: { x: 20, y: 20 } })
-  await page.keyboard.press(process.platform === "darwin" ? "Meta+K" : "Control+K")
-  await page.getByPlaceholder("Search tools, filters, panels, and commands").fill(query)
+
+  for (let attempt = 0; attempt < 2 && !(await search.isVisible().catch(() => false)); attempt++) {
+    await page.keyboard.press(commandShortcut)
+    if (attempt === 0) {
+      try {
+        await expect(search).toBeVisible({ timeout: 5000 })
+      } catch {
+        continue
+      }
+    } else {
+      await expect(search).toBeVisible({ timeout: 10000 })
+    }
+  }
+
+  await search.fill(query)
   await page.keyboard.press("Enter")
+  await expect(page.getByRole("dialog", { name: "Command Palette" })).toBeHidden()
 }
 
 test("closing a dirty document prompts before discarding changes", async ({ page }) => {
-  await page.goto("/editor")
-  await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
+  await openEditor(page)
 
   await openCommand(page, "New Layer")
   await expect(page.getByText(/Untitled-1.*\*/)).toBeVisible()
@@ -28,8 +51,7 @@ test("autosave writes separate recovery entries for open documents", async ({ pa
     localStorage.setItem("ps-preferences", JSON.stringify({ autoSave: true }))
   })
 
-  await page.goto("/editor")
-  await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
+  await openEditor(page)
   await openCommand(page, "Duplicate Document")
 
   await page.waitForFunction(() => {
@@ -52,11 +74,10 @@ test("autosave writes separate recovery entries for open documents", async ({ pa
 })
 
 test("export dialog guards browser-only export limitations", async ({ page }) => {
-  await page.goto("/editor")
-  await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
+  await openEditor(page)
 
   await openCommand(page, "Export As")
-  await expect(page.getByRole("dialog", { name: "Export As" })).toBeVisible()
+  await expect(page.getByRole("dialog", { name: "Export As" })).toBeVisible({ timeout: 30000 })
   await expect(page.getByText(/PNG export limitations/i)).toBeVisible()
   await expect(page.getByText(/Layer structure:/i)).toBeVisible()
 
@@ -81,11 +102,10 @@ test("export dialog guards browser-only export limitations", async ({ page }) =>
 })
 
 test("export dialog offers task-based decision cards with preservation guidance", async ({ page }) => {
-  await page.goto("/editor", { waitUntil: "domcontentloaded" })
-  await page.waitForSelector("[data-canvas-stage]", { timeout: 30000 })
+  await openEditor(page)
 
   await openCommand(page, "Export As")
-  await expect(page.getByRole("dialog", { name: "Export As" })).toBeVisible()
+  await expect(page.getByRole("dialog", { name: "Export As" })).toBeVisible({ timeout: 30000 })
 
   await expect(page.getByTestId("export-decision-wizard")).toBeVisible()
   await expect(page.getByRole("button", { name: /Best for web/i })).toBeVisible()
@@ -100,8 +120,7 @@ test("export dialog offers task-based decision cards with preservation guidance"
 })
 
 test("file info shows browser-local source location state", async ({ page }) => {
-  await page.goto("/editor")
-  await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
+  await openEditor(page)
 
   await openCommand(page, "File Info")
   await expect(page.getByRole("dialog", { name: "File Info" })).toBeVisible()

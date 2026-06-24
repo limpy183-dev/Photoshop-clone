@@ -3552,7 +3552,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     // deferred React render would leave stateRef stale and re-introduce the
     // race where Ctrl+Z jumps further than expected.
     let next = reducer(before, action)
-    const dirtyDocs = dirtyDocIdsForAction(action, before)
+    const dirtyDocs = dirtyDocIdsForAction(action, before, next)
     for (const docId of dirtyDocs) {
       next = reducer(next, { type: "mark-document-dirty", id: docId })
     }
@@ -4793,22 +4793,6 @@ export function useDocumentLifecycle(docId?: string | null) {
     const id = docId ?? editor.activeDocId
     return id ? editor.documentStatuses[id] : undefined
   })
-}
-
-export function useHistoryState(docId?: string | null) {
-  const { activeDocId, documentHistoryVersions, history, historyIndex, snapshots } = useEditor()
-  const id = docId ?? activeDocId
-  const isActiveDocument = !!id && id === activeDocId
-  return React.useMemo(
-    () => ({
-      docId: id ?? null,
-      entries: isActiveDocument ? history : [],
-      index: isActiveDocument ? historyIndex : -1,
-      snapshots: isActiveDocument ? snapshots : [],
-      version: id ? documentHistoryVersions[id] ?? 0 : 0,
-    }),
-    [documentHistoryVersions, history, historyIndex, id, isActiveDocument, snapshots],
-  )
 }
 
 export function useRenderSubscription(cb: (change: MergedRenderChange) => void) {

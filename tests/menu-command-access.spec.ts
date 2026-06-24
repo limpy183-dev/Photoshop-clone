@@ -7,8 +7,21 @@ function topMenu(page: Page, name: string) {
     .first()
 }
 
+async function openEditor(page: Page) {
+  await page.goto("/editor", { waitUntil: "load" })
+  await expect(page.locator("[data-canvas-stage]")).toBeVisible({ timeout: 30000 })
+}
+
 async function openTopMenu(page: Page, name: string) {
-  await topMenu(page, name).click()
+  const trigger = topMenu(page, name)
+  await expect(trigger).toBeVisible()
+  await trigger.click()
+}
+
+async function hoverMenuItem(page: Page, name: string | RegExp, options?: { exact?: boolean }) {
+  const item = page.getByRole("menuitem", { name, exact: options?.exact }).first()
+  await expect(item).toBeVisible()
+  await item.hover()
 }
 
 async function expectCommandEnabled(page: Page, name: string | RegExp) {
@@ -22,8 +35,7 @@ async function openLowerPanel(page: Page, id: string) {
 }
 
 test("top menu bar switches menus on hover after a menu is open", async ({ page }) => {
-  await page.goto("/editor")
-  await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
+  await openEditor(page)
 
   await openTopMenu(page, "File")
   await expect(page.getByRole("menuitem", { name: /New/ }).first()).toBeVisible()
@@ -34,14 +46,13 @@ test("top menu bar switches menus on hover after a menu is open", async ({ page 
 })
 
 test("arrow submenu commands expand into a usable flyout", async ({ page }) => {
-  await page.goto("/editor")
-  await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
+  await openEditor(page)
 
   await openTopMenu(page, "Edit")
   const parentMenu = page.locator('[data-slot="menubar-content"]').first()
   await expect(parentMenu).toBeVisible()
 
-  await page.getByRole("menuitem", { name: "Transform", exact: true }).hover()
+  await hoverMenuItem(page, "Transform", { exact: true })
   const submenu = page.locator('[data-slot="menubar-sub-content"]').filter({ hasText: "Flip Horizontal" }).first()
   await expect(submenu).toBeVisible()
   await expect(page.getByRole("menuitem", { name: "Flip Horizontal" })).toBeVisible()
@@ -54,31 +65,29 @@ test("arrow submenu commands expand into a usable flyout", async ({ page }) => {
 })
 
 test("selection commands stay reachable and load selection expands even without saved channels", async ({ page }) => {
-  await page.goto("/editor")
-  await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
+  await openEditor(page)
 
   await openTopMenu(page, "Select")
   for (const command of [/Expand/, /Contract/, /Similar/, /Save Selection/]) {
     await expectCommandEnabled(page, command)
   }
 
-  await page.getByRole("menuitem", { name: "Modify" }).hover()
+  await hoverMenuItem(page, "Modify")
   for (const command of [/Feather/, /Border/, /Smooth/]) {
     await expectCommandEnabled(page, command)
   }
 
   await page.keyboard.press("Escape")
   await openTopMenu(page, "Select")
-  await page.getByRole("menuitem", { name: "Load Selection" }).hover()
+  await hoverMenuItem(page, "Load Selection")
   await expect(page.getByRole("menuitem", { name: "No saved channels" })).toBeVisible()
 })
 
 test("profile and proof controls are reachable from Image and View menus", async ({ page }) => {
-  await page.goto("/editor")
-  await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
+  await openEditor(page)
 
   await openTopMenu(page, "Image")
-  await page.getByRole("menuitem", { name: "Mode" }).hover()
+  await hoverMenuItem(page, "Mode")
   await expectCommandEnabled(page, "Assign Profile...")
   await expectCommandEnabled(page, "Convert to Profile...")
   await expectCommandEnabled(page, "Color Settings / Proof Setup...")
@@ -89,7 +98,7 @@ test("profile and proof controls are reachable from Image and View menus", async
   await page.keyboard.press("Escape")
 
   await openTopMenu(page, "Image")
-  await page.getByRole("menuitem", { name: "Mode" }).hover()
+  await hoverMenuItem(page, "Mode")
   await page.getByRole("menuitem", { name: "Convert to Profile..." }).click()
   await expect(page.getByRole("dialog", { name: "Advanced Photoshop Subsystems" })).toBeVisible()
   await expect(page.getByRole("button", { name: /^convert$/i })).toHaveAttribute("aria-pressed", "true")
@@ -97,7 +106,7 @@ test("profile and proof controls are reachable from Image and View menus", async
 
   await page.keyboard.press("Escape")
   await openTopMenu(page, "View")
-  await page.getByRole("menuitem", { name: "Proof Setup" }).hover()
+  await hoverMenuItem(page, "Proof Setup")
   await expectCommandEnabled(page, /Proof Colors/)
   await expectCommandEnabled(page, /Gamut Warning/)
   await expectCommandEnabled(page, "Proof Profile")
@@ -105,28 +114,27 @@ test("profile and proof controls are reachable from Image and View menus", async
 
   await page.keyboard.press("Escape")
   await openTopMenu(page, "Image")
-  await page.getByRole("menuitem", { name: "Mode" }).hover()
+  await hoverMenuItem(page, "Mode")
   await page.getByRole("menuitem", { name: "Color Settings / Proof Setup..." }).click()
   await expect(page.getByRole("dialog", { name: "Advanced Photoshop Subsystems" })).toBeVisible()
   await expect(page.getByRole("button", { name: /^proof$/i })).toHaveAttribute("aria-pressed", "true")
 })
 
 test("stateful layer and type commands are clickable instead of greyed out", async ({ page }) => {
-  await page.goto("/editor")
-  await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
+  await openEditor(page)
 
   await openTopMenu(page, "Edit")
   await expectCommandEnabled(page, /Content-Aware Fill/)
 
   await topMenu(page, "Layer").hover()
-  await page.getByRole("menuitem", { name: "Layer Style" }).hover()
+  await hoverMenuItem(page, "Layer Style")
   for (const command of ["Copy Layer Style", "Paste Layer Style", "Clear Layer Style"]) {
     await expectCommandEnabled(page, command)
   }
 
   await page.keyboard.press("Escape")
   await openTopMenu(page, "Layer")
-  await page.getByRole("menuitem", { name: "Layer Mask" }).hover()
+  await hoverMenuItem(page, "Layer Mask")
   for (const command of [/Disable Mask|Enable Mask/, /Refine Mask/, /Apply Mask/, /Delete Mask/]) {
     await expectCommandEnabled(page, command)
   }
@@ -136,7 +144,7 @@ test("stateful layer and type commands are clickable instead of greyed out", asy
   for (const command of ["Edit Smart Object Contents", "Update Parent Smart Object"]) {
     await expectCommandEnabled(page, command)
   }
-  await page.getByRole("menuitem", { name: "Flatten Transparency", exact: true }).hover()
+  await hoverMenuItem(page, "Flatten Transparency", { exact: true })
   await expectCommandEnabled(page, "Background Color")
   await expectCommandEnabled(page, "Preserve Alpha")
 
@@ -147,8 +155,7 @@ test("stateful layer and type commands are clickable instead of greyed out", asy
 })
 
 test("file menu close/reopen commands are clickable from the menu bar", async ({ page }) => {
-  await page.goto("/editor")
-  await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
+  await openEditor(page)
 
   await openTopMenu(page, "File")
   await expectCommandEnabled(page, "Close Others")
@@ -168,8 +175,7 @@ test("file menu close/reopen commands are clickable from the menu bar", async ({
 })
 
 test("content-aware fill runs from the Edit menu once a selection exists", async ({ page }) => {
-  await page.goto("/editor")
-  await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
+  await openEditor(page)
 
   await openTopMenu(page, "Select")
   await page.getByRole("menuitem", { name: "All \u2318A" }).click()

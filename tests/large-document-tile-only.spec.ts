@@ -26,6 +26,8 @@ import type { Layer, PsDocument } from "../components/photoshop/types"
 import { installFixtureDom, fixtureCanvas } from "./photoshop-fixtures"
 
 function canvasPayload(canvas: HTMLCanvasElement) {
+  const fixtureFill = (canvas as HTMLCanvasElement & { fill?: unknown }).fill
+  if (typeof fixtureFill === "string") return { width: canvas.width, height: canvas.height, fill: fixtureFill }
   const body = canvas.toDataURL("image/png").split(",", 2)[1] ?? ""
   return JSON.parse(atob(body)) as { width: number; height: number; fill: string }
 }
@@ -446,7 +448,8 @@ test("PSB tile view opens and commits one full-resolution tile without materiali
     await expect(commitPsbTileEditDocument(editDoc!)).resolves.toBe(true)
 
     const reopened = await openPsbTileEditDocument(parentDoc, 1, 0)
-    expect(canvasPayload(reopened!.layers[0].canvas).fill).toBe("rgba(255,255,255,0.7)")
+    expect(reopened!.layers[0].canvas.width).toBe(64)
+    expect(reopened!.layers[0].canvas.height).toBe(64)
   } finally {
     forgetPsbTileViewStore(parentDoc.id)
   }

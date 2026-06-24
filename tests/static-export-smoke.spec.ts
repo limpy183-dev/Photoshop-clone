@@ -2,6 +2,10 @@ import { expect, test } from "@playwright/test"
 
 const basePath = "/Photoshop-clone"
 
+test.beforeEach(({}, testInfo) => {
+  test.skip(testInfo.project.name !== "static-chromium", "Static export smoke runs under playwright.static.config.ts")
+})
+
 test("static export serves the start workspace with basePath assets", async ({ page }) => {
   await page.goto(`${basePath}/`)
 

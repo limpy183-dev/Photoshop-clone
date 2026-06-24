@@ -2,23 +2,22 @@
 
 import * as React from "react"
 import { Camera, Download, RotateCcw, RotateCw, Search, Trash2 } from "lucide-react"
-import { useEditor } from "../editor-context"
+import { useActiveDocument } from "../editor-context"
+import { useHistoryCommands, useHistoryState } from "../editor-history-hooks"
 import { downloadText } from "../document-io"
 import { cn } from "@/lib/utils"
 import type { HistoryEntry } from "../types"
 
 export function HistoryPanel() {
+  const activeDoc = useActiveDocument()
   const {
-    history,
-    historyIndex,
-    snapshots,
     jumpHistory,
     stepHistoryBy,
-    activeDoc,
     createHistorySnapshot,
     restoreHistorySnapshot,
     deleteHistorySnapshot,
-  } = useEditor()
+  } = useHistoryCommands()
+  const { entries: history, index: historyIndex, snapshots } = useHistoryState(activeDoc?.id)
   const [snapshotName, setSnapshotName] = React.useState("")
   const [query, setQuery] = React.useState("")
   const [view, setView] = React.useState<"all" | "past" | "current" | "future">("all")

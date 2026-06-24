@@ -1337,13 +1337,21 @@ ${html ?? ""}
 
 export function validatePluginPanelRequest(
   value: unknown,
-  context: { pluginId: string; token: string; source: Window | null; eventSource: MessageEvent["source"] },
+  context: {
+    pluginId: string
+    token: string
+    source: Window | null
+    eventSource: MessageEvent["source"]
+    seenRequestIds?: Set<string>
+  },
 ): PluginPanelRequest | null {
   if (!context.source || context.eventSource !== context.source || !isRecord(value)) return null
   if (value.channel !== PLUGIN_MESSAGE_CHANNEL) return null
   if (value.pluginId !== context.pluginId || value.token !== context.token) return null
   if (typeof value.requestId !== "string" || value.requestId.length > 80 || !value.requestId) return null
   if (typeof value.method !== "string" || !PANEL_METHODS.has(value.method)) return null
+  if (context.seenRequestIds?.has(value.requestId)) return null
+  context.seenRequestIds?.add(value.requestId)
   return {
     channel: PLUGIN_MESSAGE_CHANNEL,
     pluginId: context.pluginId,

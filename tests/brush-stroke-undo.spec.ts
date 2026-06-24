@@ -1,19 +1,40 @@
 import { expect, type Page, test } from "@playwright/test"
 
+const commandShortcut = process.platform === "darwin" ? "Meta+K" : "Control+K"
+const commandSearchPlaceholder = "Search tools, filters, panels, and commands"
+
+async function openEditor(page: Page) {
+  await page.goto("/editor", { waitUntil: "load" })
+  await expect(page.locator("[data-canvas-stage]")).toBeVisible({ timeout: 30000 })
+}
+
 async function selectBrushTool(page: Page) {
-  await expect(page.locator("[data-canvas-stage]")).toBeVisible()
+  await expect(page.locator("[data-canvas-stage]")).toBeVisible({ timeout: 30000 })
+  const search = page.getByPlaceholder(commandSearchPlaceholder)
   await page.locator("body").click({ position: { x: 20, y: 20 } })
-  await page.keyboard.press(process.platform === "darwin" ? "Meta+K" : "Control+K")
-  await expect(page.getByPlaceholder("Search tools, filters, panels, and commands")).toBeVisible()
-  await page.getByPlaceholder("Search tools, filters, panels, and commands").fill("Brush Tool")
+
+  for (let attempt = 0; attempt < 2 && !(await search.isVisible().catch(() => false)); attempt++) {
+    await page.keyboard.press(commandShortcut)
+    if (attempt === 0) {
+      try {
+        await expect(search).toBeVisible({ timeout: 5000 })
+      } catch {
+        continue
+      }
+    } else {
+      await expect(search).toBeVisible({ timeout: 10000 })
+    }
+  }
+
+  await search.fill("Brush Tool")
   await page.keyboard.press("Enter")
-  await expect(page.getByText("Command Palette")).toBeHidden()
+  await expect(page.getByRole("dialog", { name: "Command Palette" })).toBeHidden()
   await expect(page.getByRole("button", { name: /^Brush Tool\b/ }).first()).toBeVisible()
 }
 
 async function canvasScreenPoint(page: Page, x: number, y: number) {
   const stage = page.locator("[data-canvas-stage]")
-  await expect(stage).toBeVisible()
+  await expect(stage).toBeVisible({ timeout: 30000 })
   const box = await stage.boundingBox()
   if (!box) throw new Error("Canvas stage is not measurable")
   return { x: box.x + x, y: box.y + y }
@@ -73,8 +94,7 @@ async function performStroke(
 // stroke and leave the prior two strokes visible.
 test("a single undo after three brush strokes only undoes the most recent stroke", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/editor")
-  await expect(page.locator("[data-canvas-stage]")).toBeVisible()
+  await openEditor(page)
   // Wait for the canvas to be ready (background fill present)
   await expect.poll(async () => canvasPixelAlpha(page, 600, 400)).toBeGreaterThan(0)
 
@@ -139,8 +159,7 @@ test("a single undo after three brush strokes only undoes the most recent stroke
 
 test("undo remains one step when pressed while brush history is still being captured", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/editor")
-  await expect(page.locator("[data-canvas-stage]")).toBeVisible()
+  await openEditor(page)
   await expect.poll(async () => canvasPixelAlpha(page, 600, 400)).toBeGreaterThan(0)
 
   await selectBrushTool(page)
@@ -170,8 +189,7 @@ test("undo remains one step when pressed while brush history is still being capt
 
 test("held ctrl z repeat events do not collapse multiple brush strokes into one undo gesture", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/editor")
-  await expect(page.locator("[data-canvas-stage]")).toBeVisible()
+  await openEditor(page)
   await expect.poll(async () => canvasPixelAlpha(page, 600, 400)).toBeGreaterThan(0)
 
   await selectBrushTool(page)
@@ -239,8 +257,7 @@ async function pixelIsWhite(page: Page, x: number, y: number) {
 
 test("undo cannot remove the initial canvas state no matter how many times it is pressed", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/editor")
-  await expect(page.locator("[data-canvas-stage]")).toBeVisible()
+  await openEditor(page)
   // Wait for the canvas background to be painted on the client
   await expect.poll(async () => canvasPixelAlpha(page, 600, 400)).toBeGreaterThan(0)
 
@@ -299,8 +316,7 @@ test("undo cannot remove the initial canvas state no matter how many times it is
 // undo step. With sync commits this can't happen.
 test("back-to-back strokes with no delay between them each get their own undo step", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/editor")
-  await expect(page.locator("[data-canvas-stage]")).toBeVisible()
+  await openEditor(page)
   await expect.poll(async () => canvasPixelAlpha(page, 600, 400)).toBeGreaterThan(0)
 
   await selectBrushTool(page)
@@ -365,8 +381,7 @@ test("back-to-back strokes with no delay between them each get their own undo st
 // inside a single animation frame.
 test("brush stroke commits return quickly to keep painting responsive", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/editor")
-  await expect(page.locator("[data-canvas-stage]")).toBeVisible()
+  await openEditor(page)
   await expect.poll(async () => canvasPixelAlpha(page, 600, 400)).toBeGreaterThan(0)
 
   await selectBrushTool(page)
@@ -418,8 +433,7 @@ test("brush stroke commits return quickly to keep painting responsive", async ({
 // step.
 test("history state has exactly one new entry per stroke and one fewer per undo", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/editor")
-  await expect(page.locator("[data-canvas-stage]")).toBeVisible()
+  await openEditor(page)
   await expect.poll(async () => canvasPixelAlpha(page, 600, 400)).toBeGreaterThan(0)
 
   await selectBrushTool(page)
@@ -517,8 +531,7 @@ test("history state has exactly one new entry per stroke and one fewer per undo"
 // intermediate state would either over-clear or under-clear the canvas.
 test("overlapping brush strokes each get their own undo step", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/editor")
-  await expect(page.locator("[data-canvas-stage]")).toBeVisible()
+  await openEditor(page)
   await expect.poll(async () => canvasPixelAlpha(page, 600, 400)).toBeGreaterThan(0)
 
   await selectBrushTool(page)
@@ -585,8 +598,7 @@ test("overlapping brush strokes each get their own undo step", async ({ page }) 
 
 test("undo after painting a new branch only removes the new brush stroke", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/editor")
-  await expect(page.locator("[data-canvas-stage]")).toBeVisible()
+  await openEditor(page)
   await expect.poll(async () => canvasPixelAlpha(page, 600, 400)).toBeGreaterThan(0)
 
   await selectBrushTool(page)

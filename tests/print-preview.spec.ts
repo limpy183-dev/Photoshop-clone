@@ -65,27 +65,39 @@ async function installWindowOpenShim(page: import("@playwright/test").Page) {
   })
 }
 
+async function openEditor(page: import("@playwright/test").Page) {
+  await page.goto("/editor", { waitUntil: "load" })
+  await expect(page.locator("[data-canvas-stage]")).toBeVisible({ timeout: 30000 })
+}
+
 test("File > Print uses window.open without the contradictory noopener feature string", async ({ page }) => {
   // The File menu is long enough on Desktop Chrome's default 720-px height
   // viewport that Print sits below the fold. Give the page room before
   // navigation so the dropdown content lays out fully inside the viewport.
   await page.setViewportSize({ width: 1280, height: 1200 })
   await installWindowOpenShim(page)
-  await page.goto("/editor")
-  await page.waitForFunction(() => document.querySelectorAll("canvas").length > 0)
+  await openEditor(page)
 
   const fileTrigger = page
     .locator('[data-slot="dropdown-menu-trigger"], [data-slot="menubar-trigger"]')
     .filter({ hasText: /^File$/ })
     .first()
+  await expect(fileTrigger).toBeVisible()
   await fileTrigger.click()
   // The File menu has two items starting with "Print" — "Print Setup / Proof..."
   // routes to the advanced dialog, while "Print…" is the popup-based action
   // L-1 protects. Match the literal label including the ⌘P shortcut so we
   // only target the popup path.
   const printItem = page.getByRole("menuitem", { name: /^Print…\s*⌘P$/ }).first()
-  await expect(printItem).toBeVisible()
-  await printItem.click({ force: true })
+  await expect(printItem).toBeVisible({ timeout: 10000 })
+  await printItem.click()
+
+  await expect.poll(
+    () => page.evaluate(
+      () => (window as unknown as { __printPreviewCalls: Array<{ url: string; target: string; features: string }> })
+        .__printPreviewCalls.length,
+    ),
+  ).toBeGreaterThanOrEqual(1)
 
   const calls = await page.evaluate(
     () => (window as unknown as { __printPreviewCalls: Array<{ url: string; target: string; features: string }> })

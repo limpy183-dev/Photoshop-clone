@@ -558,6 +558,36 @@ test("plugin UI tree normalization keeps only supported components and events", 
   })
 })
 
+test("plugin UI tree normalization enforces child and depth limits", () => {
+  const wide = normalizePluginUiTree({
+    type: "stack",
+    children: Array.from({ length: 40 }, (_, index) => ({ type: "text", text: `Item ${index}` })),
+  }) as { children: unknown[] } | null
+
+  const deep = normalizePluginUiTree({
+    type: "stack",
+    children: [{
+      type: "stack",
+      children: [{
+        type: "stack",
+        children: [{
+          type: "stack",
+          children: [{
+            type: "stack",
+            children: [{
+              type: "stack",
+              children: [{ type: "text", text: "too deep" }],
+            }],
+          }],
+        }],
+      }],
+    }],
+  })
+
+  expect(wide?.children).toHaveLength(32)
+  expect(JSON.stringify(deep)).not.toContain("too deep")
+})
+
 test("iframe srcdoc injects a sandbox API bootstrap without granting same-origin access", () => {
   const srcDoc = buildPluginIframeSrcDoc({
     pluginId: "plug_panel",
@@ -597,6 +627,24 @@ test("message validation requires source window, plugin id, token, and known met
   expect(validatePluginPanelRequest({ ...valid, method: "window.eval" }, { pluginId: "plug_panel", token: "secret-token", source, eventSource: source })).toBeNull()
   expect(validatePluginPanelRequest(valid, { pluginId: "plug_panel", token: "secret-token", source: null, eventSource: source })).toBeNull()
   expect(validatePluginPanelRequest(valid, { pluginId: "plug_panel", token: "secret-token", source, eventSource: {} as Window })).toBeNull()
+})
+
+test("message validation rejects replayed request ids per plugin panel session", () => {
+  const source = {} as Window
+  const seenRequestIds = new Set<string>()
+  const context = { pluginId: "plug_panel", token: "secret-token", source, eventSource: source, seenRequestIds }
+  const request: PluginPanelRequest = {
+    channel: "photoshop-web-plugin",
+    pluginId: "plug_panel",
+    token: "secret-token",
+    requestId: "req_replay",
+    method: "document.getInfo",
+    params: {},
+  }
+
+  expect(validatePluginPanelRequest(request, context)).toEqual(request)
+  expect(validatePluginPanelRequest(request, context)).toBeNull()
+  expect(seenRequestIds.has("req_replay")).toBe(true)
 })
 
 test("message validation rejects abusive request ids and bounds sanitized params", () => {

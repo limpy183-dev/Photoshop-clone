@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test"
 
 import {
+  canvasFromDataUrl,
+  deserializeProject,
   deserializePsdFile,
   inspectImportFileDimensions,
   loadImageFromFile,
@@ -78,6 +80,10 @@ function webpHeader(width: number, height: number) {
     ...le24(width - 1),
     ...le24(height - 1),
   ])
+}
+
+function dataUrlFromBytes(bytes: Uint8Array, mime = "image/png") {
+  return `data:${mime};base64,${Buffer.from(bytes).toString("base64")}`
 }
 
 test("PSD import rejects oversized header dimensions before full decode", async () => {
@@ -246,4 +252,75 @@ test("import dimension inspection reads PSD, PSB, and raster headers without ful
   await expect(inspectImportFileDimensions(psd)).resolves.toMatchObject({ width: 6400, height: 4200, format: "PSD", kind: "psd" })
   await expect(inspectImportFileDimensions(psb)).resolves.toMatchObject({ width: 16000, height: 12000, format: "PSB", kind: "psb" })
   await expect(inspectImportFileDimensions(png)).resolves.toMatchObject({ width: 3200, height: 1800, format: "PNG", kind: "raster" })
+})
+
+test("project embedded image data URLs reject oversized headers before browser decode", async () => {
+  installFixtureDom()
+  const originalImage = globalThis.Image
+  let imageConstructed = false
+
+  globalThis.Image = class {
+    constructor() {
+      imageConstructed = true
+      throw new Error("Browser decode should not start")
+    }
+  } as unknown as typeof Image
+
+  try {
+    await expect(canvasFromDataUrl(dataUrlFromBytes(pngHeader(9000, 9000)), 1, 1)).rejects.toThrow("Project image is too large")
+    expect(imageConstructed).toBe(false)
+  } finally {
+    globalThis.Image = originalImage
+  }
+})
+
+test("project import reports sanitizer truncation for rich plugin storage", async () => {
+  installFixtureDom()
+  const warnings: string[] = []
+  const originalWarn = console.warn
+  console.warn = (message?: unknown) => {
+    warnings.push(String(message))
+  }
+  const records = Array.from({ length: 10_001 }, (_, index) => index)
+  const project = JSON.stringify({
+    document: {
+      name: "Truncated Plugin State",
+      width: 1,
+      height: 1,
+      background: "#ffffff",
+      colorMode: "RGB",
+      bitDepth: 8,
+      activeLayerId: "layer_1",
+      selectedLayerIds: ["layer_1"],
+      selection: { bounds: null, shape: "rect" },
+      layers: [{
+        id: "layer_1",
+        name: "Layer 1",
+        kind: "raster",
+        visible: true,
+        locked: false,
+        opacity: 1,
+        blendMode: "normal",
+      }],
+      pluginStorage: {
+        plugin_1: { records },
+      },
+    },
+  })
+
+  let restored: Awaited<ReturnType<typeof deserializeProject>>
+  try {
+    restored = await deserializeProject(project)
+  } finally {
+    console.warn = originalWarn
+  }
+
+  expect((restored.pluginStorage?.plugin_1 as { records?: unknown[] } | undefined)?.records).toHaveLength(10_000)
+  expect(restored.reports?.some((report) =>
+    report.source === "Project Import" &&
+    report.items.some((item) => item.label === "Sanitizer warning" && item.detail.includes("pluginStorage")),
+  )).toBe(true)
+  expect(warnings).toEqual([
+    'Project field "pluginStorage" exceeded sanitiser limits and was truncated on load.',
+  ])
 })

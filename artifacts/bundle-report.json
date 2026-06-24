@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-06-23T13:19:19.713Z",
+  "generatedAt": "2026-06-24T20:10:56.530Z",
   "budgets": {
     "maxChunkBytes": 1500000,
     "maxInitialJsBytes": 5000000
@@ -15,8 +15,8 @@
       "bytes": 1414672
     },
     {
-      "file": ".next/static/chunks/2840.5ec3f4eefc08c548.js",
-      "bytes": 1314003
+      "file": ".next/static/chunks/2840.3354f7e3b111727e.js",
+      "bytes": 1315606
     },
     {
       "file": ".next/static/chunks/document-decoders.4f0a75ff52a86865.js",
@@ -59,8 +59,8 @@
       "bytes": 130867
     },
     {
-      "file": ".next/static/chunks/919.69f14cbedd392b0e.js",
-      "bytes": 116612
+      "file": ".next/static/chunks/919.9f9c97254ce2d153.js",
+      "bytes": 116758
     },
     {
       "file": ".next/static/chunks/polyfills-42372ed130431b0a.js",
@@ -79,12 +79,12 @@
       "bytes": 67811
     },
     {
-      "file": ".next/static/chunks/4871.202bb4771fa6485c.js",
-      "bytes": 59459
+      "file": ".next/static/chunks/3695.8e09742a93a9b7bf.js",
+      "bytes": 59793
     },
     {
-      "file": ".next/static/chunks/5063.8e6e12f824a66e0d.js",
-      "bytes": 59043
+      "file": ".next/static/chunks/4871.202bb4771fa6485c.js",
+      "bytes": 59459
     },
     {
       "file": ".next/static/chunks/7379.6ed7d5a805e349a3.js",
@@ -111,17 +111,21 @@
       "moduleSampleCount": 0,
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [],
+      "webpackStatsModuleSampleCount": 0,
       "ownershipSources": []
     },
     {
-      "file": ".next/static/chunks/2840.5ec3f4eefc08c548.js",
-      "bytes": 1314003,
+      "file": ".next/static/chunks/2840.3354f7e3b111727e.js",
+      "bytes": 1315606,
       "classification": "shared-or-dynamic",
       "routes": [],
       "moduleSamples": [],
       "moduleSampleCount": 0,
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [],
+      "webpackStatsModuleSampleCount": 0,
       "ownershipSources": []
     },
     {
@@ -133,6 +137,8 @@
       "moduleSampleCount": 0,
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [],
+      "webpackStatsModuleSampleCount": 0,
       "ownershipSources": []
     },
     {
@@ -144,6 +150,8 @@
       "moduleSampleCount": 0,
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [],
+      "webpackStatsModuleSampleCount": 0,
       "ownershipSources": []
     },
     {
@@ -155,6 +163,8 @@
       "moduleSampleCount": 0,
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [],
+      "webpackStatsModuleSampleCount": 0,
       "ownershipSources": []
     },
     {
@@ -166,6 +176,8 @@
       "moduleSampleCount": 0,
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [],
+      "webpackStatsModuleSampleCount": 0,
       "ownershipSources": []
     },
     {
@@ -177,6 +189,8 @@
       "moduleSampleCount": 0,
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [],
+      "webpackStatsModuleSampleCount": 0,
       "ownershipSources": []
     },
     {
@@ -188,6 +202,8 @@
       "moduleSampleCount": 0,
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [],
+      "webpackStatsModuleSampleCount": 0,
       "ownershipSources": []
     },
     {
@@ -199,6 +215,8 @@
       "moduleSampleCount": 0,
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [],
+      "webpackStatsModuleSampleCount": 0,
       "ownershipSources": []
     },
     {
@@ -210,6 +228,8 @@
       "moduleSampleCount": 0,
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [],
+      "webpackStatsModuleSampleCount": 0,
       "ownershipSources": []
     },
     {
@@ -221,6 +241,8 @@
       "moduleSampleCount": 0,
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [],
+      "webpackStatsModuleSampleCount": 0,
       "ownershipSources": []
     },
     {
@@ -232,17 +254,21 @@
       "moduleSampleCount": 0,
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [],
+      "webpackStatsModuleSampleCount": 0,
       "ownershipSources": []
     },
     {
-      "file": ".next/static/chunks/919.69f14cbedd392b0e.js",
-      "bytes": 116612,
+      "file": ".next/static/chunks/919.9f9c97254ce2d153.js",
+      "bytes": 116758,
       "classification": "shared-or-dynamic",
       "routes": [],
       "moduleSamples": [],
       "moduleSampleCount": 0,
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [],
+      "webpackStatsModuleSampleCount": 0,
       "ownershipSources": []
     },
     {
@@ -254,6 +280,8 @@
       "moduleSampleCount": 0,
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [],
+      "webpackStatsModuleSampleCount": 0,
       "ownershipSources": []
     },
     {
@@ -278,6 +306,8 @@
       "moduleSampleCount": 10,
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [],
+      "webpackStatsModuleSampleCount": 0,
       "ownershipSources": [
         "client-reference-manifest"
       ]
@@ -291,6 +321,8 @@
       "moduleSampleCount": 0,
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [],
+      "webpackStatsModuleSampleCount": 0,
       "ownershipSources": []
     },
     {
@@ -312,9 +344,24 @@
       "moduleSampleCount": 1,
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [],
+      "webpackStatsModuleSampleCount": 0,
       "ownershipSources": [
         "client-reference-manifest"
       ]
+    },
+    {
+      "file": ".next/static/chunks/3695.8e09742a93a9b7bf.js",
+      "bytes": 59793,
+      "classification": "shared-or-dynamic",
+      "routes": [],
+      "moduleSamples": [],
+      "moduleSampleCount": 0,
+      "sourcemapModuleSamples": [],
+      "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [],
+      "webpackStatsModuleSampleCount": 0,
+      "ownershipSources": []
     },
     {
       "file": ".next/static/chunks/4871.202bb4771fa6485c.js",
@@ -325,17 +372,8 @@
       "moduleSampleCount": 0,
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
-      "ownershipSources": []
-    },
-    {
-      "file": ".next/static/chunks/5063.8e6e12f824a66e0d.js",
-      "bytes": 59043,
-      "classification": "shared-or-dynamic",
-      "routes": [],
-      "moduleSamples": [],
-      "moduleSampleCount": 0,
-      "sourcemapModuleSamples": [],
-      "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [],
+      "webpackStatsModuleSampleCount": 0,
       "ownershipSources": []
     },
     {
@@ -347,6 +385,8 @@
       "moduleSampleCount": 0,
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [],
+      "webpackStatsModuleSampleCount": 0,
       "ownershipSources": []
     }
   ],

@@ -168,6 +168,25 @@ The core state lives in the editor context and is mutated through typed actions.
 - npm 11.5.x or the package-manager version declared in `package.json`.
 - A modern Chromium-based browser for the best Canvas and Playwright behavior.
 
+On Windows PowerShell, select Node 22 before installing or building:
+
+```powershell
+# nvm-windows
+nvm install 22
+nvm use 22
+node -v
+npm.cmd run doctor
+```
+
+For `fnm` users, the equivalent is:
+
+```powershell
+fnm install 22
+fnm use 22
+node -v
+npm.cmd run doctor
+```
+
 ### Install
 
 ```bash

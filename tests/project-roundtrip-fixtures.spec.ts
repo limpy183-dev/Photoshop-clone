@@ -17,11 +17,17 @@ test("project round trip preserves rich app-only fixture metadata", async () => 
   expect(restored.assetLibrary?.[0]).toMatchObject({ name: "PNG Export", kind: "export" })
   expect(restored.selection.bounds).toEqual({ x: 8, y: 8, w: 24, h: 18 })
   expect(restored.selection.mask?.width).toBe(64)
+  expect(restored.reports).toBeUndefined()
 
   const raster = restored.layers.find((layer) => layer.id === "layer_raster")!
   expect(raster.mask?.width).toBe(64)
   expect(raster.smartFilters?.[0]).toMatchObject({ filterId: "box-blur", name: "Box Blur", maskEnabled: true })
   expect(raster.smartFilters?.[0].mask?.height).toBe(48)
+  expect(restored.comps?.[0].state.layer_raster.smartFilters?.[0]).toMatchObject({
+    filterId: "box-blur",
+    name: "Box Blur",
+    maskEnabled: true,
+  })
 
   const text = restored.layers.find((layer) => layer.id === "layer_text")!
   expect(text.text).toMatchObject({ content: "Fixture", vertical: true, tracking: 20 })

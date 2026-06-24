@@ -1,12 +1,29 @@
 import { expect, type Page, test } from "@playwright/test"
 
+const commandShortcut = process.platform === "darwin" ? "Meta+K" : "Control+K"
+const commandSearchPlaceholder = "Search tools, filters, panels, and commands"
+
 async function openCommand(page: Page, query: string) {
+  await expect(page.locator("[data-canvas-stage]")).toBeVisible({ timeout: 30000 })
+  const search = page.getByPlaceholder(commandSearchPlaceholder)
   await page.locator("body").click({ position: { x: 20, y: 20 } })
-  await page.keyboard.press(process.platform === "darwin" ? "Meta+K" : "Control+K")
-  await expect(page.getByPlaceholder("Search tools, filters, panels, and commands")).toBeVisible()
-  await page.getByPlaceholder("Search tools, filters, panels, and commands").fill(query)
+
+  for (let attempt = 0; attempt < 2 && !(await search.isVisible().catch(() => false)); attempt++) {
+    await page.keyboard.press(commandShortcut)
+    if (attempt === 0) {
+      try {
+        await expect(search).toBeVisible({ timeout: 5000 })
+      } catch {
+        continue
+      }
+    } else {
+      await expect(search).toBeVisible({ timeout: 10000 })
+    }
+  }
+
+  await search.fill(query)
   await page.keyboard.press("Enter")
-  await expect(page.getByText("Command Palette")).toBeHidden()
+  await expect(page.getByRole("dialog", { name: "Command Palette" })).toBeHidden()
 }
 
 async function selectToolFromGroup(page: Page, groupName: string | RegExp, toolName: string) {
@@ -33,16 +50,21 @@ async function openTopMenu(page: Page, name: string) {
   await topMenu(page, name).click()
 }
 
+async function clickTopMenuItem(page: Page, menuName: string, itemName: string | RegExp) {
+  await openTopMenu(page, menuName)
+  const item = page.getByRole("menuitem", { name: itemName }).first()
+  await expect(item).toBeVisible()
+  await item.click()
+}
+
 async function openEditor(page: Page) {
   await page.setViewportSize({ width: 1440, height: 1000 })
-  await page.goto("/editor", { waitUntil: "domcontentloaded" })
-  await page.waitForSelector("[data-canvas-stage]", { timeout: 30000 })
-  await expect(page.locator("[data-canvas-stage]")).toBeVisible()
+  await page.goto("/editor", { waitUntil: "load" })
+  await expect(page.locator("[data-canvas-stage]")).toBeVisible({ timeout: 30000 })
 }
 
 async function selectAll(page: Page) {
-  await openTopMenu(page, "Select")
-  await page.getByRole("menuitem", { name: /All/ }).first().click()
+  await clickTopMenuItem(page, "Select", /All/)
 }
 
 test("quick selection and magnetic lasso expose full workflow options", async ({ page }) => {
@@ -70,8 +92,7 @@ test("save and load selection use named channel dialogs", async ({ page }) => {
 
   await selectAll(page)
 
-  await openTopMenu(page, "Select")
-  await page.getByRole("menuitem", { name: /Save Selection/ }).click()
+  await clickTopMenuItem(page, "Select", /Save Selection/)
   await expect(page.getByRole("dialog", { name: "Save Selection" })).toBeVisible()
   await page.getByLabel("Channel name").fill("Foreground Mask")
   await expect(page.getByLabel("Destination channel")).toBeVisible()
@@ -81,8 +102,7 @@ test("save and load selection use named channel dialogs", async ({ page }) => {
   await openCommand(page, "Selection Studio Panel")
   await expect(page.getByText("Foreground Mask")).toBeVisible()
 
-  await openTopMenu(page, "Select")
-  await page.getByRole("menuitem", { name: "Load Selection..." }).click({ force: true })
+  await clickTopMenuItem(page, "Select", "Load Selection...")
   await expect(page.getByRole("dialog", { name: "Load Selection" })).toBeVisible()
   await expect(page.getByLabel("Source channel")).toContainText("Foreground Mask")
   await expect(page.getByLabel("Load operation")).toBeVisible()
@@ -97,8 +117,9 @@ test("grow similar and transform selection are first-class Select menu workflows
 
   await openTopMenu(page, "Select")
   await expect(page.getByRole("menuitem", { name: "Grow..." })).toBeVisible()
-  await expect(page.getByRole("menuitem", { name: "Transform Selection..." })).toBeVisible()
-  await page.getByRole("menuitem", { name: "Transform Selection..." }).click()
+  const transformSelection = page.getByRole("menuitem", { name: "Transform Selection..." })
+  await expect(transformSelection).toBeVisible()
+  await transformSelection.click()
 
   await expect(page.getByTestId("selection-transform-overlay")).toBeVisible()
   await expect(page.getByTestId("selection-transform-mini-options")).toBeVisible()
@@ -118,8 +139,7 @@ test("grow similar and transform selection are first-class Select menu workflows
 test("color range dialog supports targeted range and preview controls", async ({ page }) => {
   await openEditor(page)
 
-  await openTopMenu(page, "Select")
-  await page.getByRole("menuitem", { name: /Color Range/ }).click()
+  await clickTopMenuItem(page, "Select", /Color Range/)
 
   await expect(page.getByRole("dialog", { name: "Color Range" })).toBeVisible()
   await expect(page.getByLabel("Range preset")).toBeVisible()

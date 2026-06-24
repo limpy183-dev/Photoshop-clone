@@ -40,6 +40,13 @@ function cleanImportOptionalText(value: unknown, maxLength = 120) {
   return cleaned || undefined
 }
 
+function cleanImportId(value: unknown, fallbackPrefix: string, maxLength = 80) {
+  const cleaned = cleanImportOptionalText(value, maxLength)
+  return cleaned && SAFE_IMPORT_KEY.test(cleaned) && !RESERVED_IMPORT_KEYS.has(cleaned)
+    ? cleaned
+    : uid(fallbackPrefix)
+}
+
 function cleanFiniteNumber(value: unknown, fallback: number, min = -Infinity, max = Infinity) {
   if (typeof value !== "number" || !Number.isFinite(value)) return fallback
   return Math.max(min, Math.min(max, value))
@@ -103,7 +110,7 @@ function normalizeImportedCredential(value: unknown): ContentCredential | null {
       const ingHash = typeof ing.hash === "string" ? ing.hash : ""
       if (ingHash.length === 0 || ingHash.length > 128 || !HEX_HASH.test(ingHash)) return null
       return {
-        id: cleanImportText(ing.id, uid("ingredient"), 80),
+        id: cleanImportId(ing.id, "ingredient"),
         name: cleanImportText(ing.name, "Layer", 120),
         kind: typeof ing.kind === "string" ? (ing.kind as ContentCredential["ingredients"][number]["kind"]) : undefined,
         visible: cleanImportBoolean(ing.visible, true),
@@ -118,7 +125,7 @@ function normalizeImportedCredential(value: unknown): ContentCredential | null {
       : new Date().toISOString()
 
   return {
-    id: cleanImportText(value.id, uid("credential"), 80),
+    id: cleanImportId(value.id, "credential"),
     action: cleanImportText(value.action, "Imported Provenance", 120),
     actor: cleanImportText(value.actor, "Imported Actor", 120),
     software: cleanImportText(value.software, "Photoshop Web", 120),
@@ -157,7 +164,7 @@ function normalizeImportedAsset(value: unknown): AssetLibraryItem | null {
   const kind = value.kind
   if (typeof kind !== "string" || !ASSET_KINDS.has(kind as AssetLibraryItem["kind"])) return null
   return {
-    id: cleanImportText(value.id, uid("asset"), 80),
+    id: cleanImportId(value.id, "asset"),
     name: cleanImportText(value.name, "Imported Asset", 120),
     kind: kind as AssetLibraryItem["kind"],
     group: cleanImportOptionalText(value.group, 80),

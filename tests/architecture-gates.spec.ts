@@ -91,20 +91,36 @@ test("doctor script reports npm and Playwright checks as structured diagnostics"
 })
 
 test("editor selector helper hooks avoid broad editor context reads", () => {
-  const source = readFileSync("components/photoshop/editor-context.tsx", "utf8")
+  const sources = [
+    readFileSync("components/photoshop/editor-context.tsx", "utf8"),
+    readFileSync("components/photoshop/editor-history-hooks.ts", "utf8"),
+  ]
 
-  for (const hook of ["useActiveDocument", "useActiveLayer", "useDocumentLifecycle"]) {
+  for (const hook of ["useActiveDocument", "useActiveLayer", "useDocumentLifecycle", "useHistoryState", "useHistoryCommands"]) {
+    const source = sources.find((candidate) => candidate.includes(`export function ${hook}`)) ?? ""
     const start = source.indexOf(`export function ${hook}`)
     const end = source.indexOf("\nexport function", start + 1)
     const block = source.slice(start, end > start ? end : undefined)
+    expect(start, `${hook} should exist`).toBeGreaterThanOrEqual(0)
     expect(block, hook).not.toContain("useEditor()")
   }
+})
+
+test("history panel consumes focused selector and command hooks", () => {
+  const source = readFileSync("components/photoshop/panels/history-panel.tsx", "utf8")
+
+  expect(source).toContain("useActiveDocument")
+  expect(source).toContain("useHistoryCommands")
+  expect(source).toContain("useHistoryState")
+  expect(source).not.toContain("useEditor")
 })
 
 test("bundle analyzer includes manifest and sourcemap attribution hooks", () => {
   const source = readFileSync("scripts/analyze-bundle.mjs", "utf8")
 
   expect(source).toContain("readChunkSourceMapOwnership")
+  expect(source).toContain("readWebpackStatsOwnership")
   expect(source).toContain("sourcemapModuleSamples")
+  expect(source).toContain("webpackStatsModuleSamples")
   expect(source).toContain("ownershipSources")
 })

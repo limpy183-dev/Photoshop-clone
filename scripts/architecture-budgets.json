@@ -6,15 +6,15 @@
     "max": 0
   },
   "oversizeFiles": {
-    "max": 25,
+    "max": 24,
     "maxLines": 1500
   },
   "useEditorImports": {
-    "max": 74
+    "max": 73
   },
   "topLargestFiles": {
     "count": 10,
-    "maxTotalLines": 36108
+    "maxTotalLines": 36095
   },
   "directClientStorage": {
     "max": 0

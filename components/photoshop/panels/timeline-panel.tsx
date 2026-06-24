@@ -15,11 +15,7 @@ import {
 } from "lucide-react"
 import { useEditor } from "../editor-context"
 import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "../events"
-import {
-  downloadBlob,
-  downloadDataUrl,
-  downloadText,
-} from "../document-io"
+import { downloadBlob, downloadDataUrl, downloadText } from "../document-io"
 import {
   DEFAULT_TIMELINE_SETTINGS,
   IDENTITY_TRANSFORM,
@@ -85,9 +81,12 @@ import {
   delay,
   safeFilePart,
 } from "./timeline/timeline-export-utils"
-import { FrameRow } from "./timeline/timeline-frame-row"
 import { PanelEmpty, TextBtn, TINTS, ToolButton } from "./timeline/timeline-shared"
-import { TimelineThumbnailStrip } from "./timeline/timeline-thumbnail-strip"
+import {
+  TimelineBulkEditBar,
+  TimelineFrameList,
+  TimelinePlayheadSection,
+} from "./timeline/timeline-panel-sections"
 import { TransformPanel } from "./timeline/timeline-transform-panel"
 import { TweenDialog } from "./timeline/timeline-tween-dialog"
 import { VideoTrimTrack } from "./timeline/timeline-video-trim-track"
@@ -1323,38 +1322,17 @@ export function TimelinePanel() {
       </div>
 
       {frames.length ? (
-        <div className="grid gap-1 border-b border-[var(--ps-divider)] px-2 py-1.5">
-          <div className="flex items-center gap-2">
-            <span className="w-20 text-[10px] text-[var(--ps-text-dim)]">Playhead {(timelinePlayheadMs / 1000).toFixed(2)}s</span>
-            <input
-              type="range"
-              min={0}
-              max={Math.max(1, totalTimelineDurationMs)}
-              step={Math.max(1, Math.round(1000 / timelineFps))}
-              value={timelinePlayheadMs}
-              onChange={(e) => seekTimelinePlayhead(Number(e.target.value))}
-              className="h-5 flex-1"
-              aria-label="Timeline playhead"
-            />
-            <span className="w-16 text-right text-[10px] text-[var(--ps-text-dim)]">
-              {timelinePlayheadFrameIndex >= 0 ? `#${timelinePlayheadFrameIndex + 1}` : "--"}
-            </span>
-            <TextBtn disabled={frames.length < 1} onClick={splitSelectedTimelineFrame} title="Split frame at playhead (Ctrl+Shift+K)">
-              <Scissors className="mr-1 inline h-3 w-3" />Split frame
-            </TextBtn>
-          </div>
-          <TimelineThumbnailStrip
-            doc={doc}
-            frames={frames}
-            playheadMs={timelinePlayheadMs}
-            playheadFrameIndex={timelinePlayheadFrameIndex}
-            cache={playbackOverlayCacheRef.current}
-            onSeekFrame={(idx) => {
-              const before = frames.slice(0, idx).reduce((sum, f) => sum + Math.max(0, f.durationMs), 0)
-              seekTimelinePlayhead(before)
-            }}
-          />
-        </div>
+        <TimelinePlayheadSection
+          doc={doc}
+          frames={frames}
+          playheadMs={timelinePlayheadMs}
+          playheadFrameIndex={timelinePlayheadFrameIndex}
+          totalDurationMs={totalTimelineDurationMs}
+          fps={timelineFps}
+          cache={playbackOverlayCacheRef.current}
+          onSeek={seekTimelinePlayhead}
+          onSplit={splitSelectedTimelineFrame}
+        />
       ) : null}
 
       {activeVideoLayer && activeVideo ? (
@@ -1448,66 +1426,44 @@ export function TimelinePanel() {
         </div>
       ) : null}
 
-      {/* Bulk-edit bar (multi-select) */}
-      {selection.size > 0 ? (
-        <div className="flex items-center gap-1 border-b border-[var(--ps-divider)] bg-[var(--ps-panel-2)]/40 px-2 py-1.5">
-          <span className="text-[10px] text-[var(--ps-text-dim)]">{selection.size} selected</span>
-          <span className="mx-1 text-[10px] text-[var(--ps-text-dim)]">Duration</span>
-          <input
-            type="number"
-            min={20}
-            max={10000}
-            step={20}
-            defaultValue={500}
-            onBlur={(e) => bulkSetDuration(Number(e.target.value) || 500)}
-            className="h-5 w-16 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-[10px]"
-            aria-label="Bulk duration in milliseconds"
-          />
-          <TextBtn onClick={() => {
-            const totalMs = Math.max(100, selection.size * 200)
-            setFrames(distributeDurations(frames.filter((f) => selection.has(f.id)), totalMs).concat(frames.filter((f) => !selection.has(f.id))), "Distribute Durations")
-          }}>Distribute</TextBtn>
-          <TextBtn onClick={() => removeFrames(Array.from(selection))}>Delete</TextBtn>
-          <TextBtn onClick={() => setSelection(new Set())}>Clear</TextBtn>
-        </div>
-      ) : null}
+      <TimelineBulkEditBar
+        selectedCount={selection.size}
+        onSetDuration={bulkSetDuration}
+        onDistributeDurations={() => {
+          const totalMs = Math.max(100, selection.size * 200)
+          setFrames(
+            distributeDurations(frames.filter((frame) => selection.has(frame.id)), totalMs)
+              .concat(frames.filter((frame) => !selection.has(frame.id))),
+            "Distribute Durations",
+          )
+        }}
+        onDeleteSelected={() => removeFrames(Array.from(selection))}
+        onClearSelection={() => setSelection(new Set())}
+      />
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {frames.length === 0 ? (
-          <PanelEmpty text="Capture layer visibility states as animation frames. Opacity, transforms, and styles are preserved." />
-        ) : (
-          frames.map((frame, idx) => (
-            <FrameRow
-              key={frame.id}
-              doc={doc}
-              frame={frame}
-              nextFrame={frames[idx + 1] ?? null}
-              index={idx}
-              total={frames.length}
-              isSelected={frame.id === selected?.id}
-              isMultiSelected={selection.has(frame.id)}
-              onSelect={(multi) => {
-                if (multi) {
-                  setSelection((prev) => {
-                    const next = new Set(prev)
-                    if (next.has(frame.id)) next.delete(frame.id)
-                    else next.add(frame.id)
-                    return next
-                  })
-                } else {
-                  setSelectedId(frame.id)
-                }
-              }}
-              onApply={() => applyFrame(frame)}
-              onChange={(patch) => updateFrame(frame.id, patch)}
-              onDuplicate={() => duplicateFrame(idx)}
-              onDelete={() => removeFrames([frame.id])}
-              onMoveUp={() => reorder(idx, -1)}
-              onMoveDown={() => reorder(idx, +1)}
-            />
-          ))
-        )}
-      </div>
+      <TimelineFrameList
+        doc={doc}
+        frames={frames}
+        selectedFrameId={selected?.id ?? null}
+        selection={selection}
+        onSelectFrame={(frameId, multi) => {
+          if (multi) {
+            setSelection((prev) => {
+              const next = new Set(prev)
+              if (next.has(frameId)) next.delete(frameId)
+              else next.add(frameId)
+              return next
+            })
+          } else {
+            setSelectedId(frameId)
+          }
+        }}
+        onApplyFrame={applyFrame}
+        onChangeFrame={updateFrame}
+        onDuplicateFrame={duplicateFrame}
+        onDeleteFrame={(frameId) => removeFrames([frameId])}
+        onMoveFrame={reorder}
+      />
 
       {selected && showTransform ? (
         <TransformPanel
