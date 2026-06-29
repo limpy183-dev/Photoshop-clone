@@ -11,7 +11,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import { cn } from "@/lib/utils"
 import { MAX_CANVAS_DIMENSION, canvasSizeError } from "./canvas-limits"
 
@@ -34,7 +34,8 @@ export function CanvasSizeDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
 }) {
-  const { activeDoc, resizeCanvas } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const resizeCanvas = useEditorSelector((editor) => editor.resizeCanvas)
   const [width, setWidth] = React.useState(activeDoc?.width ?? 1200)
   const [height, setHeight] = React.useState(activeDoc?.height ?? 800)
   const [anchorX, setAnchorX] = React.useState(0.5)

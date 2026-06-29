@@ -37,12 +37,12 @@ test("architecture gate reports no import cycles or budget regressions", () => {
   expect(report.budgets.rawPhotoshopListeners.count).toBeLessThanOrEqual(report.budgets.rawPhotoshopListeners.max)
   expect(report.budgets.rawPhotoshopListeners.max).toBe(0)
   expect(report.budgets.oversizeFiles.count).toBeLessThanOrEqual(report.budgets.oversizeFiles.max)
-  expect(report.budgets.oversizeFiles.max).toBeLessThan(26)
+  expect(report.budgets.oversizeFiles.max).toBeLessThanOrEqual(20)
   expect(report.budgets.useEditorImports.count).toBeLessThanOrEqual(report.budgets.useEditorImports.max)
-  expect(report.budgets.useEditorImports.max).toBeLessThan(79)
+  expect(report.budgets.useEditorImports.max).toBeLessThanOrEqual(50)
   expect(report.budgets.topLargestFiles.count).toBe(10)
   expect(report.budgets.topLargestFiles.totalLines).toBeLessThanOrEqual(report.budgets.topLargestFiles.maxTotalLines)
-  expect(report.budgets.topLargestFiles.maxTotalLines).toBeLessThan(36119)
+  expect(report.budgets.topLargestFiles.maxTotalLines).toBeLessThanOrEqual(34000)
   expect(report.budgets.directClientStorage.count).toBeLessThanOrEqual(report.budgets.directClientStorage.max)
   expect(report.directClientStorage.map((entry) => entry.file)).not.toEqual(
     expect.arrayContaining([
@@ -96,7 +96,7 @@ test("editor selector helper hooks avoid broad editor context reads", () => {
     readFileSync("components/photoshop/editor-history-hooks.ts", "utf8"),
   ]
 
-  for (const hook of ["useActiveDocument", "useActiveLayer", "useDocumentLifecycle", "useHistoryState", "useHistoryCommands"]) {
+  for (const hook of ["useActiveDocument", "useActiveLayer", "useToolState", "useDocumentLifecycle", "useHistoryState", "useHistoryCommands"]) {
     const source = sources.find((candidate) => candidate.includes(`export function ${hook}`)) ?? ""
     const start = source.indexOf(`export function ${hook}`)
     const end = source.indexOf("\nexport function", start + 1)
@@ -117,10 +117,21 @@ test("history panel consumes focused selector and command hooks", () => {
 
 test("bundle analyzer includes manifest and sourcemap attribution hooks", () => {
   const source = readFileSync("scripts/analyze-bundle.mjs", "utf8")
+  const routeSource = readFileSync("scripts/measure-route-bundles.mjs", "utf8")
 
   expect(source).toContain("readChunkSourceMapOwnership")
   expect(source).toContain("readWebpackStatsOwnership")
   expect(source).toContain("sourcemapModuleSamples")
   expect(source).toContain("webpackStatsModuleSamples")
   expect(source).toContain("ownershipSources")
+  expect(source).toContain("measureRouteBundles")
+  expect(source).toContain("routeMetrics")
+  expect(source).toContain("maxDecodedBytes")
+  for (const route of ["/", "/editor", "/marketing", "/documentation"]) {
+    expect(routeSource).toContain(`"${route}"`)
+  }
+  expect(routeSource).toContain("encodedBodyBytes")
+  expect(routeSource).toContain("decodedBodyBytes")
+  expect(routeSource).toContain("requestCount")
+  expect(routeSource).toContain("largestStartupChunk")
 })

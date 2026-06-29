@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs"
+
 import { expect, test } from "@playwright/test"
 
 import {
@@ -7,7 +9,7 @@ import {
   injectAvifXmpMetadata,
   injectWebpXmpMetadata,
 } from "../components/photoshop/raster-codecs"
-import { buildRasterExportMetadata, createExportCompatibilityManifest, createExportLimitationReport, diagnoseBrowserRasterEncoderSupport, type ExportFormat } from "../components/photoshop/document-io"
+import { buildRasterExportMetadata, createExportCompatibilityManifest, createExportLimitationReport, diagnoseBrowserRasterEncoderSupport, showSaveProjectPicker, type ExportFormat } from "../components/photoshop/document-io"
 import { alternativesForLimitation } from "../components/photoshop/export-alternatives"
 import { createEmbeddedFontFromBuffer } from "../components/photoshop/typography-engine"
 import { createStoredZipBlob, encodeStoredZip } from "../components/photoshop/zip-packaging"
@@ -324,6 +326,50 @@ test("every problematic export limitation has at least one one-click alternative
   }
 
   expect(missing).toEqual([])
+})
+
+test("advanced subsystem video export uses revoking Blob downloads", () => {
+  const source = readFileSync("components/photoshop/advanced-subsystems-dialog.tsx", "utf8")
+
+  expect(source).not.toContain("downloadDataUrl(URL.createObjectURL(")
+  expect(source).toContain("downloadBlob(blob, `${activeDoc.name}-${preset.id}.${ext}`)")
+})
+
+test("project picker defaults to psprojson save extension", async () => {
+  const hadWindow = "window" in globalThis
+  const originalWindow = globalThis.window
+  let pickerOptions: {
+    suggestedName?: string
+    types?: Array<{ description?: string; accept: Record<string, string[]> }>
+  } | undefined
+  const handle = { name: "project.psprojson" } as FileSystemFileHandle
+
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      showSaveFilePicker: async (options?: typeof pickerOptions) => {
+        pickerOptions = options
+        return handle
+      },
+    },
+  })
+
+  try {
+    await expect(showSaveProjectPicker()).resolves.toBe(handle)
+    expect(pickerOptions?.suggestedName).toBe("project.psprojson")
+    expect(pickerOptions?.types?.[0]?.accept).toEqual({
+      "application/json": [".psprojson"],
+    })
+  } finally {
+    if (hadWindow) {
+      Object.defineProperty(globalThis, "window", {
+        configurable: true,
+        value: originalWindow,
+      })
+    } else {
+      delete (globalThis as Partial<typeof globalThis>).window
+    }
+  }
 })
 
 test("browser encoder diagnostics detect WebP support and AVIF MIME fallback", async () => {

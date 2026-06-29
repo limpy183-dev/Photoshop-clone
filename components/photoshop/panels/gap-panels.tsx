@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useEditor } from "../editor-context"
+import { useEditorSelector } from "../editor-context"
 import { downloadBlob, downloadText } from "../document-io"
 import type { Note } from "../types"
 import { uid } from "../uid"
@@ -23,7 +23,9 @@ export function AnimationPanel() {
 }
 
 export function CommentsPanel() {
-  const { activeDoc, dispatch, commit } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
   const [text, setText] = React.useState("Comment")
   const [replyText, setReplyText] = React.useState<Record<string, string>>({})
   const [status, setStatus] = React.useState<"open" | "resolved" | "all">("open")

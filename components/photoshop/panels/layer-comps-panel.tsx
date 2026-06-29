@@ -5,7 +5,7 @@ import { AlertTriangle, Copy, Download, FileText, Play, Plus, RefreshCw, Trash2 
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { useEditor } from "../editor-context"
+import { useEditorSelector } from "../editor-context"
 import type { Layer, LayerComp, PsDocument } from "../types"
 import { captureLayerCompState, createLayerCompFromDocument, summarizeLayerComp } from "../layer-workflows"
 import { uid } from "../uid"
@@ -116,7 +116,9 @@ function compThumbnail(doc: PsDocument, comp: LayerComp) {
 }
 
 export function LayerCompsPanel() {
-  const { activeDoc, dispatch, commit } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
   const [filter, setFilter] = React.useState("")
 
   if (!activeDoc) return null

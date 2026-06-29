@@ -49,6 +49,7 @@ export interface GenerativeFillResult {
 }
 
 export interface ModelBackedGenerativeFillRequestInput {
+  capabilityToken?: string
   sourcePng: string
   maskPng: string
   prompt: string
@@ -280,7 +281,12 @@ export function createModelBackedGenerativeFillRequest(
   return {
     endpoint: input.endpoint,
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      ...(input.capabilityToken
+        ? { authorization: `Bearer ${input.capabilityToken}` }
+        : {}),
+    },
     body: {
       sourcePng: input.sourcePng,
       maskPng: input.maskPng,

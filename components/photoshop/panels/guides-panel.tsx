@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { Eye, EyeOff, Grid3X3, Lock, Plus, Trash2, Unlock } from "lucide-react"
-import { useEditor } from "../editor-context"
+import { useEditorSelector } from "../editor-context"
 import type { Guide } from "../types"
 import { uid } from "../uid"
 
@@ -11,7 +11,9 @@ function clamp(value: number, min: number, max: number) {
 }
 
 export function GuidesPanel() {
-  const { activeDoc, dispatch, commit } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
   const [orientation, setOrientation] = React.useState<Guide["orientation"]>("vertical")
   const [position, setPosition] = React.useState(100)
   const [color, setColor] = React.useState("#06b6d4")

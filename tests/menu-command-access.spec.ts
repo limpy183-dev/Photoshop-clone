@@ -1,4 +1,26 @@
 import { expect, type Page, test } from "@playwright/test"
+import { readFileSync } from "node:fs"
+
+test("menu keeps heavy command engines behind dynamic command services", () => {
+  const source = readFileSync("components/photoshop/menu-bar.tsx", "utf8")
+
+  for (const eagerImport of [
+    'from "./document-io"',
+    'from "./tool-helpers"',
+    'from "./typography-engine"',
+    'from "./advanced-subsystems"',
+  ]) {
+    expect(source).not.toContain(eagerImport)
+  }
+  for (const loader of [
+    "loadDocumentCommands",
+    "loadImageCommands",
+    "loadTypeCommands",
+    "loadAdvancedCommands",
+  ]) {
+    expect(source).toContain(loader)
+  }
+})
 
 function topMenu(page: Page, name: string) {
   return page

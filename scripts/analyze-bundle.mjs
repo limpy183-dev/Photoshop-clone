@@ -10,6 +10,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import { dirname, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { measureRouteBundles } from "./measure-route-bundles.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = resolve(here, "..")
@@ -17,6 +18,28 @@ const chunkRoot = resolve(root, ".next/static/chunks")
 const reportPath = resolve(root, "artifacts/bundle-report.json")
 const maxChunkBytes = Number(process.env.BUNDLE_MAX_CHUNK_BYTES ?? 1_500_000)
 const maxInitialJsBytes = Number(process.env.BUNDLE_MAX_INITIAL_JS_BYTES ?? 5_000_000)
+const routeBudgets = {
+  "/": {
+    maxDecodedBytes: Number(process.env.BUNDLE_HOME_MAX_DECODED_BYTES ?? 1_500_000),
+    maxEncodedBytes: Number(process.env.BUNDLE_HOME_MAX_ENCODED_BYTES ?? 600_000),
+    maxRequests: Number(process.env.BUNDLE_HOME_MAX_REQUESTS ?? 18),
+  },
+  "/editor": {
+    maxDecodedBytes: Number(process.env.BUNDLE_EDITOR_MAX_DECODED_BYTES ?? 3_000_000),
+    maxEncodedBytes: Number(process.env.BUNDLE_EDITOR_MAX_ENCODED_BYTES ?? 900_000),
+    maxRequests: Number(process.env.BUNDLE_EDITOR_MAX_REQUESTS ?? 24),
+  },
+  "/marketing": {
+    maxDecodedBytes: Number(process.env.BUNDLE_MARKETING_MAX_DECODED_BYTES ?? 1_500_000),
+    maxEncodedBytes: Number(process.env.BUNDLE_MARKETING_MAX_ENCODED_BYTES ?? 600_000),
+    maxRequests: Number(process.env.BUNDLE_MARKETING_MAX_REQUESTS ?? 18),
+  },
+  "/documentation": {
+    maxDecodedBytes: Number(process.env.BUNDLE_DOCUMENTATION_MAX_DECODED_BYTES ?? 2_000_000),
+    maxEncodedBytes: Number(process.env.BUNDLE_DOCUMENTATION_MAX_ENCODED_BYTES ?? 700_000),
+    maxRequests: Number(process.env.BUNDLE_DOCUMENTATION_MAX_REQUESTS ?? 20),
+  },
+}
 
 function walk(dir) {
   const out = []
@@ -269,12 +292,40 @@ const chunkOwnership = largest.map((chunk) => {
     ],
   }
 })
+const routeMetrics = await measureRouteBundles({ root })
+const routeViolations = []
+for (const [route, metrics] of Object.entries(routeMetrics)) {
+  const budget = routeBudgets[route]
+  if (!budget) continue
+  for (const [metric, value, limit] of [
+    ["decoded-startup-js", metrics.decodedBodyBytes, budget.maxDecodedBytes],
+    ["encoded-startup-js", metrics.encodedBodyBytes, budget.maxEncodedBytes],
+    ["startup-js-requests", metrics.requestCount, budget.maxRequests],
+  ]) {
+    if (value <= limit) continue
+    const largestPath = metrics.largestStartupChunk
+      ? new URL(metrics.largestStartupChunk.url).pathname.replace(/^\/_next\//, ".next/")
+      : undefined
+    const owner = largestPath
+      ? chunkOwnership.find((entry) => entry.file === largestPath)
+      : undefined
+    routeViolations.push({
+      rule: metric,
+      route,
+      value,
+      budget: limit,
+      largestStartupChunk: metrics.largestStartupChunk,
+      owner,
+    })
+  }
+}
 
 const report = {
   generatedAt: new Date().toISOString(),
   budgets: {
     maxChunkBytes,
     maxInitialJsBytes,
+    routes: routeBudgets,
   },
   totals: {
     chunkCount: chunks.length,
@@ -284,6 +335,7 @@ const report = {
   largest,
   decoderChunks,
   chunkOwnership,
+  routeMetrics,
   ownershipLimitations: [
     "Next client-reference manifests expose route and client-module ownership for route chunks.",
     "Shared async chunks without manifest entries require sourcemaps or webpack stats for exact module attribution.",
@@ -298,6 +350,7 @@ const report = {
     ...(initialBytes > maxInitialJsBytes
       ? [{ rule: "max-initial-js", bytes: initialBytes, budget: maxInitialJsBytes }]
       : []),
+    ...routeViolations,
   ],
 }
 
@@ -305,6 +358,12 @@ mkdirSync(dirname(reportPath), { recursive: true })
 writeFileSync(reportPath, JSON.stringify(report, null, 2) + "\n")
 
 console.log(`Bundle analysis: ${chunks.length} client chunks, ${(initialBytes / 1024).toFixed(1)} KiB initial JS`)
+for (const [route, metrics] of Object.entries(routeMetrics)) {
+  console.log(
+    `  ${route.padEnd(14)} ${(metrics.encodedBodyBytes / 1024).toFixed(1)} KiB encoded, ` +
+    `${(metrics.decodedBodyBytes / 1024).toFixed(1)} KiB decoded, ${metrics.requestCount} requests`,
+  )
+}
 for (const chunk of largest.slice(0, 10)) {
   console.log(`  ${(chunk.bytes / 1024).toFixed(1).padStart(8)} KiB  ${chunk.file}`)
 }

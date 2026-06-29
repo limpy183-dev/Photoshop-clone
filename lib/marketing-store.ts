@@ -74,8 +74,16 @@ export type AppendRecordOptions = {
 
 export type RateLimitOptions = {
   limit: number
+  maxBuckets?: number
   now?: number
   windowMs: number
+}
+
+export class MarketingStoreUnavailableError extends Error {
+  constructor(message = "Marketing record storage is unavailable.") {
+    super(message)
+    this.name = "MarketingStoreUnavailableError"
+  }
 }
 
 /**
@@ -138,7 +146,10 @@ function getClientFingerprint(request: Request): string {
  * Sec-Fetch-Site only — Origin will already match same-origin in that
  * case.
  */
-export function isAllowedOrigin(request: Request): boolean {
+export function isAllowedOrigin(
+  request: Request,
+  options: { requireRequestMetadata?: boolean } = {},
+): boolean {
   const origin = request.headers.get("origin")
   const fetchSite = request.headers.get("sec-fetch-site")
   const publicOrigin = process.env.PUBLIC_ORIGIN?.trim()
@@ -166,15 +177,15 @@ export function isAllowedOrigin(request: Request): boolean {
     return false
   }
 
-  // No Origin and no Sec-Fetch-Site. Most legitimate non-browser clients
-  // (server-to-server, tests) fall here.
-  return true
+  // Paid/browser-only capabilities must not treat generic scripted clients as
+  // same-origin merely because both browser metadata headers are absent.
+  return options.requireRequestMetadata !== true
 }
 
 export function checkRateLimit(
   key: string,
-  { limit, now = Date.now(), windowMs }: RateLimitOptions,
-): { allowed: boolean; retryAfterSeconds?: number } {
+  { limit, maxBuckets = 10_000, now = Date.now(), windowMs }: RateLimitOptions,
+): { allowed: boolean; retryAfterSeconds?: number; reason?: "capacity" } {
   if (now - lastRateLimitPruneAt > windowMs) {
     for (const [bucketKey, bucket] of rateLimitBuckets) {
       if (bucket.resetAt <= now) {
@@ -186,6 +197,17 @@ export function checkRateLimit(
 
   const bucket = rateLimitBuckets.get(key)
   if (!bucket || bucket.resetAt <= now) {
+    if (!bucket && rateLimitBuckets.size >= maxBuckets) {
+      let nextResetAt = now + windowMs
+      for (const candidate of rateLimitBuckets.values()) {
+        nextResetAt = Math.min(nextResetAt, candidate.resetAt)
+      }
+      return {
+        allowed: false,
+        reason: "capacity",
+        retryAfterSeconds: Math.max(1, Math.ceil((nextResetAt - now) / 1000)),
+      }
+    }
     rateLimitBuckets.set(key, { count: 1, resetAt: now + windowMs })
     return { allowed: true }
   }
@@ -282,6 +304,41 @@ export async function appendRecord<T extends StoredRecord>(
   record: T,
   options: AppendRecordOptions = {},
 ): Promise<{ added: boolean; total: number; record: T }> {
+  const remoteStore = process.env.MARKETING_RECORD_STORE_URL?.trim()
+  if (remoteStore) {
+    try {
+      const response = await fetch(remoteStore, {
+        method: "POST",
+        headers: {
+          authorization: process.env.MARKETING_RECORD_STORE_TOKEN
+            ? `Bearer ${process.env.MARKETING_RECORD_STORE_TOKEN}`
+            : "",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ name, options, record }),
+        signal: AbortSignal.timeout(5_000),
+      })
+      if (!response.ok) {
+        if (response.status === 409 || response.status === 413 || response.status === 429) {
+          throw new MarketingStoreQuotaError()
+        }
+        throw new MarketingStoreUnavailableError()
+      }
+      return await response.json() as { added: boolean; total: number; record: T }
+    } catch (error) {
+      if (error instanceof MarketingStoreQuotaError) throw error
+      throw new MarketingStoreUnavailableError()
+    }
+  }
+  if (
+    process.env.NODE_ENV === "production" &&
+    process.env.ALLOW_LOCAL_MARKETING_STORE !== "true"
+  ) {
+    throw new MarketingStoreUnavailableError(
+      "MARKETING_RECORD_STORE_URL is required in production.",
+    )
+  }
+
   // Serialise writes within this Node.js process so concurrent requests
   // don't race on read-then-write.
   const result = writeChain.then(async () => {

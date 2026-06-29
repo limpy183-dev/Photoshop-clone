@@ -36,14 +36,14 @@ export function resolveCanvasCursorState(input: CanvasCursorInput): CanvasCursor
   const label = toolCursorLabel(input.tool)
   const brushDiameter = Math.max(2, Math.round(input.brushSize * Math.max(0.01, input.zoom)))
 
-  if (input.isBrushTool && input.showBrushPreview && input.cursorStyle !== "standard") {
+  if (input.isBrushTool && input.showBrushPreview) {
     return {
       cssCursor: "none",
       overlay: {
         kind: "brush",
         diameterPx: brushDiameter,
         canvasSizePx: cursorCanvasSize(brushDiameter),
-        showCrosshair: input.showBrushSizeCrosshair || input.cursorStyle === "precise",
+        showCrosshair: false,
         toolLabel: label,
       },
     }
@@ -56,19 +56,6 @@ export function resolveCanvasCursorState(input: CanvasCursorInput): CanvasCursor
         kind: "precise",
         canvasSizePx: 48,
         showCrosshair: true,
-        toolLabel: label,
-      },
-    }
-  }
-
-  if (input.cursorStyle === "brush-size" && input.isBrushTool && input.showBrushPreview) {
-    return {
-      cssCursor: "none",
-      overlay: {
-        kind: "brush",
-        diameterPx: brushDiameter,
-        canvasSizePx: cursorCanvasSize(brushDiameter),
-        showCrosshair: input.showBrushSizeCrosshair,
         toolLabel: label,
       },
     }
@@ -116,19 +103,21 @@ export function paintCanvasCursorOverlay(canvas: HTMLCanvasElement, overlay: Can
 
   if (overlay.kind === "brush") {
     const radius = Math.max(1, overlay.diameterPx / 2)
-    ctx.beginPath()
-    ctx.arc(cx, cy, radius, 0, Math.PI * 2)
-    ctx.stroke()
     ctx.shadowColor = "transparent"
+    ctx.shadowBlur = 0
     ctx.strokeStyle = "rgba(0,0,0,0.9)"
     ctx.beginPath()
     ctx.arc(cx, cy, radius + 1, 0, Math.PI * 2)
     ctx.stroke()
+    ctx.strokeStyle = "rgba(255,255,255,1)"
+    ctx.beginPath()
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2)
+    ctx.stroke()
   }
 
-  if (overlay.showCrosshair) {
-    const gap = overlay.kind === "brush" ? Math.max(4, Math.min(10, overlay.diameterPx / 5)) : 4
-    const reach = overlay.kind === "brush" ? Math.max(12, overlay.diameterPx / 2 + 8) : 18
+  if (overlay.kind !== "brush" && overlay.showCrosshair) {
+    const gap = 4
+    const reach = 18
     ctx.shadowColor = "rgba(0,0,0,0.85)"
     ctx.strokeStyle = "rgba(255,255,255,0.96)"
     drawCrosshair(ctx, cx, cy, gap, reach)
@@ -137,7 +126,7 @@ export function paintCanvasCursorOverlay(canvas: HTMLCanvasElement, overlay: Can
     drawCrosshair(ctx, cx + 0.5, cy + 0.5, gap, reach)
   }
 
-  drawToolBadge(ctx, cssSize, overlay.toolLabel)
+  if (overlay.kind !== "brush") drawToolBadge(ctx, cssSize, overlay.toolLabel)
   ctx.restore()
 }
 

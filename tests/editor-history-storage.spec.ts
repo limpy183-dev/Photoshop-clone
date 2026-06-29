@@ -8,6 +8,7 @@ import {
   isCompressedCanvas,
   prepareEntryForRestore,
   purgeFilterPreviewCache,
+  releaseEntriesBlobs,
   scheduleHistoryCompression,
   stripVideoCacheFromDoc,
   stripVideoCacheFromEntry,
@@ -105,9 +106,13 @@ test.afterEach(() => {
 })
 
 test("compresses older history canvases on idle and restores them before history replay", async () => {
+  const requestedTypes: Array<string | undefined> = []
   const entries = Array.from({ length: 14 }, (_, index) => {
     const canvas = fixtureCanvas(5, 4)
-    canvas.toBlob = (callback: BlobCallback) => callback(new Blob([`blob-${index}`], { type: "image/webp" }))
+    canvas.toBlob = (callback: BlobCallback, type?: string) => {
+      requestedTypes.push(type)
+      callback(new Blob([`blob-${index}`], { type: "image/png" }))
+    }
     return historyEntry(`entry-${index}`, canvas)
   })
   Object.defineProperty(globalThis, "requestIdleCallback", {
@@ -125,9 +130,10 @@ test("compresses older history canvases on idle and restores them before history
     }),
   })
 
-  scheduleHistoryCompression(entries, 13)
-  await Promise.resolve()
+  const job = scheduleHistoryCompression(entries, 13)
+  await job.done
 
+  expect(requestedTypes).toEqual(["image/png"])
   const compressed = entries[0].layers[0].canvas
   expect(isCompressedCanvas(compressed)).toBe(true)
   expect(compressed?.__origW).toBe(5)
@@ -138,6 +144,123 @@ test("compresses older history canvases on idle and restores them before history
   expect(isCompressedCanvas(entries[0].layers[0].canvas)).toBe(false)
   expect(entries[0].layers[0].canvas?.width).toBe(5)
   expect(entries[0].layers[0].canvas?.height).toBe(4)
+})
+
+test("compresses and restores every canvas-bearing history field", async () => {
+  const makeCompressible = () => {
+    const canvas = fixtureCanvas(3, 2)
+    canvas.toBlob = (callback: BlobCallback, type?: string) => {
+      expect(type).toBe("image/png")
+      callback(new Blob(["lossless"], { type: "image/png" }))
+    }
+    return canvas
+  }
+  const oldEntry = historyEntry("old", makeCompressible())
+  const layer = oldEntry.layers[0]
+  layer.mask = makeCompressible()
+  layer.canvasPatches = [{ x: 0, y: 0, w: 3, h: 2, canvas: makeCompressible() }]
+  layer.frame = { shape: "rect", x: 0, y: 0, w: 3, h: 2, imageCanvas: makeCompressible() }
+  layer.smartSource = { canvas: makeCompressible(), embedded: true, width: 3, height: 2 }
+  layer.smartFilters = [{
+    id: "filter-1",
+    filterId: "gaussian-blur",
+    name: "Gaussian Blur",
+    enabled: true,
+    opacity: 1,
+    blendMode: "normal",
+    params: {},
+    mask: makeCompressible(),
+  }]
+  oldEntry.selection = { bounds: null, shape: "rect", mask: makeCompressible() }
+  oldEntry.quickMaskCanvas = makeCompressible()
+  oldEntry.channels = [{
+    id: "alpha-1",
+    name: "Alpha 1",
+    kind: "alpha",
+    canvas: makeCompressible(),
+  }]
+  const frame = layer.frame
+  const smartSource = layer.smartSource
+  const channels = oldEntry.channels
+  const entries = [
+    oldEntry,
+    ...Array.from({ length: 13 }, (_, index) => historyEntry(`new-${index}`, makeCompressible())),
+  ]
+
+  Object.defineProperty(globalThis, "requestIdleCallback", {
+    configurable: true,
+    value: (callback: IdleRequestCallback) => {
+      callback({ didTimeout: false, timeRemaining: () => 50 })
+      return 1
+    },
+  })
+  Object.defineProperty(globalThis, "createImageBitmap", {
+    configurable: true,
+    value: async () => ({ close: () => {} }),
+  })
+
+  const job = scheduleHistoryCompression(entries, 13)
+  await job.done
+
+  const compressed = [
+    layer.canvas,
+    layer.mask,
+    layer.canvasPatches[0].canvas,
+    frame.imageCanvas,
+    smartSource.canvas,
+    layer.smartFilters[0].mask,
+    oldEntry.selection.mask,
+    oldEntry.quickMaskCanvas,
+    channels[0].canvas,
+  ]
+  expect(compressed.every(isCompressedCanvas)).toBe(true)
+
+  await prepareEntryForRestore(oldEntry)
+
+  const restored = [
+    layer.canvas,
+    layer.mask,
+    layer.canvasPatches[0].canvas,
+    frame.imageCanvas,
+    smartSource.canvas,
+    layer.smartFilters[0].mask,
+    oldEntry.selection.mask,
+    oldEntry.quickMaskCanvas,
+    channels[0].canvas,
+  ]
+  expect(restored.every((canvas) => canvas && !isCompressedCanvas(canvas) && canvas.width === 3 && canvas.height === 2)).toBe(true)
+})
+
+test("release cancels pending compression and prevents late blob publication", async () => {
+  let resolveBlob: ((blob: Blob | null) => void) | undefined
+  const canvas = fixtureCanvas(5, 4)
+  canvas.toBlob = (callback: BlobCallback) => {
+    resolveBlob = callback
+  }
+  const oldEntry = historyEntry("old", canvas)
+  const entries = [
+    oldEntry,
+    ...Array.from({ length: 13 }, (_, index) => historyEntry(`new-${index}`)),
+  ]
+
+  Object.defineProperty(globalThis, "requestIdleCallback", {
+    configurable: true,
+    value: (callback: IdleRequestCallback) => {
+      callback({ didTimeout: false, timeRemaining: () => 50 })
+      return 1
+    },
+  })
+
+  const job = scheduleHistoryCompression(entries, 13)
+  await Promise.resolve()
+  expect(resolveBlob).toBeDefined()
+
+  releaseEntriesBlobs([oldEntry])
+  resolveBlob!(new Blob(["late"], { type: "image/png" }))
+  await job.done
+
+  expect(oldEntry.layers[0].canvas).toBe(canvas)
+  expect(isCompressedCanvas(oldEntry.layers[0].canvas)).toBe(false)
 })
 
 test("estimates purge memory without double-counting shared canvases", () => {

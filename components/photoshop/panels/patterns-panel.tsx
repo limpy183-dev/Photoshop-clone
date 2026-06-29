@@ -5,7 +5,7 @@ import { Download, Plus, RotateCcw, Trash2, Upload, X } from "lucide-react"
 import { toast } from "sonner"
 import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson, type ClientStorageKey } from "../client-storage"
 import { downloadText } from "../document-io"
-import { useEditor } from "../editor-context"
+import { useEditorSelector } from "../editor-context"
 import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "../events"
 import { Input } from "@/components/ui/input"
 
@@ -112,7 +112,10 @@ function mergePatterns(existing: readonly PatternEntry[], incoming: readonly Pat
 }
 
 export function PatternsPanel() {
-  const { activeDoc, activeLayer, commit, requestRender } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const activeLayer = useEditorSelector((editor) => editor.activeLayer)
+  const commit = useEditorSelector((editor) => editor.commit)
+  const requestRender = useEditorSelector((editor) => editor.requestRender)
   const [patterns, setPatterns] = React.useState<PatternEntry[]>(() => loadPatterns(activeDoc?.id))
   const [query, setQuery] = React.useState("")
   const [group, setGroup] = React.useState(DEFAULT_GROUP)

@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { toast } from "sonner"
-import { useEditor } from "../editor-context"
+import { useEditorSelector } from "../editor-context"
 import { dispatchPhotoshopEvent } from "../events"
 import {
   focusAreaMask,
@@ -17,7 +17,11 @@ import type { ToolId } from "../types"
 import { uid } from "../uid"
 
 export function SelectionStudioPanel() {
-  const { activeDoc, activeLayer, dispatch, commit, requestRender } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const activeLayer = useEditorSelector((editor) => editor.activeLayer)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
+  const requestRender = useEditorSelector((editor) => editor.requestRender)
   const [amount, setAmount] = React.useState(8)
   const [feather, setFeather] = React.useState(4)
   const [border, setBorder] = React.useState(3)

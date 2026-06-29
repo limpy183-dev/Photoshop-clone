@@ -1,6 +1,16 @@
-import type { Layer, PathPoint, PathProps, SelectionDiagnostics, SelectionDiagnosticReason, SelectionOptions, ShapeProps } from "./types"
+import type { Layer, PathPoint, PathProps, SelectionOptions, ShapeProps } from "./types"
 import { hexToRgb } from "./color-utils"
 import { autoAlignImageStack, seamCarveImageData } from "./photo-workflow-engine"
+import {
+  createSelectionDiagnostics,
+  finalizeSelectionDiagnostics,
+  markSelectionDiagnostic,
+} from "./algorithmic-selection-diagnostics"
+import {
+  localColorGradient,
+  sampledSeedColor,
+  sampleSizeRadius,
+} from "./algorithmic-quick-selection-helpers"
 import {
   contractMaskData as contractMaskDataPure,
   distanceToFeature,
@@ -9,6 +19,8 @@ import {
   smoothMaskData as smoothMaskDataPure,
   transformSelectionMaskData as transformSelectionMaskDataPure,
 } from "./selection-algorithms"
+
+export { selectionDiagnosticsOverlayData } from "./algorithmic-selection-diagnostics"
 
 export interface Point {
   x: number
@@ -86,160 +98,6 @@ export interface EdgeAwareQuickSelectionOptions {
   sampleSize?: SelectionOptions["sampleSize"]
   contiguous?: boolean
   diagnostics?: boolean
-}
-
-const DIAGNOSTIC_REASON_CODE: Record<SelectionDiagnosticReason, number> = {
-  accepted: 1,
-  color: 2,
-  edge: 3,
-  alpha: 4,
-  limit: 5,
-  bounds: 6,
-}
-
-function createSelectionDiagnostics(width: number, height: number): SelectionDiagnostics {
-  return {
-    acceptedPixels: 0,
-    rejectedPixels: 0,
-    coverageRatio: 0,
-    boundsTouchesCanvas: false,
-    maxPixelsReached: false,
-    queueExhausted: false,
-    summary: "Selection diagnostics are available.",
-    reasonCounts: {
-      accepted: 0,
-      color: 0,
-      edge: 0,
-      alpha: 0,
-      limit: 0,
-      bounds: 0,
-    },
-    reasonMap: new Uint8ClampedArray(width * height),
-  }
-}
-
-function markSelectionDiagnostic(
-  diagnostics: SelectionDiagnostics,
-  pixel: number,
-  reason: SelectionDiagnosticReason,
-  primary = true,
-) {
-  diagnostics.reasonCounts[reason]++
-  if (reason === "accepted") {
-    diagnostics.reasonMap[pixel] = DIAGNOSTIC_REASON_CODE.accepted
-  } else if (primary && diagnostics.reasonMap[pixel] === 0) {
-    diagnostics.reasonMap[pixel] = DIAGNOSTIC_REASON_CODE[reason]
-  }
-}
-
-function finalizeSelectionDiagnostics(
-  diagnostics: SelectionDiagnostics,
-  width: number,
-  height: number,
-  bounds: Bounds | null,
-  maxPixelsReached: boolean,
-  queueExhausted: boolean,
-) {
-  diagnostics.acceptedPixels = diagnostics.reasonCounts.accepted
-  diagnostics.rejectedPixels = diagnostics.reasonMap.reduce((sum, reason) => sum + (reason >= 2 ? 1 : 0), 0)
-  diagnostics.coverageRatio = diagnostics.acceptedPixels / Math.max(1, width * height)
-  diagnostics.maxPixelsReached = maxPixelsReached
-  diagnostics.queueExhausted = queueExhausted
-  diagnostics.boundsTouchesCanvas = !!bounds && (
-    bounds.x <= 0 ||
-    bounds.y <= 0 ||
-    bounds.x + bounds.w >= width ||
-    bounds.y + bounds.h >= height
-  )
-  if (maxPixelsReached) {
-    diagnostics.summary = "Selection stopped at the maximum pixel budget."
-  } else if (diagnostics.boundsTouchesCanvas) {
-    diagnostics.summary = "Selection reached the canvas bounds; inspect for possible leakage."
-  } else if (diagnostics.reasonCounts.edge > 0) {
-    diagnostics.summary = "Selection stopped at edge contrast and rejected nearby pixels."
-  } else if (diagnostics.reasonCounts.color > 0) {
-    diagnostics.summary = "Selection stopped at color-distance differences."
-  } else if (diagnostics.acceptedPixels === 0) {
-    diagnostics.summary = "Selection found no eligible pixels at the seed."
-  } else {
-    diagnostics.summary = "Selection completed without obvious edge leakage."
-  }
-  return diagnostics
-}
-
-export function selectionDiagnosticsOverlayData(
-  diagnostics: SelectionDiagnostics,
-  width: number,
-  height: number,
-) {
-  const out = new ImageData(width, height)
-  const colors: Record<number, [number, number, number, number]> = {
-    1: [52, 211, 153, 96],
-    2: [59, 130, 246, 140],
-    3: [248, 113, 113, 170],
-    4: [168, 85, 247, 130],
-    5: [250, 204, 21, 170],
-    6: [251, 146, 60, 160],
-  }
-  const count = Math.min(width * height, diagnostics.reasonMap.length)
-  for (let p = 0; p < count; p++) {
-    const color = colors[diagnostics.reasonMap[p]]
-    if (!color) continue
-    const i = p * 4
-    out.data[i] = color[0]
-    out.data[i + 1] = color[1]
-    out.data[i + 2] = color[2]
-    out.data[i + 3] = color[3]
-  }
-  return out
-}
-
-function sampledSeedColor(src: ImageData, x: number, y: number, radius: number, minAlpha: number) {
-  const samples: Array<{ r: number; g: number; b: number }> = []
-  for (let dy = -radius; dy <= radius; dy++) {
-    for (let dx = -radius; dx <= radius; dx++) {
-      const sx = clamp(x + dx, 0, src.width - 1)
-      const sy = clamp(y + dy, 0, src.height - 1)
-      const i = (sy * src.width + sx) * 4
-      if (src.data[i + 3] <= minAlpha) continue
-      samples.push({ r: src.data[i], g: src.data[i + 1], b: src.data[i + 2] })
-    }
-  }
-  if (!samples.length) return { r: 0, g: 0, b: 0, spread: 0 }
-  const seed = {
-    r: samples.reduce((sum, value) => sum + value.r, 0) / samples.length,
-    g: samples.reduce((sum, value) => sum + value.g, 0) / samples.length,
-    b: samples.reduce((sum, value) => sum + value.b, 0) / samples.length,
-  }
-  const distances = samples.map((value) => Math.hypot(value.r - seed.r, value.g - seed.g, value.b - seed.b))
-  const mean = distances.reduce((sum, value) => sum + value, 0) / distances.length
-  const variance = distances.reduce((sum, value) => sum + (value - mean) ** 2, 0) / distances.length
-  return { ...seed, spread: mean + Math.sqrt(variance) }
-}
-
-function localColorGradient(data: Uint8ClampedArray, width: number, height: number, p: number) {
-  const x = p % width
-  const y = (p - x) / width
-  const i = p * 4
-  let gradient = 0
-  const neighbors = [
-    x > 0 ? p - 1 : -1,
-    x < width - 1 ? p + 1 : -1,
-    y > 0 ? p - width : -1,
-    y < height - 1 ? p + width : -1,
-  ]
-  for (const next of neighbors) {
-    if (next < 0) continue
-    gradient = Math.max(gradient, rgbaDistance(data, i, next * 4))
-  }
-  return gradient
-}
-
-function sampleSizeRadius(size: EdgeAwareQuickSelectionOptions["sampleSize"]) {
-  if (!size || size === "point") return 0
-  const parsed = Number(size.split("x")[0])
-  if (!Number.isFinite(parsed)) return 0
-  return Math.max(0, Math.floor(parsed / 2))
 }
 
 export function buildEdgeAwareQuickSelectionMaskData(

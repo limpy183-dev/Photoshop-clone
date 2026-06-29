@@ -17,7 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import { rasterizeText } from "./tool-helpers"
 import type { WarpStyle } from "./types"
 
@@ -41,7 +41,10 @@ export function WarpTextDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
 }) {
-  const { activeLayer, dispatch, commit, requestRender } = useEditor()
+  const activeLayer = useEditorSelector((editor) => editor.activeLayer)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
+  const requestRender = useEditorSelector((editor) => editor.requestRender)
   const baseline = React.useRef<NonNullable<typeof activeLayer>["text"] | null>(null)
 
   React.useEffect(() => {

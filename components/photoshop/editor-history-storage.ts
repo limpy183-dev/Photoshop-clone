@@ -14,18 +14,31 @@ import type {
 /** Keep the N most recent history entries uncompressed for fast undo. */
 export const COMPRESS_AFTER_N = 12
 
-/**
- * Compress a canvas to a WebP Blob for memory-efficient storage.
- * Returns the blob, or null if compression fails.
- */
-function compressCanvasToBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
+const RAW_RGBA_BLOB_TYPE = "application/x-photoshop-history-rgba+deflate"
+
+/** Encode raw RGBA so transparent pixels retain their hidden RGB channels. */
+async function compressCanvasToBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
+  if (
+    typeof window !== "undefined" &&
+    typeof CompressionStream !== "undefined"
+  ) {
+    try {
+      const context = canvas.getContext("2d", { willReadFrequently: true })
+      if (context) {
+        const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data
+        const compressed = new Blob([pixels])
+          .stream()
+          .pipeThrough(new CompressionStream("deflate"))
+        const payload = await new Response(compressed).arrayBuffer()
+        return new Blob([payload], { type: RAW_RGBA_BLOB_TYPE })
+      }
+    } catch {
+      // Fall through to PNG for browsers without a readable 2D surface.
+    }
+  }
   return new Promise((resolve) => {
     try {
-      canvas.toBlob(
-        (blob) => resolve(blob),
-        "image/webp",
-        0.92,
-      )
+      canvas.toBlob((blob) => resolve(blob), "image/png")
     } catch {
       resolve(null)
     }
@@ -34,6 +47,16 @@ function compressCanvasToBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
 
 /** Decompress a Blob back to a canvas for rendering. */
 async function decompressBlob(blob: Blob, width: number, height: number): Promise<HTMLCanvasElement> {
+  if (blob.type === RAW_RGBA_BLOB_TYPE && typeof DecompressionStream !== "undefined") {
+    const decompressed = blob.stream().pipeThrough(new DecompressionStream("deflate"))
+    const bytes = new Uint8ClampedArray(await new Response(decompressed).arrayBuffer())
+    if (bytes.length !== width * height * 4) {
+      throw new Error("Compressed history canvas has an invalid RGBA payload length.")
+    }
+    const canvas = makeCanvas(width, height)
+    canvas.getContext("2d")!.putImageData(new ImageData(bytes, width, height), 0, 0)
+    return canvas
+  }
   const bitmap = await createImageBitmap(blob)
   const canvas = makeCanvas(width, height)
   const ctx = canvas.getContext("2d")!
@@ -45,6 +68,87 @@ async function decompressBlob(blob: Blob, width: number, height: number): Promis
 /** Map from compressed canvas placeholder ID to blob. */
 const compressedCanvasStore = new Map<string, Blob>()
 let compressedIdCounter = 0
+const releasedEntries = new WeakSet<HistoryEntry>()
+
+export interface HistoryCompressionJob {
+  cancel(): void
+  readonly done: Promise<void>
+}
+
+type CanvasVisitor = (
+  canvas: HTMLCanvasElement,
+  replace: (canvas: HTMLCanvasElement) => void,
+) => void
+
+/**
+ * Visit every mutable canvas slot carried by a history entry. Keeping this
+ * traversal centralized prevents compression, restoration, release, and
+ * accounting from drifting as the history schema grows.
+ */
+function visitHistoryEntryCanvases(entry: HistoryEntry, visit: CanvasVisitor): void {
+  const visitSlot = (
+    canvas: HTMLCanvasElement | null | undefined,
+    replace: (next: HTMLCanvasElement) => void,
+  ) => {
+    if (canvas) visit(canvas, replace)
+  }
+
+  for (const layer of entry.layers) {
+    visitSlot(layer.canvas, (canvas) => { layer.canvas = canvas })
+    visitSlot(layer.mask, (canvas) => { layer.mask = canvas })
+    for (const patch of layer.canvasPatches ?? []) {
+      visitSlot(patch.canvas, (canvas) => { patch.canvas = canvas })
+    }
+    if (layer.frame) {
+      visitSlot(layer.frame.imageCanvas, (canvas) => { layer.frame!.imageCanvas = canvas })
+    }
+    if (layer.smartSource) {
+      visitSlot(layer.smartSource.canvas, (canvas) => { layer.smartSource!.canvas = canvas })
+    }
+    for (const filter of layer.smartFilters ?? []) {
+      visitSlot(filter.mask, (canvas) => { filter.mask = canvas })
+    }
+  }
+  if (entry.selection) {
+    visitSlot(entry.selection.mask, (canvas) => { entry.selection!.mask = canvas })
+  }
+  visitSlot(entry.quickMaskCanvas, (canvas) => { entry.quickMaskCanvas = canvas })
+  for (const channel of entry.channels ?? []) {
+    visitSlot(channel.canvas, (canvas) => { channel.canvas = canvas })
+  }
+}
+
+interface MutableCompressionJob extends HistoryCompressionJob {
+  cancelled: boolean
+}
+
+const compressionJobsByEntry = new WeakMap<HistoryEntry, Set<MutableCompressionJob>>()
+
+function registerCompressionJob(job: MutableCompressionJob, entries: HistoryEntry[]) {
+  for (const entry of entries) {
+    releasedEntries.delete(entry)
+    const pending = compressionJobsByEntry.get(entry) ?? new Set<MutableCompressionJob>()
+    for (const prior of pending) prior.cancel()
+    pending.add(job)
+    compressionJobsByEntry.set(entry, pending)
+  }
+}
+
+function unregisterCompressionJob(job: MutableCompressionJob, entries: HistoryEntry[]) {
+  for (const entry of entries) {
+    const pending = compressionJobsByEntry.get(entry)
+    pending?.delete(job)
+    if (pending?.size === 0) compressionJobsByEntry.delete(entry)
+  }
+}
+
+function cancelEntryCompression(entry: HistoryEntry) {
+  releasedEntries.add(entry)
+  const pending = compressionJobsByEntry.get(entry)
+  if (!pending) return
+  for (const job of pending) job.cancel()
+  compressionJobsByEntry.delete(entry)
+}
 
 /**
  * Create a tiny 1x1 placeholder canvas that represents a compressed entry.
@@ -73,12 +177,13 @@ function getCompressedBlobId(canvas: HTMLCanvasElement): string | null {
  * store does not grow unbounded across long editing sessions.
  */
 function releaseEntryBlobs(entry: HistoryEntry | null | undefined): void {
-  if (!entry?.layers) return
-  for (const layerSnap of entry.layers) {
-    if (!layerSnap?.canvas || !isCompressedCanvas(layerSnap.canvas)) continue
-    const blobId = getCompressedBlobId(layerSnap.canvas)
+  if (!entry) return
+  cancelEntryCompression(entry)
+  visitHistoryEntryCanvases(entry, (canvas) => {
+    if (!isCompressedCanvas(canvas)) return
+    const blobId = getCompressedBlobId(canvas)
     if (blobId) compressedCanvasStore.delete(blobId)
-  }
+  })
 }
 
 /** Bulk-release blobs from many entries. */
@@ -326,33 +431,63 @@ export function stripVideoCacheFromHistory<T extends EditorHistoryLike | undefin
 export function scheduleHistoryCompression(entries: HistoryEntry[], currentIndex: number) {
   const start = 0
   const end = Math.max(0, currentIndex - COMPRESS_AFTER_N)
-  if (end <= start) return
+  if (end <= start) {
+    return { cancel() {}, done: Promise.resolve() } satisfies HistoryCompressionJob
+  }
 
   const scheduleCompress = typeof requestIdleCallback === "function"
     ? requestIdleCallback
     : (cb: () => void) => setTimeout(cb, 100)
 
-  scheduleCompress(async () => {
-    for (let i = start; i < end; i++) {
-      const entry = entries[i]
-      if (!entry) continue
-      for (const layerSnap of entry.layers) {
-        if (!layerSnap.canvas || isCompressedCanvas(layerSnap.canvas)) continue
-        if (layerSnap.canvas.width <= 1 && layerSnap.canvas.height <= 1) continue
-
-        const blob = await compressCanvasToBlob(layerSnap.canvas)
-        if (blob) {
-          const blobId = `hblob_${compressedIdCounter++}`
-          compressedCanvasStore.set(blobId, blob)
-          const w = layerSnap.canvas.width
-          const h = layerSnap.canvas.height
-          layerSnap.canvas = createCompressedPlaceholder(blobId)
-          layerSnap.canvas!.__origW = w
-          layerSnap.canvas!.__origH = h
-        }
-      }
-    }
+  const targetEntries = entries.slice(start, end).filter((entry): entry is HistoryEntry => Boolean(entry))
+  let resolveDone: () => void = () => {}
+  const done = new Promise<void>((resolve) => {
+    resolveDone = resolve
   })
+  const job: MutableCompressionJob = {
+    cancelled: false,
+    done,
+    cancel() {
+      job.cancelled = true
+    },
+  }
+  registerCompressionJob(job, targetEntries)
+
+  scheduleCompress(() => {
+    void (async () => {
+      try {
+        for (const entry of targetEntries) {
+          if (job.cancelled || releasedEntries.has(entry)) break
+          const slots: Array<{
+            canvas: HTMLCanvasElement
+            replace: (canvas: HTMLCanvasElement) => void
+          }> = []
+          visitHistoryEntryCanvases(entry, (canvas, replace) => {
+            slots.push({ canvas, replace })
+          })
+          for (const slot of slots) {
+            if (job.cancelled || releasedEntries.has(entry)) break
+            if (isCompressedCanvas(slot.canvas)) continue
+            if (slot.canvas.width <= 1 && slot.canvas.height <= 1) continue
+
+            const blob = await compressCanvasToBlob(slot.canvas)
+            if (!blob || job.cancelled || releasedEntries.has(entry)) continue
+
+            const blobId = `hblob_${compressedIdCounter++}`
+            compressedCanvasStore.set(blobId, blob)
+            const placeholder = createCompressedPlaceholder(blobId)
+            placeholder.__origW = slot.canvas.width
+            placeholder.__origH = slot.canvas.height
+            slot.replace(placeholder)
+          }
+        }
+      } finally {
+        unregisterCompressionJob(job, targetEntries)
+        resolveDone()
+      }
+    })()
+  })
+  return job
 }
 
 /**
@@ -362,23 +497,25 @@ export function scheduleHistoryCompression(entries: HistoryEntry[], currentIndex
  * canvas is no longer a placeholder.
  */
 export async function prepareEntryForRestore(entry: HistoryEntry): Promise<void> {
-  if (!entry?.layers?.length) return
-  await Promise.all(
-    entry.layers.map(async (layerSnap) => {
-      if (!layerSnap.canvas || !isCompressedCanvas(layerSnap.canvas)) return
-      const blobId = getCompressedBlobId(layerSnap.canvas)
+  if (!entry) return
+  const restores: Promise<void>[] = []
+  visitHistoryEntryCanvases(entry, (canvas, replace) => {
+    restores.push((async () => {
+      if (!isCompressedCanvas(canvas)) return
+      const blobId = getCompressedBlobId(canvas)
       if (!blobId) return
       const blob = compressedCanvasStore.get(blobId)
       if (!blob) return
-      const w = layerSnap.canvas.__origW ?? 1
-      const h = layerSnap.canvas.__origH ?? 1
+      const w = canvas.__origW ?? 1
+      const h = canvas.__origH ?? 1
       try {
         const restored = await decompressBlob(blob, w, h)
-        layerSnap.canvas = restored
+        replace(restored)
         compressedCanvasStore.delete(blobId)
       } catch {
         // Keep the placeholder so restore code can decline to overwrite pixels.
       }
-    }),
-  )
+    })())
+  })
+  await Promise.all(restores)
 }

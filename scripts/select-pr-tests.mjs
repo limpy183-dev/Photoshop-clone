@@ -4,6 +4,8 @@ import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const TEST_COMMAND_CONFIG = "--config=playwright.node.config.ts"
+const PRODUCTION_SOURCE = /^(?:app\/|components\/|hooks\/|lib\/|types\/|proxy\.ts$|next\.config\.mjs$)/
+const BROAD_FALLBACK_COMMAND = "npx playwright test --grep-invert @visual"
 
 const GROUPS = [
   {
@@ -67,6 +69,12 @@ const GROUPS = [
       "tests/editor-history-storage.spec.ts",
       "tests/editor-persisted-settings.spec.ts",
     ],
+    browserMatch: [
+      /^components\/photoshop\/editor-history-storage\.ts$/,
+    ],
+    browserTests: [
+      "tests/editor-history-pixel-fidelity.spec.ts",
+    ],
   },
   {
     id: "security-api-plugins",
@@ -81,6 +89,93 @@ const GROUPS = [
       "tests/plugin-system.spec.ts",
       "tests/security-regression-limits.spec.ts",
     ],
+    browserTests: [
+      "tests/marketing-security.spec.ts",
+    ],
+  },
+  {
+    id: "project-sanitization",
+    match: [
+      /^components\/photoshop\/project-/,
+      /^components\/photoshop\/import-/,
+    ],
+    tests: [
+      "tests/project-json-sanitizer.spec.ts",
+      "tests/project-roundtrip-fixtures.spec.ts",
+      "tests/import-hardening.spec.ts",
+    ],
+  },
+  {
+    id: "webgl-compositor",
+    match: [
+      /^components\/photoshop\/webgl-/,
+      /^components\/photoshop\/blend-/,
+      /^components\/photoshop\/compositor-/,
+    ],
+    tests: [
+      "tests/canvas-compositor.spec.ts",
+      "tests/canvas-compositor-cache.spec.ts",
+      "tests/webgl-color-pipeline.spec.ts",
+    ],
+  },
+  {
+    id: "color-high-bit",
+    match: [
+      /^components\/photoshop\/color-/,
+      /^components\/photoshop\/high-bit-/,
+      /^components\/photoshop\/document-mode-/,
+    ],
+    tests: [
+      "tests/color-channel-ops.spec.ts",
+      "tests/color-mode-conversion.spec.ts",
+      "tests/color-pipeline.spec.ts",
+      "tests/high-bit-document.spec.ts",
+      "tests/high-bit-editing-surface.spec.ts",
+    ],
+  },
+  {
+    id: "performance-storage",
+    match: [
+      /^components\/photoshop\/performance-/,
+      /^components\/photoshop\/client-storage\.ts$/,
+      /^components\/photoshop\/editor-persisted-settings\.ts$/,
+      /^components\/photoshop\/preferences-/,
+    ],
+    tests: [
+      "tests/performance-2-9.spec.ts",
+      "tests/performance-scale.spec.ts",
+      "tests/performance-storage.spec.ts",
+      "tests/preferences-performance-settings.spec.ts",
+    ],
+  },
+  {
+    id: "panels-timeline",
+    match: [
+      /^components\/photoshop\/panels\//,
+      /^components\/photoshop\/panel-/,
+      /^components\/photoshop\/timeline-/,
+      /^components\/photoshop\/three-d-video-/,
+    ],
+    tests: [
+      "tests/panel-completion-helpers.spec.ts",
+      "tests/panel-dock-ux.spec.ts",
+      "tests/panels-layers.spec.ts",
+      "tests/right-panel-status-context.spec.ts",
+      "tests/timeline-animation.spec.ts",
+    ],
+  },
+  {
+    id: "shared-types",
+    match: [
+      /^components\/photoshop\/types\.ts$/,
+      /^types\//,
+    ],
+    tests: [
+      "tests/editor-document-lifecycle.spec.ts",
+      "tests/canvas-tools.spec.ts",
+      "tests/project-roundtrip-fixtures.spec.ts",
+      "tests/high-bit-document.spec.ts",
+    ],
   },
 ]
 
@@ -88,30 +183,47 @@ function normalizePath(file) {
   return String(file).trim().replace(/\\/g, "/").replace(/^\.\//, "")
 }
 
-function commandForTests(tests) {
+function commandForTests(tests, config = TEST_COMMAND_CONFIG) {
   const existingTests = tests.filter((file) => existsSync(file))
   if (!existingTests.length) return null
-  return `npx playwright test ${existingTests.join(" ")} ${TEST_COMMAND_CONFIG}`
+  return `npx playwright test ${existingTests.join(" ")}${config ? ` ${config}` : ""}`
 }
 
 export function selectPrTestCommands(changedFiles) {
   const files = changedFiles.map(normalizePath).filter(Boolean)
-  const selectedTests = []
-  const seenTests = new Set()
+  const selectedNodeTests = []
+  const selectedBrowserTests = []
+  const seenNodeTests = new Set()
+  const seenBrowserTests = new Set()
+  const matchedFiles = new Set()
 
   for (const group of GROUPS) {
-    const selected = files.some((file) => group.match.some((pattern) => pattern.test(file)))
-    if (!selected) continue
+    const groupFiles = files.filter((file) => group.match.some((pattern) => pattern.test(file)))
+    if (!groupFiles.length) continue
+    for (const file of groupFiles) matchedFiles.add(file)
     for (const test of group.tests) {
-      if (!seenTests.has(test)) {
-        selectedTests.push(test)
-        seenTests.add(test)
+      if (!seenNodeTests.has(test)) {
+        selectedNodeTests.push(test)
+        seenNodeTests.add(test)
+      }
+    }
+    const shouldRunBrowserTests = !group.browserMatch || groupFiles.some((file) => group.browserMatch.some((pattern) => pattern.test(file)))
+    for (const test of shouldRunBrowserTests ? (group.browserTests ?? []) : []) {
+      if (!seenBrowserTests.has(test)) {
+        selectedBrowserTests.push(test)
+        seenBrowserTests.add(test)
       }
     }
   }
 
-  const command = commandForTests(selectedTests)
-  return command ? [command] : []
+  if (files.some((file) => PRODUCTION_SOURCE.test(file) && !matchedFiles.has(file))) {
+    return [BROAD_FALLBACK_COMMAND]
+  }
+
+  return [
+    commandForTests(selectedNodeTests),
+    commandForTests(selectedBrowserTests, ""),
+  ].filter(Boolean)
 }
 
 function readChangedFilesFromCli(argv) {

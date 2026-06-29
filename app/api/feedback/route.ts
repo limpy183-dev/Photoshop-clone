@@ -8,6 +8,7 @@ import {
   isAllowedOrigin,
   MARKETING_LIMITS,
   MarketingStoreQuotaError,
+  MarketingStoreUnavailableError,
   RequestBodyTooLargeError,
   readJsonWithLimit,
 } from "@/lib/marketing-store"
@@ -95,7 +96,7 @@ export async function POST(request: Request) {
       total: result.total,
     })
   } catch (error) {
-    if (error instanceof MarketingStoreQuotaError) {
+    if (error instanceof MarketingStoreQuotaError || error instanceof MarketingStoreUnavailableError) {
       return NextResponse.json(
         { ok: false, error: "Could not record feedback. Try again later." },
         { status: 503 },

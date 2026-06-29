@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { decodePdfPages } from "./advanced-subsystems"
-import { makeDocument, useEditor } from "./editor-context"
+import { makeDocument, useEditorSelector } from "./editor-context"
 
 type ImportMode = "page-per-document" | "pages-as-layers"
 
@@ -32,7 +32,7 @@ export function PdfImportDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const { createDocument } = useEditor()
+  const createDocument = useEditorSelector((editor) => editor.createDocument)
   const [file, setFile] = React.useState<File | null>(null)
   const [pages, setPages] = React.useState<PdfPagePreview[]>([])
   const [mode, setMode] = React.useState<ImportMode>("page-per-document")

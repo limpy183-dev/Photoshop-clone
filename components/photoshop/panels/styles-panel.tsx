@@ -17,7 +17,7 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { useEditor } from "../editor-context"
+import { useEditorSelector } from "../editor-context"
 import { downloadText } from "../document-io"
 import { uid } from "../uid"
 import type { LayerStyle, PsDocument } from "../types"
@@ -119,7 +119,10 @@ function asStylePresets(value: unknown): StylePreset[] {
 }
 
 export function StylesPanel() {
-  const { activeDoc, activeLayer, dispatch, commit } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const activeLayer = useEditorSelector((editor) => editor.activeLayer)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
   const [query, setQuery] = React.useState("")
   const [collapsed, setCollapsed] = React.useState<Record<string, boolean>>({})
   const [renamingId, setRenamingId] = React.useState<string | null>(null)

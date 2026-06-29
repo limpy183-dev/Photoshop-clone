@@ -16,7 +16,7 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { useEditor, makeCanvas } from "../editor-context"
+import { useEditorSelector, makeCanvas } from "../editor-context"
 import { uid } from "../uid"
 import type { Layer } from "../types"
 import { createSmartObjectSource } from "../smart-objects"
@@ -78,7 +78,9 @@ function formatDate(value: number | undefined) {
 }
 
 export function LibrariesPanel() {
-  const { activeDoc, dispatch, commit } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
   const [assets, setAssets] = React.useState<LibraryAssetRecord[]>([])
   const [query, setQuery] = React.useState("")
   const [groupFilter, setGroupFilter] = React.useState<string>("all")

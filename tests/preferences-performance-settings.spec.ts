@@ -24,7 +24,7 @@ import {
   summarizePerformancePolicy,
 } from "../components/photoshop/preferences-engine"
 import { buildRulerTickMarks } from "../components/photoshop/ruler-calibration"
-import { resolveCanvasCursorState } from "../components/photoshop/cursor-overlay"
+import { paintCanvasCursorOverlay, resolveCanvasCursorState } from "../components/photoshop/cursor-overlay"
 import { defaultTechPreviewFlags, getTechPreviewFlagDefinition } from "../components/photoshop/tech-previews"
 
 test("normalizes legacy preference sets into the full schema", () => {
@@ -280,7 +280,25 @@ test("resolves canvas cursor overlays from cursor preferences and active tool", 
   expect(brushCursor.overlay).toMatchObject({
     kind: "brush",
     diameterPx: 48,
-    showCrosshair: true,
+    showCrosshair: false,
+    toolLabel: "B",
+  })
+
+  const standardBrush = resolveCanvasCursorState({
+    standardCssCursor: "crosshair",
+    cursorStyle: "standard",
+    tool: "brush",
+    isBrushTool: true,
+    brushSize: 24,
+    zoom: 2,
+    showBrushPreview: true,
+    showBrushSizeCrosshair: true,
+  })
+  expect(standardBrush.cssCursor).toBe("none")
+  expect(standardBrush.overlay).toMatchObject({
+    kind: "brush",
+    diameterPx: 48,
+    showCrosshair: false,
     toolLabel: "B",
   })
 
@@ -307,6 +325,48 @@ test("resolves canvas cursor overlays from cursor preferences and active tool", 
     showBrushSizeCrosshair: false,
   })
   expect(preciseEyedropper.overlay).toMatchObject({ kind: "precise", toolLabel: "I" })
+})
+
+test("paints the brush cursor with contrasting outer and inner rings", () => {
+  const strokes: Array<{ radius: number; color: string }> = []
+  let currentRadius = 0
+  const ctx = {
+    setTransform: () => {},
+    clearRect: () => {},
+    save: () => {},
+    restore: () => {},
+    beginPath: () => {},
+    arc: (_x: number, _y: number, radius: number) => {
+      currentRadius = radius
+    },
+    stroke: function (this: CanvasRenderingContext2D) {
+      strokes.push({ radius: currentRadius, color: this.strokeStyle as string })
+    },
+    moveTo: () => {},
+    lineTo: () => {},
+    roundRect: () => {},
+    fill: () => {},
+    fillText: () => {},
+  } as unknown as CanvasRenderingContext2D
+  const canvas = {
+    width: 0,
+    height: 0,
+    style: {} as CSSStyleDeclaration,
+    getContext: () => ctx,
+  } as unknown as HTMLCanvasElement
+
+  paintCanvasCursorOverlay(canvas, {
+    kind: "brush",
+    diameterPx: 30,
+    canvasSizePx: 58,
+    showCrosshair: false,
+    toolLabel: "B",
+  })
+
+  expect(strokes).toEqual([
+    { radius: 16, color: "rgba(0,0,0,0.9)" },
+    { radius: 15, color: "rgba(255,255,255,1)" },
+  ])
 })
 
 test("exports, imports, and resets preference sets by section", () => {

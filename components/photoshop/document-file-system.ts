@@ -45,7 +45,7 @@ export function isFileSystemAccessSupported(): boolean {
  * Show a "Save As" file picker and return a FileSystemFileHandle.
  * Returns null if the user cancels or the API is unsupported.
  */
-export async function showSaveProjectPicker(suggestedName = "project.psproj"): Promise<FileSystemFileHandle | null> {
+export async function showSaveProjectPicker(suggestedName = "project.psprojson"): Promise<FileSystemFileHandle | null> {
   if (!isFileSystemAccessSupported()) return null
   try {
     const handle = await window.showSaveFilePicker!({
@@ -53,7 +53,7 @@ export async function showSaveProjectPicker(suggestedName = "project.psproj"): P
       types: [
         {
           description: "Photoshop Web Project",
-          accept: { "application/json": [".psproj"] },
+          accept: { "application/json": [".psprojson"] },
         },
         {
           description: "PSD File",

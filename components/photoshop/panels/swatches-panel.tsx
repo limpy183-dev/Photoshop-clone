@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "../client-storage"
-import { useEditor } from "../editor-context"
+import { useEditorSelector } from "../editor-context"
 import { BookOpen, Plus, Trash2, Download, Upload, RotateCcw, X } from "lucide-react"
 import { downloadText } from "../document-io"
 import { toast } from "sonner"
@@ -76,7 +76,9 @@ function saveRecentSwatches(swatches: SwatchEntry[]) {
 }
 
 export function SwatchesPanel() {
-  const { activeDoc, foreground, dispatch } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const foreground = useEditorSelector((editor) => editor.foreground)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
   const [swatches, setSwatches] = React.useState<SwatchEntry[]>(() => loadSwatches(activeDoc?.id))
   const [query, setQuery] = React.useState("")
   const [activeGroup, setActiveGroup] = React.useState<string>("All")

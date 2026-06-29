@@ -9,7 +9,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import { COLOR_LABELS } from "./panels/layers-panel"
 import type { Layer } from "./types"
 
@@ -20,7 +20,8 @@ export function ColorLabelsDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
 }) {
-  const { activeLayer, dispatch } = useEditor()
+  const activeLayer = useEditorSelector((editor) => editor.activeLayer)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
 
   const setColorLabel = (label: NonNullable<Layer["colorLabel"]>) => {
     if (!activeLayer) return

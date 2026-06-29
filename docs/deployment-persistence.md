@@ -24,6 +24,35 @@ Production deployments need explicit adapters for:
   and request metadata;
 - monitoring for rejected writes, rate-limit spikes, and adapter outages.
 
+Set `MARKETING_RECORD_STORE_URL` (and `MARKETING_RECORD_STORE_TOKEN`) to an
+atomic durable adapter that implements the documented append/dedupe/quota
+contract. Production refuses the JSONL fallback unless
+`ALLOW_LOCAL_MARKETING_STORE=true` is explicitly set.
+
+The in-process limiter is capped at 10,000 live buckets. It remains a
+development fallback, not a cross-instance control. In production,
+`RATE_LIMIT_SERVICE_URL` must identify a shared HTTP/edge adapter (and
+`RATE_LIMIT_SERVICE_TOKEN` should authenticate it). The application fails
+closed when this adapter is absent unless `ALLOW_LOCAL_SERVER_RATE_LIMIT=true`
+is explicitly set for a single-process deployment.
+
+## Paid Generative Fill
+
+Configuring `GENERATIVE_IMAGE_ENDPOINT` and `GENERATIVE_IMAGE_API_KEY` also
+requires:
+
+- `GENERATIVE_FILL_CAPABILITY_SECRET`, at least 32 characters;
+- an authenticated session layer that mints a signed capability scoped to
+  `generative-fill`, with a subject, nonce, and maximum 15-minute lifetime;
+- `RATE_LIMIT_SERVICE_URL` in production;
+- provider/account spend alerts or hard billing limits.
+
+The route rejects missing browser origin/fetch metadata, invalid capabilities,
+and unavailable shared limits. It enforces per-subject minute/daily quotas and
+bounded concurrency. Tune `GENERATIVE_FILL_DAILY_REQUEST_LIMIT` and
+`GENERATIVE_FILL_MAX_CONCURRENCY` to provider pricing. Never expose capability
+minting from an unauthenticated endpoint.
+
 ## Static Export Behavior
 
 GitHub Pages and other static exports do not run `app/api` routes. UI that

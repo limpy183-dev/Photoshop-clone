@@ -12,7 +12,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Copy, Play, Plus, RefreshCw, Save, Trash2 } from "lucide-react"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import type { LayerComp } from "./types"
 import { captureLayerCompState, createLayerCompFromDocument, summarizeLayerComp } from "./layer-workflows"
 import { uid } from "./uid"
@@ -31,7 +31,9 @@ export function LayerCompsDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
 }) {
-  const { activeDoc, dispatch, commit } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
 
   if (!activeDoc) return null
 

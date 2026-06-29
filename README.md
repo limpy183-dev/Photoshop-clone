@@ -224,6 +224,8 @@ npm run start
 | `npm run lint:strict` | Run ESLint with `--max-warnings=0` for warning burn-down work. |
 | `npm run typecheck` | Run TypeScript without emitting output. |
 | `npm run check:architecture` | Enforce import-cycle, raw Photoshop event/listener, file-size, and `useEditor` budgets. |
+| `npm run check:unused-scaffolds` | Reject retired duplicate scaffold files. |
+| `npm run analyze:bundle` | Enforce production startup JavaScript budgets per route. |
 | `npm run test:smoke` | Run the fast desktop/mobile Playwright smoke matrix. |
 | `npm run test:static-export:smoke` | Smoke-test an existing GitHub Pages-style `out/` export. |
 | `npm run verify` | Run lint, typecheck, capability checks, architecture budgets, build, bundle analysis, and smoke tests. |
@@ -233,6 +235,8 @@ npm run start
 The bundled marketing API storage writes to `.data/*.jsonl` and is intended for
 local/demo use. Production deployments need a durable storage and shared
 rate-limit adapter; see [docs/deployment-persistence.md](docs/deployment-persistence.md).
+Model-backed generative fill also requires an authenticated, short-lived
+`generative-fill` capability and production shared rate limiting.
 
 ## Testing
 

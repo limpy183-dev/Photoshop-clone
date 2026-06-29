@@ -3,7 +3,7 @@
 import * as React from "react"
 import { toast } from "sonner"
 import { Copy, Download, Eye, EyeOff, Lock, Plus, Trash2, Unlock } from "lucide-react"
-import { useEditor, makeCanvas } from "../editor-context"
+import { useEditorSelector, makeCanvas } from "../editor-context"
 import { downloadBlob, rasterMime, renderDocumentComposite } from "../document-io"
 import type { Slice } from "../types"
 import { uid } from "../uid"
@@ -38,7 +38,9 @@ async function exportSlice(source: HTMLCanvasElement, slice: Slice, filename: st
 }
 
 export function SlicesPanel() {
-  const { activeDoc, dispatch, commit } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
   const [prefix, setPrefix] = React.useState("slice")
 
   if (!activeDoc) return <PanelEmpty text="No document open" />

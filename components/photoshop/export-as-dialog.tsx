@@ -11,7 +11,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
@@ -35,8 +34,6 @@ import {
   formatBytes,
   rasterMime,
   type BrowserRasterEncoderDiagnostic,
-  type BrowserRasterExportFormat,
-  type CompatibilityManifestEntry,
   type ExportFormat,
 } from "./document-io"
 import { dispatchPhotoshopEvent } from "./events"
@@ -57,138 +54,27 @@ import { supportedIccProfileNames } from "./color-pipeline"
 import {
   alternativesForLimitation,
   alternativesForWarning,
-  type ExportAlternative,
 } from "./export-alternatives"
-
-const EXPORT_FORMATS: Array<{ format: ExportFormat; label: string }> = [
-  { format: "png", label: "PNG" },
-  { format: "tiff", label: "TIFF" },
-  { format: "jpeg", label: "JPG" },
-  { format: "webp", label: "WebP" },
-  { format: "gif", label: "GIF" },
-  { format: "avif", label: "AVIF" },
-  { format: "svg", label: "SVG" },
-  { format: "tga", label: "TGA" },
-  { format: "ppm", label: "PPM" },
-  { format: "pgm", label: "PGM" },
-  { format: "pbm", label: "PBM" },
-  { format: "apng", label: "APNG" },
-  { format: "animated-webp", label: "Anim WebP" },
-  { format: "metadata-json", label: "Sidecar" },
-]
-
-type ExportDecisionId = "web" | "app" | "photoshop" | "print"
-
-// Task-based export decision cards: pick the goal, get a recommended format plus
-// an honest "what's preserved vs. flattened" breakdown before committing.
-const EXPORT_DECISIONS: Array<{
-  id: ExportDecisionId
-  label: string
-  format: ExportFormat
-  blurb: string
-  preserved: string[]
-  flattened: string[]
-}> = [
-  {
-    id: "web",
-    label: "Best for web",
-    format: "webp",
-    blurb: "Small, sRGB, broadly supported.",
-    preserved: ["Flattened composite appearance", "sRGB color for browsers", "Smallest practical file size"],
-    flattened: ["Layers flattened to a single raster image", "Browser-encoded 8-bit color only"],
-  },
-  {
-    id: "app",
-    label: "Best for this app",
-    format: "metadata-json",
-    blurb: "Re-open here with the most fidelity.",
-    preserved: ["Document and layer metadata", "Layer names, blend, and opacity"],
-    flattened: ["Pixel data exported as a raster sidecar", "Browser 8-bit RGBA working space"],
-  },
-  {
-    id: "photoshop",
-    label: "Best for Photoshop handoff",
-    format: "metadata-json",
-    blurb: "Carry structure and metadata downstream.",
-    preserved: ["Layer names and metadata", "Document metadata and intent"],
-    flattened: ["Effects and smart filters rasterized", "Browser cannot write native PSD private data"],
-  },
-  {
-    id: "print",
-    label: "Best for print preview",
-    format: "png",
-    blurb: "Full-resolution, lossless raster.",
-    preserved: ["Full resolution", "Embedded export metadata"],
-    flattened: ["Flattened raster output", "Browser color management approximation only"],
-  },
-]
-
-const EXPORT_EXTENSIONS: Record<ExportFormat, string> = {
-  png: "png",
-  tiff: "tiff",
-  jpeg: "jpg",
-  webp: "webp",
-  avif: "avif",
-  gif: "gif",
-  svg: "svg",
-  tga: "tga",
-  ppm: "ppm",
-  pgm: "pgm",
-  pbm: "pbm",
-  apng: "png",
-  "animated-webp": "webp",
-  "metadata-json": "metadata.json",
-}
-
-const DEFAULT_COLOR_MANAGEMENT: ColorManagementSettings = {
-  assignedProfile: "sRGB IEC61966-2.1",
-  workingSpace: "sRGB IEC61966-2.1",
-  renderingIntent: "relative-colorimetric",
-  blackPointCompensation: true,
-  proofProfile: "None",
-  proofColors: false,
-  gamutWarning: false,
-  proofChannels: [],
-  proofPlateView: "composite",
-}
-
-function previewRasterFormat(format: ExportFormat): BrowserRasterExportFormat {
-  if (
-    format === "svg" ||
-    format === "metadata-json" ||
-    format === "apng" ||
-    format === "animated-webp" ||
-    format === "tiff" ||
-    format === "tga" ||
-    format === "ppm" ||
-    format === "pgm" ||
-    format === "pbm"
-  ) {
-    return "png"
-  }
-  return format
-}
-
-function presetScaleToPercent(scale: number | undefined) {
-  if (!Number.isFinite(scale)) return undefined
-  const value = Number(scale)
-  return value <= 8 ? Math.round(value * 100) : Math.round(value)
-}
-
-type WebpAlphaFilter = NonNullable<RasterExportMetadata["webp"]>["alphaFilter"]
-
-function splitMetadataCommentLines(value: string) {
-  return value
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(0, 8)
-}
-
-function cleanOptionalText(value: string) {
-  const clean = value.trim()
-  return clean || undefined
-}
+import {
+  CheckRow,
+  InfoPill,
+  LimitationsBlock,
+  ManifestCount,
+  Panel,
+  AlternativesRow,
+} from "./export-as-dialog-parts"
+import {
+  cleanOptionalText,
+  DEFAULT_COLOR_MANAGEMENT,
+  EXPORT_DECISIONS,
+  EXPORT_EXTENSIONS,
+  EXPORT_FORMATS,
+  presetScaleToPercent,
+  previewRasterFormat,
+  splitMetadataCommentLines,
+  type ExportDecisionId,
+  type WebpAlphaFilter,
+} from "./export-as-dialog-model"
 
 export function ExportAsDialog({
   open,
@@ -1519,125 +1405,5 @@ export function ExportAsDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  )
-}
-
-function InfoPill({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] rounded-sm px-2 py-1">
-      <div className="uppercase text-[9px]">{label}</div>
-      <div className="text-[var(--ps-text)] tabular-nums">{value}</div>
-    </div>
-  )
-}
-
-function ManifestCount({ label, value, className }: { label: string; value: number; className: string }) {
-  return (
-    <div className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 py-1">
-      <div className="uppercase text-[9px] text-[var(--ps-text-dim)]">{label}</div>
-      <div className={`tabular-nums ${className}`}>{value}</div>
-    </div>
-  )
-}
-
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="border border-[var(--ps-divider)] rounded-sm">
-      <div className="px-2 py-1 text-[10px] uppercase text-[var(--ps-text-dim)] bg-[var(--ps-panel-2)] border-b border-[var(--ps-divider)]">
-        {title}
-      </div>
-      <div className="p-2">{children}</div>
-    </div>
-  )
-}
-
-function CheckRow({
-  label,
-  checked,
-  disabled,
-  onCheckedChange,
-}: {
-  label: string
-  checked: boolean
-  disabled?: boolean
-  onCheckedChange: (v: boolean) => void
-}) {
-  return (
-    <label className={cn("flex items-center gap-2 text-[11px]", disabled && "opacity-45")}>
-      <Checkbox
-        checked={checked}
-        disabled={disabled}
-        onCheckedChange={(v) => onCheckedChange(v === true)}
-        className="border-[var(--ps-divider)]"
-      />
-      {label}
-    </label>
-  )
-}
-
-function AlternativesRow({
-  alternatives,
-  onPick,
-  testId,
-}: {
-  alternatives: ExportAlternative[]
-  onPick: (format: ExportFormat) => void
-  testId?: string
-}) {
-  if (!alternatives.length) return null
-  return (
-    <div className="mt-1 flex flex-wrap items-center gap-1" data-testid={testId}>
-      <span className="text-[9px] uppercase tracking-wide text-[var(--ps-text-dim)]">Try:</span>
-      {alternatives.map((alt) => (
-        <button
-          key={alt.format}
-          type="button"
-          title={alt.reason}
-          onClick={() => onPick(alt.format as ExportFormat)}
-          className="rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel)] px-1.5 py-0.5 text-[10px] text-[var(--ps-text)] hover:border-amber-400/60 hover:bg-amber-400/10 hover:text-amber-100"
-        >
-          {alt.label}
-        </button>
-      ))}
-    </div>
-  )
-}
-
-function LimitationsBlock({
-  summary,
-  items,
-  currentFormat,
-  onPickFormat,
-}: {
-  summary: string
-  items: CompatibilityManifestEntry[]
-  currentFormat: ExportFormat
-  onPickFormat: (format: ExportFormat) => void
-}) {
-  return (
-    <div
-      className="mt-3 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 py-1.5 text-[10px] text-[var(--ps-text-dim)]"
-      data-testid="export-limitations"
-    >
-      <div className="mb-1 font-medium text-[var(--ps-text)]">{summary}</div>
-      <div className="grid gap-1.5">
-        {items.map((item) => {
-          const alternatives = alternativesForLimitation(currentFormat, item)
-          return (
-            <div key={`${item.label}-${item.status}`} className="grid grid-cols-[92px_1fr] gap-2">
-              <span className="uppercase tracking-wide text-amber-300">{item.status}</span>
-              <div>
-                <div>{item.label}: {item.detail}</div>
-                <AlternativesRow
-                  alternatives={alternatives}
-                  onPick={onPickFormat}
-                  testId={`export-limitation-alt-${item.label.replace(/\s+/g, "-").toLowerCase()}`}
-                />
-              </div>
-            </div>
-          )
-        })}
-      </div>
-    </div>
   )
 }

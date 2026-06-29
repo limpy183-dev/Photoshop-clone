@@ -17,7 +17,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "../client-storage"
-import { useEditor } from "../editor-context"
+import { useEditorSelector } from "../editor-context"
 import { dispatchPhotoshopEvent } from "../events"
 import { downloadText } from "../document-io"
 import { uid } from "../uid"
@@ -185,7 +185,9 @@ function buildJsonExport(
 }
 
 export function MeasurementLogPanel() {
-  const { activeDoc, dispatch, commit } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
   const [prefs, setPrefs] = React.useState<MeasurementLogPreferences>(readPrefs)
   const [label, setLabel] = React.useState<string>("")
   const [notes, setNotes] = React.useState<string>("")

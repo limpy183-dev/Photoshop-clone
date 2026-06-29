@@ -5,9 +5,13 @@ on:
   push:
     branches:
       - main
+  schedule:
+    - cron: "30 5 * * 1"
+  workflow_dispatch:
 
 jobs:
   quality:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -34,14 +38,17 @@ jobs:
       - name: Architecture budgets
         run: npm run check:architecture
 
+      - name: Unused scaffold check
+        run: npm run check:unused-scaffolds
+
       - name: Build
         run: npm run build
 
-      - name: Bundle budget
-        run: npm run analyze:bundle
-
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
+
+      - name: Bundle budget
+        run: npm run analyze:bundle
 
       - name: Smoke tests
         run: npm run test:smoke:ci
@@ -95,3 +102,25 @@ jobs:
 
       - name: Full Playwright shard
         run: npm run test:full:shard -- ${{ matrix.shard }}/4
+
+  visual-regression:
+    if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium
+
+      - name: Verify visual baselines
+        run: npm run test:visual

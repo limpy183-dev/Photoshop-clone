@@ -1,9 +1,13 @@
 import { promises as fs } from "node:fs"
+import { readFileSync } from "node:fs"
 import path from "node:path"
 
 import { expect, test } from "@playwright/test"
 
 import { appendRecord, getClientIp } from "../lib/marketing-store"
+import { acquireConcurrencySlot, checkServerRateLimit } from "../lib/rate-limit-store"
+import { createServerCapability, verifyServerCapability } from "../lib/server-capabilities"
+import { POST as postGenerativeFill } from "../app/api/photoshop/generative-fill/route"
 
 type AppendOptions = {
   dedupeById?: boolean
@@ -18,6 +22,9 @@ type AppendRecordWithOptions = (
 ) => Promise<{ added: boolean; total: number; record: Record<string, unknown> }>
 
 const appendWithOptions = appendRecord as unknown as AppendRecordWithOptions
+const capabilitySecret = "test-capability-secret-that-is-at-least-32-characters"
+const tinyPngDataUrl =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
 function uniqueStoreName(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -25,6 +32,53 @@ function uniqueStoreName(prefix: string): string {
 
 async function removeStore(name: string) {
   await fs.rm(path.join(process.cwd(), ".data", `${name}.jsonl`), { force: true })
+}
+
+function snapshotEnv(keys: string[]) {
+  return Object.fromEntries(keys.map((key) => [key, process.env[key]]))
+}
+
+function restoreEnv(snapshot: Record<string, string | undefined>) {
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+}
+
+function configureGenerativeFillEnv(patch: Record<string, string> = {}) {
+  Object.assign(process.env, {
+    ALLOW_LOCAL_SERVER_RATE_LIMIT: "true",
+    GENERATIVE_FILL_CAPABILITY_SECRET: capabilitySecret,
+    GENERATIVE_FILL_DAILY_REQUEST_LIMIT: "1",
+    GENERATIVE_FILL_MAX_CONCURRENCY: "2",
+    GENERATIVE_IMAGE_API_KEY: "test-api-key",
+    GENERATIVE_IMAGE_ENDPOINT: "https://model.example.test/generate",
+    ...patch,
+  })
+  delete process.env.RATE_LIMIT_SERVICE_URL
+  delete process.env.RATE_LIMIT_SERVICE_TOKEN
+}
+
+function generativeFillRequest(subject: string, payload: unknown, userAgent = subject) {
+  const now = Math.floor(Date.now() / 1000)
+  const token = createServerCapability({
+    exp: now + 600,
+    iat: now,
+    nonce: `nonce-${subject}`,
+    scope: "generative-fill",
+    sub: subject,
+  }, capabilitySecret)
+
+  return new Request("https://app.example.test/api/photoshop/generative-fill", {
+    body: JSON.stringify(payload),
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+      "sec-fetch-site": "same-origin",
+      "user-agent": userAgent,
+    },
+    method: "POST",
+  })
 }
 
 test("append-only marketing writes can skip full-file read before append", async () => {
@@ -132,6 +186,219 @@ test("API rate limiter blocks repeated requests in a fixed window", async () => 
     now: 11_000,
     windowMs: 10_000,
   })).toMatchObject({ allowed: true })
+})
+
+test("local rate limiter bounds attacker-controlled bucket growth", async () => {
+  const { checkRateLimit } = await import("../lib/marketing-store")
+  const options = { limit: 2, maxBuckets: 2, now: 50_000, windowMs: 10_000 }
+
+  expect(checkRateLimit(`bounded-a-${Date.now()}`, options)).toMatchObject({ allowed: true })
+  expect(checkRateLimit(`bounded-b-${Date.now()}`, options)).toMatchObject({ allowed: true })
+  expect(checkRateLimit(`bounded-c-${Date.now()}`, options)).toMatchObject({
+    allowed: false,
+    reason: "capacity",
+  })
+})
+
+test("server capabilities are short-lived, scoped, and signature-verified", () => {
+  const secret = "test-capability-secret-that-is-at-least-32-characters"
+  const token = createServerCapability({
+    exp: 1_300,
+    iat: 1_000,
+    nonce: "nonce-1",
+    scope: "generative-fill",
+    sub: "account-123",
+  }, secret)
+  const request = new Request("https://app.example.test/api/photoshop/generative-fill", {
+    headers: { authorization: `Bearer ${token}` },
+  })
+
+  expect(verifyServerCapability(request, "generative-fill", { now: 1_100, secret }))
+    .toMatchObject({ ok: true, claims: { sub: "account-123" } })
+  expect(verifyServerCapability(request, "generative-fill", { now: 1_301, secret }))
+    .toEqual({ ok: false, reason: "expired" })
+  expect(verifyServerCapability(new Request(request.url, {
+    headers: { authorization: `Bearer ${token.slice(0, -1)}x` },
+  }), "generative-fill", { now: 1_100, secret }))
+    .toEqual({ ok: false, reason: "invalid" })
+})
+
+test("configured generative fill rejects same-origin callers without an authenticated capability", async () => {
+  const source = readFileSync("app/api/photoshop/generative-fill/route.ts", "utf8")
+
+  expect(source).toContain("verifyServerCapability")
+  expect(source).toContain('"generative-fill"')
+  expect(source).toContain("401")
+  expect(source.indexOf("verifyServerCapability")).toBeLessThan(source.indexOf("fetch(endpoint"))
+})
+
+test("configured generative fill rejects scripted clients without browser request metadata", async () => {
+  const source = readFileSync("app/api/photoshop/generative-fill/route.ts", "utf8")
+
+  expect(source).toContain("requireRequestMetadata: true")
+  expect(source.indexOf("isAllowedOrigin")).toBeLessThan(source.indexOf("fetch(endpoint"))
+})
+
+test("invalid generative fill payloads do not consume daily quota", async () => {
+  const env = snapshotEnv([
+    "ALLOW_LOCAL_SERVER_RATE_LIMIT",
+    "GENERATIVE_FILL_CAPABILITY_SECRET",
+    "GENERATIVE_FILL_DAILY_REQUEST_LIMIT",
+    "GENERATIVE_FILL_MAX_CONCURRENCY",
+    "GENERATIVE_IMAGE_API_KEY",
+    "GENERATIVE_IMAGE_ENDPOINT",
+    "RATE_LIMIT_SERVICE_TOKEN",
+    "RATE_LIMIT_SERVICE_URL",
+  ])
+  const originalFetch = globalThis.fetch
+  const subject = `quota-invalid-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  let upstreamCalls = 0
+
+  try {
+    configureGenerativeFillEnv()
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { "content-type": "application/json" },
+        status: 200,
+      })
+    }) as typeof fetch
+
+    const invalid = await postGenerativeFill(generativeFillRequest(subject, {
+      prompt: "fill the selected area",
+      sourcePng: "not-a-data-url",
+    }))
+
+    expect(invalid.status).toBe(400)
+    expect(upstreamCalls).toBe(0)
+
+    const valid = await postGenerativeFill(generativeFillRequest(subject, {
+      prompt: "fill the selected area",
+      sourcePng: tinyPngDataUrl,
+    }))
+
+    expect(valid.status).toBe(200)
+    await expect(valid.json()).resolves.toEqual({ ok: true })
+    expect(upstreamCalls).toBe(1)
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv(env)
+  }
+})
+
+test("concurrency-rejected generative fill requests do not consume daily quota", async () => {
+  const env = snapshotEnv([
+    "ALLOW_LOCAL_SERVER_RATE_LIMIT",
+    "GENERATIVE_FILL_CAPABILITY_SECRET",
+    "GENERATIVE_FILL_DAILY_REQUEST_LIMIT",
+    "GENERATIVE_FILL_MAX_CONCURRENCY",
+    "GENERATIVE_IMAGE_API_KEY",
+    "GENERATIVE_IMAGE_ENDPOINT",
+    "RATE_LIMIT_SERVICE_TOKEN",
+    "RATE_LIMIT_SERVICE_URL",
+  ])
+  const originalFetch = globalThis.fetch
+  const subject = `quota-concurrency-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const payload = { prompt: "fill the selected area", sourcePng: tinyPngDataUrl }
+  const heldSlot = acquireConcurrencySlot(`genfill:${subject}`, 1)
+  let upstreamCalls = 0
+
+  if (!heldSlot.acquired) throw new Error("Could not reserve the test concurrency slot.")
+
+  try {
+    configureGenerativeFillEnv({ GENERATIVE_FILL_MAX_CONCURRENCY: "1" })
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { "content-type": "application/json" },
+        status: 200,
+      })
+    }) as typeof fetch
+
+    const rejected = await postGenerativeFill(generativeFillRequest(subject, payload))
+    expect(rejected.status).toBe(429)
+    await expect(rejected.json()).resolves.toMatchObject({
+      error: "Too many concurrent generative fill requests.",
+    })
+    expect(upstreamCalls).toBe(0)
+
+    heldSlot.release()
+
+    const valid = await postGenerativeFill(generativeFillRequest(subject, payload))
+    expect(valid.status).toBe(200)
+    await expect(valid.json()).resolves.toEqual({ ok: true })
+    expect(upstreamCalls).toBe(1)
+  } finally {
+    if (heldSlot.acquired) heldSlot.release()
+    globalThis.fetch = originalFetch
+    restoreEnv(env)
+  }
+})
+
+test("remote rate-limit adapter preserves outage reasons from successful JSON responses", async () => {
+  const env = snapshotEnv(["RATE_LIMIT_SERVICE_TOKEN", "RATE_LIMIT_SERVICE_URL"])
+  const originalFetch = globalThis.fetch
+  let postedBody: unknown = null
+
+  try {
+    process.env.RATE_LIMIT_SERVICE_URL = "https://limits.example.test/check"
+    process.env.RATE_LIMIT_SERVICE_TOKEN = "limit-token"
+    globalThis.fetch = (async (_input, init) => {
+      postedBody = JSON.parse(String(init?.body ?? "{}"))
+      return new Response(JSON.stringify({
+        allowed: false,
+        reason: "unavailable",
+        retryAfterSeconds: 7,
+      }), {
+        headers: { "content-type": "application/json" },
+        status: 200,
+      })
+    }) as typeof fetch
+
+    await expect(checkServerRateLimit("remote-soft-outage", {
+      limit: 3,
+      windowMs: 60_000,
+    })).resolves.toEqual({
+      allowed: false,
+      reason: "unavailable",
+      retryAfterSeconds: 7,
+    })
+    expect(postedBody).toMatchObject({
+      key: "remote-soft-outage",
+      limit: 3,
+      windowMs: 60_000,
+    })
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv(env)
+  }
+})
+
+test("malformed successful rate-limit responses fail closed as unavailable", async () => {
+  const env = snapshotEnv(["RATE_LIMIT_SERVICE_TOKEN", "RATE_LIMIT_SERVICE_URL"])
+  const originalFetch = globalThis.fetch
+
+  try {
+    process.env.RATE_LIMIT_SERVICE_URL = "https://limits.example.test/check"
+    delete process.env.RATE_LIMIT_SERVICE_TOKEN
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ retryAfterSeconds: 12 }), {
+        headers: { "content-type": "application/json" },
+        status: 200,
+      })) as typeof fetch
+
+    await expect(checkServerRateLimit("remote-malformed", {
+      limit: 3,
+      windowMs: 60_000,
+    })).resolves.toEqual({
+      allowed: false,
+      reason: "unavailable",
+      retryAfterSeconds: 12,
+    })
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv(env)
+  }
 })
 
 test("client IP fallback uses request fingerprint instead of a shared unknown bucket", () => {

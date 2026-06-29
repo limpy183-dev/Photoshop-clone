@@ -5,7 +5,7 @@ import { CheckCircle2, ClipboardList, Layers, Play, WandSparkles } from "lucide-
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import { dispatchPhotoshopCustomEvent, dispatchPhotoshopEvent } from "./events"
 import { selectionToMaskCanvas } from "./tool-helpers"
 import {
@@ -24,7 +24,10 @@ export function WorkflowPackDialog({
   workflowId: WorkflowPackId | null
   onOpenChange: (open: boolean) => void
 }) {
-  const { activeDoc, activeLayer, dispatch, commit } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const activeLayer = useEditorSelector((editor) => editor.activeLayer)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
   const open = workflowId !== null
   const activePack = findWorkflowPack(workflowId) ?? WORKFLOW_PACKS[0]
   const [selectedId, setSelectedId] = React.useState<WorkflowPackId>(activePack.id)

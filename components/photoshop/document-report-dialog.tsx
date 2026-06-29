@@ -17,7 +17,7 @@ import {
   type CompatibilityTarget,
 } from "./document-io"
 import { createPsdExportActionPlan } from "./psd-compatibility"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import type { DocumentReport } from "./types"
 
 const STATUS_CLASS: Record<DocumentReport["items"][number]["status"], string> = {
@@ -35,7 +35,8 @@ export function DocumentReportDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const { activeDoc, dispatch } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
   const [target, setTarget] = React.useState<CompatibilityTarget>("project")
   const [sourceFilter, setSourceFilter] = React.useState<DocumentReport["source"] | "All">("All")
   const [statusFilter, setStatusFilter] = React.useState<DocumentReport["items"][number]["status"] | "All">("All")

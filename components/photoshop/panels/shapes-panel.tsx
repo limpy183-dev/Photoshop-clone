@@ -17,7 +17,7 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { useEditor } from "../editor-context"
+import { useEditorSelector } from "../editor-context"
 import { downloadText } from "../document-io"
 import { addPhotoshopEventListener } from "../events"
 import { uid } from "../uid"
@@ -127,7 +127,11 @@ function renderBundledShapePreview(customId: CustomShapeId, color = "#94a3b8", s
 }
 
 export function ShapesPanel() {
-  const { activeDoc, activeLayer, dispatch, commit, foreground } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const activeLayer = useEditorSelector((editor) => editor.activeLayer)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
+  const foreground = useEditorSelector((editor) => editor.foreground)
   const [tab, setTab] = React.useState<Tab>("custom")
   const [query, setQuery] = React.useState("")
   const [shapePresets, setShapePresets] = React.useState<ShapePresetEntry[]>(readShapePresets)

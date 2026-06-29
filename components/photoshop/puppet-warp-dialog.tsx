@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import { makeCanvas } from "./tool-helpers"
 
 interface Pin {
@@ -28,7 +28,9 @@ export function PuppetWarpDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
 }) {
-  const { activeLayer, commit, requestRender } = useEditor()
+  const activeLayer = useEditorSelector((editor) => editor.activeLayer)
+  const commit = useEditorSelector((editor) => editor.commit)
+  const requestRender = useEditorSelector((editor) => editor.requestRender)
   const [pins, setPins] = React.useState<Pin[]>([])
   const [draggingPin, setDraggingPin] = React.useState<string | null>(null)
   const [meshDensity, setMeshDensity] = React.useState<"fewer" | "normal" | "more">("normal")

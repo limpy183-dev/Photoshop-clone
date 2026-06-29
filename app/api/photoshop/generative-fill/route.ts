@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 import {
-  checkRateLimit,
   getClientIp,
   isAllowedOrigin,
   RequestBodyTooLargeError,
   readJsonWithLimit,
 } from "@/lib/marketing-store"
+import { acquireConcurrencySlot, checkServerRateLimit } from "@/lib/rate-limit-store"
+import { verifyServerCapability } from "@/lib/server-capabilities"
 
 export const runtime = "nodejs"
 
@@ -14,6 +15,7 @@ const MAX_BODY_BYTES = 24 * 1024 * 1024
 const MAX_UPSTREAM_BYTES = 32 * 1024 * 1024
 const UPSTREAM_TIMEOUT_MS = 30_000
 const RATE_LIMIT = { limit: 10, windowMs: 60_000 }
+const DAY_MS = 24 * 60 * 60 * 1000
 
 // Mirrors the body produced by createModelBackedGenerativeFillRequest in
 // components/photoshop/generative-fill-engine.ts. Only these fields are
@@ -72,21 +74,42 @@ export async function POST(request: Request) {
     )
   }
 
-  if (!isAllowedOrigin(request)) {
+  if (!isAllowedOrigin(request, { requireRequestMetadata: true })) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
 
-  const rateLimit = checkRateLimit(`genfill:${getClientIp(request)}`, RATE_LIMIT)
-  if (!rateLimit.allowed) {
+  const capability = verifyServerCapability(request, "generative-fill")
+  if (!capability.ok) {
+    const unavailable = capability.reason === "unconfigured"
     return NextResponse.json(
-      { error: "Too many requests. Try again later." },
       {
-        headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 60) },
-        status: 429,
+        error: unavailable
+          ? "Generative fill authorization is not configured."
+          : "Authentication required.",
       },
+      { status: unavailable ? 503 : 401 },
     )
   }
 
+  const subject = capability.claims.sub
+  const clientIdentity = getClientIp(request)
+  const rateLimit = await checkServerRateLimit(
+    `genfill:minute:${subject}:${clientIdentity}`,
+    RATE_LIMIT,
+  )
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      {
+        error: rateLimit.reason
+          ? "Generative fill rate limiting is unavailable."
+          : "Too many requests. Try again later.",
+      },
+      {
+        headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 60) },
+        status: rateLimit.reason ? 503 : 429,
+      },
+    )
+  }
   let body: unknown
   try {
     body = await readJsonWithLimit(request, MAX_BODY_BYTES)
@@ -111,55 +134,87 @@ export async function POST(request: Request) {
     )
   }
 
-  let upstream: Response
-  try {
-    upstream = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(parsed.data),
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-    })
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      (error.name === "TimeoutError" || error.name === "AbortError")
-    ) {
-      return NextResponse.json(
-        { error: "Generative fill request timed out." },
-        { status: 504 },
-      )
-    }
+  const concurrencyLimit = Math.max(1, Number(process.env.GENERATIVE_FILL_MAX_CONCURRENCY) || 2)
+  const concurrency = acquireConcurrencySlot(`genfill:${subject}`, concurrencyLimit)
+  if (!concurrency.acquired) {
     return NextResponse.json(
-      { error: "Generative fill request failed." },
-      { status: 502 },
+      { error: "Too many concurrent generative fill requests." },
+      { headers: { "Retry-After": "1" }, status: 429 },
     )
   }
 
-  const contentLength = upstream.headers.get("content-length")
-  if (contentLength) {
-    const contentBytes = Number(contentLength)
-    if (Number.isFinite(contentBytes) && contentBytes > MAX_UPSTREAM_BYTES) {
+  try {
+    const dailyLimit = Math.max(1, Number(process.env.GENERATIVE_FILL_DAILY_REQUEST_LIMIT) || 100)
+    const dailyQuota = await checkServerRateLimit(
+      `genfill:day:${subject}`,
+      { limit: dailyLimit, windowMs: DAY_MS },
+    )
+    if (!dailyQuota.allowed) {
+      return NextResponse.json(
+        {
+          error: dailyQuota.reason
+            ? "Generative fill quota service is unavailable."
+            : "Daily generative fill quota exceeded.",
+        },
+        {
+          headers: { "Retry-After": String(dailyQuota.retryAfterSeconds ?? 3600) },
+          status: dailyQuota.reason ? 503 : 429,
+        },
+      )
+    }
+
+    let upstream: Response
+    try {
+      upstream = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(parsed.data),
+        signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      })
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        (error.name === "TimeoutError" || error.name === "AbortError")
+      ) {
+        return NextResponse.json(
+          { error: "Generative fill request timed out." },
+          { status: 504 },
+        )
+      }
+      return NextResponse.json(
+        { error: "Generative fill request failed." },
+        { status: 502 },
+      )
+    }
+
+    const contentLength = upstream.headers.get("content-length")
+    if (contentLength) {
+      const contentBytes = Number(contentLength)
+      if (Number.isFinite(contentBytes) && contentBytes > MAX_UPSTREAM_BYTES) {
+        return NextResponse.json(
+          { error: "Generative fill response is too large." },
+          { status: 502 },
+        )
+      }
+    }
+
+    const text = await readUpstreamTextWithLimit(upstream, MAX_UPSTREAM_BYTES)
+    if (text === null) {
       return NextResponse.json(
         { error: "Generative fill response is too large." },
         { status: 502 },
       )
     }
-  }
+    const contentType = upstream.headers.get("content-type") ?? "application/json"
 
-  const text = await readUpstreamTextWithLimit(upstream, MAX_UPSTREAM_BYTES)
-  if (text === null) {
-    return NextResponse.json(
-      { error: "Generative fill response is too large." },
-      { status: 502 },
-    )
+    return new Response(text, {
+      status: upstream.status,
+      headers: { "content-type": contentType },
+    })
+  } finally {
+    concurrency.release()
   }
-  const contentType = upstream.headers.get("content-type") ?? "application/json"
-
-  return new Response(text, {
-    status: upstream.status,
-    headers: { "content-type": contentType },
-  })
 }

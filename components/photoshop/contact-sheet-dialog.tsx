@@ -36,7 +36,7 @@ import {
   type ContactSheetRenderable,
 } from "./contact-sheet"
 import { downloadBlob } from "./document-io"
-import { makeDocument, useEditor } from "./editor-context"
+import { makeDocument, useEditorSelector } from "./editor-context"
 
 type LayoutMode = "contact-sheet" | "picture-package"
 type SortMode = "name" | "original"
@@ -229,7 +229,7 @@ export function ContactSheetDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const { createDocument } = useEditor()
+  const createDocument = useEditorSelector((editor) => editor.createDocument)
   const [mode, setMode] = React.useState<LayoutMode>("contact-sheet")
   const [images, setImages] = React.useState<ImportedImage[]>([])
   const [dragActive, setDragActive] = React.useState(false)

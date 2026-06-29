@@ -11,7 +11,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 
 type StrokePosition = "inside" | "center" | "outside"
 
@@ -22,7 +22,11 @@ export function StrokeDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
 }) {
-  const { activeDoc, activeLayer, foreground, dispatch, commit } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const activeLayer = useEditorSelector((editor) => editor.activeLayer)
+  const foreground = useEditorSelector((editor) => editor.foreground)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
   const [width, setWidth] = React.useState(4)
   const [color, setColor] = React.useState(foreground)
   const [position, setPosition] = React.useState<StrokePosition>("inside")

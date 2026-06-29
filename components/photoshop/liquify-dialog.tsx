@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import { makeCanvas } from "./tool-helpers"
 import {
   createLiquifyMesh,
@@ -94,7 +94,9 @@ export function LiquifyDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
 }) {
-  const { activeLayer, commit, requestRender } = useEditor()
+  const activeLayer = useEditorSelector((editor) => editor.activeLayer)
+  const commit = useEditorSelector((editor) => editor.commit)
+  const requestRender = useEditorSelector((editor) => editor.requestRender)
   const [brushSize, setBrushSize] = React.useState(80)
   const [pressure, setPressure] = React.useState(50)
   const [density, setDensity] = React.useState(50)

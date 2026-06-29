@@ -49,11 +49,11 @@ The right-click context menu (`ContextMenuLayer`) uses this pattern to avoid tri
 
 ### Canvas & Rendering
 
-`components/photoshop/canvas-view.tsx` handles canvas rendering and pointer input routing. The canvas uses HTML5 2D (no WebGL). Expensive filters run in a Web Worker with optional tiling (`filter-worker.ts`) — large documents are split into tiles to avoid blocking the main thread. Filter output is verified with golden-image Playwright tests.
+`components/photoshop/canvas-view.tsx` coordinates rendering and pointer input. Layer composition can use the WebGL compositor with a Canvas 2D fallback. Expensive filters run in a Web Worker with optional tiling (`filter-worker.ts`) — large documents are split into tiles to avoid blocking the main thread. Filter output is verified with golden-image Playwright tests.
 
 ### History / Undo
 
-Last 12 history entries are kept as raw snapshots; older entries are compressed to WebP blobs in a Map and decompressed on demand via `createImageBitmap`. This bounds memory usage for long sessions.
+Last 12 history entries are kept as raw snapshots; older canvas-bearing history fields are encoded losslessly as PNG blobs and restored on demand via `createImageBitmap`. Compression jobs are cancellable and verify entry liveness before publishing blobs.
 
 ### Panels & Dialogs
 
@@ -61,7 +61,7 @@ Panels are registered in `panel-registry.tsx` — this is the single source of t
 
 ### PSD I/O
 
-PSD import/export uses the `ag-psd` library (`document-io.ts`). The app intentionally surfaces browser limitations rather than hiding them: 8-bit RGBA only (no CMYK, ICC profiles, 16/32-bit), and generates compatibility reports for unsupported PSD constructs.
+PSD import/export uses `ag-psd` plus dedicated PSD color-mode/resource modules. The document model supports high-bit/color intent, ICC metadata, and CMYK/Lab/multichannel compatibility paths. Browser Canvas editing still resolves through RGBA surfaces, so unsupported native fidelity is reported rather than silently promised.
 
 ### Testing
 
@@ -78,9 +78,12 @@ Trace is captured on first retry. Base URL is `http://127.0.0.1:3000`.
 | `components/photoshop/editor-context.tsx` | Central state machine |
 | `components/photoshop/types.ts` | All shared types (ToolId, BlendMode, LayerKind, …) |
 | `components/photoshop/canvas-view.tsx` | Canvas render + pointer routing |
+| `components/photoshop/webgl-compositor.ts` | WebGL composition with Canvas fallback |
+| `components/photoshop/editor-history-storage.ts` | Lossless, cancellable history blob storage |
 | `components/photoshop/panel-registry.tsx` | Panel definitions + workspace presets |
 | `components/photoshop/filters.ts` | Filter registry (60+ filters) |
 | `components/photoshop/filter-worker.ts` | Async + tiled filter execution |
 | `components/photoshop/document-io.ts` | PSD + raster file I/O |
 | `components/photoshop/brush-engine.ts` | Brush rendering, pressure, dynamics |
 | `playwright.config.ts` | Test configuration |
+| `scripts/measure-route-bundles.mjs` | Production startup measurement by route |

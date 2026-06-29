@@ -11,7 +11,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import { fitImageDimensions } from "./automation-commands"
 
 export function FitImageDialog({
@@ -21,7 +21,9 @@ export function FitImageDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const { activeDoc, dispatch, commit } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
   const [maxWidth, setMaxWidth] = React.useState(1920)
   const [maxHeight, setMaxHeight] = React.useState(1080)
   const [constrain, setConstrain] = React.useState(true)

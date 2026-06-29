@@ -86,11 +86,17 @@ test("remaining requested Photoshop filters are registered and reachable from me
     "lens-correction",
     "adaptive-wide-angle",
   ]
-  const menuSource = readFileSync(join(process.cwd(), "components/photoshop/menu-bar.tsx"), "utf8")
+  const menuBarSource = readFileSync(join(process.cwd(), "components/photoshop/menu-bar.tsx"), "utf8")
+  const filterMenuSource = readFileSync(join(process.cwd(), "components/photoshop/menus/filter-menu.tsx"), "utf8")
+  const mediaWorkspaceMenuSource = readFileSync(join(process.cwd(), "components/photoshop/menus/media-workspace-menus.tsx"), "utf8")
+  const mountedMenuSources = [filterMenuSource, mediaWorkspaceMenuSource].join("\n")
+
+  expect(menuBarSource, "menu bar should mount the extracted filter menu").toContain("<FilterMenu")
+  expect(menuBarSource, "menu bar should mount media workspace menus").toContain("<MediaWorkspaceMenus")
 
   for (const id of requested) {
     expect(getFilter(id), id).toBeTruthy()
-    expect(menuSource, `menu should open ${id}`).toContain(`"${id}"`)
+    expect(mountedMenuSources, `mounted menus should open ${id}`).toContain(`"${id}"`)
   }
 })
 

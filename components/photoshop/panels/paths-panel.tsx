@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useEditor, useRenderSubscription, makeCanvas } from "../editor-context"
+import { useEditorSelector, useRenderSubscription, makeCanvas } from "../editor-context"
 import { PenTool, Trash2, MousePointer2, CircleDot, Route } from "lucide-react"
 import {
   pathToSelectionMask,
@@ -13,7 +13,12 @@ import { strokePathWithBrushDynamics } from "../vector-stroke-dynamics"
 import type { Layer, PathProps } from "../types"
 
 export function PathsPanel() {
-  const { activeDoc, activeLayer, dispatch, commit, foreground, brush } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const activeLayer = useEditorSelector((editor) => editor.activeLayer)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
+  const foreground = useEditorSelector((editor) => editor.foreground)
+  const brush = useEditorSelector((editor) => editor.brush)
   const canvasRef = React.useRef<HTMLCanvasElement>(null)
 
   // Gather paths from all layers

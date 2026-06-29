@@ -18,8 +18,7 @@ import {
 } from "@/components/ui/menubar"
 import { useEditor, makeDocument, makeCanvas, type DocumentLifecycleState, type FileSystemFileHandleLike } from "./editor-context"
 import { compositeLayer } from "./blend-modes"
-import { FILTER_META, getFilterName } from "./filters-meta"
-import { renderThreeDScene } from "./advanced-subsystems"
+import { FILTER_META } from "./filters-meta"
 import type { AdvancedSubsystemTab, ColorWorkflowMode } from "./advanced-subsystems-dialog"
 import type { GapWorkflowKind } from "./gap-workflow-dialog"
 import type { SelectionOperation } from "./management-dialogs"
@@ -29,6 +28,14 @@ import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
 import { canPluginUsePermission, permissionsForPluginActionDescriptors } from "./plugin-system"
 import { DEFAULT_COLOR_MANAGEMENT } from "./menus/color-management-defaults"
 import { MenuDialogs, type AutoAlgorithmId } from "./menus/menu-dialogs"
+import { loadAdvancedCommands } from "./menus/advanced-command-service"
+import { loadDocumentCommands } from "./menus/document-command-service"
+import { FilterMenu } from "./menus/filter-menu"
+import { loadImageCommands } from "./menus/image-command-service"
+import { MediaWorkspaceMenus } from "./menus/media-workspace-menus"
+import { SelectMenu } from "./menus/select-menu"
+import { loadTypeCommands } from "./menus/type-command-service"
+import { ViewMenu } from "./menus/view-menu"
 import { readWorkspaceLibrary } from "./workspace-layouts"
 
 import {
@@ -37,20 +44,6 @@ import {
   WORKSPACE_PRESET_OPTIONS,
   type WorkspacePresetId,
 } from "./panel-registry"
-import {
-  createDocumentReport,
-  deserializePsdFile,
-  deserializeProject,
-  downloadBlob,
-  downloadText,
-  generateDocumentThumbnail,
-  inspectImportFileDimensions,
-  inspectPsdRecoveryFile,
-  loadRasterCanvasFromFile,
-  serializePsb,
-  serializePsd,
-  serializeProject,
-} from "./document-io"
 import {
   createLargeDocumentInspectionDocument,
   describeLargeDocumentRecovery,
@@ -63,29 +56,11 @@ import {
   removeRecentDocument,
   type RecentDocument,
 } from "./recent-documents"
-import {
-  contentAwareFill,
-  focusAreaMask,
-  rasterizeText,
-  selectSkyMask,
-  selectSubjectMask,
-  selectionFromMask,
-  selectionToMaskCanvas,
-} from "./tool-helpers"
 import { MAX_PROJECT_FILE_BYTES, assertFileSize } from "./canvas-limits"
 import type { AdjustmentType, ColorManagementSettings, DocumentModeSettings, Layer, LayerStyle, PluginCommandDescriptor, PluginDescriptor, PluginPermission, TextAntiAliasMode } from "./types"
-import {
-  applyTextInsideShape,
-  convertTextToEditablePath,
-  createTextExtrusionScene,
-  diagnoseDocumentFonts,
-  matchFontForLayer,
-} from "./typography-engine"
-import { requestCanvasZoom, requestPrintSizeView } from "./zoom-events"
 import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop } from "./adjustment-layers"
 import { createSmartObjectSource, relinkSmartObjectToFile, syncLinkedSmartObjectSource } from "./smart-objects"
 import { PURGE_COMMANDS, formatPurgeStatus, type PurgeTarget } from "./purge-commands"
-import { supportedIccProfileNames } from "./color-pipeline"
 import {
   revealSourceInBrowser,
   sourceInfoForSmartObject,
@@ -287,14 +262,17 @@ export function MenuBar({
   }, [refreshRecents])
 
   const rememberDoc = React.useCallback((doc: NonNullable<typeof activeDoc>, kind: RecentDocument["kind"]) => {
-    try {
-      rememberRecentDocument({ name: doc.name, kind, serialized: serializeProject(doc), thumbnail: generateDocumentThumbnail(doc) })
-      refreshRecents()
-    } catch {}
+    void loadDocumentCommands().then(({ generateDocumentThumbnail, serializeProject }) => {
+      try {
+        rememberRecentDocument({ name: doc.name, kind, serialized: serializeProject(doc), thumbnail: generateDocumentThumbnail(doc) })
+        refreshRecents()
+      } catch {}
+    })
   }, [refreshRecents])
 
   const openRecent = async (recent: RecentDocument) => {
     try {
+      const { createDocumentReport, deserializeProject } = await loadDocumentCommands()
       const doc = await deserializeProject(recent.serialized)
       createDocument(doc, "Open Recent")
       dispatch({ type: "add-document-report", report: createDocumentReport(doc, "Project Import") })
@@ -749,6 +727,7 @@ export function MenuBar({
   }
 
   const canvasFromImageFile = async (file: File) => {
+    const { loadRasterCanvasFromFile } = await loadDocumentCommands()
     return (await loadRasterCanvasFromFile(file, { mode: "reduced-scale" })).canvas
   }
 
@@ -813,6 +792,7 @@ export function MenuBar({
     error: unknown,
     picked?: { handle?: ReadableFileHandle; permission?: PermissionState | "unsupported" },
   ) => {
+    const { inspectImportFileDimensions, inspectPsdRecoveryFile } = await loadDocumentCommands()
     const dimensions = await inspectImportFileDimensions(file).catch(() => null)
     if (!dimensions) return false
     const parsedPsd = dimensions.kind === "psd" || dimensions.kind === "psb"
@@ -838,6 +818,7 @@ export function MenuBar({
     source: "open" | "place",
     picked?: { handle?: ReadableFileHandle; permission?: PermissionState | "unsupported" },
   ) => {
+    const { inspectImportFileDimensions, inspectPsdRecoveryFile } = await loadDocumentCommands()
     const dimensions = await inspectImportFileDimensions(file).catch(() => null)
     if (!dimensions) return false
     const parsedPsd = dimensions.kind === "psd" || dimensions.kind === "psb"
@@ -880,7 +861,7 @@ export function MenuBar({
 
   const openRasterCanvasAsDocument = React.useCallback((
     file: File,
-    raster: Awaited<ReturnType<typeof loadRasterCanvasFromFile>>,
+    raster: Awaited<ReturnType<typeof import("./document-io").loadRasterCanvasFromFile>>,
     picked?: { handle?: ReadableFileHandle },
   ) => {
     const doc = makeDocument(file.name, raster.canvas.width, raster.canvas.height)
@@ -1087,6 +1068,7 @@ export function MenuBar({
       toast.error("Could not export smart object contents")
       return
     }
+    const { downloadBlob } = await loadDocumentCommands()
     downloadBlob(blob, `${safeNameFor(layer.smartSource?.fileName ?? layer.smartSource?.name ?? layer.name)}.png`)
     dispatch({
       type: "replace-smart-object-contents",
@@ -1134,7 +1116,7 @@ export function MenuBar({
     requestRender()
   }
 
-  const fillContentAware = () => {
+  const fillContentAware = async () => {
     if (!activeDoc) {
       toast.info("Open a document before using Content-Aware Fill.")
       return
@@ -1151,6 +1133,7 @@ export function MenuBar({
       toast.info("Create a selection before using Content-Aware Fill.")
       return
     }
+    const { contentAwareFill, selectionToMaskCanvas } = await loadImageCommands()
     const mask = selectionToMaskCanvas(activeDoc.width, activeDoc.height, activeDoc.selection)
     if (!mask) return
     const maskData = mask.getContext("2d")!.getImageData(0, 0, activeDoc.width, activeDoc.height)
@@ -1604,6 +1587,7 @@ export function MenuBar({
     const doc = documents.find((candidate) => candidate.id === (docId ?? activeDoc?.id))
     if (!doc) return null
     const lifecycle = documentStatuses[doc.id]
+    const { createDocumentReport, downloadText, serializeProject } = await loadDocumentCommands()
     const report = createDocumentReport(doc, "Project Export")
     const docWithReport = { ...doc, reports: [report, ...(doc.reports ?? [])].slice(0, 12) }
     const serialized = serializeProject(docWithReport, { pretty: false })
@@ -1701,6 +1685,7 @@ export function MenuBar({
 
       const file = picked.file
       try {
+        const { createDocumentReport, deserializePsdFile, loadRasterCanvasFromFile } = await loadDocumentCommands()
         const photoshopFamily = /\.(?:psd|psb)$/i.test(file.name) || file.type === "image/vnd.adobe.photoshop"
         if (await preflightLargeDocumentImport(file, "open", picked)) return
         if (photoshopFamily) {
@@ -1742,6 +1727,7 @@ export function MenuBar({
   const savePsd = async () => {
     if (!activeDoc) return
     try {
+      const { createDocumentReport, downloadBlob, serializePsd } = await loadDocumentCommands()
       const report = createDocumentReport(activeDoc, "PSD Export")
       downloadBlob(await serializePsd(activeDoc), `${safeDocName()}.psd`)
       dispatch({ type: "add-document-report", report })
@@ -1755,6 +1741,7 @@ export function MenuBar({
   const savePsb = async () => {
     if (!activeDoc) return
     try {
+      const { createDocumentReport, downloadBlob, serializePsb } = await loadDocumentCommands()
       const report = createDocumentReport(activeDoc, "PSD Export")
       downloadBlob(await serializePsb(activeDoc), `${safeDocName()}.psb`)
       dispatch({ type: "add-document-report", report })
@@ -1784,6 +1771,7 @@ export function MenuBar({
 
       const file = picked.file
       try {
+        const { createDocumentReport, deserializeProject } = await loadDocumentCommands()
         assertFileSize(file, MAX_PROJECT_FILE_BYTES, "Project file")
         const doc = await deserializeProject(await file.text())
         doc.metadata = { ...(doc.metadata ?? {}), title: doc.metadata?.title ?? doc.name, source: file.name }
@@ -1814,6 +1802,7 @@ export function MenuBar({
       const file = picked.file
       if (!activeDoc) return
       try {
+        const { loadRasterCanvasFromFile } = await loadDocumentCommands()
         if (await preflightLargeDocumentImport(file, "place", picked)) return
         const raster = await loadRasterCanvasFromFile(file)
         await placeRasterCanvas(file, raster.canvas, "Place Embedded", picked)
@@ -1834,6 +1823,7 @@ export function MenuBar({
     if (!recovery) return
     setLargeDocumentRecoveryBusy(true)
     try {
+      const { createDocumentReport, deserializePsdFile, loadRasterCanvasFromFile } = await loadDocumentCommands()
       if (recovery.source === "place") {
         const raster = await loadRasterCanvasFromFile(recovery.file, { mode: "reduced-scale" })
         await placeRasterCanvas(recovery.file, raster.canvas, "Place Reduced Embedded", recovery.picked)
@@ -1864,6 +1854,7 @@ export function MenuBar({
     }
     setLargeDocumentRecoveryBusy(true)
     try {
+      const { createDocumentReport, deserializePsdFile } = await loadDocumentCommands()
       const doc = await deserializePsdFile(recovery.file, { psbLargeDocumentMode: "tile-view" })
       doc.metadata = { ...(doc.metadata ?? {}), title: doc.metadata?.title ?? recovery.file.name, source: recovery.file.name }
       createDocument(doc, "Open Tile-Only PSB", lifecycleForPickedFile(recovery.file, recovery.picked, "psd"))
@@ -1877,9 +1868,10 @@ export function MenuBar({
     }
   }
 
-  const inspectLargeDocument = () => {
+  const inspectLargeDocument = async () => {
     const recovery = largeDocumentRecovery
     if (!recovery) return
+    const { createDocumentReport } = await loadDocumentCommands()
     const doc = createLargeDocumentInspectionDocument({
       fileName: recovery.file.name,
       kind: recovery.plan.kind,
@@ -2968,8 +2960,9 @@ export function MenuBar({
           <DropdownMenuContent align="start" className="w-64">
             <DropdownMenuLabel>Type</DropdownMenuLabel>
             <DropdownMenuItem
-              onSelect={() => {
+              onSelect={async () => {
                 if (!activeLayer || activeLayer.kind !== "text" || !activeLayer.text) return
+                const { rasterizeText } = await loadImageCommands()
                 const enabled = activeLayer.text.antiAlias === false
                 const next = { ...activeLayer.text, antiAlias: enabled, antiAliasMode: enabled ? "smooth" : "none" as TextAntiAliasMode }
                 dispatch({ type: "set-layer-text", id: activeLayer.id, text: next })
@@ -2980,8 +2973,9 @@ export function MenuBar({
               {activeLayer?.text?.antiAlias === false ? "" : "✓ "}Anti-Alias
             </DropdownMenuItem>
             <DropdownMenuItem
-              onSelect={() => {
+              onSelect={async () => {
                 if (!activeLayer || activeLayer.kind !== "text" || !activeLayer.text) return
+                const { convertTextToEditablePath } = await loadTypeCommands()
                 const path = convertTextToEditablePath(activeLayer.text)
                 dispatch({ type: "set-layer-path", id: activeLayer.id, path })
                 dispatch({ type: "set-layer-kind", id: activeLayer.id, kind: "shape" })
@@ -2991,7 +2985,7 @@ export function MenuBar({
               Convert to Shape/Path
             </DropdownMenuItem>
             <DropdownMenuItem
-              onSelect={() => {
+              onSelect={async () => {
                 if (!activeDoc) {
                   toast.info("Open a document before placing text inside a shape.")
                   return
@@ -3005,6 +2999,8 @@ export function MenuBar({
                   toast.info("Select or create a shape layer to use as the text container.")
                   return
                 }
+                const { applyTextInsideShape } = await loadTypeCommands()
+                const { rasterizeText } = await loadImageCommands()
                 const next = applyTextInsideShape(activeLayer.text, shapeLayer.shape, { inset: activeLayer.text.textShapeInset ?? 8 })
                 dispatch({ type: "set-layer-text", id: activeLayer.id, text: next })
                 rasterizeText(activeLayer.canvas, next)
@@ -3019,8 +3015,10 @@ export function MenuBar({
               Warp Text…
             </DropdownMenuItem>
             <DropdownMenuItem
-              onSelect={() => {
+              onSelect={async () => {
                 if (!activeLayer || activeLayer.kind !== "text" || !activeLayer.text) return
+                const { matchFontForLayer } = await loadTypeCommands()
+                const { rasterizeText } = await loadImageCommands()
                 const match = matchFontForLayer(activeLayer.text)
                 const next = {
                   ...activeLayer.text,
@@ -3036,8 +3034,9 @@ export function MenuBar({
               Match Font…
             </DropdownMenuItem>
             <DropdownMenuItem
-              onSelect={() => {
+              onSelect={async () => {
                 if (!activeDoc) return
+                const { diagnoseDocumentFonts } = await loadTypeCommands()
                 const diagnostics = diagnoseDocumentFonts(activeDoc.layers)
                 if (diagnostics.missingFonts.length) {
                   toast.warning(`Missing fonts: ${diagnostics.missingFonts.join(", ")}`)
@@ -3051,7 +3050,7 @@ export function MenuBar({
               Font Diagnostics...
             </DropdownMenuItem>
             <DropdownMenuItem
-              onSelect={() => {
+              onSelect={async () => {
                 if (!activeDoc) {
                   toast.info("Open a document before creating 3D text.")
                   return
@@ -3060,6 +3059,8 @@ export function MenuBar({
                   toast.info("Select a text layer before creating 3D text extrusion.")
                   return
                 }
+                const { createTextExtrusionScene } = await loadTypeCommands()
+                const { renderThreeDScene } = await loadAdvancedCommands()
                 const scene = createTextExtrusionScene({
                   ...activeLayer.text,
                   extrusion: activeLayer.text.extrusion ?? { enabled: true, depth: 30, bevel: 3, angle: 35, color: activeLayer.text.color },
@@ -3088,655 +3089,57 @@ export function MenuBar({
         </DropdownMenu>
 
         {/* Select */}
-        <DropdownMenu>
-          <DropdownMenuTrigger className={menuClass}>Select</DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-64">
-            <DropdownMenuItem
-              onSelect={() => {
-                if (!activeDoc) return
-                dispatch({
-                  type: "set-selection",
-                  selection: {
-                    bounds: { x: 0, y: 0, w: activeDoc.width, h: activeDoc.height },
-                    shape: "rect",
-                  },
-                })
-              }}
-            >
-              All <DropdownMenuShortcut>⌘A</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() =>
-                dispatch({ type: "set-selection", selection: { bounds: null, shape: "rect" } })
-              }
-            >
-              Deselect <DropdownMenuShortcut>⌘D</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => {
-                if (!activeDoc) return
-                if (lastSelectionRef.current) {
-                  dispatch({ type: "set-selection", selection: lastSelectionRef.current })
-                }
-              }}
-            >
-              Reselect <DropdownMenuShortcut>⌘⇧D</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => {
-                if (!activeDoc) {
-                  toast.info("Open a document before saving a selection.")
-                  return
-                }
-                if (!activeDoc.selection.bounds) {
-                  toast.info("Create a selection before saving it.")
-                  return
-                }
-                const sel = activeDoc.selection
-                const inverseMask = makeCanvas(activeDoc.width, activeDoc.height)
-                const ictx = inverseMask.getContext("2d")!
-                ictx.fillStyle = "#fff"
-                ictx.fillRect(0, 0, activeDoc.width, activeDoc.height)
-                ictx.globalCompositeOperation = "destination-out"
-                if (sel.mask) {
-                  ictx.drawImage(sel.mask, 0, 0)
-                } else if (sel.bounds) {
-                  if (sel.shape === "ellipse") {
-                    ictx.beginPath()
-                    ictx.ellipse(
-                      sel.bounds.x + sel.bounds.w / 2,
-                      sel.bounds.y + sel.bounds.h / 2,
-                      sel.bounds.w / 2,
-                      sel.bounds.h / 2,
-                      0,
-                      0,
-                      Math.PI * 2,
-                    )
-                    ictx.fill()
-                  } else {
-                    ictx.fillRect(sel.bounds.x, sel.bounds.y, sel.bounds.w, sel.bounds.h)
-                  }
-                }
-                dispatch({
-                  type: "set-selection",
-                  selection: {
-                    bounds: { x: 0, y: 0, w: activeDoc.width, h: activeDoc.height },
-                    shape: "freehand",
-                    mask: inverseMask,
-                  },
-                })
-              }}
-            >
-              Inverse <DropdownMenuShortcut>⌘⇧I</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onSelect={() => {
-                if (!activeDoc) return
-                const ids = activeDoc.layers.map((l) => l.id)
-                dispatch({ type: "set-selected-layers", ids, activeId: activeDoc.activeLayerId })
-              }}
-            >
-              All Layers <DropdownMenuShortcut>⌘⌥A</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setColorRangeOpen(true)} disabled={!activeDoc}>
-              Color Range…
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setRefineEdgeOpen(true)}>
-              Refine Edge…
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setSelectMaskOpen(true)} disabled={!activeDoc}>
-              Select and Mask… <DropdownMenuShortcut>⌘⌥R</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => {
-                if (!activeDoc || !activeLayer) return
-                if (typeof activeLayer.canvas.getContext !== "function") return
-                const mask = selectSubjectMask(activeLayer.canvas, 48)
-                dispatch({ type: "set-selection", selection: selectionFromMask(mask, "freehand") })
-                commit("Select Subject", [])
-              }}
-              disabled={!activeLayer}
-            >
-              Select Subject
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => {
-                if (!activeDoc || !activeLayer) return
-                if (typeof activeLayer.canvas.getContext !== "function") return
-                // "Sky" — heuristic: pick top 30% pixels with high blue and low red
-                const mask = selectSkyMask(activeLayer.canvas)
-                dispatch({ type: "set-selection", selection: selectionFromMask(mask, "freehand") })
-                commit("Select Sky", [])
-              }}
-              disabled={!activeLayer}
-            >
-              Select Sky
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => {
-                if (!activeDoc || !activeLayer || !activeLayer.canvas) return
-                if (typeof activeLayer.canvas.getContext !== "function") return
-                const mask = focusAreaMask(activeLayer.canvas)
-                dispatch({ type: "set-selection", selection: selectionFromMask(mask, "freehand") })
-                commit("Focus Area", [])
-              }}
-              disabled={!activeLayer}
-            >
-              Focus Area
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onSelect={() => openSelectionOperation("expand")}
-            >
-              Expand...
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => openSelectionOperation("contract")}
-            >
-              Contract...
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => openSelectionOperation("grow")}
-            >
-              Grow...
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => openSelectionOperation("similar")}
-            >
-              Similar…
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => dispatchPhotoshopEvent("ps-transform-selection-begin")}
-            >
-              Transform Selection...
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Modify</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem
-                  onSelect={() => openSelectionOperation("feather")}
-                >
-                  Feather… <DropdownMenuShortcut>⇧F6</DropdownMenuShortcut>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => openSelectionOperation("border")}
-                >
-                  Border…
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => openSelectionOperation("smooth")}
-                >
-                  Smooth…
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onSelect={() => {
-                if (!activeDoc?.selection.bounds) {
-                  toast.info("Create a selection before saving it.")
-                  return
-                }
-                setSaveSelectionOpen(true)
-              }}
-            >
-              Save Selection…
-            </DropdownMenuItem>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger onClick={() => setLoadSelectionOpen(true)}>
-                Load Selection...
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                {(activeDoc?.channels ?? []).map((ch) => (
-                  <DropdownMenuSub key={ch.id}>
-                    <DropdownMenuSubTrigger>{ch.name}</DropdownMenuSubTrigger>
-                    <DropdownMenuSubContent>
-                      {([
-                        ["replace", "Replace"],
-                        ["add", "Add"],
-                        ["subtract", "Subtract"],
-                        ["intersect", "Intersect"],
-                      ] as const).map(([mode, label]) => (
-                        <DropdownMenuItem
-                          key={mode}
-                          onSelect={() => {
-                            dispatch({ type: "load-selection", channelId: ch.id, mode })
-                            commit("Load Selection", [])
-                          }}
-                        >
-                          {label}
-                        </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuSubContent>
-                  </DropdownMenuSub>
-                ))}
-                {!(activeDoc?.channels?.length) && (
-                  <DropdownMenuItem disabled>No saved channels</DropdownMenuItem>
-                )}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
+        <SelectMenu
+          menuClass={menuClass}
+          activeDoc={activeDoc}
+          activeLayer={activeLayer}
+          lastSelection={lastSelectionRef.current}
+          dispatch={dispatch}
+          commit={commit}
+          loadImageCommands={loadImageCommands}
+          openSelectionOperation={openSelectionOperation}
+          setColorRangeOpen={setColorRangeOpen}
+          setRefineEdgeOpen={setRefineEdgeOpen}
+          setSelectMaskOpen={setSelectMaskOpen}
+          setSaveSelectionOpen={setSaveSelectionOpen}
+          setLoadSelectionOpen={setLoadSelectionOpen}
+        />
         {/* Filter */}
-        <DropdownMenu>
-          <DropdownMenuTrigger className={menuClass}>Filter</DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-72">
-            <DropdownMenuItem
-              onSelect={() => lastFilter && openFilterDialog(lastFilter)}
-            >
-              Last Filter
-              {lastFilter ? `: ${getFilterName(lastFilter)}` : ""}
-              <DropdownMenuShortcut>⌘F</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setFilterGalleryOpen(true)} disabled={!activeLayer}>
-              Filter Gallery…
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => setCameraRawOpen(true)} disabled={!activeLayer}>
-              Camera Raw Filter...
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => openFilterDialog("sky-replacement")} disabled={!activeLayer}>
-              Sky Replacement...
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setLiquifyOpen(true)} disabled={!activeLayer}>
-              Liquify… <DropdownMenuShortcut>⌘⇧X</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setPuppetWarpOpen(true)} disabled={!activeLayer}>
-              Puppet Warp…
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Blur</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => openFilterDialog("gaussian-blur")}>
-                  Gaussian Blur…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => applyInstant("average-blur")}>
-                  Average
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => applyInstant("blur-more")}>
-                  Blur More
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("box-blur")}>
-                  Box Blur…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("smart-blur")}>
-                  Smart Blur…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("shape-blur")}>
-                  Shape Blur…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("motion-blur")}>
-                  Motion Blur…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("lens-blur")}>
-                  Lens Blur…
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuSub>
-                  <DropdownMenuSubTrigger>Blur Gallery</DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent>
-                    <DropdownMenuItem onSelect={() => openFilterDialog("field-blur")}>Field Blur...</DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => openFilterDialog("iris-blur")}>Iris Blur...</DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => openFilterDialog("tilt-shift")}>Tilt-Shift...</DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => openFilterDialog("path-blur")}>Path Blur...</DropdownMenuItem>
-                    <DropdownMenuItem onSelect={() => openFilterDialog("spin-blur")}>Spin Blur...</DropdownMenuItem>
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Sharpen</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => openFilterDialog("sharpen")}>
-                  Sharpen…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("unsharp-mask")}>
-                  Unsharp Mask…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("smart-sharpen")}>
-                  Smart Sharpen…
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Stylize</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => applyInstant("find-edges")}>
-                  Find Edges
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("glowing-edges")}>
-                  Glowing Edges…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("wind")}>
-                  Wind…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("extrude")}>
-                  Extrude…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("diffuse")}>
-                  Diffuse...
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("tiles")}>
-                  Tiles...
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("emboss")}>
-                  Emboss…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("solarize")}>
-                  Solarize…
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Pixelate</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => openFilterDialog("pixelate")}>
-                  Mosaic…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("color-halftone")}>
-                  Color Halftone...
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("mezzotint")}>
-                  Mezzotint...
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("pointillize")}>
-                  Pointillize...
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => applyInstant("fragment")}>
-                  Fragment
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("facet")}>
-                  Facet...
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Noise</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => openFilterDialog("noise")}>
-                  Add Noise…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("reduce-noise")}>
-                  Reduce Noise…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("dust-scratches")}>
-                  Dust & Scratches…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => applyInstant("despeckle")}>
-                  Despeckle
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Artistic</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                {["colored-pencil", "cutout", "dry-brush", "film-grain", "fresco", "neon-glow", "paint-daubs", "palette-knife", "plastic-wrap", "poster-edges", "rough-pastels", "smudge-stick", "sponge-filter", "underpainting", "watercolor"].map((id) => (
-                  <DropdownMenuItem key={id} onSelect={() => openFilterDialog(id)}>{getFilterName(id)}</DropdownMenuItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Brush Strokes</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                {["accented-edges", "angled-strokes", "crosshatch", "dark-strokes", "ink-outlines", "spatter", "sprayed-strokes", "sumi-e"].map((id) => (
-                  <DropdownMenuItem key={id} onSelect={() => openFilterDialog(id)}>{getFilterName(id)}</DropdownMenuItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Sketch</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                {["bas-relief", "chalk-charcoal", "charcoal", "chrome", "conte-crayon", "graphic-pen", "halftone-pattern", "note-paper", "photocopy", "plaster", "reticulation", "stamp-filter", "torn-edges", "water-paper"].map((id) => (
-                  <DropdownMenuItem key={id} onSelect={() => openFilterDialog(id)}>{getFilterName(id)}</DropdownMenuItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Texture</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                {["craquelure", "grain", "mosaic-tiles", "patchwork", "stained-glass", "texturizer"].map((id) => (
-                  <DropdownMenuItem key={id} onSelect={() => openFilterDialog(id)}>{getFilterName(id)}</DropdownMenuItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Distort</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => openFilterDialog("adaptive-wide-angle")}>Adaptive Wide Angle...</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("lens-correction")}>Lens Correction...</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("vanishing-point")}>Vanishing Point...</DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => openFilterDialog("displace")}>Displace…</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("shear")}>Shear...</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("diffuse-glow")}>Diffuse Glow…</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("ocean-ripple")}>Ocean Ripple…</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("twirl")}>Twirl…</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("pinch")}>Pinch…</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("spherize")}>Spherize…</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("wave")}>Wave…</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("ripple")}>Ripple…</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("zigzag")}>ZigZag…</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("polar-coordinates")}>Polar Coordinates…</DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Render</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => openFilterDialog("clouds")}>Clouds…</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("difference-clouds")}>Difference Clouds…</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("lighting-effects")}>Lighting Effects...</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("fibers")}>Fibers…</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("lens-flare")}>Lens Flare…</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("flame")}>Flame…</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("picture-frame")}>Picture Frame…</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("tree")}>Tree…</DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Other</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => openFilterDialog("high-pass")}>High Pass…</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("offset")}>Offset…</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("maximum")}>Maximum…</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("minimum")}>Minimum…</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("custom-filter")}>Custom Filter...</DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Color</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => applyInstant("grayscale")}>
-                  Grayscale
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openFilterDialog("sepia")}>
-                  Sepia…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => applyInstant("invert")}>
-                  Invert
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
+        <FilterMenu
+          menuClass={menuClass}
+          activeLayer={activeLayer}
+          lastFilter={lastFilter}
+          applyInstant={applyInstant}
+          openFilterDialog={openFilterDialog}
+          setCameraRawOpen={setCameraRawOpen}
+          setFilterGalleryOpen={setFilterGalleryOpen}
+          setLiquifyOpen={setLiquifyOpen}
+          setPuppetWarpOpen={setPuppetWarpOpen}
+        />
         {/* View */}
-        <DropdownMenu>
-          <DropdownMenuTrigger className={menuClass}>View</DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-72">
-            <DropdownMenuItem
-              onSelect={() => activeDoc && requestCanvasZoom({ factor: 2 })}
-            >
-              Zoom In <DropdownMenuShortcut>⌘+</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => activeDoc && requestCanvasZoom({ factor: 0.5 })}
-            >
-              Zoom Out <DropdownMenuShortcut>⌘-</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => requestCanvasZoom({ zoom: 1 })}>
-              100% <DropdownMenuShortcut>⌘1</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => requestCanvasZoom({ zoom: 0.5 })}>
-              Fit on Screen <DropdownMenuShortcut>⌘0</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => requestPrintSizeView()} disabled={!activeDoc}>
-              Print Size
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => openAdvancedTab("preview")} disabled={!activeDoc}>
-              Device Preview...
-            </DropdownMenuItem>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Proof Setup</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem
-                  onSelect={() => updateColorManagement({ proofColors: !colorSettings.proofColors }, colorSettings.proofColors ? "Proof Colors Off" : "Proof Colors On")}
-                  disabled={!activeDoc}
-                >
-                  {colorSettings.proofColors ? "✓ " : ""}Proof Colors
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => updateColorManagement({ gamutWarning: !colorSettings.gamutWarning }, colorSettings.gamutWarning ? "Gamut Warning Off" : "Gamut Warning On")}
-                  disabled={!activeDoc}
-                >
-                  {colorSettings.gamutWarning ? "✓ " : ""}Gamut Warning
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuSub>
-                  <DropdownMenuSubTrigger>Proof Profile</DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent>
-                    <DropdownMenuItem onSelect={() => updateColorManagement({ proofProfile: "None", proofColors: false }, "Proof Profile: None")} disabled={!activeDoc}>
-                      {colorSettings.proofProfile === "None" ? "✓ " : ""}None
-                    </DropdownMenuItem>
-                    {supportedIccProfileNames().map((profile) => (
-                      <DropdownMenuItem
-                        key={profile}
-                        onSelect={() => updateColorManagement({ proofProfile: profile, proofColors: true }, `Proof Profile: ${profile}`)}
-                        disabled={!activeDoc}
-                      >
-                        {colorSettings.proofProfile === profile ? "✓ " : ""}{profile}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
-                <DropdownMenuSub>
-                  <DropdownMenuSubTrigger>Plate Channels</DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent>
-                    <DropdownMenuItem onSelect={() => updateColorManagement({ proofChannels: [] }, "Proof Channels: Composite")} disabled={!activeDoc}>
-                      {(colorSettings.proofChannels?.length ?? 0) === 0 ? "✓ " : ""}Composite
-                    </DropdownMenuItem>
-                    {(["cyan", "magenta", "yellow", "black", "red", "green", "blue"] as const).map((channel) => (
-                      <DropdownMenuItem key={channel} onSelect={() => toggleProofChannel(channel)} disabled={!activeDoc}>
-                        {colorSettings.proofChannels?.includes(channel) ? "✓ " : ""}{channel[0].toUpperCase() + channel.slice(1)}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
-                <DropdownMenuSub>
-                  <DropdownMenuSubTrigger>Plate View Mode</DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent>
-                    {(["composite", "ink", "mask"] as const).map((mode) => (
-                      <DropdownMenuItem key={mode} onSelect={() => updateColorManagement({ proofPlateView: mode }, `Proof Plate View: ${mode}`)} disabled={!activeDoc}>
-                        {(colorSettings.proofPlateView ?? "composite") === mode ? "✓ " : ""}{mode[0].toUpperCase() + mode.slice(1)}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuItem onSelect={() => onToggleStatusBar?.()} disabled={!onToggleStatusBar}>
-              {statusBarVisible ? "Hide Info Bar" : "Show Info Bar"}
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onSelect={() => dispatch({ type: "toggle-grid" })}
-            >
-              {activeDoc?.showGrid ? "✓ " : ""}Show Grid <DropdownMenuShortcut>⌘'</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setGridSettingsOpen(true)} disabled={!activeDoc}>
-              Grid Settings…
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatch({ type: "toggle-pixel-grid" })} disabled={!activeDoc}>
-              {activeDoc?.showPixelGrid ? "✓ " : ""}Pixel Grid
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatch({ type: "toggle-snap" })}>
-              {activeDoc?.snap ? "✓ " : ""}Snap
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatch({ type: "toggle-snap-grid" })}>
-              {activeDoc?.snapToGrid ? "✓ " : ""}Snap to Grid
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatch({ type: "toggle-snap-guides" })}>
-              {activeDoc?.snapToGuides ? "✓ " : ""}Snap to Guides
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => setNewGuideOpen(true)}
-              disabled={!activeDoc}
-            >
-              New Guide…
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setGuideLayoutOpen(true)} disabled={!activeDoc}>
-              New Guide Layout…
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => dispatch({ type: "clear-guides" })}
-            >
-              Clear Guides
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => setGapWorkflow("scripted-pattern")} disabled={!activeDoc}>
-              Pattern Preview / Scripted Patterns...
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={toggleQuickMask}>
-              {activeDoc?.quickMask ? "✓ " : ""}Edit in Quick Mask <DropdownMenuShortcut>Q</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Screen Mode</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-set-screen-mode", { mode: "standard" })}>
-                  Standard Screen Mode
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-set-screen-mode", { mode: "full-screen-with-menu" })}>
-                  Full Screen Mode with Menu Bar
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-set-screen-mode", { mode: "full-screen" })}>
-                  Full Screen Mode
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-cycle-screen-mode")}>
-                  Cycle Screen Mode <DropdownMenuShortcut>F</DropdownMenuShortcut>
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        {/* 3D */}
-        <DropdownMenu>
-          <DropdownMenuTrigger className={menuClass}>3D</DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-64">
-            <DropdownMenuItem onSelect={() => openAdvancedTab("3d")} disabled={!activeDoc}>3D Workspace...</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => openAdvancedTab("3d")} disabled={!activeDoc}>New Mesh from Primitive...</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => openAdvancedTab("3d")} disabled={!activeDoc}>Import / Export OBJ or DAE...</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        {/* Video */}
-        <DropdownMenu>
-          <DropdownMenuTrigger className={menuClass}>Video</DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-64">
-            <DropdownMenuItem onSelect={() => openFilterDialog("de-interlace")} disabled={!activeDoc}>De-Interlace...</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => applyInstant("ntsc-colors")} disabled={!activeDoc}>NTSC Colors</DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => openAdvancedTab("video")} disabled={!activeDoc}>Video Timeline...</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => openAdvancedTab("video")} disabled={!activeDoc}>Import Video Layer...</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => openAdvancedTab("video")} disabled={!activeDoc}>Render Video...</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <ViewMenu
+          menuClass={menuClass}
+          activeDoc={activeDoc}
+          colorSettings={colorSettings}
+          dispatch={dispatch}
+          onToggleStatusBar={onToggleStatusBar}
+          statusBarVisible={statusBarVisible}
+          openAdvancedTab={openAdvancedTab}
+          updateColorManagement={updateColorManagement}
+          toggleProofChannel={toggleProofChannel}
+          setGridSettingsOpen={setGridSettingsOpen}
+          setNewGuideOpen={setNewGuideOpen}
+          setGuideLayoutOpen={setGuideLayoutOpen}
+          setGapWorkflow={setGapWorkflow}
+          toggleQuickMask={toggleQuickMask}
+        />
+        <MediaWorkspaceMenus
+          menuClass={menuClass}
+          activeDoc={activeDoc}
+          applyInstant={applyInstant}
+          openFilterDialog={openFilterDialog}
+          openAdvancedTab={openAdvancedTab}
+        />
 
         {/* Plugins */}
         <DropdownMenu>

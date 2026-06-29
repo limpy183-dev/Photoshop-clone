@@ -8,6 +8,7 @@ import {
   isAllowedOrigin,
   MARKETING_LIMITS,
   MarketingStoreQuotaError,
+  MarketingStoreUnavailableError,
   RequestBodyTooLargeError,
   readJsonWithLimit,
 } from "@/lib/marketing-store"
@@ -96,7 +97,7 @@ export async function POST(request: Request) {
     })
     return NextResponse.json({ ok: true })
   } catch (error) {
-    if (error instanceof MarketingStoreQuotaError) {
+    if (error instanceof MarketingStoreQuotaError || error instanceof MarketingStoreUnavailableError) {
       return NextResponse.json(
         { ok: false, error: "Could not record subscription. Try again later." },
         { status: 503 },
