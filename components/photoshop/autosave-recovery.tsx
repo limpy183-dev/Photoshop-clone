@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { toast } from "sonner"
 import { planAutosaveDocuments, planIncrementalAutosave, type IncrementalAutosaveManifest } from "./autosave-planner"
 import { deserializeProject, serializeProject } from "./document-io"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import { addPhotoshopEventListener } from "./events"
 import { writeScratchBlob } from "./opfs-scratch"
 import { loadPreferencesFromStorage } from "./preferences-engine"
@@ -25,7 +25,10 @@ function autosavePreferences() {
 }
 
 export function AutosaveRecovery() {
-  const { documents, createDocument, documentStatuses, documentHistoryVersions } = useEditor()
+  const documents = useEditorSelector((editor) => editor.documents)
+  const createDocument = useEditorSelector((editor) => editor.createDocument)
+  const documentStatuses = useEditorSelector((editor) => editor.documentStatuses)
+  const documentHistoryVersions = useEditorSelector((editor) => editor.documentHistoryVersions)
   const [candidate, setCandidate] = React.useState<AutosaveDocument | null>(null)
   const [prefs, setPrefs] = React.useState<{ enabled: boolean; intervalMs: number } | null>(null)
 

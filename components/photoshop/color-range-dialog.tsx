@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import { compositeLayer } from "./blend-modes"
 import { colorRangeMask, hexToRgb, makeCanvas, selectionFromMask } from "./tool-helpers"
 import { Minus, Pipette, Plus } from "lucide-react"
@@ -61,7 +61,9 @@ export function ColorRangeDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
 }) {
-  const { activeDoc, dispatch, commit } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
   const [tolerance, setTolerance] = React.useState(40)
   const [target, setTarget] = React.useState<SampledColor>({
     r: 128,

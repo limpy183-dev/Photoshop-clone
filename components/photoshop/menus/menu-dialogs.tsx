@@ -20,6 +20,7 @@ import type { SelectionOperation } from "../management-dialogs"
 import type { PurgeTarget } from "../purge-commands"
 import type { RecentDocument } from "../recent-documents"
 import type { WorkflowPackId } from "../workflow-presets"
+import { preloadCanvasSizeDialog, preloadExportAsDialog, preloadImageSizeDialog } from "../dialog-preload"
 
 // All dialogs below are lazy-mounted: the JS chunk is fetched only the first
 // time the user opens the dialog, and the component returns null until then.
@@ -30,10 +31,10 @@ const FilterDialog = lazyDialog<{ filterId: string | null; onClose: () => void }
   (p) => p.filterId != null,
 )
 const ImageSizeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../image-size-dialog").then((m) => ({ default: m.ImageSizeDialog })),
+  preloadImageSizeDialog,
 )
 const CanvasSizeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../canvas-size-dialog").then((m) => ({ default: m.CanvasSizeDialog })),
+  preloadCanvasSizeDialog,
 )
 const StrokeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
   () => import("../stroke-dialog").then((m) => ({ default: m.StrokeDialog })),
@@ -73,7 +74,7 @@ const ExportAsDialog = lazyDialog<{
   onOpenChange: (open: boolean) => void
   initial?: unknown
 }>(
-  () => import("../export-as-dialog").then((m) => ({ default: m.ExportAsDialog as unknown as React.ComponentType<{
+  () => preloadExportAsDialog().then((m) => ({ default: m.default as unknown as React.ComponentType<{
     open: boolean
     onOpenChange: (open: boolean) => void
     initial?: unknown

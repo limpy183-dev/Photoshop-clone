@@ -1,4 +1,9 @@
-import { createPrimitiveThreeDScene, exportSceneToDae, exportSceneToObj as _exportSceneToObj, parseDaeToScene } from "./advanced-subsystems"
+import {
+  createPrimitiveThreeDScene,
+  exportSceneToDae,
+  exportSceneToObj as _exportSceneToObj,
+  parseDaeToScene,
+} from "./three-d-scene-formats"
 import type {
   ThreeDCrossSection,
   ThreeDMaterial,

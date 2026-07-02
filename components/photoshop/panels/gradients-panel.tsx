@@ -5,7 +5,7 @@ import { Copy, Download, Plus, RotateCcw, Upload, X } from "lucide-react"
 import { toast } from "sonner"
 import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "../client-storage"
 import { downloadText } from "../document-io"
-import { useEditor } from "../editor-context"
+import { useEditorCommands, useEditorStateSelector } from "../editor-context"
 import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "../events"
 import { Input } from "@/components/ui/input"
 import { gradientStopsToEditorStops, mergeById, normalizeGradientPresets } from "../asset-libraries"
@@ -181,7 +181,10 @@ function drawGradientPreview(canvas: HTMLCanvasElement, stops: GradientStopPrese
 }
 
 export function GradientsPanel() {
-  const { dispatch, gradient, foreground, background } = useEditor()
+  const gradient = useEditorStateSelector((state) => state.gradient)
+  const foreground = useEditorStateSelector((state) => state.foreground)
+  const background = useEditorStateSelector((state) => state.background)
+  const { dispatch } = useEditorCommands()
   const [selected, setSelected] = React.useState<string>("fg-bg")
   const [userGradients, setUserGradients] = React.useState<GradientPreset[]>(() => loadUserGradients())
   const [query, setQuery] = React.useState("")

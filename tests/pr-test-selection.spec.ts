@@ -3,8 +3,25 @@ import { expect, test } from "@playwright/test"
 async function loadSelector() {
   return await import("../scripts/select-pr-tests.mjs") as {
     selectPrTestCommands: (changedFiles: string[]) => string[]
+    selectPrTestInvocations: (changedFiles: string[]) => Array<{
+      executable: string
+      args: string[]
+    }>
   }
 }
+
+test("path-aware selector exposes argument arrays for shell-free CI execution", async () => {
+  const { selectPrTestInvocations } = await loadSelector()
+  const invocations = selectPrTestInvocations([
+    "components/photoshop/editor-context.tsx",
+  ])
+
+  expect(invocations.length).toBeGreaterThan(0)
+  expect(invocations[0].executable).toBe("npx")
+  expect(invocations[0].args.slice(0, 2)).toEqual(["playwright", "test"])
+  expect(invocations[0].args).toContain("--config=playwright.node.config.ts")
+  expect(JSON.stringify(invocations)).not.toContain("eval")
+})
 
 test("path-aware selector maps document IO and decoder changes to import/export tests", async () => {
   const { selectPrTestCommands } = await loadSelector()
@@ -91,4 +108,68 @@ test("path-aware selector falls back to broad browser tests for unmatched produc
   ])).toEqual([
     "npx playwright test --grep-invert @visual",
   ])
+})
+
+test("path-aware selector maps extracted filter worker modules to focused filter suites", async () => {
+  const { selectPrTestCommands } = await loadSelector()
+  const commands = selectPrTestCommands([
+    "components/photoshop/filter-worker-source.ts",
+  ])
+  const joined = commands.join("\n")
+
+  expect(commands).not.toEqual(["npx playwright test --grep-invert @visual"])
+  expect(joined).toContain("tests/filters-algorithms.spec.ts")
+  expect(joined).toContain("tests/io-color-filter-hardening.spec.ts")
+})
+
+test("path-aware selector maps extracted raster codec modules to import/export suites", async () => {
+  const { selectPrTestCommands } = await loadSelector()
+  const commands = selectPrTestCommands([
+    "components/photoshop/raster-codec-utils.ts",
+    "components/photoshop/raster-openexr-encoders.ts",
+    "components/photoshop/raster-tiff-encoders.ts",
+    "components/photoshop/raster-metadata-embeds.ts",
+  ])
+  const joined = commands.join("\n")
+
+  expect(commands).not.toEqual(["npx playwright test --grep-invert @visual"])
+  expect(joined).toContain("tests/file-format-depth.spec.ts")
+  expect(joined).toContain("tests/io-color-filter-hardening.spec.ts")
+  expect(joined).toContain("tests/project-roundtrip-fixtures.spec.ts")
+})
+
+test("path-aware selector maps tile-only extraction modules to large-document tile coverage", async () => {
+  const { selectPrTestCommands } = await loadSelector()
+  const commands = selectPrTestCommands([
+    "components/photoshop/tile-only-export-planning.ts",
+  ])
+  const joined = commands.join("\n")
+
+  expect(commands).not.toEqual(["npx playwright test --grep-invert @visual"])
+  expect(joined).toContain("tests/large-document-tile-only.spec.ts")
+})
+
+test("path-aware selector maps capability extraction modules to diagnostics coverage", async () => {
+  const { selectPrTestCommands } = await loadSelector()
+  const commands = selectPrTestCommands([
+    "components/photoshop/capability-types.ts",
+    "components/photoshop/capability-warnings.ts",
+  ])
+  const joined = commands.join("\n")
+
+  expect(commands).not.toEqual(["npx playwright test --grep-invert @visual"])
+  expect(joined).toContain("tests/capabilities.spec.ts")
+  expect(joined).toContain("tests/browser-diagnostics.spec.ts")
+  expect(joined).toContain("tests/document-io-preflight.spec.ts")
+})
+
+test("path-aware selector maps 3D scene format extraction to focused 3D coverage", async () => {
+  const { selectPrTestCommands } = await loadSelector()
+  const commands = selectPrTestCommands([
+    "components/photoshop/three-d-scene-formats.ts",
+  ])
+  const joined = commands.join("\n")
+
+  expect(commands).not.toEqual(["npx playwright test --grep-invert @visual"])
+  expect(joined).toContain("tests/three-d-video-depth.spec.ts")
 })

@@ -1,6 +1,6 @@
 "use client"
 
-import { applyModeAndColorManagement } from "./advanced-subsystems"
+import { applyModeAndColorManagement } from "./document-color-management"
 import { isAdjustmentNoop } from "./adjustment-layers"
 import { compositeLayer } from "./blend-modes"
 import { assertCanvasSize } from "./canvas-limits"

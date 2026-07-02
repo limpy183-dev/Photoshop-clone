@@ -190,10 +190,11 @@ for (const file of searchedForEvents) {
 
 const directClientStorageAllowedFiles = new Set([
   "components/photoshop/client-storage.ts",
+  "components/photoshop/storage-registry.ts",
   "components/photoshop/panels/browser-diagnostics-panel.tsx",
 ])
 const directClientStorageRegex =
-  /\b(?:window|globalThis)\s*\.\s*localStorage\b|\blocalStorage\s*\.\s*(?:getItem|setItem|removeItem|clear|key)\s*\(|\btypeof\s+localStorage\b/g
+  /\b(?:window|globalThis)\s*\.\s*(?:localStorage|sessionStorage)\b|\b(?:localStorage|sessionStorage)\s*\.\s*(?:getItem|setItem|removeItem|clear|key)\s*\(|\btypeof\s+(?:localStorage|sessionStorage|indexedDB)\b|\bindexedDB\s*\.\s*open\s*\(|\bstorageManager\s*\.\s*getDirectory\s*\(/g
 const directClientStorage = photoshopSource
   .map((file) => {
     const rel = relativePath(file)
@@ -201,6 +202,19 @@ const directClientStorage = photoshopSource
     return { file: rel, count: matches?.length ?? 0 }
   })
   .filter((entry) => entry.count > 0 && !directClientStorageAllowedFiles.has(entry.file))
+  .sort((a, b) => b.count - a.count || a.file.localeCompare(b.file))
+
+const sourceHygieneFiles = allFiles.filter((file) => {
+  const rel = relativePath(file)
+  return sourceExtensions.has(extname(file)) && !rel.startsWith("tests/")
+})
+const hookDependencySuppressionRegex = /eslint-disable-next-line\s+react-hooks\/exhaustive-deps/g
+const hookDependencySuppressions = sourceHygieneFiles
+  .map((file) => {
+    const matches = readText(file).match(hookDependencySuppressionRegex)
+    return { file: relativePath(file), count: matches?.length ?? 0 }
+  })
+  .filter((entry) => entry.count > 0)
   .sort((a, b) => b.count - a.count || a.file.localeCompare(b.file))
 
 const useEditorImports = photoshopSource
@@ -211,8 +225,23 @@ const useEditorImports = photoshopSource
   .map(relativePath)
   .sort()
 
+const coordinationFiles = Object.entries(budgets.coordinationFiles ?? {}).map(([file, limit]) => {
+  const absolute = resolve(root, file)
+  const imports = graph.get(absolute)?.length ?? 0
+  const fanIn = [...graph.values()].filter((targets) => targets.includes(absolute)).length
+  return {
+    file,
+    imports,
+    maxImports: limit.maxImports,
+    fanIn,
+    maxFanIn: limit.maxFanIn,
+    ok: imports <= limit.maxImports && fanIn <= limit.maxFanIn,
+  }
+})
+
 const rawPhotoshopEventCount = rawPhotoshopEvents.reduce((sum, entry) => sum + entry.count, 0)
 const rawPhotoshopListenerCount = rawPhotoshopListeners.reduce((sum, entry) => sum + entry.count, 0)
+const hookDependencySuppressionCount = hookDependencySuppressions.reduce((sum, entry) => sum + entry.count, 0)
 const report = {
   checks: [
     { id: "no-import-cycles", ok: importCycles.length === 0 },
@@ -240,6 +269,14 @@ const report = {
       id: "direct-client-storage-budget",
       ok: directClientStorage.length <= budgets.directClientStorage.max,
     },
+    {
+      id: "hook-dependency-suppression-budget",
+      ok: hookDependencySuppressionCount <= budgets.hookDependencySuppressions.max,
+    },
+    {
+      id: "coordination-file-budget",
+      ok: coordinationFiles.every((entry) => entry.ok),
+    },
   ],
   importCycles,
   oversizeFiles,
@@ -247,7 +284,9 @@ const report = {
   rawPhotoshopEvents,
   rawPhotoshopListeners,
   directClientStorage,
+  hookDependencySuppressions,
   useEditorImports,
+  coordinationFiles,
   budgets: {
     rawPhotoshopEvents: {
       count: rawPhotoshopEventCount,
@@ -275,6 +314,10 @@ const report = {
       count: directClientStorage.length,
       max: budgets.directClientStorage.max,
     },
+    hookDependencySuppressions: {
+      count: hookDependencySuppressionCount,
+      max: budgets.hookDependencySuppressions.max,
+    },
   },
 }
 
@@ -295,6 +338,15 @@ if (json) {
     `${report.budgets.topLargestFiles.totalLines}/${report.budgets.topLargestFiles.maxTotalLines} lines`,
   )
   console.log(`direct client storage files: ${report.budgets.directClientStorage.count}/${report.budgets.directClientStorage.max}`)
+  console.log(
+    `hook dependency suppressions: ` +
+    `${report.budgets.hookDependencySuppressions.count}/${report.budgets.hookDependencySuppressions.max}`,
+  )
+  for (const entry of report.coordinationFiles) {
+    console.log(
+      `${entry.file}: imports ${entry.imports}/${entry.maxImports}, fan-in ${entry.fanIn}/${entry.maxFanIn}`,
+    )
+  }
 }
 
 process.exit(ok ? 0 : 1)

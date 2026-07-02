@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "routes": {
+    "/": {
+      "encodedBodyBytes": 169620,
+      "decodedBodyBytes": 564121,
+      "requestCount": 11
+    },
+    "/editor": {
+      "encodedBodyBytes": 524459,
+      "decodedBodyBytes": 1709568,
+      "requestCount": 14
+    },
+    "/marketing": {
+      "encodedBodyBytes": 213230,
+      "decodedBodyBytes": 673796,
+      "requestCount": 15
+    },
+    "/documentation": {
+      "encodedBodyBytes": 143781,
+      "decodedBodyBytes": 478301,
+      "requestCount": 10
+    }
+  },
+  "ownerModules": [
+    "components/photoshop/action-conditionals.ts",
+    "components/photoshop/adjustment-layers.ts",
+    "components/photoshop/blend-modes.ts",
+    "components/photoshop/blur-gallery-controls.ts",
+    "components/photoshop/brush-engine.ts",
+    "components/photoshop/canvas-limits.ts",
+    "components/photoshop/canvas-utils.ts",
+    "components/photoshop/capability-warnings.ts",
+    "components/photoshop/color-channel-ops.ts",
+    "components/photoshop/color-mode-conversion.ts",
+    "components/photoshop/color-pipeline.ts",
+    "components/photoshop/color-utils.ts"
+  ]
+}

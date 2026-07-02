@@ -187,7 +187,7 @@ export function createAccessibilityAuditReport(input: AccessibilityAuditInput, g
 
 export function formatAccessibilityAuditReport(report: AccessibilityAuditReport) {
   const lines = [
-    "Accessibility Audit Report",
+    "Editor Accessibility Metadata Audit Report",
     `Generated: ${report.generatedAt}`,
     `Summary: ${report.summary.errors} errors, ${report.summary.warnings} warnings, ${report.summary.info} informational findings`,
     "",

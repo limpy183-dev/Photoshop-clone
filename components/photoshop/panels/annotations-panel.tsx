@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useEditor } from "../editor-context"
+import { useEditorSelector } from "../editor-context"
 import { downloadBlob, downloadText } from "../document-io"
 import { appendThreadReply, createReviewReport, createReviewThread, describeAnnotationGeometry, normalizeAnnotationGeometry, setThreadResolved } from "../collaboration"
 import type { AnnotationGeometry, CountMarker, Note, PsDocument } from "../types"
@@ -114,7 +114,9 @@ async function buildAnnotationsPdf(doc: Pick<PsDocument, "name" | "width" | "hei
 }
 
 export function AnnotationsPanel() {
-  const { activeDoc, dispatch, commit } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
   const [author, setAuthor] = React.useState("Reviewer")
   const [noteText, setNoteText] = React.useState("Review note")
   const [noteColor, setNoteColor] = React.useState("#facc15")

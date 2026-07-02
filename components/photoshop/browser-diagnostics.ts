@@ -1,4 +1,7 @@
-import { capabilityWarningsForDocument, type CapabilityDocumentSnapshot } from "./capabilities"
+import {
+  capabilityWarningsForDocument,
+  type CapabilityDocumentSnapshot,
+} from "./capability-warnings"
 import {
   MAX_CANVAS_DIMENSION,
   MAX_CANVAS_PIXELS,
@@ -6,7 +9,7 @@ import {
 import { createHeapMemoryMonitor, getGlobalMemoryBudget } from "./memory-budget"
 import { detectOffscreenCanvasCapabilities, diagnoseOffscreenCanvasTransfer, type OffscreenCanvasCapabilities } from "./offscreen-canvas"
 import { estimateScratchQuota, isOPFSSupported, type ScratchQuotaSnapshot } from "./opfs-scratch"
-import { createTileOnlyCapabilityDashboard, type TileOnlyCapabilityStatus, type TileOnlyExportLayerDescriptor } from "./tile-only-pipeline"
+import { createTileOnlyCapabilityDashboard, type TileOnlyCapabilityStatus, type TileOnlyExportLayerDescriptor } from "./tile-only-export-planning"
 import type { LayerKind } from "./types"
 
 const MIB = 1024 * 1024

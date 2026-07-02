@@ -1,4 +1,4 @@
-import { capabilityWarningsForDocument } from "./capabilities"
+import { capabilityWarningsForDocument } from "./capability-warnings"
 import { layerHasPartialAlpha } from "./flatten-transparency"
 import { diagnoseDocumentFonts } from "./typography-engine"
 import type { Layer, PsDocument, Slice } from "./types"

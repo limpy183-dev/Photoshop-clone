@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useEditor } from "../editor-context"
+import { useActiveDocument, useActiveLayer, useEditorCommands } from "../editor-context"
 import { rasterizeText } from "../tool-helpers"
 import type { TextAntiAliasMode } from "../types"
 import {
@@ -43,7 +43,9 @@ const PARAGRAPH_ALIGNMENT_CONTROLS = [
 ] as const
 
 export function CharacterPanel() {
-  const { activeDoc, activeLayer, dispatch, requestRender, commit } = useEditor()
+  const activeDoc = useActiveDocument()
+  const activeLayer = useActiveLayer()
+  const { dispatch, requestRender, commit } = useEditorCommands()
   const text = activeLayer?.kind === "text" ? activeLayer.text : null
   const textFont = text?.font
   const embeddedFont = text ? text.embeddedFont ?? findEmbeddedFontForFamily(activeDoc?.assetLibrary, text.font) : undefined
@@ -533,7 +535,8 @@ export function CharacterPanel() {
 }
 
 export function ParagraphPanel() {
-  const { activeLayer, dispatch, requestRender, commit } = useEditor()
+  const activeLayer = useActiveLayer()
+  const { dispatch, requestRender, commit } = useEditorCommands()
   const text = activeLayer?.kind === "text" ? activeLayer.text : null
 
   const update = (patch: Partial<NonNullable<typeof text>>) => {

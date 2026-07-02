@@ -821,7 +821,7 @@ export function LayersPanel() {
             commitLayerChange("Layer Blend Mode", [active.id])
           }}
         >
-          <SelectTrigger className="h-6 w-full text-[11px]">
+          <SelectTrigger aria-label="Layer blend mode" className="h-6 w-full text-[11px]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -1027,7 +1027,7 @@ export function LayersPanel() {
       <div className="flex items-center gap-1 border-b border-[var(--ps-divider)] px-2 py-1 text-[10px] text-[var(--ps-text-dim)]">
         <span className="min-w-0 flex-1 truncate">
           {visibleLayers.length} of {collapseFiltered.length} visible in list
-          {filtersActive ? ` · ${selectedVisibleCount} selected` : ""}
+          {filtersActive ? ` / ${selectedVisibleCount} selected` : ""}
         </span>
         {filtersActive ? (
           <button
@@ -1332,6 +1332,7 @@ export function LayersPanel() {
               ) : null}
 
               <input
+                aria-label={`Layer name: ${l.name}`}
                 value={l.name}
                 disabled={isLocked}
                 onChange={(e) => {

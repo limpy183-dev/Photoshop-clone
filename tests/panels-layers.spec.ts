@@ -42,7 +42,7 @@ test("layer filter summary does not render mojibake separators", async ({ page }
   await page.getByLabel("Layer search").fill("Layer")
 
   await expect(page.getByText(/visible in list/)).toBeVisible()
-  await expect(page.getByText(/Â·/)).toHaveCount(0)
+  await expect(page.getByText(/·/)).toHaveCount(0)
 })
 
 test("layer lock controls do not render mojibake glyphs", async ({ page }) => {

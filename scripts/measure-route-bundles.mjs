@@ -6,6 +6,7 @@ import { chromium } from "playwright"
 
 export const BUNDLE_ROUTES = ["/", "/editor", "/marketing", "/documentation"]
 const DECODER_RE = /decoder|raster|raw|heic|j2k|openjpeg|exr|tiff|pdfjs|dicom|wasm/i
+const REPORT_ORIGIN = "http://bundle.local"
 
 async function reservePort() {
   return await new Promise((resolvePort, reject) => {
@@ -37,10 +38,34 @@ async function waitForServer(baseUrl, child, logs) {
   throw new Error(`Timed out waiting for production server at ${baseUrl}.`)
 }
 
-function resourceSummary(resources) {
-  const scripts = resources.filter((entry) =>
-    entry.initiatorType === "script" || /\.js(?:\?|$)/i.test(entry.name),
+export function normalizeBundleReportUrl(value) {
+  try {
+    const url = new URL(value)
+    return `${REPORT_ORIGIN}${url.pathname}${url.search}`
+  } catch {
+    return String(value)
+  }
+}
+
+export function sortBundleResources(resources) {
+  return [...resources].sort((a, b) =>
+    normalizeBundleReportUrl(a.name).localeCompare(normalizeBundleReportUrl(b.name)) ||
+    a.initiatorType.localeCompare(b.initiatorType) ||
+    a.decodedBodySize - b.decodedBodySize,
   )
+}
+
+function normalizeResource(entry) {
+  return {
+    ...entry,
+    name: normalizeBundleReportUrl(entry.name),
+  }
+}
+
+function resourceSummary(resources) {
+  const scripts = sortBundleResources(resources).filter((entry) =>
+    entry.initiatorType === "script" || /\.js(?:\?|$)/i.test(entry.name),
+  ).map(normalizeResource)
   const decoderResources = scripts.filter((entry) => DECODER_RE.test(entry.name))
   const startupResources = scripts.filter((entry) => !DECODER_RE.test(entry.name))
   const largestStartupChunk = startupResources.reduce(
@@ -49,7 +74,7 @@ function resourceSummary(resources) {
           decodedBodyBytes: entry.decodedBodySize,
           encodedBodyBytes: entry.encodedBodySize,
           transferBytes: entry.transferSize,
-          url: entry.name,
+          url: normalizeBundleReportUrl(entry.name),
         }
       : largest,
     null,

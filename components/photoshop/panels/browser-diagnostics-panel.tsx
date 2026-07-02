@@ -14,7 +14,7 @@ import { downloadText } from "../document-io"
 import { useEditorSelector } from "../editor-context"
 import { loadPreferencesFromStorage } from "../preferences-engine"
 import { readAutosaves } from "../recent-documents"
-import { createTileOnlyCapabilityDashboard, type TileOnlyCapabilityDashboard, type TileOnlyCapabilityStatus } from "../tile-only-pipeline"
+import { createTileOnlyCapabilityDashboard, type TileOnlyCapabilityDashboard, type TileOnlyCapabilityStatus } from "../tile-only-export-planning"
 import type { PsDocument } from "../types"
 
 function documentSnapshot(doc: PsDocument | null | undefined): BrowserDiagnosticsDocumentSnapshot | null {

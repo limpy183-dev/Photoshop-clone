@@ -151,27 +151,27 @@ function _blackWhite(src: ImageData, reds: number, yellows: number, greens: numb
     // Normalize hue to 0-1 range
     const hue = h
 
-    // Red range (0-30Â° and 330-360Â°)
+    // Red range (0-30° and 330-360°)
     if (hue < 0.083 || hue > 0.917) {
       lightness += (reds / 100) * 0.3 // Scale factor for subtle adjustment
     }
-    // Yellow range (30-90Â°)
+    // Yellow range (30-90°)
     else if (hue >= 0.083 && hue < 0.25) {
       lightness += (yellows / 100) * 0.3
     }
-    // Green range (90-150Â°)
+    // Green range (90-150°)
     else if (hue >= 0.25 && hue < 0.417) {
       lightness += (greens / 100) * 0.3
     }
-    // Cyan range (150-210Â°)
+    // Cyan range (150-210°)
     else if (hue >= 0.417 && hue < 0.583) {
       lightness += (cyans / 100) * 0.3
     }
-    // Blue range (210-270Â°)
+    // Blue range (210-270°)
     else if (hue >= 0.583 && hue < 0.75) {
       lightness += (blues / 100) * 0.3
     }
-    // Magenta range (270-330Â°)
+    // Magenta range (270-330°)
     else if (hue >= 0.75 && hue < 0.917) {
       lightness += (magentas / 100) * 0.3
     }

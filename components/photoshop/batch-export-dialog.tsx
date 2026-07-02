@@ -25,7 +25,7 @@ import {
   type BrowserRasterEncoderDiagnostic,
   type CompatibilityManifestEntry,
 } from "./document-io"
-import { useEditor, makeCanvas } from "./editor-context"
+import { makeCanvas, useEditorSelector } from "./editor-context"
 import { dispatchPhotoshopEvent } from "./events"
 import { canvasSizeError } from "./canvas-limits"
 import type { BrowserRasterExportFormat } from "./document-io"
@@ -207,7 +207,9 @@ export function BatchExportDialog({
   onOpenChange: (open: boolean) => void
   initial?: Partial<{ scope: BatchScope; format: RasterFormat; scale: number; transparent: boolean }>
 }) {
-  const { activeDoc, selectedLayers, dispatch } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const selectedLayers = useEditorSelector((editor) => editor.selectedLayers)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
   const [scope, setScope] = React.useState<BatchScope>("document")
   const [format, setFormat] = React.useState<RasterFormat>("png")
   const [scale, setScale] = React.useState(1)

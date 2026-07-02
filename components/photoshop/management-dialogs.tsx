@@ -433,6 +433,10 @@ export function SaveSelectionDialog({
   const [docId, setDocId] = React.useState(activeDoc?.id ?? "")
   const targetDoc = documents.find((d) => d.id === docId) ?? activeDoc ?? null
   const channels = targetDoc?.channels ?? []
+  const channelCountRef = React.useRef(channels.length)
+  React.useEffect(() => {
+    channelCountRef.current = channels.length
+  }, [channels.length])
   const eligibleDocs = activeDoc
     ? documents.filter((d) => d.id === activeDoc.id || (d.width === activeDoc.width && d.height === activeDoc.height))
     : documents
@@ -448,15 +452,13 @@ export function SaveSelectionDialog({
   React.useEffect(() => {
     if (!open) return
     setDocId(activeDoc?.id ?? "")
-    setName(`Alpha ${channels.length + 1}`)
+    setName(`Alpha ${channelCountRef.current + 1}`)
     setDestination("new")
     setMode("replace")
     setKind("alpha")
     setSpotColor("#ff3b30")
     setSpotOpacity(50)
     setInvert(false)
-    // Initialize create-channel form only when opening for a new active document; channel count changes should not reset user input.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeDoc?.id, open])
 
   // When switching destination document, reset the destination channel
@@ -675,11 +677,17 @@ export function LoadSelectionDialog({
   // Photoshop's Load Selection dialog lets you read a channel saved in any
   // open document whose pixel dimensions match the active one.
   const [sourceDocId, setSourceDocId] = React.useState(activeDoc?.id ?? "")
-  const eligibleSourceDocs = activeDoc
-    ? documents.filter((d) => d.id === activeDoc.id || (d.width === activeDoc.width && d.height === activeDoc.height))
-    : []
-  const sourceDoc = documents.find((d) => d.id === sourceDocId) ?? activeDoc ?? null
-  const channels = sourceDoc?.channels ?? []
+  const eligibleSourceDocs = React.useMemo(
+    () => activeDoc
+      ? documents.filter((d) => d.id === activeDoc.id || (d.width === activeDoc.width && d.height === activeDoc.height))
+      : [],
+    [activeDoc, documents],
+  )
+  const sourceDoc = React.useMemo(
+    () => documents.find((d) => d.id === sourceDocId) ?? activeDoc ?? null,
+    [activeDoc, documents, sourceDocId],
+  )
+  const channels = React.useMemo(() => sourceDoc?.channels ?? [], [sourceDoc])
   const [channelId, setChannelId] = React.useState("")
   const [mode, setMode] = React.useState<SelectionChannelMode>("replace")
   const [invert, setInvert] = React.useState(false)
@@ -691,23 +699,22 @@ export function LoadSelectionDialog({
     setSourceDocId(activeDoc?.id ?? "")
     setMode("replace")
     setInvert(false)
-    // Initialize load-selection form on open/document change; source channel changes are handled by the channel-id effect below.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeDoc?.id, open])
 
+  const firstChannelRef = React.useRef<{ id: string; name: string }>({ id: "", name: "" })
   React.useEffect(() => {
     const first = channels[0]
-    setChannelId(first?.id ?? "")
-    setRename(first?.name ?? "")
-    // Reset selection when the source document or channel count changes; channel object identity changes should not overwrite edits.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    firstChannelRef.current = { id: first?.id ?? "", name: first?.name ?? "" }
+  }, [channels])
+
+  React.useEffect(() => {
+    setChannelId(firstChannelRef.current.id)
+    setRename(firstChannelRef.current.name)
   }, [sourceDocId, channels.length])
 
   React.useEffect(() => {
     if (selected) setRename(selected.name)
-    // Rename mirrors the selected channel id; name-only edits on the same id should not clobber typed text.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id])
+  }, [selected])
 
   const load = () => {
     if (!selected || !sourceDoc) return

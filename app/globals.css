@@ -11,7 +11,7 @@
   --card-foreground: oklch(0.92 0 0);
   --popover: oklch(0.20 0 0);
   --popover-foreground: oklch(0.92 0 0);
-  --primary: oklch(0.62 0.18 245);
+  --primary: oklch(0.52 0.18 245);
   --primary-foreground: oklch(0.98 0 0);
   --secondary: oklch(0.27 0 0);
   --secondary-foreground: oklch(0.92 0 0);
@@ -33,8 +33,8 @@
   --ps-canvas-bg: oklch(0.32 0 0);    /* canvas surrounding gray */
   --ps-divider: oklch(0.12 0 0);
   --ps-text: oklch(0.88 0 0);
-  --ps-text-dim: oklch(0.62 0 0);
-  --ps-accent: oklch(0.62 0.18 245);  /* Adobe-ish blue */
+  --ps-text-dim: oklch(0.82 0 0);
+  --ps-accent: oklch(0.44 0.18 245);  /* Accessible Adobe-ish blue behind white text */
   --ps-accent-2: oklch(0.72 0.16 245);
   --ps-warning: oklch(0.78 0.16 80);
   --ps-tool-active: oklch(0.30 0 0);
@@ -48,7 +48,7 @@
   --card-foreground: oklch(0.92 0 0);
   --popover: oklch(0.20 0 0);
   --popover-foreground: oklch(0.92 0 0);
-  --primary: oklch(0.62 0.18 245);
+  --primary: oklch(0.52 0.18 245);
   --primary-foreground: oklch(0.98 0 0);
   --secondary: oklch(0.27 0 0);
   --secondary-foreground: oklch(0.92 0 0);

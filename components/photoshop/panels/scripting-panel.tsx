@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useEditor, makeCanvas } from "../editor-context"
+import { useActiveDocument, useActiveLayer, useEditorCommands, makeCanvas } from "../editor-context"
 import { downloadText } from "../document-io"
 import { FILTERS } from "../filters"
 import { Textarea } from "@/components/ui/textarea"
@@ -76,8 +76,9 @@ function importMacrosPayload(value: unknown): CommandMacro[] {
 }
 
 export function ScriptingPanel() {
-  const editor = useEditor()
-  const { activeDoc, activeLayer, dispatch, commit, requestRender } = editor
+  const activeDoc = useActiveDocument()
+  const activeLayer = useActiveLayer()
+  const { dispatch, commit, requestRender } = useEditorCommands()
   const [code, setCode] = React.useState(STARTER_SCRIPT)
   const [macroName, setMacroName] = React.useState("Command Macro")
   const [macros, setMacros] = React.useState<CommandMacro[]>([])

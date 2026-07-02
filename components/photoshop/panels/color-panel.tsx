@@ -210,6 +210,7 @@ export function ColorPanel() {
         </div>
         <div className="flex-1 min-w-0">
           <input
+            aria-label="Foreground color hex value"
             value={localHex}
             onChange={(e) => {
               const val = e.target.value
@@ -264,6 +265,7 @@ export function ColorPanel() {
             background: `linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, ${hueColor})`,
           }}
           aria-label="Saturation/Brightness"
+          role="group"
         >
           <div
             className="absolute w-3.5 h-3.5 rounded-full border-2 border-white pointer-events-none"
@@ -284,6 +286,11 @@ export function ColorPanel() {
               "linear-gradient(to right, #f00 0%, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, #f00 100%)",
           }}
           aria-label="Hue"
+          role="slider"
+          tabIndex={0}
+          aria-valuemin={0}
+          aria-valuemax={360}
+          aria-valuenow={Math.round(localHsv.h)}
         >
           <div
             className="absolute -top-0.5 -bottom-0.5 w-2 bg-white border border-black rounded-sm pointer-events-none"

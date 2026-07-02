@@ -202,7 +202,7 @@ function MenubarShortcut({
     <span
       data-slot="menubar-shortcut"
       className={cn(
-        'text-muted-foreground ml-auto text-xs tracking-widest',
+        'ml-auto text-xs tracking-widest text-[var(--ps-text)]',
         className,
       )}
       {...props}

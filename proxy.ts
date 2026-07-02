@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { createContentSecurityPolicy } from "./lib/security-policy.mjs"
 
 /**
  * Per-request CSP nonce proxy.
@@ -32,29 +33,7 @@ function generateNonce(): string {
 
 export function proxy(request: NextRequest) {
   const nonce = generateNonce()
-  const devScriptSource = process.env.NODE_ENV === "production" ? "" : " 'unsafe-eval'"
-
-  // Build the CSP. Keep it aligned with the static one in next.config.mjs;
-  // when proxy runs, this header takes effect (Next.js dedupes on
-  // header name, last write wins).
-  const csp = [
-    "default-src 'self'",
-    // 'strict-dynamic' lets the nonced framework script load further
-    // chunks without us having to enumerate every chunk URL. We keep
-    // 'self' alongside it for browsers that don't honor strict-dynamic
-    // and for non-script subresource loads.
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${devScriptSource} https://va.vercel-scripts.com`,
-    "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob:",
-    "font-src 'self' data:",
-    "connect-src 'self' https://vitals.vercel-insights.com https://va.vercel-scripts.com",
-    "worker-src 'self' blob:",
-    "frame-src 'self'",
-    "object-src 'none'",
-    "base-uri 'self'",
-    "form-action 'self'",
-    "frame-ancestors 'none'",
-  ].join("; ")
+  const csp = createContentSecurityPolicy({ nonce })
 
   // Forward the nonce to the rendered tree. layout.tsx (and any nested
   // server component that injects a <Script>) can read it via

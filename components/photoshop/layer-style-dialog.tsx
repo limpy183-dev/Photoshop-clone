@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import { defaultStyle } from "./layer-styles"
 import {
   defaultAdvancedBlending,
@@ -91,7 +91,11 @@ export function LayerStyleDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
 }) {
-  const { activeDoc, activeLayer, foreground, dispatch, commit } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const activeLayer = useEditorSelector((editor) => editor.activeLayer)
+  const foreground = useEditorSelector((editor) => editor.foreground)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
   const [style, setStyle] = React.useState<LayerStyle>(() => defaultStyle(foreground))
   const [advanced, setAdvanced] = React.useState<AdvancedBlending>(() => defaultAdvancedBlending())
   const [tab, setTab] = React.useState<StyleKey>("blending")

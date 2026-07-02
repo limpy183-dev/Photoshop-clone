@@ -4,7 +4,6 @@ import * as React from "react"
 import { toast } from "sonner"
 import {
   Menubar,
-  MenubarCheckboxItem as DropdownMenuCheckboxItem,
   MenubarContent as DropdownMenuContent,
   MenubarItem as DropdownMenuItem,
   MenubarLabel as DropdownMenuLabel,
@@ -25,12 +24,23 @@ import type { SelectionOperation } from "./management-dialogs"
 import type { WorkflowPackId } from "./workflow-presets"
 import { WORKFLOW_PACKS } from "./workflow-presets"
 import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
-import { canPluginUsePermission, permissionsForPluginActionDescriptors } from "./plugin-system"
 import { DEFAULT_COLOR_MANAGEMENT } from "./menus/color-management-defaults"
 import { MenuDialogs, type AutoAlgorithmId } from "./menus/menu-dialogs"
 import { loadAdvancedCommands } from "./menus/advanced-command-service"
 import { loadDocumentCommands } from "./menus/document-command-service"
 import { FilterMenu } from "./menus/filter-menu"
+import {
+  FileMenu,
+  LINKED_SMART_OBJECT_POLL_MS,
+  MENU_TRIGGER_CLASS,
+  cloneLayerStyle,
+  pluginCommandUnavailable,
+  smartLinkFingerprint,
+  type OpenPickerWindow,
+  type ReadableFileHandle,
+  type SaveMode,
+  type SavePickerWindow,
+} from "./menus/file-menu"
 import { loadImageCommands } from "./menus/image-command-service"
 import { MediaWorkspaceMenus } from "./menus/media-workspace-menus"
 import { SelectMenu } from "./menus/select-menu"
@@ -57,7 +67,7 @@ import {
   type RecentDocument,
 } from "./recent-documents"
 import { MAX_PROJECT_FILE_BYTES, assertFileSize } from "./canvas-limits"
-import type { AdjustmentType, ColorManagementSettings, DocumentModeSettings, Layer, LayerStyle, PluginCommandDescriptor, PluginDescriptor, PluginPermission, TextAntiAliasMode } from "./types"
+import type { AdjustmentType, ColorManagementSettings, DocumentModeSettings, Layer, PluginCommandDescriptor, PluginDescriptor, TextAntiAliasMode } from "./types"
 import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop } from "./adjustment-layers"
 import { createSmartObjectSource, relinkSmartObjectToFile, syncLinkedSmartObjectSource } from "./smart-objects"
 import { PURGE_COMMANDS, formatPurgeStatus, type PurgeTarget } from "./purge-commands"
@@ -67,65 +77,7 @@ import {
   type SourceFileHandleLike,
 } from "./source-location"
 
-const menuClass =
-  "h-7 px-2 inline-flex items-center text-[12px] text-[var(--ps-text)] hover:bg-[var(--ps-tool-hover)] data-[state=open]:bg-[var(--ps-tool-active)] rounded-none outline-none cursor-default"
-
-const LINKED_SMART_OBJECT_POLL_MS = 30_000
-
-function smartLinkFingerprint(source: Layer["smartSource"]): string {
-  if (!source) return "none"
-  return [
-    source.status ?? "",
-    source.fileName ?? "",
-    source.fileHandleName ?? "",
-    source.handlePermission ?? "",
-    source.lastKnownModified ?? "",
-    source.lastKnownSize ?? "",
-    source.sourceHash ?? "",
-  ].join("|")
-}
-
-function permissionsForPluginCommand(command: PluginCommandDescriptor): PluginPermission[] {
-  if (command.requiredPermissions?.length) return command.requiredPermissions
-  if (command.action.type === "apply-filter") return ["filters:write"]
-  if (command.action.type === "post-message") return ["commands"]
-  if (command.action.type === "batch-play") return permissionsForPluginActionDescriptors(command.action.descriptors)
-  if (command.action.type === "eval-script") return ["commands"]
-  return []
-}
-
-function pluginCommandUnavailable(plugin: PluginDescriptor, command: PluginCommandDescriptor) {
-  if (plugin.enabled === false) return "Plugin is disabled"
-  const missing = permissionsForPluginCommand(command).filter((permission) => !canPluginUsePermission(plugin, permission))
-  return missing[0] ? `Missing ${missing[0]} permission` : undefined
-}
-
-function cloneLayerStyle(style: LayerStyle): LayerStyle {
-  if (typeof structuredClone === "function") return structuredClone(style)
-  return JSON.parse(JSON.stringify(style))
-}
-
-type SaveMode = "save" | "save-as"
-
-type SavePickerWindow = Window & {
-  showSaveFilePicker?: (options: {
-    suggestedName?: string
-    types?: Array<{ description: string; accept: Record<string, string[]> }>
-  }) => Promise<FileSystemFileHandleLike>
-}
-
-type ReadableFileHandle = FileSystemFileHandle & {
-  getFile: () => Promise<File>
-  queryPermission?: (descriptor?: { mode?: "read" | "readwrite" }) => Promise<PermissionState>
-  requestPermission?: (descriptor?: { mode?: "read" | "readwrite" }) => Promise<PermissionState>
-}
-
-type OpenPickerWindow = Window & {
-  showOpenFilePicker?: (options: {
-    multiple?: boolean
-    types?: Array<{ description: string; accept: Record<string, string[]> }>
-  }) => Promise<ReadableFileHandle[]>
-}
+const menuClass = MENU_TRIGGER_CLASS
 
 interface MenuBarProps {
   onOpenNew: () => void
@@ -225,7 +177,6 @@ export function MenuBar({
   const [selectionOperation, setSelectionOperation] = React.useState<SelectionOperation | null>(null)
   const [saveSelectionOpen, setSaveSelectionOpen] = React.useState(false)
   const [loadSelectionOpen, setLoadSelectionOpen] = React.useState(false)
-  // Task 27 — Adjustment workflow dialog state.
   const [shadowsHighlightsOpen, setShadowsHighlightsOpen] = React.useState(false)
   const [hdrToningOpen, setHdrToningOpen] = React.useState(false)
   const [matchColorOpen, setMatchColorOpen] = React.useState(false)
@@ -435,10 +386,6 @@ export function MenuBar({
     }
   }, [dispatch])
 
-  // Read the latest history bounds from the editor's stateRef each
-  // call so rapid menu clicks always step exactly one entry, even if
-  // the closure-captured `historyIndex` from the previous render is
-  // still the old value.
   const undo = () => stepHistoryBy(-1)
   const redo = () => stepHistoryBy(1)
   const [pendingPurge, setPendingPurge] = React.useState<PurgeTarget | null>(null)
@@ -454,7 +401,6 @@ export function MenuBar({
     }
     setPendingPurge(target)
   }, [executePurge])
-  // Listen for cross-component purge requests (e.g. from command palette).
   React.useEffect(() => {
     const handler = (detail: { target: PurgeTarget }) => {
       if (detail?.target) runPurge(detail.target)
@@ -1591,8 +1537,6 @@ export function MenuBar({
     const report = createDocumentReport(doc, "Project Export")
     const docWithReport = { ...doc, reports: [report, ...(doc.reports ?? [])].slice(0, 12) }
     const serialized = serializeProject(docWithReport, { pretty: false })
-    // Capture the history index at serialization time so edits made while the
-    // async file write is in flight are not marked as saved.
     const savedHistoryIndex = documentHistoryVersions[doc.id] ?? 0
     const fallbackName = `${safeNameFor(lifecycle?.fileName ?? doc.name)}.psprojson`
     let nextLifecycle: Partial<DocumentLifecycleState> = {
@@ -1938,343 +1882,15 @@ export function MenuBar({
 
         <Menubar className="h-full min-w-0 flex-1 justify-start gap-0 rounded-none border-0 bg-transparent p-0 shadow-none">
 
-        {/* File */}
-        <DropdownMenu>
-          <DropdownMenuTrigger className={menuClass}>File</DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-72">
-            <DropdownMenuItem onSelect={onOpenNew}>
-              New… <DropdownMenuShortcut>⌘N</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={openImageOrPsd}>
-              Open… <DropdownMenuShortcut>⌘O</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={openProject}>
-              Open Project…
-            </DropdownMenuItem>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Open Recent</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                {recentDocuments.length === 0 ? (
-                  <DropdownMenuItem disabled>(empty)</DropdownMenuItem>
-                ) : (
-                  recentDocuments.map((recent) => (
-                    <DropdownMenuItem key={recent.id} onSelect={() => openRecent(recent)}>
-                      <span className="truncate max-w-56">{recent.name}</span>
-                      <DropdownMenuShortcut>{recent.kind}</DropdownMenuShortcut>
-                    </DropdownMenuItem>
-                  ))
-                )}
-                {recentDocuments.length > 0 ? (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onSelect={() => setRecentManagerOpen(true)}>
-                      Manage Recent Documents...
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onSelect={() => {
-                        clearRecentDocuments()
-                      }}
-                    >
-                      Clear Recent Files
-                    </DropdownMenuItem>
-                  </>
-                ) : (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onSelect={() => setRecentManagerOpen(true)}>
-                      Manage Recent Documents...
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onSelect={() => {
-                if (!activeDoc) return
-                requestCloseDocument(activeDoc.id)
-              }}
-            >
-              Close <DropdownMenuShortcut>⌘W</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => duplicateDocument()} disabled={!activeDoc}>
-              Duplicate Document...
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={closeOtherDocumentsFromMenu}>
-              Close Others
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={reopenClosedDocumentFromMenu}>
-              Reopen Closed Document
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => exportImage("png")}>
-              Save As PNG… <DropdownMenuShortcut>⌘⇧S</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={saveProject} disabled={!activeDoc}>
-              Save Project (.psprojson)…
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={savePsd} disabled={!activeDoc}>
-              Save As PSD...
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={savePsb} disabled={!activeDoc}>
-              Save As PSB...
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={placeEmbedded} disabled={!activeDoc}>
-              Place Embedded…
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setContactSheetOpen(true)}>
-              Contact Sheet II…
-            </DropdownMenuItem>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Workflow Packs</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                {WORKFLOW_PACKS.map((pack) => (
-                  <DropdownMenuItem key={pack.id} onSelect={() => setWorkflowPack(pack.id)}>
-                    {pack.title}...
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Automate</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => openAdvancedTab("automation")} disabled={!activeDoc}>Automation Manager...</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openAdvancedTab("automation")} disabled={!activeDoc}>Droplets...</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openAdvancedTab("automation")} disabled={!activeDoc}>Script Events Manager...</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openAdvancedTab("automation")} disabled={!activeDoc}>Conditional Actions...</DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => setGapWorkflow("load-stack")}>Load Files into Stack...</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setPhotomergeOpen(true)}>Photomerge...</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setGapWorkflow("hdr-merge")}>Merge to HDR Pro...</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setGapWorkflow("focus-stack")}>Focus Stack...</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setGapWorkflow("stack-statistics")}>Statistics...</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setGapWorkflow("pdf-presentation")}>PDF Presentation...</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setPdfImportOpen(true)}>Import PDF...</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setGapWorkflow("image-assets")}>Generate Image Assets...</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setCropAndStraightenOpen(true)}>Crop and Straighten Photos...</DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger disabled={!activeDoc}>Generate</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuCheckboxItem
-                  checked={activeDoc?.metadata?.imageAssetGenerator?.enabled !== false}
-                  onCheckedChange={(value) => {
-                    if (!activeDoc) return
-                    dispatch({
-                      type: "set-document-metadata",
-                      metadata: {
-                        ...(activeDoc.metadata ?? {}),
-                        imageAssetGenerator: {
-                          ...(activeDoc.metadata?.imageAssetGenerator ?? {}),
-                          enabled: value === true,
-                        },
-                      },
-                    })
-                  }}
-                >
-                  Image Assets
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  disabled={!activeDoc}
-                  onSelect={() => {
-                    if (!activeDoc) return
-                    dispatchPhotoshopEvent("ps-image-assets-generator-run", { docId: activeDoc.id })
-                  }}
-                >
-                  Run Image Assets Now
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={!activeDoc}
-                  onSelect={() => {
-                    if (!activeDoc) return
-                    const picker = (window as typeof window & {
-                      showDirectoryPicker?: () => Promise<{ name?: string }>
-                    }).showDirectoryPicker
-                    if (!picker) {
-                      toast.error("Folder auto-export requires File System Access support.")
-                      return
-                    }
-                    void (async () => {
-                      try {
-                        const directoryHandle = await picker()
-                        dispatchPhotoshopEvent("ps-image-assets-generator-directory", { docId: activeDoc.id, directoryHandle })
-                        dispatch({
-                          type: "set-document-metadata",
-                          metadata: {
-                            ...(activeDoc.metadata ?? {}),
-                            imageAssetGenerator: {
-                              ...(activeDoc.metadata?.imageAssetGenerator ?? {}),
-                              outputFolderName: directoryHandle.name ?? "Selected folder",
-                            },
-                          },
-                        })
-                      } catch (err) {
-                        if (!(err instanceof DOMException && err.name === "AbortError")) {
-                          toast.error(err instanceof Error ? err.message : "Could not connect folder")
-                        }
-                      }
-                    })()
-                  }}
-                >
-                  Choose Output Folder…
-                  {activeDoc?.metadata?.imageAssetGenerator?.outputFolderName ? (
-                    <DropdownMenuShortcut>{activeDoc.metadata.imageAssetGenerator.outputFolderName}</DropdownMenuShortcut>
-                  ) : null}
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuCheckboxItem
-                  checked={activeDoc?.metadata?.imageAssetGenerator?.autoExportOnSave !== false}
-                  onCheckedChange={(value) => {
-                    if (!activeDoc) return
-                    dispatch({
-                      type: "set-document-metadata",
-                      metadata: {
-                        ...(activeDoc.metadata ?? {}),
-                        imageAssetGenerator: {
-                          ...(activeDoc.metadata?.imageAssetGenerator ?? {}),
-                          autoExportOnSave: value === true,
-                        },
-                      },
-                    })
-                  }}
-                >
-                  Auto-export on save
-                </DropdownMenuCheckboxItem>
-                <DropdownMenuCheckboxItem
-                  checked={activeDoc?.metadata?.imageAssetGenerator?.autoExportOnChange === true}
-                  onCheckedChange={(value) => {
-                    if (!activeDoc) return
-                    dispatch({
-                      type: "set-document-metadata",
-                      metadata: {
-                        ...(activeDoc.metadata ?? {}),
-                        imageAssetGenerator: {
-                          ...(activeDoc.metadata?.imageAssetGenerator ?? {}),
-                          autoExportOnChange: value === true,
-                        },
-                      },
-                    })
-                  }}
-                >
-                  Auto-export on change
-                </DropdownMenuCheckboxItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuItem onSelect={() => setBatchProcessingOpen(true)}>
-              Batch Processing...
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setImageProcessorOpen(true)}>
-              Image Processor...
-            </DropdownMenuItem>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Export As</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem
-                  onSelect={() => {
-                    setExportAsInitial(undefined)
-                    setExportAsOpen(true)
-                  }}
-                >
-                  Export As Dialog…
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => {
-                    setBatchExportInitial(undefined)
-                    setBatchExportOpen(true)
-                  }}
-                  disabled={!activeDoc}
-                >
-                  Batch Export...
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => {
-                    setBatchExportInitial({ scope: "slices" })
-                    setBatchExportOpen(true)
-                  }}
-                  disabled={!activeDoc}
-                >
-                  Export Slices...
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => {
-                    setBatchExportInitial({ scope: "visible-layers" })
-                    setBatchExportOpen(true)
-                  }}
-                  disabled={!activeDoc}
-                >
-                  Export Layers to Files...
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => {
-                    setBatchExportInitial({ scope: "sprite-layers" })
-                    setBatchExportOpen(true)
-                  }}
-                  disabled={!activeDoc}
-                >
-                  Sprite Sheet...
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => exportImage("png")}>PNG</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => exportImage("jpg")}>JPG</DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => setFileInfoOpen(true)}>File Info…</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => void revealDocumentSourceFromMenu()} disabled={!activeDoc}>
-              Reveal Source…
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => openAdvancedTab("formats")}>
-              Advanced Import / Metadata...
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => openAdvancedTab("variables")} disabled={!activeDoc}>
-              Data Sets / Variables...
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setPreflightOpen(true)} disabled={!activeDoc}>Preflight Check...</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setDocumentReportOpen(true)} disabled={!activeDoc}>Round-Trip Inspector...</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => openAdvancedTab("print")} disabled={!activeDoc}>
-              Print Setup / Proof...
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => {
-                if (!activeDoc) return
-                const flat = makeCanvas(activeDoc.width, activeDoc.height)
-                const fctx = flat.getContext("2d")!
-                fctx.fillStyle = activeDoc.background
-                fctx.fillRect(0, 0, activeDoc.width, activeDoc.height)
-                for (const l of activeDoc.layers) {
-                  if (!l.visible || typeof l.canvas.getContext !== "function") continue
-                  compositeLayer(fctx, l.canvas, l.blendMode, l.opacity, l.fillOpacity ?? 1)
-                }
-                const win = window.open("about:blank", "_blank")
-                if (!win) return
-                // Even though the popup inherits about:blank as its origin,
-                // we still null out the opener to defend against future
-                // browsers that allow same-origin opener access from a
-                // sandboxed about:blank document.
-                try { (win as Window & { opener: Window | null }).opener = null } catch {}
-                win.document.title = `Print — ${activeDoc.name}`
-                const img = win.document.createElement("img")
-                img.src = flat.toDataURL("image/png")
-                img.style.maxWidth = "100%"
-                win.document.body.style.margin = "0"
-                win.document.body.style.display = "flex"
-                win.document.body.style.justifyContent = "center"
-                win.document.body.style.alignItems = "center"
-                win.document.body.style.minHeight = "100vh"
-                win.document.body.style.background = "#fff"
-                win.document.body.appendChild(img)
-                img.onload = () => { win.print() }
-              }}
+        <FileMenu {...{
+          menuClass, onOpenNew, openImageOrPsd, openProject, recentDocuments, openRecent, setRecentManagerOpen, clearRecentDocuments,
+          activeDoc, requestCloseDocument, duplicateDocument, closeOtherDocumentsFromMenu, reopenClosedDocumentFromMenu, exportImage,
+          saveProject, savePsd, savePsb, placeEmbedded, setContactSheetOpen, setWorkflowPack, openAdvancedTab, setGapWorkflow,
+          setPhotomergeOpen, setPdfImportOpen, setCropAndStraightenOpen, dispatch, setBatchProcessingOpen, setImageProcessorOpen,
+          setExportAsInitial, setExportAsOpen, setBatchExportInitial, setBatchExportOpen, setFileInfoOpen,
+          revealDocumentSourceFromMenu, setPreflightOpen, setDocumentReportOpen,
+        }} />
 
-            >
-              Print… <DropdownMenuShortcut>⌘P</DropdownMenuShortcut>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        {/* Edit */}
         <DropdownMenu>
           <DropdownMenuTrigger className={menuClass}>Edit</DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-72">
@@ -2412,7 +2028,6 @@ export function MenuBar({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* Image */}
         <DropdownMenu>
           <DropdownMenuTrigger className={menuClass}>Image</DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-72">
@@ -2429,16 +2044,16 @@ export function MenuBar({
                   {activeDoc?.colorMode === "CMYK" ? "✓ " : ""}CMYK Color
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => setColorModeTarget("Duotone")}>
-                  {activeDoc?.colorMode === "Duotone" ? "âœ“ " : ""}Duotone...
+                  {activeDoc?.colorMode === "Duotone" ? "✓ " : ""}Duotone...
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => setColorModeTarget("Indexed")}>
-                  {activeDoc?.colorMode === "Indexed" ? "âœ“ " : ""}Indexed Color...
+                  {activeDoc?.colorMode === "Indexed" ? "✓ " : ""}Indexed Color...
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => setColorMode("Multichannel")}>
-                  {activeDoc?.colorMode === "Multichannel" ? "âœ“ " : ""}Multichannel...
+                  {activeDoc?.colorMode === "Multichannel" ? "✓ " : ""}Multichannel...
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => setColorModeTarget("Bitmap")}>
-                  {activeDoc?.colorMode === "Bitmap" ? "âœ“ " : ""}Bitmap / Halftone...
+                  {activeDoc?.colorMode === "Bitmap" ? "✓ " : ""}Bitmap / Halftone...
                 </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => setColorModeTarget("ColorTable")}>
                   Color Table...
@@ -2674,7 +2289,6 @@ export function MenuBar({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* Layer */}
         <DropdownMenu>
           <DropdownMenuTrigger className={menuClass}>Layer</DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="max-h-[calc(100vh-56px)] w-72 overflow-y-auto">
@@ -2954,7 +2568,6 @@ export function MenuBar({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* Type */}
         <DropdownMenu>
           <DropdownMenuTrigger className={menuClass}>Type</DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-64">
@@ -3088,7 +2701,6 @@ export function MenuBar({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* Select */}
         <SelectMenu
           menuClass={menuClass}
           activeDoc={activeDoc}
@@ -3104,7 +2716,6 @@ export function MenuBar({
           setSaveSelectionOpen={setSaveSelectionOpen}
           setLoadSelectionOpen={setLoadSelectionOpen}
         />
-        {/* Filter */}
         <FilterMenu
           menuClass={menuClass}
           activeLayer={activeLayer}
@@ -3116,7 +2727,6 @@ export function MenuBar({
           setLiquifyOpen={setLiquifyOpen}
           setPuppetWarpOpen={setPuppetWarpOpen}
         />
-        {/* View */}
         <ViewMenu
           menuClass={menuClass}
           activeDoc={activeDoc}
@@ -3141,7 +2751,6 @@ export function MenuBar({
           openAdvancedTab={openAdvancedTab}
         />
 
-        {/* Plugins */}
         <DropdownMenu>
           <DropdownMenuTrigger className={menuClass}>Plugins</DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-72">
@@ -3168,7 +2777,6 @@ export function MenuBar({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* Window */}
         <DropdownMenu>
           <DropdownMenuTrigger className={menuClass}>Window</DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-64">
@@ -3233,51 +2841,9 @@ export function MenuBar({
             <DropdownMenuItem onSelect={() => setColorLabelsOpen(true)}>
               Color Labels...
             </DropdownMenuItem>
-            {/*
-            <DropdownMenuItem>✓ Layers</DropdownMenuItem>
-            <DropdownMenuItem>✓ Color</DropdownMenuItem>
-            <DropdownMenuItem>✓ Properties</DropdownMenuItem>
-            <DropdownMenuItem>✓ History</DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "selection-studio")}>Selection Studio</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "guides")}>Guides</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "adjustments")}>Adjustments</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "assets")}>Assets</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "preset-manager")}>Preset Manager</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "libraries")}>Libraries</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "glyphs")}>Glyphs</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "styles")}>Styles</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "shapes")}>Shapes</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "tool-presets")}>Tool Presets</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "clone-source")}>Clone Source</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "timeline")}>Timeline</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "animation")}>Animation</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "comments")}>Comments</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "annotations")}>Annotations</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "notes")}>Notes</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "measurement-log")}>Measurement Log</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "slices")}>Slices</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "scripting")}>Scripting</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "learn")}>Learn</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "discover")}>Discover</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setLayerCompsOpen(true)}>
-              Layer Comps…
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "layer-comps")}>
-              Layer Comps Panel
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setColorLabelsOpen(true)}>
-              Color Labels…
-            </DropdownMenuItem>
-            <DropdownMenuItem>✓ Channels</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => {
-              dispatchPhotoshopEvent("ps-switch-panel", "paths")
-            }}>Paths</DropdownMenuItem>
-            */}
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* Help */}
         <DropdownMenu>
           <DropdownMenuTrigger className={menuClass}>Help</DropdownMenuTrigger>
           <DropdownMenuContent align="start">

@@ -537,9 +537,10 @@ export function ReplaceColorDialog({
   // Rendered composite canvas (full-doc resolution) cached so we can both
   // draw the preview thumbnail and sample exact pixels.
   const composite = React.useMemo(() => (activeDoc ? compositeDocument(activeDoc) : null), [activeDoc])
+  const activeDocId = activeDoc?.id
 
   React.useEffect(() => {
-    if (!open || !activeDoc) return
+    if (!open || !activeDocId) return
     setIncludeSamples([])
     setExcludeSamples([])
     setFuzziness(40)
@@ -549,9 +550,7 @@ export function ReplaceColorDialog({
     setReplacementLightness(0)
     setResultHex("")
     setPickMode("add")
-    // Reset only when the dialog targets a new document; sample arrays are intentionally cleared, not replayed.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, activeDoc?.id])
+  }, [open, activeDocId])
 
   // Render preview with a colored overlay indicating the matched zone.
   React.useEffect(() => {

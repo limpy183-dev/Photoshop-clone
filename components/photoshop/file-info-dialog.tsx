@@ -10,7 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import type { ColorManagementSettings, DocumentMetadata, PrintSettings } from "./types"
 import {
   revealSourceInBrowser,
@@ -93,7 +93,10 @@ export function FileInfoDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
 }) {
-  const { activeDoc, dispatch, commit, documentStatuses } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
+  const documentStatuses = useEditorSelector((editor) => editor.documentStatuses)
   const [tab, setTab] = React.useState<"summary" | "metadata" | "color" | "print">("summary")
   const [metadata, setMetadata] = React.useState<DocumentMetadata>(defaultMetadata("Untitled"))
   const [keywords, setKeywords] = React.useState("")

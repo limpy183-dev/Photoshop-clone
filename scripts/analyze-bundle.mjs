@@ -15,9 +15,14 @@ import { measureRouteBundles } from "./measure-route-bundles.mjs"
 const here = dirname(fileURLToPath(import.meta.url))
 const root = resolve(here, "..")
 const chunkRoot = resolve(root, ".next/static/chunks")
-const reportPath = resolve(root, "artifacts/bundle-report.json")
+const reportPath = process.env.BUNDLE_REPORT_PATH
+  ? resolve(root, process.env.BUNDLE_REPORT_PATH)
+  : resolve(root, "artifacts/bundle-report.json")
+const generatedAt = process.env.BUNDLE_REPORT_GENERATED_AT ?? "1970-01-01T00:00:00.000Z"
+const baselinePath = resolve(root, "artifacts/bundle-baseline.json")
 const maxChunkBytes = Number(process.env.BUNDLE_MAX_CHUNK_BYTES ?? 1_500_000)
 const maxInitialJsBytes = Number(process.env.BUNDLE_MAX_INITIAL_JS_BYTES ?? 5_000_000)
+const maxAppOwnedStartupChunkBytes = Number(process.env.BUNDLE_MAX_APP_OWNED_STARTUP_CHUNK_BYTES ?? 819_200)
 const routeBudgets = {
   "/": {
     maxDecodedBytes: Number(process.env.BUNDLE_HOME_MAX_DECODED_BYTES ?? 1_500_000),
@@ -25,7 +30,7 @@ const routeBudgets = {
     maxRequests: Number(process.env.BUNDLE_HOME_MAX_REQUESTS ?? 18),
   },
   "/editor": {
-    maxDecodedBytes: Number(process.env.BUNDLE_EDITOR_MAX_DECODED_BYTES ?? 3_000_000),
+    maxDecodedBytes: Number(process.env.BUNDLE_EDITOR_MAX_DECODED_BYTES ?? 1_572_864),
     maxEncodedBytes: Number(process.env.BUNDLE_EDITOR_MAX_ENCODED_BYTES ?? 900_000),
     maxRequests: Number(process.env.BUNDLE_EDITOR_MAX_REQUESTS ?? 24),
   },
@@ -245,6 +250,30 @@ function readWebpackStatsOwnership(chunks) {
   return new Map()
 }
 
+function chunkFileFromResourceUrl(value) {
+  try {
+    const path = new URL(value).pathname
+    if (!path.endsWith(".js") || !path.startsWith("/_next/static/chunks/")) return null
+    return path.replace(/^\/_next\//, ".next/")
+  } catch {
+    return null
+  }
+}
+
+function hasAppOwnedModule(owner) {
+  if (!owner) return false
+  const samples = [
+    ...(owner.moduleSamples ?? []),
+    ...(owner.sourcemapModuleSamples ?? []),
+    ...(owner.webpackStatsModuleSamples ?? []),
+  ]
+  return samples.some((module) =>
+    module.startsWith("app/") ||
+    module.startsWith("components/") ||
+    module.startsWith("lib/"),
+  )
+}
+
 if (!existsSync(chunkRoot)) {
   console.error("Bundle analysis requires a completed Next build: .next/static/chunks was not found.")
   process.exit(2)
@@ -292,6 +321,7 @@ const chunkOwnership = largest.map((chunk) => {
     ],
   }
 })
+const ownershipByFile = new Map(chunkOwnership.map((entry) => [entry.file, entry]))
 const routeMetrics = await measureRouteBundles({ root })
 const routeViolations = []
 for (const [route, metrics] of Object.entries(routeMetrics)) {
@@ -320,11 +350,91 @@ for (const [route, metrics] of Object.entries(routeMetrics)) {
   }
 }
 
+const appOwnedStartupChunks = []
+for (const [route, metrics] of Object.entries(routeMetrics)) {
+  const seen = new Set()
+  for (const resource of metrics.resources ?? []) {
+    const file = chunkFileFromResourceUrl(resource.name)
+    if (!file || seen.has(file)) continue
+    seen.add(file)
+    const owner = ownershipByFile.get(file)
+    if (!hasAppOwnedModule(owner)) continue
+    appOwnedStartupChunks.push({
+      route,
+      file,
+      decodedBodyBytes: resource.decodedBodySize,
+      encodedBodyBytes: resource.encodedBodySize,
+      transferBytes: resource.transferSize,
+      owner,
+    })
+  }
+}
+const appOwnedStartupViolations = appOwnedStartupChunks
+  .filter((chunk) => chunk.decodedBodyBytes > maxAppOwnedStartupChunkBytes)
+  .map((chunk) => ({
+    rule: "max-app-owned-startup-chunk",
+    route: chunk.route,
+    file: chunk.file,
+    decodedBodyBytes: chunk.decodedBodyBytes,
+    budget: maxAppOwnedStartupChunkBytes,
+    owner: chunk.owner,
+  }))
+
+const appOwnedStartupChunkReasons = appOwnedStartupChunks
+  .slice()
+  .sort((a, b) => b.decodedBodyBytes - a.decodedBodyBytes)
+  .map((chunk) => ({
+    route: chunk.route,
+    file: chunk.file,
+    decodedBodyBytes: chunk.decodedBodyBytes,
+    budget: maxAppOwnedStartupChunkBytes,
+    appOwnedModuleSamples: [
+      ...(chunk.owner?.moduleSamples ?? []),
+      ...(chunk.owner?.sourcemapModuleSamples ?? []),
+      ...(chunk.owner?.webpackStatsModuleSamples ?? []),
+    ]
+      .filter((module) =>
+        module.startsWith("app/") ||
+        module.startsWith("components/") ||
+        module.startsWith("lib/"),
+      )
+      .slice(0, 16),
+    ownershipSources: chunk.owner?.ownershipSources ?? [],
+    reviewGuidance: chunk.decodedBodyBytes > maxAppOwnedStartupChunkBytes
+      ? "Required: split or justify this app-owned startup chunk before merging."
+      : "Review if new workflow-specific modules appear in this startup chunk.",
+  }))
+
+let baseline = { routes: {}, ownerModules: [] }
+if (existsSync(baselinePath)) {
+  try {
+    baseline = JSON.parse(readFileSync(baselinePath, "utf8"))
+  } catch {
+    baseline = { routes: {}, ownerModules: [] }
+  }
+}
+const routeDeltas = Object.fromEntries(Object.entries(routeMetrics).map(([route, metrics]) => {
+  const previous = baseline.routes?.[route] ?? {}
+  return [route, {
+    encodedBodyBytes: metrics.encodedBodyBytes - Number(previous.encodedBodyBytes ?? 0),
+    decodedBodyBytes: metrics.decodedBodyBytes - Number(previous.decodedBodyBytes ?? 0),
+    requestCount: metrics.requestCount - Number(previous.requestCount ?? 0),
+  }]
+}))
+const currentOwnerModules = new Set(
+  appOwnedStartupChunkReasons.flatMap((reason) => reason.appOwnedModuleSamples),
+)
+const baselineOwnerModules = new Set(baseline.ownerModules ?? [])
+const newOwnerModules = [...currentOwnerModules]
+  .filter((module) => !baselineOwnerModules.has(module))
+  .sort()
+
 const report = {
-  generatedAt: new Date().toISOString(),
+  generatedAt,
   budgets: {
     maxChunkBytes,
     maxInitialJsBytes,
+    maxAppOwnedStartupChunkBytes,
     routes: routeBudgets,
   },
   totals: {
@@ -335,6 +445,10 @@ const report = {
   largest,
   decoderChunks,
   chunkOwnership,
+  appOwnedStartupChunks,
+  appOwnedStartupChunkReasons,
+  routeDeltas,
+  newOwnerModules,
   routeMetrics,
   ownershipLimitations: [
     "Next client-reference manifests expose route and client-module ownership for route chunks.",
@@ -351,6 +465,7 @@ const report = {
       ? [{ rule: "max-initial-js", bytes: initialBytes, budget: maxInitialJsBytes }]
       : []),
     ...routeViolations,
+    ...appOwnedStartupViolations,
   ],
 }
 
@@ -359,13 +474,27 @@ writeFileSync(reportPath, JSON.stringify(report, null, 2) + "\n")
 
 console.log(`Bundle analysis: ${chunks.length} client chunks, ${(initialBytes / 1024).toFixed(1)} KiB initial JS`)
 for (const [route, metrics] of Object.entries(routeMetrics)) {
+  const delta = routeDeltas[route]
   console.log(
     `  ${route.padEnd(14)} ${(metrics.encodedBodyBytes / 1024).toFixed(1)} KiB encoded, ` +
-    `${(metrics.decodedBodyBytes / 1024).toFixed(1)} KiB decoded, ${metrics.requestCount} requests`,
+    `${(metrics.decodedBodyBytes / 1024).toFixed(1)} KiB decoded, ${metrics.requestCount} requests ` +
+    `(delta ${(delta.decodedBodyBytes / 1024).toFixed(1)} KiB, ${delta.requestCount >= 0 ? "+" : ""}${delta.requestCount} requests)`,
   )
+}
+if (newOwnerModules.length) {
+  console.log(`New app-owned startup modules: ${newOwnerModules.join(", ")}`)
 }
 for (const chunk of largest.slice(0, 10)) {
   console.log(`  ${(chunk.bytes / 1024).toFixed(1).padStart(8)} KiB  ${chunk.file}`)
+}
+const largestAppOwnedStartupChunk = appOwnedStartupChunks
+  .slice()
+  .sort((a, b) => b.decodedBodyBytes - a.decodedBodyBytes)[0]
+if (largestAppOwnedStartupChunk) {
+  console.log(
+    `Largest app-owned startup chunk: ${(largestAppOwnedStartupChunk.decodedBodyBytes / 1024).toFixed(1)} KiB ` +
+    `${largestAppOwnedStartupChunk.file} on ${largestAppOwnedStartupChunk.route}`,
+  )
 }
 console.log(`Report: ${relative(root, reportPath).split("\\").join("/")}`)
 

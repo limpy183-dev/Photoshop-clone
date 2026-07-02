@@ -13,7 +13,7 @@ import {
   DUOTONE_PRESETS,
   sampleDuotoneCurve,
 } from "./color-mode-conversion"
-import { useEditor } from "./editor-context"
+import { useActiveDocument, useActiveLayer, useEditorCommands } from "./editor-context"
 import { downloadBlob, renderDocumentComposite } from "./document-io"
 import type { DocumentModeSettings, Layer } from "./types"
 
@@ -97,7 +97,9 @@ export function ColorModeDialog({
   target: ColorModeDialogTarget | null
   onOpenChange: (open: boolean) => void
 }) {
-  const { activeDoc, activeLayer, dispatch, commit, requestRender } = useEditor()
+  const activeDoc = useActiveDocument()
+  const activeLayer = useActiveLayer()
+  const { dispatch, commit, requestRender } = useEditorCommands()
   const open = target !== null
   const mode = target === "ColorTable" ? "Indexed" : target
   const isColorTable = target === "ColorTable"
@@ -614,7 +616,7 @@ function DuotoneCurveEditor({ curve, onChange }: { curve: number[]; onChange: (n
 }
 
 function ModePreview({ settings }: { settings: DocumentModeSettings }) {
-  const { activeDoc } = useEditor()
+  const activeDoc = useActiveDocument()
   const beforeRef = React.useRef<HTMLCanvasElement>(null)
   const afterRef = React.useRef<HTMLCanvasElement>(null)
   React.useEffect(() => {

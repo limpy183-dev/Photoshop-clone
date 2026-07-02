@@ -1,6 +1,5 @@
 import type {
   DocumentMetadata,
-  DocumentModeSettings,
   Layer,
   PluginDescriptor,
   PrintSettings,
@@ -11,19 +10,23 @@ import type {
   Vec3,
   VariableBinding,
 } from "./types"
-import {
-  applyIccTransformToImageData,
-  buildGamutWarningMaskImageData,
-  convertImageDataForExport,
-  softProofImageData,
-  transformRgbColor,
-} from "./color-pipeline"
-import { buildColorSeparationModel, composeSeparationProofView, type SeparationProcess } from "./color-channel-ops"
-import { convertImageDataToDocumentMode } from "./color-mode-conversion"
 import { decodeAdvancedRasterBufferAsync, inspectExrHeader } from "./raster-codecs"
 import { assertCanvasSize, assertFileSize, MAX_RASTER_FILE_BYTES } from "./canvas-limits"
 import { hexToRgb } from "./color-utils"
 import { uid } from "./uid"
+
+export {
+  applyModeAndColorManagement,
+  convertCanvasToDocumentMode,
+} from "./document-color-management"
+export {
+  ADVANCED_3D_IMPORT_LIMITS,
+  createPrimitiveThreeDScene,
+  exportSceneToDae,
+  exportSceneToObj,
+  parseDaeToScene,
+  parseObjToScene,
+} from "./three-d-scene-formats"
 
 const MB = 1024 * 1024
 
@@ -34,13 +37,6 @@ export const ADVANCED_FILE_LIMITS = {
   jsonBytes: 2 * MB,
   csvBytes: 5 * MB,
   fontBytes: 20 * MB,
-} as const
-
-export const ADVANCED_3D_IMPORT_LIMITS = {
-  textBytes: ADVANCED_FILE_LIMITS.modelTextBytes,
-  vertices: 50_000,
-  faces: 100_000,
-  numericTokens: 500_000,
 } as const
 
 export function assertAdvancedFileSize(file: File, maxBytes = ADVANCED_FILE_LIMITS.rasterBytes, label = "Advanced file") {
@@ -352,10 +348,6 @@ function _mixColor(a: { r: number; g: number; b: number }, b: { r: number; g: nu
   }
 }
 
-function luminance(r: number, g: number, b: number) {
-  return 0.299 * r + 0.587 * g + 0.114 * b
-}
-
 function vec(x = 0, y = 0, z = 0): Vec3 {
   return { x, y, z }
 }
@@ -403,78 +395,6 @@ function transformVertex(vertex: Vec3, object: ThreeDObject): Vec3 {
 
 function defaultMaterial(color = "#5ec8ff"): ThreeDMaterial {
   return { id: uid("mat"), name: "Material", color, metallic: 0, roughness: 0.45, opacity: 1 }
-}
-
-function createObject(name: string, vertices: Vec3[], faces: number[][], materialId: string): ThreeDObject {
-  return {
-    id: uid("obj"),
-    name,
-    vertices,
-    faces: faces.map((indices) => ({ indices, materialId })),
-    materialId,
-    position: vec(0, 0, 0),
-    rotation: vec(18, -28, 0),
-    scale: vec(1, 1, 1),
-    visible: true,
-  }
-}
-
-export function createPrimitiveThreeDScene(kind: "cube" | "plane" | "pyramid" | "sphere" = "cube"): ThreeDScene {
-  const material = defaultMaterial(kind === "sphere" ? "#89e38f" : kind === "pyramid" ? "#f7c46c" : "#5ec8ff")
-  let object: ThreeDObject
-  if (kind === "plane") {
-    object = createObject("Plane", [vec(-1.5, 0, -1), vec(1.5, 0, -1), vec(1.5, 0, 1), vec(-1.5, 0, 1)], [[0, 1, 2, 3]], material.id)
-  } else if (kind === "pyramid") {
-    object = createObject(
-      "Pyramid",
-      [vec(0, 1.3, 0), vec(-1, -0.8, -1), vec(1, -0.8, -1), vec(1, -0.8, 1), vec(-1, -0.8, 1)],
-      [[1, 2, 3, 4], [0, 1, 2], [0, 2, 3], [0, 3, 4], [0, 4, 1]],
-      material.id,
-    )
-  } else if (kind === "sphere") {
-    const vertices: Vec3[] = []
-    const faces: number[][] = []
-    const rows = 10
-    const cols = 18
-    for (let y = 0; y <= rows; y++) {
-      const v = y / rows
-      const phi = v * Math.PI
-      for (let x = 0; x < cols; x++) {
-        const u = x / cols
-        const theta = u * Math.PI * 2
-        vertices.push(vec(Math.sin(phi) * Math.cos(theta), Math.cos(phi), Math.sin(phi) * Math.sin(theta)))
-      }
-    }
-    for (let y = 0; y < rows; y++) {
-      for (let x = 0; x < cols; x++) {
-        const a = y * cols + x
-        const b = y * cols + ((x + 1) % cols)
-        const c = (y + 1) * cols + ((x + 1) % cols)
-        const d = (y + 1) * cols + x
-        faces.push([a, b, c, d])
-      }
-    }
-    object = createObject("Sphere", vertices, faces, material.id)
-  } else {
-    object = createObject(
-      "Cube",
-      [vec(-1, -1, -1), vec(1, -1, -1), vec(1, 1, -1), vec(-1, 1, -1), vec(-1, -1, 1), vec(1, -1, 1), vec(1, 1, 1), vec(-1, 1, 1)],
-      [[0, 1, 2, 3], [4, 7, 6, 5], [0, 4, 5, 1], [1, 5, 6, 2], [2, 6, 7, 3], [3, 7, 4, 0]],
-      material.id,
-    )
-  }
-  return {
-    objects: [object],
-    materials: [material],
-    lights: [
-      { id: uid("light"), name: "Ambient", kind: "ambient", color: "#ffffff", intensity: 0.35 },
-      { id: uid("light"), name: "Key", kind: "directional", color: "#ffffff", intensity: 0.9, direction: vec(-0.4, -0.65, -0.55) },
-    ],
-    camera: { position: vec(0, 0.2, 5), target: vec(0, 0, 0), fov: 42, focalLength: 50 },
-    renderMode: "solid-wire",
-    background: "transparent",
-    selectedObjectId: object.id,
-  }
 }
 
 function project(point: Vec3, scene: ThreeDScene, width: number, height: number) {
@@ -562,165 +482,6 @@ export function renderThreeDScene(scene: ThreeDScene, width: number, height: num
   return canvas
 }
 
-function normalizeMesh(vertices: Vec3[]) {
-  if (!vertices.length) return vertices
-  const min = vertices.reduce((acc, p) => vec(Math.min(acc.x, p.x), Math.min(acc.y, p.y), Math.min(acc.z, p.z)), vec(Infinity, Infinity, Infinity))
-  const max = vertices.reduce((acc, p) => vec(Math.max(acc.x, p.x), Math.max(acc.y, p.y), Math.max(acc.z, p.z)), vec(-Infinity, -Infinity, -Infinity))
-  const center = mul(add(min, max), 0.5)
-  const scale = 2 / Math.max(max.x - min.x, max.y - min.y, max.z - min.z, 0.01)
-  return vertices.map((p) => mul(sub(p, center), scale))
-}
-
-function advancedLimitLabel(bytes: number) {
-  return `${(bytes / MB).toFixed(0)} MB`
-}
-
-function assertAdvancedTextSize(text: string, maxBytes: number, label: string) {
-  if (text.length > maxBytes) {
-    throw new Error(`${label} is too large. Maximum file size is ${advancedLimitLabel(maxBytes)}.`)
-  }
-}
-
-function isDigitCode(code: number) {
-  return code >= 48 && code <= 57
-}
-
-function isNumericBoundary(code: number) {
-  return code <= 32 || code === 44 || code === 47 || code === 60 || code === 62
-}
-
-function startsNumericToken(text: string, index: number) {
-  const code = text.charCodeAt(index)
-  const previousIsBoundary = index === 0 || isNumericBoundary(text.charCodeAt(index - 1))
-  if (!previousIsBoundary) return false
-  if (isDigitCode(code)) return true
-  if (code !== 43 && code !== 45 && code !== 46) return false
-  return index + 1 < text.length && isDigitCode(text.charCodeAt(index + 1))
-}
-
-function countNumericTokens(text: string, format: "OBJ" | "DAE", max = ADVANCED_3D_IMPORT_LIMITS.numericTokens) {
-  let count = 0
-  for (let i = 0; i < text.length; i++) {
-    if (!startsNumericToken(text, i)) continue
-    count += 1
-    if (count > max) throw new Error(`${format} model is too complex: numeric tokens exceed ${max.toLocaleString()}.`)
-  }
-  return count
-}
-
-function assertModelCount(format: "OBJ" | "DAE", kind: "vertices" | "faces", count: number, max: number) {
-  if (count > max) throw new Error(`${format} model is too complex: ${kind} exceed ${max.toLocaleString()}.`)
-}
-
-function assertModelTextComplexity(text: string, format: "OBJ" | "DAE") {
-  assertAdvancedTextSize(text, ADVANCED_3D_IMPORT_LIMITS.textBytes, `${format} model`)
-  countNumericTokens(text, format)
-}
-
-function forEachLine(text: string, callback: (line: string) => void) {
-  let start = 0
-  for (let i = 0; i <= text.length; i++) {
-    const code = i < text.length ? text.charCodeAt(i) : 10
-    if (i < text.length && code !== 10 && code !== 13) continue
-    callback(text.slice(start, i))
-    if (code === 13 && text.charCodeAt(i + 1) === 10) i += 1
-    start = i + 1
-  }
-}
-
-export function parseObjToScene(text: string): ThreeDScene {
-  assertModelTextComplexity(text, "OBJ")
-  const vertices: Vec3[] = []
-  const faces: number[][] = []
-  forEachLine(text, (line) => {
-    const trimmed = line.trim()
-    if (trimmed.startsWith("v ")) {
-      const [, x, y, z] = trimmed.split(/\s+/)
-      assertModelCount("OBJ", "vertices", vertices.length + 1, ADVANCED_3D_IMPORT_LIMITS.vertices)
-      vertices.push(vec(Number(x) || 0, Number(y) || 0, Number(z) || 0))
-    } else if (trimmed.startsWith("f ")) {
-      const indices = trimmed.slice(2).trim().split(/\s+/).map((part) => {
-        const raw = Number(part.split("/")[0])
-        return raw < 0 ? vertices.length + raw : raw - 1
-      }).filter((index) => index >= 0 && index < vertices.length)
-      if (indices.length >= 3) {
-        assertModelCount("OBJ", "faces", faces.length + 1, ADVANCED_3D_IMPORT_LIMITS.faces)
-        faces.push(indices)
-      }
-    }
-  })
-  if (!vertices.length || !faces.length) return createPrimitiveThreeDScene("cube")
-  const scene = createPrimitiveThreeDScene("cube")
-  const material = scene.materials[0]
-  scene.objects = [createObject("OBJ Mesh", normalizeMesh(vertices), faces, material.id)]
-  scene.selectedObjectId = scene.objects[0].id
-  return scene
-}
-
-export function exportSceneToObj(scene: ThreeDScene) {
-  const lines = ["# Exported from Photoshop Web browser-native 3D subsystem"]
-  let offset = 1
-  for (const object of scene.objects) {
-    lines.push(`o ${object.name.replace(/\s+/g, "_")}`)
-    for (const vertex of object.vertices.map((v) => transformVertex(v, object))) {
-      lines.push(`v ${vertex.x.toFixed(5)} ${vertex.y.toFixed(5)} ${vertex.z.toFixed(5)}`)
-    }
-    for (const face of object.faces) {
-      lines.push(`f ${face.indices.map((index) => index + offset).join(" ")}`)
-    }
-    offset += object.vertices.length
-  }
-  return `${lines.join("\n")}\n`
-}
-
-export function parseDaeToScene(text: string): ThreeDScene {
-  assertModelTextComplexity(text, "DAE")
-  const floatMatch = text.match(/<float_array[^>]*>([\s\S]*?)<\/float_array>/i)
-  const pMatch = text.match(/<p>([\s\S]*?)<\/p>/i)
-  const floatText = floatMatch?.[1] ?? ""
-  const pText = pMatch?.[1] ?? ""
-  assertModelCount("DAE", "vertices", Math.floor(countNumericTokens(floatText, "DAE") / 3), ADVANCED_3D_IMPORT_LIMITS.vertices)
-  const floats = floatText.trim() ? floatText.trim().split(/\s+/).map(Number).filter(Number.isFinite) : []
-  const vertices: Vec3[] = []
-  for (let i = 0; i + 2 < floats.length; i += 3) vertices.push(vec(floats[i], floats[i + 1], floats[i + 2]))
-  const rawIndices = pText.trim() ? pText.trim().split(/\s+/).map(Number).filter(Number.isFinite) : []
-  const stride = rawIndices.length >= 6 && vertices.length ? Math.max(1, Math.floor(rawIndices.length / Math.max(1, Math.floor(rawIndices.length / 3)))) : 1
-  const indices = rawIndices.filter((_, index) => index % stride === 0).map((value) => value % Math.max(1, vertices.length))
-  const faces: number[][] = []
-  for (let i = 0; i + 2 < indices.length; i += 3) {
-    assertModelCount("DAE", "faces", faces.length + 1, ADVANCED_3D_IMPORT_LIMITS.faces)
-    faces.push([indices[i], indices[i + 1], indices[i + 2]])
-  }
-  if (!vertices.length || !faces.length) return createPrimitiveThreeDScene("cube")
-  const scene = createPrimitiveThreeDScene("cube")
-  const material = scene.materials[0]
-  scene.objects = [createObject("DAE Mesh", normalizeMesh(vertices), faces, material.id)]
-  scene.selectedObjectId = scene.objects[0].id
-  return scene
-}
-
-export function exportSceneToDae(scene: ThreeDScene) {
-  const vertices = scene.objects.flatMap((object) => object.vertices.map((v) => transformVertex(v, object)))
-  const faces: number[] = []
-  let offset = 0
-  for (const object of scene.objects) {
-    for (const face of object.faces) {
-      const indices = face.indices.length === 3 ? face.indices : [face.indices[0], face.indices[1], face.indices[2]]
-      faces.push(...indices.map((index) => index + offset))
-    }
-    offset += object.vertices.length
-  }
-  return `<?xml version="1.0" encoding="utf-8"?>
-<COLLADA version="1.4.1" xmlns="http://www.collada.org/2005/11/COLLADASchema">
-  <asset><contributor><authoring_tool>Photoshop Web</authoring_tool></contributor><unit name="meter" meter="1"/><up_axis>Y_UP</up_axis></asset>
-  <library_geometries><geometry id="mesh" name="SceneMesh"><mesh>
-    <source id="mesh-positions"><float_array id="mesh-positions-array" count="${vertices.length * 3}">${vertices.map((v) => `${v.x.toFixed(5)} ${v.y.toFixed(5)} ${v.z.toFixed(5)}`).join(" ")}</float_array><technique_common><accessor source="#mesh-positions-array" count="${vertices.length}" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>
-    <vertices id="mesh-vertices"><input semantic="POSITION" source="#mesh-positions"/></vertices>
-    <triangles count="${Math.floor(faces.length / 3)}"><input semantic="VERTEX" source="#mesh-vertices" offset="0"/><p>${faces.join(" ")}</p></triangles>
-  </mesh></geometry></library_geometries>
-</COLLADA>`
-}
-
 export function nudgeSceneVertex(scene: ThreeDScene, objectId: string, vertexIndex: number, delta: Vec3): ThreeDScene {
   return {
     ...scene,
@@ -732,145 +493,6 @@ export function nudgeSceneVertex(scene: ThreeDScene, objectId: string, vertexInd
       }
     }),
   }
-}
-
-export function applyModeAndColorManagement(
-  source: HTMLCanvasElement,
-  doc: Pick<PsDocument, "colorMode" | "modeSettings" | "colorManagement">,
-  options: { purpose?: "preview" | "export" } = {},
-) {
-  const modeSettings = doc.modeSettings ?? { mode: doc.colorMode }
-  const color = doc.colorManagement
-  const purpose = options.purpose ?? "preview"
-  const active =
-    doc.colorMode !== "RGB" ||
-    modeSettings.mode !== "RGB" ||
-    color?.proofColors ||
-    color?.gamutWarning ||
-    !!color?.proofChannels?.length ||
-    color?.assignedProfile !== "sRGB IEC61966-2.1" ||
-    (purpose === "export" && color?.assignedProfile !== color?.workingSpace)
-  if (!active) return source
-
-  const canvas = createSubsystemCanvas(source.width, source.height)
-  const ctx = canvas.getContext("2d")!
-  ctx.drawImage(source, 0, 0)
-  const image = ctx.getImageData(0, 0, canvas.width, canvas.height)
-  const trap = modeSettings.trap?.enabled ? { width: modeSettings.trap.widthPx, strength: modeSettings.trap.strength } : null
-  if (modeSettings.mode === "Grayscale" || modeSettings.mode === "Duotone" || modeSettings.mode === "Indexed" || modeSettings.mode === "Bitmap") {
-    image.data.set(convertImageDataToDocumentMode(image, modeSettings).data)
-  }
-  for (let y = 0; y < image.height; y++) {
-    for (let x = 0; x < image.width; x++) {
-      const i = (y * image.width + x) * 4
-      if (image.data[i + 3] === 0) continue
-      let r = image.data[i]
-      let g = image.data[i + 1]
-      let b = image.data[i + 2]
-      const _lum = luminance(r, g, b)
-      const mode = modeSettings.mode
-      if (mode === "Multichannel") {
-        const channels = modeSettings.multichannel?.channels
-        r = channels?.r === false ? 0 : r
-        g = channels?.g === false ? 0 : g
-        b = channels?.b === false ? 0 : b
-      } else if (mode === "CMYK") {
-        const targetProfile = color?.workingSpace?.includes("CMYK") ? color.workingSpace : "Working CMYK"
-        const cmyk = transformRgbColor(
-          { r, g, b },
-          {
-            sourceProfile: color?.assignedProfile ?? "sRGB IEC61966-2.1",
-            targetProfile,
-            renderingIntent: color?.renderingIntent,
-            blackPointCompensation: color?.blackPointCompensation,
-          },
-        )
-        r = cmyk.rgb.r
-        g = cmyk.rgb.g
-        b = cmyk.rgb.b
-      }
-      image.data[i] = clamp(r)
-      image.data[i + 1] = clamp(g)
-      image.data[i + 2] = clamp(b)
-    }
-  }
-  if (trap) applyTrapToImageData(image, Math.round(trap.width), trap.strength)
-  let managed = image
-  if (color) {
-    if (purpose === "export") {
-      managed = convertImageDataForExport(image, color).imageData
-    } else if (color.proofColors && color.proofProfile !== "None") {
-      managed = softProofImageData(image, color)
-    } else if (color.assignedProfile && color.assignedProfile !== "sRGB IEC61966-2.1") {
-      managed = applyIccTransformToImageData(image, {
-        sourceProfile: color.assignedProfile,
-        targetProfile: "sRGB IEC61966-2.1",
-        renderingIntent: color.renderingIntent,
-        blackPointCompensation: color.blackPointCompensation,
-      })
-    }
-
-    if (purpose === "preview" && color.gamutWarning) {
-      const mask = buildGamutWarningMaskImageData(image, color)
-      for (let i = 0; i < managed.data.length; i += 4) {
-        const alpha = mask.data[i + 3] / 255
-        if (alpha <= 0) continue
-        managed.data[i] = clamp(managed.data[i] * (1 - alpha) + mask.data[i] * alpha)
-        managed.data[i + 1] = clamp(managed.data[i + 1] * (1 - alpha) + mask.data[i + 1] * alpha)
-        managed.data[i + 2] = clamp(managed.data[i + 2] * (1 - alpha) + mask.data[i + 2] * alpha)
-      }
-    }
-    if (purpose === "preview" && color.proofChannels?.length) {
-      const colorMode = String(doc.colorMode)
-      const mode: SeparationProcess = colorMode === "CMYK"
-        ? "CMYK"
-        : colorMode === "Grayscale"
-          ? "Grayscale"
-          : colorMode === "Lab"
-            ? "Lab"
-            : "RGB"
-      const visiblePlateIds = color.proofChannels.map((channel) => {
-        if (channel === "cyan") return "process_c"
-        if (channel === "magenta") return "process_m"
-        if (channel === "yellow") return "process_y"
-        if (channel === "black") return "process_k"
-        if (channel === "gray") return "process_gray"
-        return `process_${channel[0]}`
-      })
-      const model = buildColorSeparationModel(managed, {
-        mode,
-        processProfile: color.proofProfile !== "None" ? color.proofProfile : color.workingSpace,
-      })
-      managed = composeSeparationProofView(model, {
-        visiblePlateIds,
-        viewMode: color.proofPlateView ?? "composite",
-      })
-    }
-  }
-  ctx.putImageData(managed, 0, 0)
-  return canvas
-}
-
-function applyTrapToImageData(image: ImageData, width: number, strength: number) {
-  if (width <= 0 || strength <= 0) return
-  const source = new Uint8ClampedArray(image.data)
-  for (let pass = 0; pass < Math.min(4, width); pass++) {
-    for (let y = 1; y < image.height - 1; y++) {
-      for (let x = 1; x < image.width - 1; x++) {
-        const i = (y * image.width + x) * 4
-        const lum = luminance(source[i], source[i + 1], source[i + 2])
-        const right = i + 4
-        const down = i + image.width * 4
-        const edge = Math.max(Math.abs(lum - luminance(source[right], source[right + 1], source[right + 2])), Math.abs(lum - luminance(source[down], source[down + 1], source[down + 2])))
-        if (edge < 35) continue
-        for (let k = 0; k < 3; k++) image.data[i + k] = clamp(image.data[i + k] * (1 - strength) + Math.min(source[right + k], source[down + k], source[i + k]) * strength)
-      }
-    }
-  }
-}
-
-export function convertCanvasToDocumentMode(source: HTMLCanvasElement, settings: DocumentModeSettings) {
-  return applyModeAndColorManagement(source, { colorMode: settings.mode, modeSettings: settings, colorManagement: undefined })
 }
 
 function pageSizePx(settings: PrintSettings) {

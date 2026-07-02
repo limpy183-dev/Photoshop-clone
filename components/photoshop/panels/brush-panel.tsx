@@ -3,7 +3,7 @@
 import * as React from "react"
 import { toast } from "sonner"
 import { Copy, Search, Trash2 } from "lucide-react"
-import { useEditor } from "../editor-context"
+import { useEditorCommands, useEditorStateSelector } from "../editor-context"
 import { Slider } from "@/components/ui/slider"
 import {
   Select,
@@ -184,7 +184,12 @@ export type NormalizedBrushImport =
   | { kind: "single"; brush: Partial<BrushSettings>; preset: BrushPreset }
 
 export function BrushPanel() {
-  const { brush, brushPresets, dispatch, foreground, background, symmetry } = useEditor()
+  const brush = useEditorStateSelector((state) => state.brush)
+  const brushPresets = useEditorStateSelector((state) => state.brushPresets)
+  const foreground = useEditorStateSelector((state) => state.foreground)
+  const background = useEditorStateSelector((state) => state.background)
+  const symmetry = useEditorStateSelector((state) => state.symmetry)
+  const { dispatch } = useEditorCommands()
   const [presetName, setPresetName] = React.useState("Custom Brush")
   const [folder, setFolder] = React.useState("User")
   const [folderFilter, setFolderFilter] = React.useState("All")

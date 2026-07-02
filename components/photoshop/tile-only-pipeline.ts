@@ -8,14 +8,12 @@ import { planTileGrid } from "./performance-engine"
 import { smartFilterMaskAmountAt, smartFilterMaskToImageData } from "./smart-filter-masks"
 import type { BlendMode, Layer, LayerKind, PsDocument, ToolId } from "./types"
 import { rasterizeVectorMaskForWebGL } from "./webgl-compositor"
-
 export interface TileOnlyTile {
   key: string
   col: number
   row: number
   rect: TileCanvasRect
 }
-
 export interface TileOnlyOperation {
   kind:
     | "paint"
@@ -37,7 +35,6 @@ export interface TileOnlyOperation {
   radius?: number
   sourceBounds?: DirtyRect
 }
-
 export interface TileOnlyEditPlan {
   strategy: "tile-local" | "unsupported"
   layerId: string
@@ -50,20 +47,17 @@ export interface TileOnlyEditPlan {
   reasons: string[]
   unsupportedReasons: string[]
 }
-
 export interface TileOnlyEditInput {
   documentWidth: number
   documentHeight: number
   tileSize?: number
   operation: TileOnlyOperation
 }
-
 export interface TileOnlyFilterPlan extends TileOnlyEditPlan {
   filterId: string
   readHalo: number
   workerPreferred: boolean
 }
-
 export interface TileOnlyFilterInput {
   documentWidth: number
   documentHeight: number
@@ -73,7 +67,6 @@ export interface TileOnlyFilterInput {
   params?: Record<string, number | string | boolean>
   bounds?: DirtyRect
 }
-
 export interface TileOnlySelectionInput {
   documentWidth: number
   documentHeight: number
@@ -94,7 +87,6 @@ export interface TileOnlySelectionInput {
   tolerance?: number
   feather?: number
 }
-
 export interface TileOnlySelectionPlan {
   strategy: "tile-local"
   selectionStorage: "tile-mask"
@@ -105,91 +97,15 @@ export interface TileOnlySelectionPlan {
   materializesFullDocument: false
   reasons: string[]
 }
-
 export interface TileOnlyExportLayerDescriptor {
   id: string
   kind?: LayerKind
   visible?: boolean
 }
-
-export interface TileOnlyExportInput {
-  documentWidth: number
-  documentHeight: number
-  tileSize?: number
-  format: string
-  scale?: number
-  layers: readonly TileOnlyExportLayerDescriptor[]
-}
-
-export interface TileOnlyExportPlan {
-  mode: "tile-stream" | "single-canvas"
-  encoder: "tile-sequence" | "browser-canvas"
-  materializesFullDocument: boolean
-  outputWidth: number
-  outputHeight: number
-  tileSize: number
-  tileColumns: number
-  tileRows: number
-  tileCount: number
-  tiles: TileOnlyTile[]
-  unsupportedLayerIds: string[]
-  warnings: string[]
-}
-
-export type TileOnlyCapabilityStatus = "safe" | "approximate" | "blocked"
-
-export interface TileOnlyCapabilityRow {
-  id: string
-  label: string
-  status: TileOnlyCapabilityStatus
-  detail: string
-  tilesInScope?: number
-  mitigation?: string
-}
-
-export interface TileOnlyCapabilityDashboardInput {
-  documentWidth: number
-  documentHeight: number
-  tileSize?: number
-  viewport?: DirtyRect
-  explicitTileOnly?: boolean
-  canvasBudgetPixels?: number
-  format?: string
-  scale?: number
-  layers: readonly TileOnlyExportLayerDescriptor[]
-  colorMode?: string
-  bitDepth?: number
-  quickMask?: boolean
-  filterPreviewCount?: number
-}
-
-export interface TileOnlyCapabilityDashboard {
-  summary: string
-  documentMegapixels: number
-  tileSize: number
-  tileColumns: number
-  tileRows: number
-  tileCount: number
-  safeCount: number
-  approximateCount: number
-  blockedCount: number
-  rows: TileOnlyCapabilityRow[]
-  unflushedPaths: readonly TileOnlyUnflushedPath[]
-}
-
-export interface TileOnlyExportDecision {
-  mode: "tile-sequence" | "full-canvas-fallback"
-  status: TileOnlyCapabilityStatus
-  label: string
-  actionLabel: string
-  detail: string
-}
-
 export interface ComposeDocumentTileOptions {
   transparent?: boolean
   matte?: string
 }
-
 export interface TileOnlyDefaultCompositorInput {
   documentWidth: number
   documentHeight: number
@@ -207,7 +123,6 @@ export interface TileOnlyDefaultCompositorInput {
   filterPreviewCount?: number
   canvasBudgetPixels?: number
 }
-
 export interface TileOnlyDefaultCompositorPlan {
   strategy: "tile-local" | "fallback-full"
   viewportPlan: TileOnlyViewportComposePlan
@@ -215,18 +130,15 @@ export interface TileOnlyDefaultCompositorPlan {
   unsupportedLayerIds: string[]
   reasons: string[]
 }
-
 export interface TileOnlyViewportRenderedTile extends TileOnlyViewportTile {
   canvas: HTMLCanvasElement
 }
-
 export interface TileOnlyViewportRenderResult {
   viewport: DirtyRect
   viewportUnion: DirtyRect
   tiles: TileOnlyViewportRenderedTile[]
   materializesFullDocument: false
 }
-
 export interface TileOnlyInteractiveToolInput {
   documentWidth: number
   documentHeight: number
@@ -238,15 +150,12 @@ export interface TileOnlyInteractiveToolInput {
   sourceBounds?: DirtyRect
   sampleAllLayers?: boolean
 }
-
 const DEFAULT_TILE_SIZE = 512
-
 function positiveInt(value: unknown, fallback: number) {
   const next = typeof value === "number" ? value : Number(value)
   if (!Number.isFinite(next)) return fallback
   return Math.max(1, Math.round(next))
 }
-
 function normalizeRect(rect: DirtyRect, width: number, height: number): DirtyRect {
   const x = Math.floor(rect.x)
   const y = Math.floor(rect.y)
@@ -254,12 +163,10 @@ function normalizeRect(rect: DirtyRect, width: number, height: number): DirtyRec
   const h = Math.ceil(rect.h)
   return intersectDirtyRect({ x, y, w, h }, { x: 0, y: 0, w: width, h: height })
 }
-
 function inflateRect(rect: DirtyRect, radius: number, width: number, height: number): DirtyRect {
   const halo = Math.max(0, Math.ceil(radius))
   return normalizeRect({ x: rect.x - halo, y: rect.y - halo, w: rect.w + halo * 2, h: rect.h + halo * 2 }, width, height)
 }
-
 function tileRect(col: number, row: number, width: number, height: number, tileSize: number): TileCanvasRect {
   const x = col * tileSize
   const y = row * tileSize
@@ -270,7 +177,6 @@ function tileRect(col: number, row: number, width: number, height: number, tileS
     h: Math.max(0, Math.min(tileSize, height - y)),
   }
 }
-
 function tilesForRect(rect: DirtyRect, width: number, height: number, tileSizeInput?: number): TileOnlyTile[] {
   const tileSize = positiveInt(tileSizeInput, DEFAULT_TILE_SIZE)
   const clipped = normalizeRect(rect, width, height)
@@ -288,13 +194,11 @@ function tilesForRect(rect: DirtyRect, width: number, height: number, tileSizeIn
   }
   return out
 }
-
 function uniqueTiles(tiles: readonly TileOnlyTile[]) {
   const byKey = new Map<string, TileOnlyTile>()
   for (const tile of tiles) byKey.set(tile.key, tile)
   return [...byKey.values()].sort((a, b) => a.row - b.row || a.col - b.col)
 }
-
 function readTilesForOutputTiles(
   writeTiles: readonly TileOnlyTile[],
   halo: number,
@@ -305,7 +209,6 @@ function readTilesForOutputTiles(
   if (halo <= 0) return [...writeTiles]
   return uniqueTiles(writeTiles.flatMap((tile) => tilesForRect(inflateRect(tile.rect, halo, width, height), width, height, tileSize)))
 }
-
 function operationHalo(operation: TileOnlyOperation) {
   const explicit = Number(operation.radius)
   if (Number.isFinite(explicit) && explicit > 0) return Math.ceil(explicit)
@@ -321,7 +224,6 @@ function operationHalo(operation: TileOnlyOperation) {
       return 0
   }
 }
-
 export function planTileOnlyEdit(input: TileOnlyEditInput): TileOnlyEditPlan {
   const width = positiveInt(input.documentWidth, 1)
   const height = positiveInt(input.documentHeight, 1)
@@ -350,7 +252,6 @@ export function planTileOnlyEdit(input: TileOnlyEditInput): TileOnlyEditPlan {
     unsupportedReasons,
   }
 }
-
 export function planTileOnlyFilter(input: TileOnlyFilterInput): TileOnlyFilterPlan {
   const width = positiveInt(input.documentWidth, 1)
   const height = positiveInt(input.documentHeight, 1)
@@ -377,7 +278,6 @@ export function planTileOnlyFilter(input: TileOnlyFilterInput): TileOnlyFilterPl
     unsupportedReasons: [],
   }
 }
-
 export function planTileOnlySelection(input: TileOnlySelectionInput): TileOnlySelectionPlan {
   const width = positiveInt(input.documentWidth, 1)
   const height = positiveInt(input.documentHeight, 1)
@@ -400,7 +300,6 @@ export function planTileOnlySelection(input: TileOnlySelectionInput): TileOnlySe
     ],
   }
 }
-
 export function supportsTileOnlyLayer(layer: Pick<Layer, "kind" | "visible" | "canvas"> | TileOnlyExportLayerDescriptor) {
   if ("visible" in layer && layer.visible === false) return true
   const kind = layer.kind ?? "raster"
@@ -417,14 +316,12 @@ export function supportsTileOnlyLayer(layer: Pick<Layer, "kind" | "visible" | "c
     "video",
   ].includes(kind)
 }
-
 function makeCanvas(width: number, height: number) {
   const canvas = document.createElement("canvas")
   canvas.width = Math.max(1, Math.round(width))
   canvas.height = Math.max(1, Math.round(height))
   return canvas
 }
-
 function cropCanvas(source: HTMLCanvasElement | null | undefined, rect: TileCanvasRect) {
   if (!source || typeof source.getContext !== "function") return null
   const canvas = makeCanvas(rect.w, rect.h)
@@ -434,13 +331,11 @@ function cropCanvas(source: HTMLCanvasElement | null | undefined, rect: TileCanv
   ctx.drawImage(source, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h)
   return canvas
 }
-
 function imageDataToCanvas(image: ImageData) {
   const canvas = makeCanvas(image.width, image.height)
   canvas.getContext("2d")?.putImageData(image, 0, 0)
   return canvas
 }
-
 function paramsWithDefaults(filter: NonNullable<ReturnType<typeof getFilter>>, params: Record<string, number | string | boolean>) {
   const out: Record<string, number | string | boolean> = {}
   for (const param of filter.params) {
@@ -458,7 +353,6 @@ function paramsWithDefaults(filter: NonNullable<ReturnType<typeof getFilter>>, p
   }
   return out
 }
-
 function applySmartFiltersToTile(sourceTile: HTMLCanvasElement, layer: Layer, rect: TileCanvasRect) {
   const enabled = layer.smartFilters?.filter((filter) => filter.enabled) ?? []
   if (!enabled.length) return sourceTile
@@ -501,7 +395,6 @@ function applySmartFiltersToTile(sourceTile: HTMLCanvasElement, layer: Layer, re
   ctx.putImageData(current, 0, 0)
   return canvas
 }
-
 function applyMaskCanvas(tile: HTMLCanvasElement, mask: HTMLCanvasElement | null) {
   if (!mask) return tile
   const canvas = makeCanvas(tile.width, tile.height)
@@ -526,7 +419,6 @@ function applyMaskCanvas(tile: HTMLCanvasElement, mask: HTMLCanvasElement | null
   ctx.putImageData(image, 0, 0)
   return canvas
 }
-
 function renderLayerTileForComposite(layer: Layer, rect: TileCanvasRect, doc: Pick<PsDocument, "width" | "height">, clipMask: HTMLCanvasElement | null) {
   let tile = renderLayerContentTile(layer, rect, { width: doc.width, height: doc.height })
   tile = applySmartFiltersToTile(tile, layer, rect)
@@ -538,14 +430,12 @@ function renderLayerTileForComposite(layer: Layer, rect: TileCanvasRect, doc: Pi
   if (clipMask) tile = applyMaskCanvas(tile, clipMask)
   return tile
 }
-
 function maskAmountAt(mask: ImageData | null, x: number, y: number) {
   if (!mask || x < 0 || y < 0 || x >= mask.width || y >= mask.height) return 1
   const i = (y * mask.width + x) * 4
   const luminance = (mask.data[i] + mask.data[i + 1] + mask.data[i + 2]) / 765
   return luminance * (mask.data[i + 3] / 255)
 }
-
 function applyAdjustmentTile(
   ctx: CanvasRenderingContext2D,
   layer: Layer,
@@ -576,7 +466,6 @@ function applyAdjustmentTile(
   }
   ctx.putImageData(after, 0, 0)
 }
-
 function clippedBaseLayerCanvas(doc: Pick<PsDocument, "layers">, index: number, rect: TileCanvasRect) {
   for (let j = index - 1; j >= 0; j--) {
     const candidate = doc.layers[j]
@@ -584,7 +473,6 @@ function clippedBaseLayerCanvas(doc: Pick<PsDocument, "layers">, index: number, 
   }
   return null
 }
-
 export function composeDocumentTile(
   doc: Pick<PsDocument, "width" | "height" | "layers" | "background">,
   rectInput: TileCanvasRect & ComposeDocumentTileOptions,
@@ -610,7 +498,6 @@ export function composeDocumentTile(
   }
   return canvas
 }
-
 /* ------------------------------------------------------------------------- *
  * Tile-only viewport compositor planning
  *
@@ -637,7 +524,6 @@ export function composeDocumentTile(
  *     the tile-only path because PSD encoding inherently needs the full
  *     composite for compatibility layer 0.
  * ------------------------------------------------------------------------- */
-
 export interface TileOnlyViewportComposeInput {
   documentWidth: number
   documentHeight: number
@@ -653,7 +539,6 @@ export interface TileOnlyViewportComposeInput {
   /** Tiles that have been spilled to OPFS. */
   spilledTileKeys?: readonly string[]
 }
-
 export interface TileOnlyViewportTile extends TileOnlyTile {
   /** Tile intersects the visible viewport; must be at full res. */
   viewport: boolean
@@ -666,7 +551,6 @@ export interface TileOnlyViewportTile extends TileOnlyTile {
   /** Tile sits on OPFS and must be paged in before composite. */
   spilled: boolean
 }
-
 export interface TileOnlyViewportComposePlan {
   strategy: "tile-local" | "fallback-full"
   tileSize: number
@@ -689,7 +573,6 @@ export interface TileOnlyViewportComposePlan {
   materializesFullDocument: false
   reasons: string[]
 }
-
 /**
  * Plan the compositor's per-tile work for a single frame. For huge documents
  * this avoids ever allocating a full-document canvas: only viewport tiles are
@@ -713,7 +596,6 @@ export function planTileOnlyViewportCompose(input: TileOnlyViewportComposeInput)
   const grid = planTileGrid(width, height, tileSize)
   const viewportKeys = new Set(tilesForRect(viewport, width, height, tileSize).map((tile) => tile.key))
   const prefetchKeys = new Set(tilesForRect(prefetch, width, height, tileSize).map((tile) => tile.key))
-
   const materializeTiles: TileOnlyViewportTile[] = []
   const reuseTiles: TileOnlyViewportTile[] = []
   const pageInTiles: TileOnlyViewportTile[] = []
@@ -721,7 +603,6 @@ export function planTileOnlyViewportCompose(input: TileOnlyViewportComposeInput)
   const evictableTiles: TileOnlyViewportTile[] = []
   let dirtyUnion: DirtyRect = { x: 0, y: 0, w: 0, h: 0 }
   let viewportUnion: DirtyRect = { x: 0, y: 0, w: 0, h: 0 }
-
   for (let row = 0; row < grid.tileRows; row++) {
     for (let col = 0; col < grid.tileColumns; col++) {
       const key = `${col}:${row}`
@@ -788,7 +669,6 @@ export function planTileOnlyViewportCompose(input: TileOnlyViewportComposeInput)
     reasons,
   }
 }
-
 export function planTileOnlyDefaultCompositor(input: TileOnlyDefaultCompositorInput): TileOnlyDefaultCompositorPlan {
   const width = positiveInt(input.documentWidth, 1)
   const height = positiveInt(input.documentHeight, 1)
@@ -831,7 +711,6 @@ export function planTileOnlyDefaultCompositor(input: TileOnlyDefaultCompositorIn
     reasons: reasons.length ? reasons : ["fits-full-frame"],
   }
 }
-
 export function renderTileOnlyViewportComposite(
   doc: Pick<PsDocument, "width" | "height" | "layers" | "background">,
   plan: Pick<TileOnlyDefaultCompositorPlan, "strategy" | "viewportPlan">,
@@ -854,7 +733,6 @@ export function renderTileOnlyViewportComposite(
     materializesFullDocument: false,
   }
 }
-
 function tileOnlyOperationKindForTool(tool: ToolId): TileOnlyOperation["kind"] | null {
   switch (tool) {
     case "brush":
@@ -891,7 +769,6 @@ function tileOnlyOperationKindForTool(tool: ToolId): TileOnlyOperation["kind"] |
       return null
   }
 }
-
 export function planTileOnlyInteractiveTool(input: TileOnlyInteractiveToolInput): TileOnlyEditPlan {
   const kind = tileOnlyOperationKindForTool(input.tool)
   if (!kind) {
@@ -925,7 +802,6 @@ export function planTileOnlyInteractiveTool(input: TileOnlyInteractiveToolInput)
     },
   })
 }
-
 /* ------------------------------------------------------------------------- *
  * Paint-stroke damaged-tile tracking
  *
@@ -945,7 +821,6 @@ export function planTileOnlyInteractiveTool(input: TileOnlyInteractiveToolInput)
  *   for (const sample of strokeSamples) tracker.touchPoint(sample.x, sample.y)
  *   const plan = tracker.commit() // -> writeTiles[], readTiles[] (with halo)
  * ------------------------------------------------------------------------- */
-
 export interface DamagedTileTrackerInput {
   documentWidth: number
   documentHeight: number
@@ -953,7 +828,6 @@ export interface DamagedTileTrackerInput {
   /** Halo (px) applied to every stamp so the read set picks up neighbors. */
   toolHalo?: number
 }
-
 export interface DamagedTileCommitPlan {
   writeTiles: TileOnlyTile[]
   readTiles: TileOnlyTile[]
@@ -961,7 +835,6 @@ export interface DamagedTileCommitPlan {
   haloRect: DirtyRect
   materializesFullDocument: false
 }
-
 export interface DamagedTileTracker {
   /** Mark a paint stamp/dab. */
   touchStamp(rect: DirtyRect): void
@@ -976,7 +849,6 @@ export interface DamagedTileTracker {
   /** Build the final commit plan and reset internal state for the next stroke. */
   commit(): DamagedTileCommitPlan
 }
-
 export function createDamagedTileTracker(input: DamagedTileTrackerInput): DamagedTileTracker {
   const width = positiveInt(input.documentWidth, 1)
   const height = positiveInt(input.documentHeight, 1)
@@ -984,14 +856,12 @@ export function createDamagedTileTracker(input: DamagedTileTrackerInput): Damage
   const halo = Math.max(0, Math.ceil(Number(input.toolHalo ?? 0)))
   const damaged = new Map<string, TileOnlyTile>()
   let damageRect: DirtyRect = { x: 0, y: 0, w: 0, h: 0 }
-
   const touchStamp = (rect: DirtyRect) => {
     const clipped = normalizeRect(rect, width, height)
     if (isEmptyDirtyRect(clipped)) return
     damageRect = unionDirtyRect(damageRect, clipped)
     for (const tile of tilesForRect(clipped, width, height, tileSize)) damaged.set(tile.key, tile)
   }
-
   return {
     touchStamp,
     touchPoint(x, y, radius) {
@@ -1025,11 +895,9 @@ export function createDamagedTileTracker(input: DamagedTileTrackerInput): Damage
     },
   }
 }
-
 /* ------------------------------------------------------------------------- *
  * Smart-object source-change re-render planning
  * ------------------------------------------------------------------------- */
-
 export interface TileOnlySmartObjectUpdateInput {
   documentWidth: number
   documentHeight: number
@@ -1042,7 +910,6 @@ export interface TileOnlySmartObjectUpdateInput {
   /** Edge halo (e.g., transform anti-aliasing) added around the dirty rect. */
   edgeHalo?: number
 }
-
 export interface TileOnlySmartObjectUpdatePlan {
   strategy: "tile-local"
   layerId: string
@@ -1054,7 +921,6 @@ export interface TileOnlySmartObjectUpdatePlan {
   materializesFullDocument: false
   reasons: string[]
 }
-
 /**
  * When a smart object's source updates, only the tiles within the layer's
  * render bounds intersected with the source-dirty rect need to be re-rendered.
@@ -1086,7 +952,6 @@ export function planTileOnlySmartObjectUpdate(input: TileOnlySmartObjectUpdateIn
     ],
   }
 }
-
 /* ------------------------------------------------------------------------- *
  * 3D / video tile-store routing
  *
@@ -1104,7 +969,6 @@ export function planTileOnlySmartObjectUpdate(input: TileOnlySmartObjectUpdateIn
  * video frame is at the same canvas size as the document and is decomposed
  * into the same tile grid).
  * ------------------------------------------------------------------------- */
-
 export interface TileOnlyRayTraceRouteInput {
   documentWidth: number
   documentHeight: number
@@ -1114,7 +978,6 @@ export interface TileOnlyRayTraceRouteInput {
   /** Optional sub-region in document space; defaults to whole document. */
   bounds?: DirtyRect
 }
-
 export interface TileOnlyRayTraceRoutePlan {
   strategy: "tile-local"
   layerId: string
@@ -1124,7 +987,6 @@ export interface TileOnlyRayTraceRoutePlan {
   materializesFullDocument: false
   reasons: string[]
 }
-
 export function planTileOnlyRayTraceRoute(
   input: TileOnlyRayTraceRouteInput & { kind?: "3d" | "video" },
 ): TileOnlyRayTraceRoutePlan {
@@ -1143,12 +1005,10 @@ export function planTileOnlyRayTraceRoute(
     reasons: [`route:tile-store`, `tile-count:${writeTiles.length}`],
   }
 }
-
 export interface TileOnlySink {
   /** Called once per rendered tile. Implementations should write to the tile store. */
   onTile(tile: TileOnlyTile, image: ImageData): void | Promise<void>
 }
-
 /**
  * Wraps a TileOnlySink to be compatible with three-d-video-engine's
  * `rayTraceSceneTiled` `onTile` callback shape. Routes each engine tile to the
@@ -1168,7 +1028,6 @@ export function createTileOnlyRayTraceAdapter(
     return sink.onTile(tile, image)
   }
 }
-
 /* ------------------------------------------------------------------------- *
  * Filter tile-margin routing
  *
@@ -1178,25 +1037,21 @@ export function createTileOnlyRayTraceAdapter(
  * avoid edge seams. The resulting pairs (writeTile, readRect) feed directly
  * into `applyFilterTiled` in filter-worker.ts via its `overlap` option.
  * ------------------------------------------------------------------------- */
-
 export interface TileOnlyFilterMarginInput extends TileOnlyFilterInput {
   /** Override the auto-computed margin (e.g., raise for non-separable kernels). */
   overrideMargin?: number
 }
-
 export interface TileOnlyFilterMarginPair {
   tile: TileOnlyTile
   readRect: DirtyRect
   readTiles: TileOnlyTile[]
 }
-
 export interface TileOnlyFilterMarginPlan extends TileOnlyFilterPlan {
   /** Per-output-tile read rect inflated by the margin. */
   marginPairs: TileOnlyFilterMarginPair[]
   /** Effective margin in pixels (>= readHalo). */
   margin: number
 }
-
 export function planTileOnlyFilterMargin(input: TileOnlyFilterMarginInput): TileOnlyFilterMarginPlan {
   const base = planTileOnlyFilter(input)
   const width = positiveInt(input.documentWidth, 1)
@@ -1217,7 +1072,6 @@ export function planTileOnlyFilterMargin(input: TileOnlyFilterMarginInput): Tile
     marginPairs,
   }
 }
-
 /* ------------------------------------------------------------------------- *
  * Tiled selection mask storage
  *
@@ -1231,22 +1085,18 @@ export function planTileOnlyFilterMargin(input: TileOnlyFilterMarginInput): Tile
  * dirty tile list; lasso/polygon tools call `writeMask(rect, maskBytes)` with
  * a precomputed pixel mask; wand tools call `applyMaskPredicate` per tile.
  * ------------------------------------------------------------------------- */
-
 export type SelectionTileOp = "replace" | "add" | "subtract" | "intersect"
-
 export interface TileOnlySelectionMaskInput {
   documentWidth: number
   documentHeight: number
   tileSize?: number
 }
-
 export interface TileOnlySelectionMaskSnapshot {
   totalTiles: number
   populatedTiles: number
   bytesAllocated: number
   bounds: DirtyRect
 }
-
 export class TileOnlySelectionMask {
   readonly width: number
   readonly height: number
@@ -1255,7 +1105,6 @@ export class TileOnlySelectionMask {
   readonly tileRows: number
   private readonly tiles = new Map<string, Uint8ClampedArray>()
   private dirtyBounds: DirtyRect = { x: 0, y: 0, w: 0, h: 0 }
-
   constructor(input: TileOnlySelectionMaskInput) {
     this.width = positiveInt(input.documentWidth, 1)
     this.height = positiveInt(input.documentHeight, 1)
@@ -1264,11 +1113,9 @@ export class TileOnlySelectionMask {
     this.tileColumns = grid.tileColumns
     this.tileRows = grid.tileRows
   }
-
   private tileAt(col: number, row: number): Uint8ClampedArray | null {
     return this.tiles.get(`${col}:${row}`) ?? null
   }
-
   private ensureTile(col: number, row: number): Uint8ClampedArray {
     const key = `${col}:${row}`
     let tile = this.tiles.get(key)
@@ -1281,7 +1128,6 @@ export class TileOnlySelectionMask {
     this.tiles.set(key, tile)
     return tile
   }
-
   writeRect(rect: DirtyRect, value: number, op: SelectionTileOp = "replace"): TileOnlyTile[] {
     const clipped = normalizeRect(rect, this.width, this.height)
     if (isEmptyDirtyRect(clipped)) return []
@@ -1309,7 +1155,6 @@ export class TileOnlySelectionMask {
     this.dirtyBounds = unionDirtyRect(this.dirtyBounds, clipped)
     return touched
   }
-
   writeMask(rect: DirtyRect, mask: Uint8ClampedArray | Uint8Array, op: SelectionTileOp = "replace"): TileOnlyTile[] {
     const clipped = normalizeRect(rect, this.width, this.height)
     if (isEmptyDirtyRect(clipped)) return []
@@ -1337,7 +1182,6 @@ export class TileOnlySelectionMask {
     this.dirtyBounds = unionDirtyRect(this.dirtyBounds, clipped)
     return touched
   }
-
   readRect(rect: DirtyRect): Uint8ClampedArray | null {
     const clipped = normalizeRect(rect, this.width, this.height)
     if (isEmptyDirtyRect(clipped)) return null
@@ -1358,7 +1202,6 @@ export class TileOnlySelectionMask {
     }
     return out
   }
-
   /** Sample a single mask byte (0 if outside or unallocated). */
   sample(x: number, y: number): number {
     if (x < 0 || y < 0 || x >= this.width || y >= this.height) return 0
@@ -1371,12 +1214,10 @@ export class TileOnlySelectionMask {
     const tileW = Math.min(this.tileSize, this.width - tileX)
     return tile[(y - tileY) * tileW + (x - tileX)]
   }
-
   clear(): void {
     this.tiles.clear()
     this.dirtyBounds = { x: 0, y: 0, w: 0, h: 0 }
   }
-
   snapshot(): TileOnlySelectionMaskSnapshot {
     let bytesAllocated = 0
     for (const tile of this.tiles.values()) bytesAllocated += tile.byteLength
@@ -1388,7 +1229,6 @@ export class TileOnlySelectionMask {
     }
   }
 }
-
 /* ------------------------------------------------------------------------- *
  * Tile-by-tile export streaming
  *
@@ -1407,7 +1247,6 @@ export class TileOnlySelectionMask {
  * caller should materialize to an OPFS-backed temp buffer first via
  * `materializeTileStreamToOpfsBlob`.
  * ------------------------------------------------------------------------- */
-
 export interface TileStreamProducer {
   width: number
   height: number
@@ -1417,7 +1256,6 @@ export interface TileStreamProducer {
   /** Pulls the ImageData for one tile (row-major: row=0 col=0 then col=1 ... then row=1 col=0). */
   getTile(col: number, row: number): Promise<ImageData> | ImageData
 }
-
 /**
  * Yield one full document scanline at a time. Maintains a buffer of at most
  * `tileSize` rows (one tile row worth of pixels) and pulls tiles lazily.
@@ -1448,14 +1286,12 @@ export async function* streamTileSequenceToScanlines(
     }
   }
 }
-
 export interface TileStreamMaterializeOptions {
   /** Storage adapter (OPFS, IDB, in-memory) used to back the temp blob. */
   write: (key: string, blob: Blob) => Promise<void> | void
   /** Scratch key prefix; uniques per tile are appended. */
   keyPrefix: string
 }
-
 /**
  * Stream tiles to a sequence of small blobs in the provided storage adapter,
  * returning the manifest of stored chunks. Callers can then read the chunks
@@ -1482,7 +1318,6 @@ export async function materializeTileStreamToOpfsBlob(
   }
   return { keys, totalBytes, tileCount: keys.length }
 }
-
 /**
  * Adapter: convert a `composeDocumentTile`-style function into a
  * TileStreamProducer that streams the whole document one tile at a time. The
@@ -1518,7 +1353,6 @@ export function createComposeTileStreamProducer(
     },
   }
 }
-
 /* ------------------------------------------------------------------------- *
  * Documented remaining unflushed paths
  *
@@ -1532,297 +1366,3 @@ export function createComposeTileStreamProducer(
  *   - why:  reason a tile-local path is not yet wired
  *   - mitigation: what the runtime falls back to today
  * ------------------------------------------------------------------------- */
-
-export interface TileOnlyUnflushedPath {
-  id: string
-  area: string
-  why: string
-  mitigation: string
-}
-
-export const TILE_ONLY_UNFLUSHED_PATHS: readonly TileOnlyUnflushedPath[] = [
-  {
-    id: "webgl-compositor-full-texture",
-    area: "WebGL compositor",
-    why: "The WebGL backend still uploads one large texture per layer; the tiled-WebGL path is tracked under Item 18 in the in-scope gaps report.",
-    mitigation: "Canvas 2D tile path is used automatically when WebGL is bypassed.",
-  },
-  {
-    id: "psd-save-flatten",
-    area: "PSD save (document-io)",
-    why: "PSD compatibility layer 0 requires a full composite; that flatten is intrinsic to the format, not a tile-store limitation.",
-    mitigation: "Save streams layer 0 once and writes individual layers without re-flattening.",
-  },
-  {
-    id: "filter-context-required",
-    area: "Filters needing extra context (match-color, apply-image, calculations)",
-    why: "These filters consume multiple layers/documents and cannot accept a single ImageData tile.",
-    mitigation: "Run on the main thread with a downsampled preview when the document is too large to fit memory.",
-  },
-  {
-    id: "vector-text-rasterization",
-    area: "Text + vector rasterization",
-    why: "Text and vector layers rasterize through the platform canvas which is layer-sized, not tile-sized.",
-    mitigation: "Crop the rasterized canvas into per-tile reads at compose time; for very large layers this still allocates the full layer canvas.",
-  },
-  {
-    id: "history-snapshots",
-    area: "History store",
-    why: "Snapshots before/after each edit currently capture the whole layer canvas to compress with WebP.",
-    mitigation: "Older entries are spilled to WebP blobs and rehydrated lazily; bounded to last 12 raw entries.",
-  },
-  {
-    id: "single-canvas-export",
-    area: "Browser-canvas export fallback",
-    why: "When a layer kind is not in supportsTileOnlyLayer (e.g., unsupported group flattening), planTileOnlyExport returns mode=single-canvas.",
-    mitigation: "exportRasterTileSequenceBlob throws so the caller can switch to the browser-canvas path or remove the unsupported layer.",
-  },
-] as const
-
-export function getTileOnlyUnflushedPaths(): readonly TileOnlyUnflushedPath[] {
-  return TILE_ONLY_UNFLUSHED_PATHS
-}
-
-function statusCounts(rows: readonly TileOnlyCapabilityRow[]) {
-  return rows.reduce(
-    (counts, row) => {
-      if (row.status === "safe") counts.safeCount += 1
-      else if (row.status === "approximate") counts.approximateCount += 1
-      else counts.blockedCount += 1
-      return counts
-    },
-    { safeCount: 0, approximateCount: 0, blockedCount: 0 },
-  )
-}
-
-function sampleOperationRect(width: number, height: number, tileSize: number): DirtyRect {
-  const w = Math.max(1, Math.min(Math.ceil(tileSize / 3), width))
-  const h = Math.max(1, Math.min(Math.ceil(tileSize / 3), height))
-  return normalizeRect({
-    x: Math.max(0, Math.floor((width - w) / 2)),
-    y: Math.max(0, Math.floor((height - h) / 2)),
-    w,
-    h,
-  }, width, height)
-}
-
-function defaultDashboardViewport(width: number, height: number, tileSize: number): DirtyRect {
-  return normalizeRect({ x: 0, y: 0, w: Math.min(width, tileSize * 2), h: Math.min(height, tileSize * 2) }, width, height)
-}
-
-export function describeTileOnlyExportDecision(plan: TileOnlyExportPlan): TileOnlyExportDecision {
-  if (plan.mode === "tile-stream") {
-    return {
-      mode: "tile-sequence",
-      status: "safe",
-      label: "Tile-sequence export",
-      actionLabel: "Export tile package",
-      detail: `${plan.outputWidth} x ${plan.outputHeight}px output streams as ${plan.tileCount} independently composited ${plan.tileSize}px tiles and avoids a full-canvas allocation.`,
-    }
-  }
-  const unsupported = plan.unsupportedLayerIds.length ? plan.unsupportedLayerIds.join(", ") : "unsupported document payloads"
-  return {
-    mode: "full-canvas-fallback",
-    status: "blocked",
-    label: "Full-canvas export fallback",
-    actionLabel: "Resolve unsupported layers",
-    detail: `Tile-sequence export is blocked by ${unsupported}; browser-canvas export is the fallback and may exceed large-document limits.`,
-  }
-}
-
-export function createTileOnlyCapabilityDashboard(input: TileOnlyCapabilityDashboardInput): TileOnlyCapabilityDashboard {
-  const width = positiveInt(input.documentWidth, 1)
-  const height = positiveInt(input.documentHeight, 1)
-  const tileSize = positiveInt(input.tileSize, DEFAULT_TILE_SIZE)
-  const grid = planTileGrid(width, height, tileSize)
-  const rows: TileOnlyCapabilityRow[] = []
-  const fallbackLayers: readonly TileOnlyExportLayerDescriptor[] = [{ id: "background", kind: "raster" }]
-  const layers: readonly TileOnlyExportLayerDescriptor[] = input.layers.length ? input.layers : fallbackLayers
-  const viewport = input.viewport ? normalizeRect(input.viewport, width, height) : defaultDashboardViewport(width, height, tileSize)
-  const sampleRect = sampleOperationRect(width, height, tileSize)
-  const unsupportedLayerIds = layers.filter((layer) => !supportsTileOnlyLayer(layer)).map((layer) => layer.id)
-
-  const compositor = planTileOnlyDefaultCompositor({
-    documentWidth: width,
-    documentHeight: height,
-    tileSize,
-    viewport,
-    explicitTileOnly: input.explicitTileOnly ?? width * height > 10000 * 10000,
-    canvasBudgetPixels: input.canvasBudgetPixels,
-    layers,
-  })
-  rows.push({
-    id: "viewport-compositing",
-    label: "Viewport compositing",
-    status: unsupportedLayerIds.length ? "blocked" : "safe",
-    tilesInScope: compositor.viewportPlan.materializeTiles.length,
-    detail: unsupportedLayerIds.length
-      ? `Viewport tiling is blocked by unsupported layers: ${unsupportedLayerIds.join(", ")}.`
-      : `Visible viewport composes ${compositor.viewportPlan.materializeTiles.length} tile${compositor.viewportPlan.materializeTiles.length === 1 ? "" : "s"} without allocating the full document.`,
-    mitigation: unsupportedLayerIds.length ? "Flatten or rasterize unsupported layers before using tile-only viewport rendering." : undefined,
-  })
-
-  const paint = planTileOnlyInteractiveTool({
-    documentWidth: width,
-    documentHeight: height,
-    tileSize,
-    tool: "brush",
-    layerId: layers[0]?.id ?? "active-layer",
-    bounds: sampleRect,
-    radius: Math.max(8, Math.ceil(tileSize / 32)),
-  })
-  rows.push({
-    id: "interactive-tools",
-    label: "Paint and retouch tools",
-    status: paint.strategy === "tile-local" ? "safe" : "blocked",
-    tilesInScope: paint.writeTiles.length,
-    detail: `Brush, clone, healing, smudge, dodge, burn, and sponge edits can limit reads and writes to touched tiles with halo padding.`,
-    mitigation: paint.strategy === "tile-local" ? undefined : paint.unsupportedReasons.join(", "),
-  })
-
-  const filter = planTileOnlyFilter({
-    documentWidth: width,
-    documentHeight: height,
-    tileSize,
-    layerId: layers[0]?.id ?? "active-layer",
-    filterId: "gaussian-blur",
-    params: { radius: 12 },
-    bounds: sampleRect,
-  })
-  rows.push({
-    id: "local-filters",
-    label: "Local-kernel filters",
-    status: "safe",
-    tilesInScope: filter.writeTiles.length,
-    detail: `Blur, sharpen, and similar local filters read halo tiles and write only the affected tile range.`,
-  })
-
-  const selection = planTileOnlySelection({
-    documentWidth: width,
-    documentHeight: height,
-    tileSize,
-    kind: "quick-selection",
-    bounds: sampleRect,
-    tolerance: 24,
-    sampleAllLayers: true,
-  })
-  rows.push({
-    id: "selections-and-masks",
-    label: "Selections and masks",
-    status: "safe",
-    tilesInScope: selection.writeTiles.length,
-    detail: `Selections store tile masks and can sample tile-local composites instead of creating one full alpha canvas.`,
-  })
-
-  const exportPlan = planTileOnlyExport({
-    documentWidth: width,
-    documentHeight: height,
-    tileSize,
-    format: input.format ?? "png",
-    scale: input.scale ?? 1,
-    layers,
-  })
-  const exportDecision = describeTileOnlyExportDecision(exportPlan)
-  rows.push({
-    id: "raster-export",
-    label: "Raster export",
-    status: exportDecision.status,
-    tilesInScope: exportPlan.tileCount,
-    detail: exportDecision.detail,
-    mitigation: exportDecision.status === "blocked" ? "Remove, flatten, or rasterize the unsupported layer payload before tile-sequence export." : undefined,
-  })
-
-  if (input.colorMode && input.colorMode !== "RGB") {
-    rows.push({
-      id: "color-mode-preview",
-      label: "Color-mode preview",
-      status: "approximate",
-      detail: `${input.colorMode} intent is previewed through browser RGB tiles; source metadata remains available for compatibility decisions.`,
-      mitigation: "Use compatibility reports before export when color handoff matters.",
-    })
-  }
-  if ((input.bitDepth ?? 8) > 8) {
-    rows.push({
-      id: "high-bit-preview",
-      label: "High-bit preview",
-      status: "approximate",
-      detail: `${input.bitDepth}-bit sources can be preserved where supported, but browser canvas previews are 8-bit RGBA.`,
-      mitigation: "Use high-bit reports and avoid destructive browser-raster export when precision matters.",
-    })
-  }
-  if (input.quickMask) {
-    rows.push({
-      id: "quick-mask-preview",
-      label: "Quick Mask preview",
-      status: "approximate",
-      detail: "Quick Mask overlays can force preview compositing outside the tile-local default path.",
-      mitigation: "Commit or hide Quick Mask before evaluating final tile export.",
-    })
-  }
-  if ((input.filterPreviewCount ?? 0) > 0) {
-    rows.push({
-      id: "active-filter-previews",
-      label: "Active filter previews",
-      status: "approximate",
-      detail: "Live preview overlays can use reduced or tiled previews before the final pass commits.",
-      mitigation: "Commit the preview to measure the final tile-only path.",
-    })
-  }
-
-  for (const path of TILE_ONLY_UNFLUSHED_PATHS) {
-    const blocksCurrentExport = path.id === "single-canvas-export" && exportPlan.mode === "single-canvas"
-    const textVectorIdle =
-      path.id === "vector-text-rasterization" &&
-      !layers.some((layer) => layer.kind === "text" || layer.kind === "shape")
-    rows.push({
-      id: path.id,
-      label: path.area,
-      status: blocksCurrentExport ? "blocked" : textVectorIdle ? "safe" : "approximate",
-      detail: path.why,
-      mitigation: path.mitigation,
-    })
-  }
-
-  const counts = statusCounts(rows)
-  return {
-    summary: `${grid.tileCount} tiles at ${tileSize}px; ${counts.safeCount} safe, ${counts.approximateCount} approximate, ${counts.blockedCount} blocked operation path${rows.length === 1 ? "" : "s"}.`,
-    documentMegapixels: Math.round((width * height / 1_000_000) * 10) / 10,
-    tileSize,
-    tileColumns: grid.tileColumns,
-    tileRows: grid.tileRows,
-    tileCount: grid.tileCount,
-    ...counts,
-    rows,
-    unflushedPaths: getTileOnlyUnflushedPaths(),
-  }
-}
-
-export function planTileOnlyExport(input: TileOnlyExportInput): TileOnlyExportPlan {
-  const scale = Number.isFinite(input.scale) ? Math.max(0.001, Number(input.scale)) : 1
-  const width = positiveInt(input.documentWidth * scale, 1)
-  const height = positiveInt(input.documentHeight * scale, 1)
-  const tileSize = positiveInt(input.tileSize, DEFAULT_TILE_SIZE)
-  const grid = planTileGrid(width, height, tileSize)
-  const tiles = tilesForRect({ x: 0, y: 0, w: width, h: height }, width, height, tileSize)
-  const unsupportedLayerIds = input.layers
-    .filter((layer) => !supportsTileOnlyLayer(layer))
-    .map((layer) => layer.id)
-  const browserCanvas = unsupportedLayerIds.length > 0
-  const format = input.format.toUpperCase()
-  return {
-    mode: browserCanvas ? "single-canvas" : "tile-stream",
-    encoder: browserCanvas ? "browser-canvas" : "tile-sequence",
-    materializesFullDocument: browserCanvas,
-    outputWidth: width,
-    outputHeight: height,
-    tileSize,
-    tileColumns: grid.tileColumns,
-    tileRows: grid.tileRows,
-    tileCount: grid.tileCount,
-    tiles,
-    unsupportedLayerIds,
-    warnings: browserCanvas
-      ? [`${format} export requires the browser canvas path because unsupported layers are present: ${unsupportedLayerIds.join(", ")}.`]
-      : [`${format} export streams tiles to the encoder plan instead of allocating a ${width} x ${height} canvas.`],
-  }
-}

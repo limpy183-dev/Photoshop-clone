@@ -11,7 +11,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import { dispatchPhotoshopEvent } from "./events"
 import { layerHasPartialAlpha } from "./flatten-transparency"
 
@@ -44,8 +44,13 @@ export function FlattenTransparencyDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const { activeDoc, activeLayer, selectedLayers, background, dispatch, commit, requestRender } =
-    useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const activeLayer = useEditorSelector((editor) => editor.activeLayer)
+  const selectedLayers = useEditorSelector((editor) => editor.selectedLayers)
+  const background = useEditorSelector((editor) => editor.background)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
+  const requestRender = useEditorSelector((editor) => editor.requestRender)
   const [scope, setScope] = React.useState<Scope>("selected")
   const [matte, setMatte] = React.useState(background)
   const [clearAlpha, setClearAlpha] = React.useState(true)

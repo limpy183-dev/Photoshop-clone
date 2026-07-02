@@ -15,7 +15,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { makeCanvas, makeDocument, useEditor } from "./editor-context"
+import { makeCanvas, makeDocument, useEditorSelector } from "./editor-context"
 import { canvasToGifDataUrl, downloadBlob, downloadDataUrl, loadRasterCanvasFromFile, rasterMime, renderDocumentComposite } from "./document-io"
 import type { BrowserRasterExportFormat } from "./document-io"
 import {
@@ -241,7 +241,7 @@ async function exportCanvas(
 }
 
 export function BatchProcessingDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
-  const { documents } = useEditor()
+  const documents = useEditorSelector((editor) => editor.documents)
   const [files, setFiles] = React.useState<File[]>([])
   const [operation, setOperation] = React.useState<BatchOperation>("auto-tone")
   const [workflowMode, setWorkflowMode] = React.useState<"operation" | "macro" | "script" | "workflow">("operation")
@@ -412,7 +412,7 @@ export function ImageProcessorDialog({
   onOpenChange: (open: boolean) => void
   initial?: ImageProcessorWorkflowPreset
 }) {
-  const { createDocument } = useEditor()
+  const createDocument = useEditorSelector((editor) => editor.createDocument)
   const [files, setFiles] = React.useState<File[]>([])
   const [format, setFormat] = React.useState<RasterFormat>("jpeg")
   const [quality, setQuality] = React.useState(0.92)
@@ -727,7 +727,7 @@ export function CropAndStraightenDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const { createDocument } = useEditor()
+  const createDocument = useEditorSelector((editor) => editor.createDocument)
   const [files, setFiles] = React.useState<File[]>([])
   const [minSize, setMinSize] = React.useState(120)
   const [edgeThreshold, setEdgeThreshold] = React.useState(30)

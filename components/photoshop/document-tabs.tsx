@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import { dispatchPhotoshopEvent } from "./events"
 import { Copy, RotateCcw, X } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -14,18 +14,16 @@ import {
 } from "@/components/ui/dropdown-menu"
 
 export function DocumentTabs() {
-  const {
-    documents,
-    activeDocId,
-    closedDocuments,
-    documentStatuses,
-    dispatch,
-    duplicateDocument,
-    requestCloseDocument,
-    closeOtherDocuments,
-    reopenClosedDocument,
-    moveLayersToDocument,
-  } = useEditor()
+  const documents = useEditorSelector((editor) => editor.documents)
+  const activeDocId = useEditorSelector((editor) => editor.activeDocId)
+  const closedDocuments = useEditorSelector((editor) => editor.closedDocuments)
+  const documentStatuses = useEditorSelector((editor) => editor.documentStatuses)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const duplicateDocument = useEditorSelector((editor) => editor.duplicateDocument)
+  const requestCloseDocument = useEditorSelector((editor) => editor.requestCloseDocument)
+  const closeOtherDocuments = useEditorSelector((editor) => editor.closeOtherDocuments)
+  const reopenClosedDocument = useEditorSelector((editor) => editor.reopenClosedDocument)
+  const moveLayersToDocument = useEditorSelector((editor) => editor.moveLayersToDocument)
   if (!documents.length) {
     return closedDocuments.length ? (
       <div className="h-7 bg-[var(--ps-chrome)] border-b border-[var(--ps-divider)] flex items-center gap-2 px-2 text-[11px] text-[var(--ps-text-dim)]">
@@ -60,39 +58,19 @@ export function DocumentTabs() {
   }
 
   return (
-    <div role="tablist" aria-label="Open documents" className="h-7 bg-[var(--ps-chrome)] border-b border-[var(--ps-divider)] flex items-end gap-px overflow-x-auto">
+    <div role="toolbar" aria-label="Open documents" className="h-7 bg-[var(--ps-chrome)] border-b border-[var(--ps-divider)] flex items-end gap-px overflow-x-auto">
       {documents.map((d) => {
         const isActive = d.id === activeDocId
         return (
           <div
             key={d.id}
-            role="tab"
-            aria-selected={isActive}
-            tabIndex={isActive ? 0 : -1}
+            role="presentation"
             className={cn(
-              "h-full flex items-center gap-2 px-3 text-[11px] cursor-pointer border-r border-[var(--ps-divider)] min-w-[120px] group",
+              "h-full flex items-center gap-2 px-2 text-[11px] border-r border-[var(--ps-divider)] min-w-[120px] group",
               isActive
                 ? "bg-[var(--ps-canvas-bg)] text-[var(--ps-text)]"
                 : "bg-[var(--ps-panel)] text-[var(--ps-text-dim)] hover:text-[var(--ps-text)]",
             )}
-            onClick={() => dispatch({ type: "activate-document", id: d.id })}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                if (event.key === " ") event.preventDefault()
-                dispatch({ type: "activate-document", id: d.id })
-                return
-              }
-              if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-                event.preventDefault()
-                const index = documents.findIndex((doc) => doc.id === d.id)
-                const nextIndex = event.key === "ArrowLeft" ? index - 1 : index + 1
-                const next = documents[nextIndex]
-                if (!next) return
-                dispatch({ type: "activate-document", id: next.id })
-                const tabs = event.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="tab"]')
-                tabs?.[nextIndex]?.focus()
-              }
-            }}
             onDragOver={(event) => {
               const hasLayer = event.dataTransfer.types.includes("application/x-ps-layer-ids")
               if (hasLayer && d.id !== activeDocId) {
@@ -102,10 +80,33 @@ export function DocumentTabs() {
             }}
             onDrop={(event) => onTabDrop(event, d.id)}
           >
-            <span className="truncate">
-              {d.name}{documentStatuses[d.id]?.dirty ? "*" : ""} <span className="opacity-60">@ {Math.round(d.zoom * 100)}%</span>{" "}
-              <span className="opacity-50">({d.colorMode}/{d.bitDepth})</span>
-            </span>
+            <div role="tablist" aria-label={`Document ${d.name}`} className="flex min-w-0 flex-1">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              tabIndex={isActive ? 0 : -1}
+              className="flex min-w-0 flex-1 items-center text-left"
+              onClick={() => dispatch({ type: "activate-document", id: d.id })}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                  event.preventDefault()
+                  const index = documents.findIndex((doc) => doc.id === d.id)
+                  const nextIndex = event.key === "ArrowLeft" ? index - 1 : index + 1
+                  const next = documents[nextIndex]
+                  if (!next) return
+                  dispatch({ type: "activate-document", id: next.id })
+                  const tabs = event.currentTarget.closest('[role="toolbar"]')?.querySelectorAll<HTMLElement>('[role="tab"]')
+                  tabs?.[nextIndex]?.focus()
+                }
+              }}
+            >
+              <span className="truncate">
+                {d.name}{documentStatuses[d.id]?.dirty ? "*" : ""} <span className="text-[var(--ps-text-dim)]">@ {Math.round(d.zoom * 100)}%</span>{" "}
+                <span className="text-[var(--ps-text-dim)]">({d.colorMode}/{d.bitDepth})</span>
+              </span>
+            </button>
+            </div>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button

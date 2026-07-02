@@ -3,7 +3,7 @@
 import * as React from "react"
 import { toast } from "sonner"
 import { downloadBlob } from "./document-io"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import { addPhotoshopEventListener } from "./events"
 import {
   collectImageAssetGeneratorPlan,
@@ -17,11 +17,10 @@ import {
   type ImageAssetGeneratorTrigger,
 } from "./image-assets-generator"
 import type { PsDocument } from "./types"
+import { openRegisteredIndexedDB, STORAGE_RESOURCES } from "./storage-registry"
 
 type TimerId = number
 
-const DIRECTORY_DB_NAME = "ps-image-assets-generator"
-const DIRECTORY_DB_VERSION = 1
 const DIRECTORY_STORE = "directories"
 
 interface PersistedDirectoryRecord {
@@ -35,7 +34,7 @@ function isIndexedDBAvailable() {
 
 function openDirectoryDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DIRECTORY_DB_NAME, DIRECTORY_DB_VERSION)
+    const request = openRegisteredIndexedDB(STORAGE_RESOURCES.assetDirectories)
     request.onupgradeneeded = () => {
       const db = request.result
       if (!db.objectStoreNames.contains(DIRECTORY_STORE)) {
@@ -106,7 +105,9 @@ async function ensureDirectoryWritable(handle: FileSystemDirectoryHandleLike, pr
 }
 
 export function ImageAssetsGeneratorRunner() {
-  const { documents, activeDocId, dispatch } = useEditor()
+  const documents = useEditorSelector((editor) => editor.documents)
+  const activeDocId = useEditorSelector((editor) => editor.activeDocId)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
   const documentsRef = React.useRef(documents)
   const activeDocIdRef = React.useRef(activeDocId)
   const directoriesRef = React.useRef<Record<string, FileSystemDirectoryHandleLike>>({})

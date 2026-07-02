@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { toast } from "sonner"
-import { useEditor } from "../editor-context"
+import { useActiveDocument, useActiveLayer, useEditorCommands, useEditorStateSelector } from "../editor-context"
 import { dispatchPhotoshopEvent } from "../events"
 import { downloadBlob, downloadText } from "../document-io"
 import { Archive, Brush, CircleDot, Download, FolderOpen, Palette, Plus, Sparkles, Trash2, Upload } from "lucide-react"
@@ -99,7 +99,12 @@ export function normalizeImportedAssetLibrary(parsed: unknown, options: AssetImp
 }
 
 export function AssetsPanel() {
-  const { activeDoc, activeLayer, brush, gradient, foreground, dispatch, commit } = useEditor()
+  const activeDoc = useActiveDocument()
+  const activeLayer = useActiveLayer()
+  const brush = useEditorStateSelector((state) => state.brush)
+  const gradient = useEditorStateSelector((state) => state.gradient)
+  const foreground = useEditorStateSelector((state) => state.foreground)
+  const { dispatch, commit } = useEditorCommands()
   const [kind, setKind] = React.useState<AssetKind>("all")
   const [group, setGroup] = React.useState("Project")
   const [query, setQuery] = React.useState("")

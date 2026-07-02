@@ -39,7 +39,7 @@ import {
   RotateCw,
   Crosshair,
 } from "lucide-react"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import type { ToolId } from "./types"
 import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
 import { getToolHelp } from "./tool-help"
@@ -199,7 +199,6 @@ const TOOL_GROUPS: ToolGroup[] = [
   { primary: { id: "transform", name: "Transform Tool", shortcut: "F", icon: MousePointer2 } },
 ]
 
-const LEARNING_QUERY_KEY = "ps-learning-index-query"
 
 interface ToolTooltipPreferences {
   showTooltips: boolean
@@ -227,7 +226,12 @@ function readToolTooltipPrefs(): ToolTooltipPreferences {
 }
 
 export function ToolPalette() {
-  const { tool, dispatch, foreground, background, activeDoc, toggleQuickMask } = useEditor()
+  const tool = useEditorSelector((editor) => editor.tool)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const foreground = useEditorSelector((editor) => editor.foreground)
+  const background = useEditorSelector((editor) => editor.background)
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const toggleQuickMask = useEditorSelector((editor) => editor.toggleQuickMask)
   const [openGroup, setOpenGroup] = React.useState<string | null>(null)
   const triggerRefs = React.useRef<Record<string, HTMLButtonElement | null>>({})
   const flyoutRef = React.useRef<HTMLDivElement | null>(null)
@@ -531,9 +535,7 @@ function QuickMaskTooltipFrame({
 }
 
 function openLearningQuery(query: string) {
-  try {
-    sessionStorage.setItem(LEARNING_QUERY_KEY, query)
-  } catch {}
+  writeRegisteredSessionString(STORAGE_RESOURCES.learningQuery, query)
   dispatchPhotoshopEvent("ps-open-panel", "discover")
   window.setTimeout(() => dispatchPhotoshopEvent("ps-set-learning-query", query), 0)
 }
@@ -598,3 +600,4 @@ function ForegroundBackgroundSwatch({
     </div>
   )
 }
+import { STORAGE_RESOURCES, writeRegisteredSessionString } from "./storage-registry"

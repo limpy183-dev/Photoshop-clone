@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
 import { CLIENT_STORAGE_KEYS, readClientStorageJson } from "./client-storage"
-import { useEditor, makeDocument, makeCanvas } from "./editor-context"
+import { makeCanvas, makeDocument, useEditorSelector } from "./editor-context"
 import { canvasSizeError, clampCanvasSize } from "./canvas-limits"
 import { createHighBitImageFromImageData, type HighBitImage } from "./color-pipeline"
 import type { DocumentModeSettings, Layer, PsDocument } from "./types"
@@ -54,7 +54,9 @@ export function NewDocumentDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
 }) {
-  const { createDocument, foreground, background } = useEditor()
+  const createDocument = useEditorSelector((editor) => editor.createDocument)
+  const foreground = useEditorSelector((editor) => editor.foreground)
+  const background = useEditorSelector((editor) => editor.background)
   const uid = React.useId()
   const [name, setName] = React.useState("Untitled-1")
   const [width, setWidth] = React.useState(1200)

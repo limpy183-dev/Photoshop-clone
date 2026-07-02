@@ -1,5 +1,4 @@
 "use client"
-
 import * as React from "react"
 import { toast } from "sonner"
 import {
@@ -13,7 +12,7 @@ import {
   Square,
   X,
 } from "lucide-react"
-import { useEditor } from "../editor-context"
+import { useActiveDocument, useActiveLayer, useEditorCommands } from "../editor-context"
 import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "../events"
 import { downloadBlob, downloadDataUrl, downloadText } from "../document-io"
 import {
@@ -95,7 +94,8 @@ type AnimationFormat = "gif" | "apng" | "animated-webp"
 type VideoThumbnail = { index: number; timeMs: number; label: string; dataUrl: string }
 
 export function TimelinePanel() {
-  const { activeDoc, activeLayer, dispatch, commit, requestRender } = useEditor()
+  const activeDoc = useActiveDocument(), activeLayer = useActiveLayer()
+  const { dispatch, commit, requestRender } = useEditorCommands()
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [selection, setSelection] = React.useState<Set<string>>(new Set())
   const [playing, setPlaying] = React.useState(false)

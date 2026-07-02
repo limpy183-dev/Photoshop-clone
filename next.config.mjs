@@ -1,4 +1,7 @@
+import { mkdirSync, writeFileSync } from "node:fs"
+import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { createContentSecurityPolicy } from "./lib/security-policy.mjs"
 
 /** @type {import('next').NextConfig} */
 
@@ -36,20 +39,7 @@ import { fileURLToPath } from "node:url"
 //
 // We intentionally do NOT enable upgrade-insecure-requests so the dev server
 // still works over http://localhost.
-const csp = [
-  "default-src 'self'",
-  `script-src 'self'${process.env.NODE_ENV === "production" ? "" : " 'unsafe-eval'"} https://va.vercel-scripts.com`,
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
-  "font-src 'self' data:",
-  "connect-src 'self' https://vitals.vercel-insights.com https://va.vercel-scripts.com",
-  "worker-src 'self' blob:",
-  "frame-src 'self'",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-  "frame-ancestors 'none'",
-].join("; ")
+const csp = createContentSecurityPolicy()
 
 const securityHeaders = [
   { key: "Content-Security-Policy", value: csp },
@@ -71,6 +61,62 @@ const emptyNodeFs = fileURLToPath(new URL("./components/photoshop/empty-node-fs.
 const outputFileTracingRoot = fileURLToPath(new URL("./", import.meta.url))
 const isGithubPages = process.env.GITHUB_PAGES === "true"
 const githubPagesBasePath = "/Photoshop-clone"
+
+function webpackModuleName(module, compilation) {
+  if (typeof module.nameForCondition === "function") {
+    const name = module.nameForCondition()
+    if (name) return name
+  }
+  if (typeof module.identifier === "function") {
+    const identifier = module.identifier()
+    if (identifier) return identifier
+  }
+  if (typeof module.readableIdentifier === "function") {
+    return module.readableIdentifier(compilation.requestShortener)
+  }
+  return String(module)
+}
+
+function collectWebpackChunkModules(module, compilation, out) {
+  out.push({
+    identifier: typeof module.identifier === "function" ? module.identifier() : undefined,
+    name: webpackModuleName(module, compilation),
+    nameForCondition: typeof module.nameForCondition === "function" ? module.nameForCondition() : undefined,
+  })
+  for (const nested of module.modules ?? []) {
+    collectWebpackChunkModules(nested, compilation, out)
+  }
+}
+
+function addBundleStatsPlugin(config) {
+  const statsPath = process.env.BUNDLE_WEBPACK_STATS_PATH?.trim() || "artifacts/webpack-stats.json"
+  if (statsPath === "0" || statsPath === "false") return
+  const resolvedStatsPath = resolve(outputFileTracingRoot, statsPath)
+  config.plugins = config.plugins ?? []
+  config.plugins.push({
+    apply(compiler) {
+      compiler.hooks.done.tap("BundleWebpackStatsPlugin", (stats) => {
+        const { compilation } = stats
+        const chunks = Array.from(compilation.chunks, (chunk) => {
+          const modules = []
+          for (const module of compilation.chunkGraph.getChunkModulesIterable(chunk)) {
+            collectWebpackChunkModules(module, compilation, modules)
+          }
+          return {
+            id: chunk.id,
+            ids: Array.from(chunk.ids ?? []),
+            names: Array.from(new Set([chunk.name, ...Array.from(chunk.names ?? [])].filter(Boolean).map(String))),
+            files: Array.from(chunk.files ?? []),
+            modules,
+          }
+        })
+        const json = { chunks }
+        mkdirSync(dirname(resolvedStatsPath), { recursive: true })
+        writeFileSync(resolvedStatsPath, JSON.stringify(json, null, 2) + "\n")
+      })
+    },
+  })
+}
 
 const nextConfig = {
   outputFileTracingRoot,
@@ -124,6 +170,7 @@ const nextConfig = {
   },
   webpack(config, { isServer }) {
     if (!isServer) {
+      addBundleStatsPlugin(config)
       config.resolve = config.resolve ?? {}
       config.resolve.alias = {
         ...(config.resolve.alias ?? {}),

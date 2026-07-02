@@ -1,63 +1,16 @@
-export type CapabilityStatus = "complete" | "usable" | "approximation" | "stub" | "unsupported"
+import type {
+  CapabilityKind,
+  CapabilityRecord,
+  CapabilityStatus,
+} from "./capability-types"
 
-export type CapabilityKind =
-  | "tool"
-  | "filter"
-  | "panel"
-  | "format"
-  | "export"
-  | "color"
-  | "smart-object"
-  | "typography"
-  | "3d"
-  | "video"
-  | "workflow"
-  | "external"
-  | "performance"
-  | "preferences"
-
-export interface CapabilityRecord {
-  id: string
-  label: string
-  kind: CapabilityKind
-  status: CapabilityStatus
-  summary: string
-  limitations?: string[]
-  recommendedAction?: string
-  dependsOn?: string[]
-  testCoverage?: "none" | "reachability" | "unit" | "e2e" | "golden"
-}
-
-export interface CapabilityWarning {
-  label: string
-  capabilityId: string
-  status: CapabilityStatus
-  detail: string
-  recommendedAction?: string
-}
-
-export interface CapabilityDocumentSnapshot {
-  colorMode?: string
-  bitDepth?: number
-  layers?: Array<{
-    kind?: string
-    smartObject?: boolean
-    smartFilters?: Array<{ enabled?: boolean }>
-    adjustment?: unknown
-    frame?: unknown
-    artboard?: unknown
-    threeD?: unknown
-    video?: unknown
-    plugins?: unknown
-  }>
-  plugins?: unknown[]
-  variableDataSets?: unknown[]
-  comps?: unknown[]
-  slices?: unknown[]
-  guides?: unknown[]
-  metadata?: unknown
-  colorManagement?: unknown
-}
+export type {
+  CapabilityDocumentSnapshot,
+  CapabilityKind,
+  CapabilityRecord,
+  CapabilityStatus,
+  CapabilityWarning,
+} from "./capability-types"
 
 export const CAPABILITY_STATUS_ORDER: CapabilityStatus[] = [
   "complete",
@@ -717,7 +670,7 @@ const records = [
   },
   {
     id: "panel.accessibility-audit",
-    label: "Accessibility Audit Panel",
+    label: "Editor Accessibility Metadata Audit Panel",
     kind: "panel",
     status: "usable",
     summary: "Accessibility audit mode checks keyboard shortcut conflicts, focus-trap declarations, compact touch targets, icon labels, and panel/tab metadata for keyboard discoverability.",
@@ -804,91 +757,7 @@ export function summarizeCapabilities(items: readonly CapabilityRecord[]) {
   return summary
 }
 
-function warning(record: CapabilityRecord, label: string, detail?: string): CapabilityWarning {
-  return {
-    label,
-    capabilityId: record.id,
-    status: record.status,
-    detail: detail ?? record.summary,
-    recommendedAction: record.recommendedAction,
-  }
-}
-
-export function capabilityWarningsForDocument(doc: CapabilityDocumentSnapshot | null | undefined): CapabilityWarning[] {
-  if (!doc) return []
-  const warnings: CapabilityWarning[] = []
-  const layers = doc.layers ?? []
-  const bitDepth = Number(doc.bitDepth ?? 8)
-  const colorMode = String(doc.colorMode ?? "RGB")
-  const smartFilterCount = layers.reduce((sum, layer) => sum + (layer.smartFilters?.length ?? 0), 0)
-  const smartObjectCount = layers.filter((layer) => layer.kind === "smart-object" || layer.smartObject).length
-  const appOnlyLayerCount = layers.filter((layer) =>
-    layer.kind === "3d" ||
-    layer.kind === "video" ||
-    layer.kind === "adjustment" ||
-    Boolean(layer.frame) ||
-    Boolean(layer.artboard) ||
-    Boolean(layer.threeD) ||
-    Boolean(layer.video) ||
-    Boolean(layer.smartFilters?.length),
-  ).length
-
-  warnings.push(warning(
-    getCapability("color.browser-rgba"),
-    "Browser pixel pipeline",
-    bitDepth > 8
-      ? `${bitDepth}-bit documents retain typed-array edit sources where supported; the displayed canvas remains an 8-bit RGBA preview.`
-      : "Rendered editing uses browser 8-bit RGBA canvas pixels.",
-  ))
-
-  if (bitDepth > 8) {
-    warnings.push(warning(
-      getCapability("color.high-bit-pipeline"),
-      "High-bit editing",
-      "High-bit typed arrays now back compatible filters, adjustment layers, brush/paint synchronization, source-vs-preview readouts, and precision TIFF/PNM exports; unsupported operations still report preview fallback risk.",
-    ))
-  }
-
-  if (!["RGB", "Grayscale"].includes(colorMode)) {
-    warnings.push(warning(
-      getCapability("color.icc-conversion"),
-      "Color mode",
-      `${colorMode} mode is stored as document intent; display, filters, and export operate through browser RGB canvas data.`,
-    ))
-  }
-
-  if (smartFilterCount) {
-    warnings.push(warning(
-      getCapability("smart-object.filters"),
-      "Smart filters",
-      `${smartFilterCount} smart filter${smartFilterCount === 1 ? "" : "s"} remain editable in-project; PSD/export workflows may rasterize the visual result.`,
-    ))
-  }
-
-  if (smartObjectCount) {
-    warnings.push(warning(
-      getCapability("smart-object.linked"),
-      "Smart object lifecycle",
-      `${smartObjectCount} smart object layer${smartObjectCount === 1 ? "" : "s"} use browser-local smart source records with permission-aware relink/update checks, polling notifications for linked files, and tile-backed render materialization.`,
-    ))
-  }
-
-  if (appOnlyLayerCount || doc.plugins?.length || doc.variableDataSets?.length || doc.comps?.length || doc.slices?.length || doc.guides?.length) {
-    warnings.push(warning(
-      getCapability("format.psd"),
-      "PSD round trip",
-      "Project format preserves more app metadata than PSD import/export; PSD workflows keep a raster-compatible subset.",
-    ))
-  }
-
-  warnings.push(warning(
-    getCapability("export.browser-raster"),
-    "Raster export",
-    "Raster export applies supported ICC conversions and embeds PNG/JPEG profile metadata; content credentials remain a handoff limitation.",
-  ))
-
-  return warnings
-}
+export { capabilityWarningsForDocument } from "./capability-warnings"
 
 export function capabilitiesForIds(ids: readonly string[]) {
   return ids.map(getCapability).sort((a, b) => capabilityStatusRank(a.status) - capabilityStatusRank(b.status))

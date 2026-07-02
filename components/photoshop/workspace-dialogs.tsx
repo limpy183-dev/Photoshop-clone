@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import { LayoutGrid, Plus } from "lucide-react"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import type { Guide } from "./types"
 import { cn } from "@/lib/utils"
 import { uid } from "./uid"
@@ -65,7 +65,8 @@ export function GridSettingsDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
 }) {
-  const { activeDoc, dispatch } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
   const [enabled, setEnabled] = React.useState(false)
   const [size, setSize] = React.useState(50)
   const [subdivisions, setSubdivisions] = React.useState(1)
@@ -174,7 +175,8 @@ export function NewGuideDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
 }) {
-  const { activeDoc, dispatch } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
   const [orientation, setOrientation] = React.useState<"horizontal" | "vertical">("horizontal")
   const [position, setPosition] = React.useState(50)
   const [unit, setUnit] = React.useState("%")
@@ -265,7 +267,8 @@ export function GuideLayoutDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
 }) {
-  const { activeDoc, dispatch } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
   const [columns, setColumns] = React.useState(3)
   const [rows, setRows] = React.useState(3)
   const [gutter, setGutter] = React.useState(24)

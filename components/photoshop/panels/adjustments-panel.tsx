@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useEditor, makeCanvas } from "../editor-context"
+import { useActiveDocument, useActiveLayer, useEditorCommands, makeCanvas } from "../editor-context"
 import { FILTERS, type FilterDef, type FilterParam } from "../filters"
 import { Slider } from "@/components/ui/slider"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -16,7 +16,7 @@ import {
   SlidersHorizontal,
   Sparkles,
 } from "lucide-react"
-import type { AdjustmentProps, AdjustmentType, Layer } from "../types"
+import type { AdjustmentProps, AdjustmentType, Layer, PsDocument } from "../types"
 import {
   adjustmentParamsWithDefaults,
   createAdjustmentLayer as createAdjustmentLayerModel,
@@ -54,7 +54,9 @@ const ADJUSTMENT_EDIT_DEBOUNCE_MS = 60
 const ADJUSTMENT_COMMIT_DEBOUNCE_MS = 350
 
 export function AdjustmentsPanel() {
-  const { activeDoc, activeLayer, dispatch, commit, requestRender } = useEditor()
+  const activeDoc = useActiveDocument()
+  const activeLayer = useActiveLayer()
+  const { dispatch, commit, requestRender } = useEditorCommands()
   const [clipToBelow, setClipToBelow] = React.useState(false)
   const [withMask, setWithMask] = React.useState(true)
   const [showAddSection, setShowAddSection] = React.useState(false)
@@ -286,7 +288,7 @@ function AdjustmentEditor({
   onToggleAddSection,
   addSection,
 }: {
-  doc: NonNullable<ReturnType<typeof useEditor>["activeDoc"]>
+  doc: PsDocument
   layer: Layer
   adjustment: AdjustmentProps
   filterDef: FilterDef
@@ -557,7 +559,7 @@ function AdjustmentVisual({
   doc,
   layer,
 }: {
-  doc: NonNullable<ReturnType<typeof useEditor>["activeDoc"]>
+  doc: PsDocument
   layer: Layer
 }) {
   const ref = React.useRef<HTMLCanvasElement>(null)
@@ -630,7 +632,7 @@ function AdjustmentVisual({
   return <canvas ref={ref} className="block w-full rounded-sm border border-[var(--ps-divider)]" />
 }
 
-function renderAdjustmentPreviewSample(doc: NonNullable<ReturnType<typeof useEditor>["activeDoc"]>) {
+function renderAdjustmentPreviewSample(doc: PsDocument) {
   const sampleScale = Math.min(1, 192 / Math.max(doc.width, doc.height))
   const canvas = makeCanvas(Math.max(1, Math.round(doc.width * sampleScale)), Math.max(1, Math.round(doc.height * sampleScale)))
   const ctx = canvas.getContext("2d")!

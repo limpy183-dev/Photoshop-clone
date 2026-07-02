@@ -4,8 +4,15 @@ import * as React from "react"
 import { Check, Copy, Download, Plus, Search, Trash2, Upload } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { useEditor } from "../editor-context"
-import type { AssetLibraryItem, ToolId } from "../types"
+import { useEditorSelector } from "../editor-context"
+import type {
+  AssetLibraryItem,
+  BrushSettings,
+  CloneSourceSettings,
+  EraserSettings,
+  SelectionOptions,
+  ToolId,
+} from "../types"
 import { uid } from "../uid"
 import { downloadText } from "../document-io"
 import { mergeToolPresetAssets, normalizeToolPresetAssets, serializeToolPresetAssets } from "../tool-preset-library"
@@ -13,10 +20,10 @@ import { toast } from "sonner"
 
 type ToolPresetPayload = {
   tool: ToolId
-  brush: ReturnType<typeof useEditor>["brush"]
-  eraser: ReturnType<typeof useEditor>["eraser"]
-  cloneSource: ReturnType<typeof useEditor>["cloneSource"]
-  selectionOptions: ReturnType<typeof useEditor>["selectionOptions"]
+  brush: BrushSettings
+  eraser: EraserSettings
+  cloneSource: CloneSourceSettings
+  selectionOptions: SelectionOptions
   foreground: string
   background: string
 }
@@ -63,18 +70,16 @@ export function reorderToolPresetAssets(assets: readonly AssetLibraryItem[], sou
 }
 
 export function ToolPresetsPanel() {
-  const {
-    activeDoc,
-    tool,
-    brush,
-    eraser,
-    cloneSource,
-    selectionOptions,
-    foreground,
-    background,
-    dispatch,
-    commit,
-  } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const tool = useEditorSelector((editor) => editor.tool)
+  const brush = useEditorSelector((editor) => editor.brush)
+  const eraser = useEditorSelector((editor) => editor.eraser)
+  const cloneSource = useEditorSelector((editor) => editor.cloneSource)
+  const selectionOptions = useEditorSelector((editor) => editor.selectionOptions)
+  const foreground = useEditorSelector((editor) => editor.foreground)
+  const background = useEditorSelector((editor) => editor.background)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
   const [name, setName] = React.useState("")
   const [group, setGroup] = React.useState("Tools")
   const [filter, setFilter] = React.useState("")

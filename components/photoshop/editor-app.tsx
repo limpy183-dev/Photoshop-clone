@@ -5,28 +5,14 @@ import dynamic from "next/dynamic"
 import { useSearchParams } from "next/navigation"
 import { toast } from "sonner"
 import { EditorProvider, makeHistoryEntry, useEditor } from "@/components/photoshop/editor-context"
-import { MenuBar } from "@/components/photoshop/menu-bar"
-import { OptionsBar } from "@/components/photoshop/options-bar"
-import { ToolPalette } from "@/components/photoshop/tool-palette"
-import { PanelDock } from "@/components/photoshop/panel-dock"
-import { StatusBar } from "@/components/photoshop/status-bar"
-import { DocumentTabs } from "@/components/photoshop/document-tabs"
-import { ImageAssetsGeneratorRunner } from "@/components/photoshop/image-assets-generator-runner"
-import { NewDocumentDialog } from "@/components/photoshop/new-document-dialog"
+import { EditorErrorBoundary } from "@/components/photoshop/editor-error-boundary"
 import { useShortcuts } from "@/components/photoshop/use-shortcuts"
-import { ResizeHandle } from "@/components/photoshop/resize-handle"
 import { useMounted } from "@/components/photoshop/use-mounted"
 import {
   applyPreferencesToDocumentSettings,
   loadPreferencesFromStorage,
   normalizePreferences,
 } from "@/components/photoshop/preferences-engine"
-import {
-  deserializeProject,
-  generateDocumentThumbnail,
-  loadRasterCanvasFromFile,
-  serializeProject,
-} from "@/components/photoshop/document-io"
 import { requestCanvasZoom } from "@/components/photoshop/zoom-events"
 import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "@/components/photoshop/events"
 import { CLIENT_STORAGE_KEYS, readClientStorageString, writeClientStorageString } from "@/components/photoshop/client-storage"
@@ -46,21 +32,29 @@ import {
   type ScreenMode,
 } from "@/components/photoshop/screen-modes"
 import type { DocumentFileKind, DocumentStorageKind } from "@/components/photoshop/editor-context"
+import {
+  preloadCanvasSizeDialog,
+  preloadImageSizeDialog,
+  preloadNewDocumentDialog,
+} from "@/components/photoshop/dialog-preload"
 
 // Heavy dialogs / overlays are rarely visible — load them lazily so their
 // JS, Radix portals, and event listeners don't bloat first paint or
 // re-render with the workspace.
-const CommandPalette = React.lazy(() =>
-  import("@/components/photoshop/command-palette").then((m) => ({ default: m.CommandPalette })),
-)
+const loadCommandPalette = () =>
+  import("@/components/photoshop/command-palette").then((m) => ({ default: m.CommandPalette }))
+const CommandPalette = React.lazy(loadCommandPalette)
 const ImageSizeDialog = React.lazy(() =>
-  import("@/components/photoshop/image-size-dialog").then((m) => ({ default: m.ImageSizeDialog })),
+  preloadImageSizeDialog(),
 )
 const CanvasSizeDialog = React.lazy(() =>
-  import("@/components/photoshop/canvas-size-dialog").then((m) => ({ default: m.CanvasSizeDialog })),
+  preloadCanvasSizeDialog(),
 )
 const AutosaveRecovery = React.lazy(() =>
   import("@/components/photoshop/autosave-recovery").then((m) => ({ default: m.AutosaveRecovery })),
+)
+const NewDocumentDialog = React.lazy(() =>
+  preloadNewDocumentDialog(),
 )
 // The Home/Start workspace is shown when no document is open or when the
 // user explicitly toggles it from Window ▸ Home. Lazy-load so its preset/
@@ -68,14 +62,20 @@ const AutosaveRecovery = React.lazy(() =>
 const HomeWorkspace = React.lazy(() =>
   import("@/components/photoshop/home-workspace").then((m) => ({ default: m.HomeWorkspace })),
 )
+const ImageAssetsGeneratorRunner = React.lazy(() =>
+  import("@/components/photoshop/image-assets-generator-runner").then((m) => ({
+    default: m.ImageAssetsGeneratorRunner,
+  })),
+)
 
-const CanvasView = dynamic(
-  () => import("@/components/photoshop/canvas-view").then((m) => m.CanvasView),
+const EditorShell = dynamic(
+  () => import("@/components/photoshop/editor-shell").then((m) => m.EditorShell),
   {
     ssr: false,
-    loading: () => <div className="min-w-0 flex-1 bg-[var(--ps-canvas-bg)]" aria-label="Loading canvas" />,
+    loading: () => <div role="status" className="min-h-0 flex-1 bg-[var(--ps-canvas-bg)]" aria-label="Loading editor shell" />,
   },
 )
+
 const ColorPickerDialog = React.lazy(() =>
   import("@/components/photoshop/color-picker-dialog").then((m) => ({ default: m.ColorPickerDialog })),
 )
@@ -98,9 +98,11 @@ type ColorPickerState = {
 
 export default function Page() {
   return (
-    <EditorProvider>
-      <Workspace />
-    </EditorProvider>
+    <EditorErrorBoundary>
+      <EditorProvider>
+        <Workspace />
+      </EditorProvider>
+    </EditorErrorBoundary>
   )
 }
 
@@ -137,8 +139,26 @@ function Workspace() {
   // also shown automatically whenever no documents are open, so this flag
   // only matters for "Window ▸ Home" toggling while a doc is active.
   const [homeOpen, setHomeOpen] = React.useState(false)
-  const openNew = React.useCallback(() => setNewOpen(true), [])
-  const openCommandPalette = React.useCallback(() => setCommandOpen(true), [])
+  const newDialogReturnFocusRef = React.useRef<HTMLElement | null>(null)
+  const commandPaletteReturnFocusRef = React.useRef<HTMLElement | null>(null)
+  const openNew = React.useCallback(() => {
+    newDialogReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    void preloadNewDocumentDialog()
+    setNewOpen(true)
+  }, [])
+  const openCommandPalette = React.useCallback(() => {
+    commandPaletteReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    void loadCommandPalette()
+    setCommandOpen(true)
+  }, [])
+  const setNewDialogOpen = React.useCallback((open: boolean) => {
+    setNewOpen(open)
+    if (!open) requestAnimationFrame(() => newDialogReturnFocusRef.current?.focus())
+  }, [])
+  const setCommandPaletteOpen = React.useCallback((open: boolean) => {
+    setCommandOpen(open)
+    if (!open) requestAnimationFrame(() => commandPaletteReturnFocusRef.current?.focus())
+  }, [])
   useShortcuts(openNew, openCommandPalette)
 
   const [dockWidth, setDockWidth] = React.useState(380)
@@ -278,8 +298,14 @@ function Workspace() {
   }, [])
 
   React.useEffect(() => {
-    const imageSizeHandler = () => setImageSizeOpen(true)
-    const canvasSizeHandler = () => setCanvasSizeOpen(true)
+    const imageSizeHandler = () => {
+      void preloadImageSizeDialog()
+      setImageSizeOpen(true)
+    }
+    const canvasSizeHandler = () => {
+      void preloadCanvasSizeDialog()
+      setCanvasSizeOpen(true)
+    }
 
     const removeImageSize = addPhotoshopEventListener("ps-open-image-size", imageSizeHandler)
     const removeCanvasSize = addPhotoshopEventListener("ps-open-canvas-size", canvasSizeHandler)
@@ -325,36 +351,29 @@ function Workspace() {
       data-screen-mode={screenMode}
     >
       <StartupRouteEffects />
-      {screenModeState.hideMenuBar ? null : (
-        <MenuBar
-          onOpenNew={openNew}
-          statusBarVisible={statusBarVisible && !screenModeState.hideStatusBar}
-          onToggleStatusBar={toggleStatusBarVisibility}
-        />
-      )}
-      {screenModeState.hideMenuBar ? null : <OptionsBar />}
-      {screenModeState.hideMenuBar ? null : <DocumentTabs />}
-      <ImageAssetsGeneratorRunner />
-      <div className="relative flex-1 flex min-h-0">
-        {screenModeState.hideToolPalette ? null : <ToolPalette />}
-        {homeOpen || !activeDoc ? (
+      <React.Suspense fallback={null}>
+        <ImageAssetsGeneratorRunner />
+      </React.Suspense>
+      <EditorShell
+        hideMenuBar={screenModeState.hideMenuBar}
+        hidePanels={screenModeState.hidePanels}
+        hideStatusBar={screenModeState.hideStatusBar}
+        hideToolPalette={screenModeState.hideToolPalette}
+        statusBarVisible={statusBarVisible}
+        showCanvas={!homeOpen && !!activeDoc}
+        centerContent={(
           <React.Suspense fallback={<div className="min-w-0 flex-1 bg-[var(--ps-canvas-bg)]" />}>
             <HomeWorkspace onOpenNew={openNew} onClose={() => setHomeOpen(false)} />
           </React.Suspense>
-        ) : (
-          <CanvasView />
         )}
-        {screenModeState.hidePanels || isNarrow ? null : (
-          <ResizeHandle
-            direction="horizontal"
-            ariaLabel="Resize right sidebar"
-            onResize={resizeDock}
-            onResizeEnd={saveDockWidth}
-          />
-        )}
-        {screenModeState.hidePanels ? null : <PanelDock width={mounted ? dockWidth : 380} overlay={isNarrow} />}
-      </div>
-      {statusBarVisible && !screenModeState.hideStatusBar ? <StatusBar onHide={() => setStatusBarVisibility(false)} /> : null}
+        dockWidth={mounted ? dockWidth : 380}
+        panelOverlay={isNarrow}
+        onOpenNew={openNew}
+        onToggleStatusBar={toggleStatusBarVisibility}
+        onHideStatusBar={() => setStatusBarVisibility(false)}
+        onResizeDock={resizeDock}
+        onResizeDockEnd={saveDockWidth}
+      />
 
       {/* Context menu lives in its own subtree so opening/closing it does
           not re-render the workspace shell. */}
@@ -366,11 +385,11 @@ function Workspace() {
         onHudColorPicker={(x, y) => setColorPicker({ target: "foreground", surface: "hud", x, y })}
       />
 
-      <NewDocumentDialog open={newOpen} onOpenChange={setNewOpen} />
       <React.Suspense fallback={null}>
+        {newOpen ? <NewDocumentDialog open={newOpen} onOpenChange={setNewDialogOpen} /> : null}
         {imageSizeOpen ? <ImageSizeDialog open={imageSizeOpen} onOpenChange={setImageSizeOpen} /> : null}
         {canvasSizeOpen ? <CanvasSizeDialog open={canvasSizeOpen} onOpenChange={setCanvasSizeOpen} /> : null}
-        {commandOpen ? <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} onOpenNew={openNew} /> : null}
+        {commandOpen ? <CommandPalette open={commandOpen} onOpenChange={setCommandPaletteOpen} onOpenNew={openNew} /> : null}
         {colorPicker?.surface === "dialog" ? (
           <ColorPickerDialog
             open
@@ -442,6 +461,7 @@ function StartupRouteEffects() {
       const recent = readRecentDocuments().find((item) => item.id === recentId)
       if (!recent) return
       try {
+        const { deserializeProject } = await import("@/components/photoshop/document-io")
         const doc = await deserializeProject(recent.serialized)
         if (cancelled) return
         const fileKind: DocumentFileKind =
@@ -471,6 +491,11 @@ function StartupRouteEffects() {
     const openStartupImport = async () => {
       if (!startupImportId || presetName || recentId) return
       try {
+        const {
+          generateDocumentThumbnail,
+          loadRasterCanvasFromFile,
+          serializeProject,
+        } = await import("@/components/photoshop/document-io")
         const file = await readStartupImageImport(startupImportId)
         if (!file) {
           toast.error("The selected image is no longer available. Choose it again from Home.")

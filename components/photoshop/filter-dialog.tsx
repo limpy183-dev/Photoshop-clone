@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Slider } from "@/components/ui/slider"
 import { Button } from "@/components/ui/button"
 import { compositeLayer } from "./blend-modes"
-import { useEditor } from "./editor-context"
+import { useActiveDocument, useEditorCommands, useEditorSelector, useEditorStateSelector } from "./editor-context"
 import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
 import {
   applyPlannedFilterFinal,
@@ -53,7 +53,15 @@ const ADVANCED_ADJUSTMENTS = new Set([
 ])
 
 export function FilterDialog({ filterId, onClose }: FilterDialogProps) {
-  const { documents, activeDoc, selectedLayers, commit, dispatch, requestRender, setFilterPreview } = useEditor()
+  const documents = useEditorStateSelector((state) => state.documents)
+  const activeDoc = useActiveDocument()
+  const selectedLayers = React.useMemo(() => {
+    if (!activeDoc) return []
+    const selected = new Set(activeDoc.selectedLayerIds)
+    return activeDoc.layers.filter((layer) => selected.has(layer.id))
+  }, [activeDoc])
+  const { commit, dispatch, requestRender } = useEditorCommands()
+  const setFilterPreview = useEditorSelector((editor) => editor.setFilterPreview)
   const filter = filterId ? getFilter(filterId) : null
   const previewRef = React.useRef<HTMLCanvasElement>(null)
 

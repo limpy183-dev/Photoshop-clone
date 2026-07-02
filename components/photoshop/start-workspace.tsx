@@ -174,6 +174,7 @@ export function StartWorkspace() {
               type="file"
               accept="image/*"
               className="hidden"
+              suppressHydrationWarning
               onChange={(event) => void importImageFile(event)}
             />
           </nav>

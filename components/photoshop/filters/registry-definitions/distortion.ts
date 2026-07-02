@@ -92,7 +92,7 @@ export const distortionFilters: Record<string, FilterDef> = {
     name: "Twirl",
     category: "Distort",
     params: [
-      { type: "slider", key: "angle", label: "Angle", min: -999, max: 999, step: 1, default: 50, suffix: "Â°" },
+      { type: "slider", key: "angle", label: "Angle", min: -999, max: 999, step: 1, default: 50, suffix: "°" },
     ],
     apply: (src, p) => distortTwirl(src, Number(p.angle)),
   },

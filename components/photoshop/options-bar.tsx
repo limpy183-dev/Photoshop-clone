@@ -198,6 +198,7 @@ export function OptionsBar() {
           ) : null}
           <span className={labelClass}>Size:</span>
           <Input
+            aria-label="Brush size"
             type="number"
             min={1}
             max={500}
@@ -209,6 +210,7 @@ export function OptionsBar() {
           />
           {mounted ? (
             <Slider
+              aria-label="Brush size"
               min={1}
               max={300}
               step={1}
@@ -224,6 +226,7 @@ export function OptionsBar() {
         <div className="flex items-center gap-1.5">
           <ScrubLabel label="Hardness:" value={brush.hardness} min={0} max={100} onChange={(v) => dispatch({ type: "set-brush", brush: { hardness: v } })} />
           <PercentInput
+            label="Brush hardness"
             value={brush.hardness}
             onChange={(v) => dispatch({ type: "set-brush", brush: { hardness: v } })}
           />
@@ -233,6 +236,7 @@ export function OptionsBar() {
         <div className="flex items-center gap-1.5">
           <ScrubLabel label="Opacity:" value={brush.opacity} min={0} max={100} onChange={(v) => dispatch({ type: "set-brush", brush: { opacity: v } })} />
           <PercentInput
+            label="Brush opacity"
             value={brush.opacity}
             onChange={(v) => dispatch({ type: "set-brush", brush: { opacity: v } })}
           />
@@ -242,6 +246,7 @@ export function OptionsBar() {
         <div className="flex items-center gap-1.5">
           <ScrubLabel label="Flow:" value={brush.flow} min={0} max={100} onChange={(v) => dispatch({ type: "set-brush", brush: { flow: v } })} />
           <PercentInput
+            label="Brush flow"
             value={brush.flow}
             onChange={(v) => dispatch({ type: "set-brush", brush: { flow: v } })}
           />
@@ -251,6 +256,7 @@ export function OptionsBar() {
         <div className="flex items-center gap-1.5">
           <ScrubLabel label="Smoothing:" value={brush.smoothing} min={0} max={100} onChange={(v) => dispatch({ type: "set-brush", brush: { smoothing: v } })} />
           <PercentInput
+            label="Brush smoothing"
             value={brush.smoothing}
             onChange={(v) => dispatch({ type: "set-brush", brush: { smoothing: v } })}
           />
@@ -382,16 +388,19 @@ export function OptionsBar() {
             <Divider />
             <span className={labelClass}>Wet:</span>
             <PercentInput
+              label="Mixer wetness"
               value={brush.mixer?.wet ?? 55}
               onChange={(v) => dispatch({ type: "set-brush", brush: { mixer: { ...(brush.mixer ?? { wet: 55, load: 60, mix: 50, flow: brush.flow, sampleAllLayers: false, cleanAfterStroke: false }), wet: v } } })}
             />
             <span className={labelClass}>Load:</span>
             <PercentInput
+              label="Mixer load"
               value={brush.mixer?.load ?? 60}
               onChange={(v) => dispatch({ type: "set-brush", brush: { mixer: { ...(brush.mixer ?? { wet: 55, load: 60, mix: 50, flow: brush.flow, sampleAllLayers: false, cleanAfterStroke: false }), load: v } } })}
             />
             <span className={labelClass}>Mix:</span>
             <PercentInput
+              label="Mixer mix"
               value={brush.mixer?.mix ?? 50}
               onChange={(v) => dispatch({ type: "set-brush", brush: { mixer: { ...(brush.mixer ?? { wet: 55, load: 60, mix: 50, flow: brush.flow, sampleAllLayers: false, cleanAfterStroke: false }), mix: v } } })}
             />
@@ -432,6 +441,7 @@ export function OptionsBar() {
             />
             <span className={labelClass}>Fidelity:</span>
             <PercentInput
+              label="Art history fidelity"
               value={brush.artHistory?.fidelity ?? 60}
               onChange={(v) => dispatch({ type: "set-brush", brush: { artHistory: { ...(brush.artHistory ?? { style: "tight-medium", area: 24, fidelity: 60 }), fidelity: v } } })}
             />
@@ -1868,9 +1878,11 @@ function ToolBadge({ tool }: { tool: ToolId }) {
 /* ---------- ScrubLabel: drag-to-adjust label for number inputs ---------- */
 
 function PercentInput({
+  label,
   value,
   onChange,
 }: {
+  label: string
   value: number
   onChange: (value: number) => void
 }) {
@@ -1899,6 +1911,7 @@ function PercentInput({
 
   return (
     <Input
+      aria-label={label}
       type="number"
       min={0}
       max={100}

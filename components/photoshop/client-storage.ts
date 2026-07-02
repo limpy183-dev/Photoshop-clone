@@ -1,5 +1,7 @@
 "use client"
 
+import { emitRuntimeEvent } from "./runtime-telemetry"
+
 export type ClientStoragePrivacy =
   | "preference"
   | "project-data"
@@ -476,9 +478,29 @@ export function writeClientStorageJson<T>(
     return { ok: true }
   } catch (error) {
     if (error instanceof DOMException && error.name === "QuotaExceededError") {
+      emitRuntimeEvent("storage-failure", {
+        component: "local-storage",
+        operation: "write-json",
+        reason: "quota",
+        recoverable: true,
+      })
       return { ok: false, reason: "quota", error }
     }
-    if (error instanceof TypeError) return { ok: false, reason: "serialization", error }
+    if (error instanceof TypeError) {
+      emitRuntimeEvent("storage-failure", {
+        component: "local-storage",
+        operation: "write-json",
+        reason: "serialization",
+        recoverable: true,
+      })
+      return { ok: false, reason: "serialization", error }
+    }
+    emitRuntimeEvent("storage-failure", {
+      component: "local-storage",
+      operation: "write-json",
+      reason: "unknown",
+      recoverable: true,
+    })
     return { ok: false, reason: "unknown", error }
   }
 }
@@ -511,8 +533,20 @@ export function writeClientStorageString(
     return { ok: true }
   } catch (error) {
     if (error instanceof DOMException && error.name === "QuotaExceededError") {
+      emitRuntimeEvent("storage-failure", {
+        component: "local-storage",
+        operation: "write-string",
+        reason: "quota",
+        recoverable: true,
+      })
       return { ok: false, reason: "quota", error }
     }
+    emitRuntimeEvent("storage-failure", {
+      component: "local-storage",
+      operation: "write-string",
+      reason: "unknown",
+      recoverable: true,
+    })
     return { ok: false, reason: "unknown", error }
   }
 }

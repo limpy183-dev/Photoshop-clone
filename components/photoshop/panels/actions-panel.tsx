@@ -3,7 +3,7 @@
 import * as React from "react"
 import { Circle, Copy, Download, Folder, GitBranch, Play, Plus, Route, Square, Trash2, Upload, X } from "lucide-react"
 import { toast } from "sonner"
-import { makeHistoryEntry, useEditor } from "../editor-context"
+import { makeHistoryEntry, useActiveDocument, useEditorCommands, useEditorSelector, useEditorStateSelector } from "../editor-context"
 import { canvasFromDataUrl, downloadText } from "../document-io"
 import { MAX_CANVAS_DIMENSION, MAX_PROJECT_LAYERS } from "../canvas-limits"
 import { cn } from "@/lib/utils"
@@ -581,18 +581,16 @@ async function deserializeAction(action: SerializedMacroAction, width: number, h
 }
 
 export function ActionsPanel() {
-  const {
-    actions,
-    recordingActionId,
-    isPlayingAction,
-    activeDoc,
-    dispatch,
-    startRecordingAction,
-    stopRecordingAction,
-    playAction,
-    deleteAction,
-    clearAction,
-  } = useEditor()
+  const actions = useEditorStateSelector((state) => state.actions)
+  const recordingActionId = useEditorStateSelector((state) => state.recordingActionId)
+  const isPlayingAction = useEditorStateSelector((state) => state.isPlayingAction)
+  const activeDoc = useActiveDocument()
+  const { dispatch } = useEditorCommands()
+  const startRecordingAction = useEditorSelector((editor) => editor.startRecordingAction)
+  const stopRecordingAction = useEditorSelector((editor) => editor.stopRecordingAction)
+  const playAction = useEditorSelector((editor) => editor.playAction)
+  const deleteAction = useEditorSelector((editor) => editor.deleteAction)
+  const clearAction = useEditorSelector((editor) => editor.clearAction)
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [newActionName, setNewActionName] = React.useState("")
   const [newActionFolder, setNewActionFolder] = React.useState("Default")

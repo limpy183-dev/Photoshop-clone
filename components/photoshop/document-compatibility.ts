@@ -1,6 +1,6 @@
-import { capabilityWarningsForDocument } from "./capabilities"
+import { capabilityWarningsForDocument } from "./capability-warnings"
 import { validateClippingGroup } from "./psd-channels-masks"
-import { planTileOnlyExport } from "./tile-only-pipeline"
+import { planTileOnlyExport } from "./tile-only-export-planning"
 import type { ColorProfileName, DocumentReport, PsDocument } from "./types"
 import type {
   CompatibilityManifest,

@@ -16,7 +16,7 @@ import {
   Sparkles,
 } from "lucide-react"
 import { toast } from "sonner"
-import { makeHistoryEntry, useEditor } from "./editor-context"
+import { makeHistoryEntry, useEditorSelector } from "./editor-context"
 import { deserializeProject } from "./document-io"
 import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
 import { buildLearningIndex, runLearningIndexItem, type LearningIndexItem } from "./learning-index"
@@ -142,7 +142,8 @@ export interface HomeWorkspaceProps {
  * Home surface stays in sync with the rest of the app's data sources.
  */
 export function HomeWorkspace({ onOpenNew, onClose, onOpenFile }: HomeWorkspaceProps) {
-  const { dispatch, requestRender } = useEditor()
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const requestRender = useEditorSelector((editor) => editor.requestRender)
   const { recents, pinnedIds, togglePin } = useHomeData()
   const [category, setCategory] = React.useState<HomeCategory>(HOME_CATEGORIES[0])
 

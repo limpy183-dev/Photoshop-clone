@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test"
+import { runInNewContext } from "node:vm"
 
 import {
   analyzeContentAwareScale,
@@ -12,11 +13,13 @@ import {
 import {
   applyFilterBatch,
   applyFilterAsync,
+  getInlineFilterWorkerSupport,
   getFilterWorkerAudit,
   getFilterWorkerSupport,
   isFilterWorkerSupported,
   type FilterBatchOperation,
 } from "../components/photoshop/filter-worker"
+import { workerSource } from "../components/photoshop/filter-worker-source"
 import {
   sampleImageDataBilinear,
 } from "../components/photoshop/warp-transform"
@@ -44,6 +47,87 @@ globalThis.ImageData = TestImageData as unknown as typeof ImageData
 
 function imageData(width: number, height: number, pixels: number[]) {
   return new ImageData(new Uint8ClampedArray(pixels), width, height)
+}
+
+const INLINE_WORKER_PARITY_CASES: Array<[string, Record<string, number | string | boolean>]> = [
+  ["invert", {}],
+  ["grayscale", {}],
+  ["desaturate", {}],
+  ["sepia", { amount: 80 }],
+  ["threshold", { level: 120 }],
+  ["posterize", { levels: 4 }],
+  ["exposure", { ev: 0.5 }],
+  ["brightness-contrast", { brightness: 15, contrast: 20, useLegacy: false }],
+  ["gaussian-blur", { radius: 3 }],
+  ["box-blur", { radius: 1 }],
+  ["motion-blur", { distance: 2, angle: 0 }],
+  ["sharpen", { amount: 50 }],
+  ["unsharp-mask", { amount: 100, radius: 3 }],
+  ["noise", { amount: 0, mono: true, distribution: "uniform" }],
+  ["ripple", { amount: 20, size: "medium" }],
+  ["clouds", { scale: 50, seed: 3 }],
+  ["difference-clouds", { scale: 50, seed: 3 }],
+  ["fibers", { variance: 16, strength: 4, seed: 5 }],
+  ["radial-blur", { amount: 18, method: "spin", quality: "good", centerX: 50, centerY: 50 }],
+  ["surface-blur", { radius: 2, threshold: 24 }],
+  ["lens-blur", { radius: 2, bladeCount: 6, rotation: 0, brightness: 0, threshold: 255, noiseAmount: 0 }],
+  ["oil-paint", { radius: 2, levels: 16, shine: 18 }],
+  ["high-pass", { radius: 2 }],
+  ["offset", { horizontal: 1, vertical: -1, wrap: "wrap" }],
+  ["custom-convolution", { preset: "sharpen-more", strength: 100, bias: 0 }],
+  ["custom-filter", { preset: "edge-enhance", strength: 80, bias: 0 }],
+  ["lighting-effects", { style: "spot", intensity: 120, ambient: 45, height: 35 }],
+  ["field-blur", { blur: 8, pins: "0,50,2;100,50,16" }],
+  ["iris-blur", { blur: 8, centerX: 50, centerY: 50, radius: 40, feather: 25 }],
+  ["tilt-shift", { blur: 8, centerX: 50, centerY: 50, angle: 0, radius: 30, feather: 25 }],
+  ["path-blur", { distance: 5, angle: 0, taper: 20, path: "0,50;100,50" }],
+  ["spin-blur", { amount: 18, centerX: 50, centerY: 50, radius: 60 }],
+]
+
+function inlineWorkerCaseIds() {
+  return [...new Set([...workerSource().matchAll(/case "([^"]+)":/g)].map((match) => match[1]))].sort()
+}
+
+function applyInlineWorkerSource(
+  filterId: string,
+  src: ImageData,
+  params: Record<string, number | string | boolean>,
+) {
+  const messages: Array<{ id: number; width: number; height: number; buffer?: ArrayBuffer; error?: string }> = []
+  const self = {
+    postMessage(message: { id: number; width: number; height: number; buffer?: ArrayBuffer; error?: string }) {
+      messages.push(message)
+    },
+  }
+  runInNewContext(workerSource(), {
+    Array,
+    Error,
+    Math,
+    Number,
+    String,
+    Uint8ClampedArray,
+    self,
+  })
+
+  const buffer = new ArrayBuffer(src.data.byteLength)
+  new Uint8ClampedArray(buffer).set(src.data)
+  ;(self as typeof self & {
+    onmessage: (event: { data: unknown }) => void
+  }).onmessage({
+    data: {
+      id: 1,
+      filterId,
+      width: src.width,
+      height: src.height,
+      buffer,
+      params,
+    },
+  })
+  const final = messages.find((message) => message.buffer || message.error)
+  if (!final) throw new Error("Inline worker did not return a final response.")
+  if (final.error) throw new Error(final.error)
+  if (!final.buffer) throw new Error("Inline worker returned no buffer.")
+  return new ImageData(new Uint8ClampedArray(final.buffer), final.width, final.height)
 }
 
 test("filter compositing honors opacity, blend mode, and enabled masks", () => {
@@ -146,6 +230,14 @@ test("filter worker audit covers the full registry and classifies fallback reaso
   expect(audit.entries.find((entry) => entry.filterId === "match-color")?.strategy).toBe("main-thread-context")
 })
 
+test("inline filter worker support matches worker source and parity fixtures", () => {
+  const inlineSupport = getInlineFilterWorkerSupport().supportedFilters
+  const parityIds = INLINE_WORKER_PARITY_CASES.map(([filterId]) => filterId).sort()
+
+  expect(inlineSupport).toEqual(inlineWorkerCaseIds())
+  expect(parityIds).toEqual(inlineSupport)
+})
+
 test("worker-backed deterministic filters match registry output", async () => {
   const src = imageData(3, 2, [
     10, 20, 30, 255,
@@ -155,30 +247,31 @@ test("worker-backed deterministic filters match registry output", async () => {
     120, 130, 140, 210,
     210, 200, 180, 200,
   ])
-  const cases: Array<[string, Record<string, number | string | boolean>]> = [
-    ["gaussian-blur", { radius: 3 }],
-    ["box-blur", { radius: 1 }],
-    ["motion-blur", { distance: 2, angle: 0 }],
-    ["sharpen", { amount: 50 }],
-    ["unsharp-mask", { amount: 100, radius: 3 }],
-    ["noise", { amount: 0, mono: true, distribution: "uniform" }],
-    ["ripple", { amount: 20, size: "medium" }],
-    ["clouds", { scale: 50, seed: 3 }],
-    ["difference-clouds", { scale: 50, seed: 3 }],
-    ["fibers", { variance: 16, strength: 4, seed: 5 }],
-    ["field-blur", { blur: 8, pins: "0,50,2;100,50,16" }],
-    ["iris-blur", { blur: 8, centerX: 50, centerY: 50, radius: 40, feather: 25 }],
-    ["tilt-shift", { blur: 8, centerX: 50, centerY: 50, angle: 0, radius: 30, feather: 25 }],
-    ["path-blur", { distance: 5, angle: 0, taper: 20, path: "0,50;100,50" }],
-    ["spin-blur", { amount: 18, centerX: 50, centerY: 50, radius: 60 }],
-  ]
-
-  for (const [filterId, params] of cases) {
+  for (const [filterId, params] of INLINE_WORKER_PARITY_CASES) {
     const filter = getFilter(filterId)
     expect(filter).toBeTruthy()
     const expected = filter!.apply(src, params)
     const actual = await applyFilterAsync(filterId, src, params)
     expect(Array.from(actual.data)).toEqual(Array.from(expected.data))
+  }
+})
+
+test("inline worker source matches registry output for every supported fallback filter", () => {
+  const src = imageData(3, 2, [
+    10, 20, 30, 255,
+    80, 90, 100, 240,
+    150, 160, 170, 230,
+    40, 60, 90, 220,
+    120, 130, 140, 210,
+    210, 200, 180, 200,
+  ])
+
+  for (const [filterId, params] of INLINE_WORKER_PARITY_CASES) {
+    const filter = getFilter(filterId)
+    expect(filter).toBeTruthy()
+    const expected = filter!.apply(src, params)
+    const actual = applyInlineWorkerSource(filterId, src, params)
+    expect(Array.from(actual.data), filterId).toEqual(Array.from(expected.data))
   }
 })
 

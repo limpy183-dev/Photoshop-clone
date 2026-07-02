@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import {
   buildColorHarmony,
   cmykFieldsToRgb,
@@ -66,7 +66,9 @@ function actionForTarget(target: ColorPickerTarget, color: string) {
 }
 
 function usePickerColor(target: ColorPickerTarget, open: boolean, live = false) {
-  const { foreground, background, dispatch } = useEditor()
+  const foreground = useEditorSelector((editor) => editor.foreground)
+  const background = useEditorSelector((editor) => editor.background)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
   const current = colorForTarget(target, foreground, background)
   const [hex, setHex] = React.useState(() => normalizeWebColor(current))
   const [webDraft, setWebDraft] = React.useState(() => normalizeWebColor(current))
@@ -157,7 +159,7 @@ export function ColorPickerDialog({
   onOpenChange: (open: boolean) => void
   target: ColorPickerTarget
 }) {
-  const { activeDoc } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
   const picker = usePickerColor(target, open)
   const recents = useRecentColors(open)
   const [harmonyRule, setHarmonyRule] = React.useState<ColorHarmonyRule>("complementary")
@@ -425,9 +427,13 @@ export function ColorPickerHud({
   target: ColorPickerTarget
   position: { x: number; y: number }
 }) {
-  const { activeDoc } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
   const picker = usePickerColor(target, open, true)
   const wrapperRef = React.useRef<HTMLDivElement>(null)
+  const latestHexRef = React.useRef(picker.hex)
+  React.useEffect(() => {
+    latestHexRef.current = picker.hex
+  }, [picker.hex])
 
   React.useEffect(() => {
     if (!open) return
@@ -444,11 +450,8 @@ export function ColorPickerHud({
       // Persist the final HUD color into recents when the HUD closes — the
       // caller has already committed it to the editor, but the recents strip
       // shouldn't depend on Dialog OK being clicked.
-      pushRecentColor(picker.hex)
+      pushRecentColor(latestHexRef.current)
     }
-  // We intentionally read picker.hex only on cleanup; including it would
-  // re-run the cleanup on every drag tick.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
   if (!open) return null
@@ -717,7 +720,8 @@ function PreviewStrip({
   description: PickerColorDescription
   outOfGamut: boolean
 }) {
-  const { foreground, background } = useEditor()
+  const foreground = useEditorSelector((editor) => editor.foreground)
+  const background = useEditorSelector((editor) => editor.background)
   const previous = target === "foreground" ? foreground : background
   return (
     <div className="grid grid-cols-2 overflow-hidden rounded-sm border border-[var(--ps-divider)] text-[10px]">

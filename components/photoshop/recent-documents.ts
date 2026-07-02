@@ -9,6 +9,7 @@ import {
   type ClientStorageKey,
 } from "./client-storage"
 import { dispatchPhotoshopEvent } from "./events"
+import { openRegisteredIndexedDB, STORAGE_RESOURCES } from "./storage-registry"
 
 export interface RecentDocument {
   id: string
@@ -57,8 +58,6 @@ const RECENT_KINDS = new Set<RecentDocument["kind"]>(["project", "psd", "image",
 
 /* =================== IndexedDB autosave helpers =================== */
 
-const IDB_NAME = "ps-autosave-db"
-const IDB_VERSION = 1
 const IDB_STORE = "autosaves"
 
 function isIndexedDBAvailable() {
@@ -72,7 +71,7 @@ function isIndexedDBAvailable() {
 function openAutosaveDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (!isIndexedDBAvailable()) { reject(new Error("IndexedDB not available")); return }
-    const request = indexedDB.open(IDB_NAME, IDB_VERSION)
+    const request = openRegisteredIndexedDB(STORAGE_RESOURCES.recentDocuments)
     request.onupgradeneeded = () => {
       const db = request.result
       if (!db.objectStoreNames.contains(IDB_STORE)) {

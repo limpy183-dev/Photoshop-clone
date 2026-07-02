@@ -1,12 +1,14 @@
 import { expect, test } from "@playwright/test"
 
 import {
-  composeDocumentTile,
   createTileOnlyCapabilityDashboard,
   describeTileOnlyExportDecision,
+  planTileOnlyExport,
+} from "../components/photoshop/tile-only-export-planning"
+import {
+  composeDocumentTile,
   planTileOnlyDefaultCompositor,
   planTileOnlyEdit,
-  planTileOnlyExport,
   planTileOnlyFilter,
   planTileOnlyInteractiveTool,
   planTileOnlySelection,

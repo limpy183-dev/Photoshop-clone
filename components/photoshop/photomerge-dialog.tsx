@@ -14,7 +14,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { cn } from "@/lib/utils"
-import { makeCanvas, makeDocument, useEditor } from "./editor-context"
+import { makeCanvas, makeDocument, useEditorSelector } from "./editor-context"
 import { loadRasterCanvasFromFile, renderDocumentComposite } from "./document-io"
 import { photomergeImageStack } from "./photo-workflow-engine"
 import { contentAwareFill } from "./tool-helpers"
@@ -168,7 +168,9 @@ export function PhotomergeDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const { createDocument, documents, activeDocId } = useEditor()
+  const createDocument = useEditorSelector((editor) => editor.createDocument)
+  const documents = useEditorSelector((editor) => editor.documents)
+  const activeDocId = useEditorSelector((editor) => editor.activeDocId)
   const [sources, setSources] = React.useState<PhotomergeSource[]>([])
   const [settings, setSettings] = React.useState<PhotomergeWorkspaceSettings>(DEFAULT_SETTINGS)
   const [busy, setBusy] = React.useState(false)

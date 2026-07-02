@@ -3,8 +3,6 @@ import { randomUUID } from "node:crypto"
 import { z } from "zod"
 import {
   appendRecord,
-  checkRateLimit,
-  getClientIp,
   isAllowedOrigin,
   MARKETING_LIMITS,
   MarketingStoreQuotaError,
@@ -12,6 +10,8 @@ import {
   RequestBodyTooLargeError,
   readJsonWithLimit,
 } from "@/lib/marketing-store"
+import { checkServerRateLimit } from "@/lib/rate-limit-store"
+import { productionIdentityIsUsable, resolveClientIdentity } from "@/lib/client-identity"
 
 export const runtime = "nodejs"
 
@@ -40,16 +40,29 @@ export async function POST(request: Request) {
     )
   }
 
-  const rateLimit = checkRateLimit(
-    `feedback:${getClientIp(request)}`,
+  const identity = resolveClientIdentity(request)
+  if (!productionIdentityIsUsable(identity)) {
+    return NextResponse.json(
+      { ok: false, error: "Rate limiting is unavailable. Try again later." },
+      { status: 503 },
+    )
+  }
+  const rateLimit = await checkServerRateLimit(
+    `feedback:${identity.key}`,
     MARKETING_LIMITS.feedback.rateLimit,
   )
   if (!rateLimit.allowed) {
+    const rateLimitUnavailable = Boolean(rateLimit.reason)
     return NextResponse.json(
-      { ok: false, error: "Too many requests. Try again later." },
+      {
+        ok: false,
+        error: rateLimitUnavailable
+          ? "Rate limiting is unavailable. Try again later."
+          : "Too many requests. Try again later.",
+      },
       {
         headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 60) },
-        status: 429,
+        status: rateLimitUnavailable ? 503 : 429,
       },
     )
   }
@@ -97,6 +110,15 @@ export async function POST(request: Request) {
     })
   } catch (error) {
     if (error instanceof MarketingStoreQuotaError || error instanceof MarketingStoreUnavailableError) {
+      console.warn(
+        error instanceof MarketingStoreQuotaError
+          ? "marketing_record_store_quota"
+          : "marketing_record_store_unavailable",
+        {
+          operation: "feedback.append",
+          reason: error.reason,
+        },
+      )
       return NextResponse.json(
         { ok: false, error: "Could not record feedback. Try again later." },
         { status: 503 },

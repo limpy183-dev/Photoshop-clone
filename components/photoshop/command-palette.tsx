@@ -23,6 +23,7 @@ import {
 } from "./command-ranking"
 import { WORKFLOW_PACKS } from "./workflow-presets"
 import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
+import { preloadDialogForCommand } from "./dialog-preload"
 
 interface CommandPaletteProps {
   open: boolean
@@ -983,7 +984,13 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
                 role="option"
                 disabled={command.disabled}
                 aria-selected={active}
-                onMouseEnter={() => setActiveIndex(index)}
+                onMouseEnter={() => {
+                  setActiveIndex(index)
+                  void preloadDialogForCommand(command.id)
+                }}
+                onFocus={() => {
+                  void preloadDialogForCommand(command.id)
+                }}
                 onClick={() => runCommand(command)}
                 className={`grid w-full grid-cols-[86px_1fr_auto] items-center gap-2 px-3 py-2 text-left text-[12px] ${
                   command.disabled

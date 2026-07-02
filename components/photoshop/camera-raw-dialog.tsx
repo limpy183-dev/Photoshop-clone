@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import {
   CAMERA_RAW_LENS_PROFILES,
   applyCameraRawImageData,
@@ -74,7 +74,9 @@ function storeSnapshots(snapshots: CameraRawSnapshot[]) {
 }
 
 export function CameraRawDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
-  const { activeLayer, commit, requestRender } = useEditor()
+  const activeLayer = useEditorSelector((editor) => editor.activeLayer)
+  const commit = useEditorSelector((editor) => editor.commit)
+  const requestRender = useEditorSelector((editor) => editor.requestRender)
   const previewRef = React.useRef<HTMLCanvasElement>(null)
   const [settings, setSettings] = React.useState<CameraRawSettings>(DEFAULTS)
   const [snapshotName, setSnapshotName] = React.useState("Snapshot 1")

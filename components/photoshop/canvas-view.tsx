@@ -3,7 +3,7 @@
 import * as React from "react"
 import { useEditor } from "./editor-context"
 import { compositeLayer } from "./blend-modes"
-import { applyModeAndColorManagement } from "./advanced-subsystems"
+import { applyModeAndColorManagement } from "./document-color-management"
 import {
   addAnchorPointToPath,
   appendPathToCanvas,
@@ -83,7 +83,7 @@ import { normalizeAdvancedBlending } from "./layer-workflows"
 import { DEFAULT_PREFERENCES } from "./preferences-engine"
 import { paintCanvasCursorOverlay, resolveCanvasCursorState } from "./cursor-overlay"
 import { buildRetouchingFeedbackModel } from "./retouch-feedback"
-import { buildEdgeAwareQuickSelectionMaskData } from "./algorithmic-operations"
+import { emitRuntimeEvent } from "./runtime-telemetry"
 import { getLayerHighBitImage, highBitImageToSelectionSource, renderDocumentHighBitPreviewCanvas, syncHighBitLayerFromCanvasChange } from "./high-bit-document"
 import {
   defaultCanvasRuntimePreferences,
@@ -99,7 +99,6 @@ import {
 } from "./canvas-view-runtime"
 import { useCanvasViewportController } from "./canvas-viewport-controller"
 import {
-  applyTransformContext,
   clampTransformSkew,
   finiteOr,
   pickTransformHandle,
@@ -109,9 +108,9 @@ import {
   transformedBounds,
   type TransformDragState,
   type TransformHandleId,
-  type TransformInterpolation,
   type TransformOptionsEvent,
 } from "./canvas-transform-geometry"
+import { drawTransformSourcePreview } from "./canvas-transform-preview"
 import {
   cursorForTool,
   labelForTool,
@@ -645,6 +644,13 @@ export function CanvasView() {
       activeDoc.colorMode === "RGB"
     ) {
       const glCanvas = document.createElement("canvas")
+      glCanvas.addEventListener("webglcontextlost", () => {
+        emitRuntimeEvent("webgl-context-loss", {
+          component: "canvas-compositor",
+          fallback: "canvas-2d",
+          recoverable: true,
+        })
+      }, { once: true })
       glCanvas.width = cv.width
       glCanvas.height = cv.height
       const result = compositeDocumentWithWebGL(glCanvas, activeDoc.layers, {
@@ -811,6 +817,35 @@ export function CanvasView() {
     compose()
     return subscribeRender((change) => compose(true, change))
   }, [compose, subscribeRender])
+
+  React.useEffect(() => {
+    const stage = stageRef.current
+    if (!stage) return
+    delete stage.dataset.editorReady
+    let cancelled = false
+    let frame = 0
+    const measure = () => {
+      if (cancelled) return
+      const canvas = compositeRef.current
+      const box = stage.getBoundingClientRect()
+      const context = canvas?.getContext("2d", { willReadFrequently: true })
+      if (canvas && context && box.width > 0 && box.height > 0 && canvas.width > 0 && canvas.height > 0) {
+        const x = Math.min(canvas.width - 1, Math.floor(canvas.width / 2))
+        const y = Math.min(canvas.height - 1, Math.floor(canvas.height / 2))
+        if (context.getImageData(x, y, 1, 1).data[3] > 0) {
+          stage.dataset.editorReady = "true"
+          return
+        }
+      }
+      frame = requestAnimationFrame(measure)
+    }
+    frame = requestAnimationFrame(measure)
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(frame)
+      delete stage.dataset.editorReady
+    }
+  }, [activeDoc?.id, compose])
 
   React.useEffect(() => {
     return () => {
@@ -3630,9 +3665,55 @@ export function CanvasView() {
       const ctx = srcCanvas.getContext("2d")!
       const src = ctx.getImageData(0, 0, activeDoc.width, activeDoc.height)
       const { x, y } = pt
-      let quickSelectionDiagnostics: Selection["diagnostics"] | undefined
-      const m = tool === "quick-selection"
-        ? (() => {
+      const finishRegionSelection = (
+        m: ImageData,
+        diagnostics?: Selection["diagnostics"],
+        quick = false,
+      ) => {
+        let minX = activeDoc.width
+        let minY = activeDoc.height
+        let maxX = 0
+        let maxY = 0
+        let hasPixels = false
+        const data = m.data
+        for (let yi = 0; yi < activeDoc.height; yi++) {
+          for (let xi = 0; xi < activeDoc.width; xi++) {
+            if (data[(yi * activeDoc.width + xi) * 4 + 3] > 0) {
+              hasPixels = true
+              if (xi < minX) minX = xi
+              if (yi < minY) minY = yi
+              if (xi > maxX) maxX = xi
+              if (yi > maxY) maxY = yi
+            }
+          }
+        }
+        if (hasPixels) {
+          const maskCv = makeCanvas(activeDoc.width, activeDoc.height)
+          maskCv.getContext("2d")!.putImageData(m, 0, 0)
+          commitSelection({
+            bounds: { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 },
+            shape: "wand",
+            mask: maskCv,
+            diagnostics,
+          })
+          if (quick) commit("Quick Selection", [])
+        } else if (quick) {
+          const radius = Math.max(8, Math.min(48, Math.round(selectionOptions.tolerance / 2)))
+          commitSelection({
+            bounds: {
+              x: Math.max(0, x - radius),
+              y: Math.max(0, y - radius),
+              w: Math.min(activeDoc.width - Math.max(0, x - radius), radius * 2),
+              h: Math.min(activeDoc.height - Math.max(0, y - radius), radius * 2),
+            },
+            shape: "ellipse",
+          })
+          commit("Quick Selection", [])
+        }
+      }
+      if (tool === "quick-selection") {
+        void import("./algorithmic-operations")
+          .then(({ buildEdgeAwareQuickSelectionMaskData }) => {
             const result = buildEdgeAwareQuickSelectionMaskData(src, {
               seed: { x, y },
               tolerance: selectionOptions.tolerance,
@@ -3642,54 +3723,30 @@ export function CanvasView() {
               includeDiagonals: true,
               diagnostics: true,
             })
-            quickSelectionDiagnostics = result.diagnostics
             const mask = new ImageData(activeDoc.width, activeDoc.height)
             for (let i = 0; i < result.maskData.length; i++) {
               mask.data[i * 4 + 3] = result.maskData[i]
             }
-            return mask
-          })()
-        : floodFillMask(src, x, y, selectionOptions.tolerance, selectionOptions.contiguous)
-      // mask -> bounds
-      let minX = activeDoc.width
-      let minY = activeDoc.height
-      let maxX = 0
-      let maxY = 0
-      let hasPixels = false
-      const data = m.data
-      for (let yi = 0; yi < activeDoc.height; yi++) {
-        for (let xi = 0; xi < activeDoc.width; xi++) {
-          if (data[(yi * activeDoc.width + xi) * 4 + 3] > 0) {
-            hasPixels = true
-            if (xi < minX) minX = xi
-            if (yi < minY) minY = yi
-            if (xi > maxX) maxX = xi
-            if (yi > maxY) maxY = yi
-          }
-        }
-      }
-      if (hasPixels) {
-        const maskCv = makeCanvas(activeDoc.width, activeDoc.height)
-        maskCv.getContext("2d")!.putImageData(m, 0, 0)
-        commitSelection({
-          bounds: { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 },
-          shape: "wand",
-          mask: maskCv,
-          diagnostics: quickSelectionDiagnostics,
-        })
-        if (tool === "quick-selection") commit("Quick Selection", [])
-      } else if (tool === "quick-selection") {
-        const radius = Math.max(8, Math.min(48, Math.round(selectionOptions.tolerance / 2)))
-        commitSelection({
-          bounds: {
-            x: Math.max(0, x - radius),
-            y: Math.max(0, y - radius),
-            w: Math.min(activeDoc.width - Math.max(0, x - radius), radius * 2),
-            h: Math.min(activeDoc.height - Math.max(0, y - radius), radius * 2),
-          },
-          shape: "ellipse",
-        })
-        commit("Quick Selection", [])
+            finishRegionSelection(mask, result.diagnostics, true)
+          })
+          .catch(() => {
+            emitRuntimeEvent("worker-fallback", {
+              component: "quick-selection",
+              reason: "module-load-failed",
+              fallback: "magic-wand",
+            })
+            finishRegionSelection(
+              floodFillMask(src, x, y, selectionOptions.tolerance, selectionOptions.contiguous),
+              undefined,
+              true,
+            )
+          })
+      } else {
+        finishRegionSelection(
+          floodFillMask(src, x, y, selectionOptions.tolerance, selectionOptions.contiguous),
+          undefined,
+          false,
+        )
       }
       return
     }
@@ -5913,7 +5970,7 @@ export function CanvasView() {
     ctx.clearRect(0, 0, activeDoc.width, activeDoc.height)
     if (t.source) {
       ctx.save()
-      drawTransformSource(ctx, t)
+      drawTransformSourcePreview(ctx, t)
       ctx.restore()
     }
     transformRef.current = null
@@ -5931,7 +5988,7 @@ export function CanvasView() {
     const ctx = layer.canvas.getContext("2d")!
     ctx.clearRect(0, 0, activeDoc.width, activeDoc.height)
     ctx.save()
-    drawTransformSource(ctx, t)
+    drawTransformSourcePreview(ctx, t)
     ctx.restore()
     requestRender()
   }
@@ -6000,115 +6057,6 @@ export function CanvasView() {
     t.scaleY = ny
   }
 
-  function drawTransformSource(ctx: CanvasRenderingContext2D, t: TransformDragState) {
-    if (!t.source) return
-    if (!hasPerspective(t)) {
-      applyTransformContext(ctx, t)
-      ctx.drawImage(t.source, 0, 0)
-      return
-    }
-    drawPerspectiveWarp(ctx, t.source, t.bounds, transformCorners(t), t.interpolation ?? "bicubic")
-  }
-
-  function hasPerspective(t: TransformDragState) {
-    const p = t.perspective
-    if (!p) return false
-    return [p.tl, p.tr, p.br, p.bl].some((point) => Math.abs(point.x) > 0.01 || Math.abs(point.y) > 0.01)
-  }
-
-  function drawPerspectiveWarp(
-    ctx: CanvasRenderingContext2D,
-    source: HTMLCanvasElement,
-    srcRect: { x: number; y: number; w: number; h: number },
-    quad: { x: number; y: number }[],
-    interpolation: TransformInterpolation,
-  ) {
-    const xs = quad.map((p) => p.x)
-    const ys = quad.map((p) => p.y)
-    const minX = Math.max(0, Math.floor(Math.min(...xs)))
-    const minY = Math.max(0, Math.floor(Math.min(...ys)))
-    const maxX = Math.min(ctx.canvas.width, Math.ceil(Math.max(...xs)))
-    const maxY = Math.min(ctx.canvas.height, Math.ceil(Math.max(...ys)))
-    if (maxX <= minX || maxY <= minY || srcRect.w <= 0 || srcRect.h <= 0) return
-    const sctx = source.getContext("2d")
-    if (!sctx) return
-    const src = sctx.getImageData(0, 0, source.width, source.height)
-    const out = ctx.getImageData(minX, minY, maxX - minX, maxY - minY)
-    for (let y = minY; y < maxY; y++) {
-      for (let x = minX; x < maxX; x++) {
-        const uv = inverseBilinear({ x: x + 0.5, y: y + 0.5 }, quad)
-        if (!uv || uv.u < 0 || uv.u > 1 || uv.v < 0 || uv.v > 1) continue
-        const sx = srcRect.x + uv.u * srcRect.w
-        const sy = srcRect.y + uv.v * srcRect.h
-        const sample = sampleCanvasImage(src, sx, sy, interpolation !== "nearest")
-        const i = ((y - minY) * out.width + (x - minX)) * 4
-        const a = sample.a / 255
-        if (a <= 0) continue
-        out.data[i] = sample.r
-        out.data[i + 1] = sample.g
-        out.data[i + 2] = sample.b
-        out.data[i + 3] = sample.a
-      }
-    }
-    ctx.putImageData(out, minX, minY)
-  }
-
-  function inverseBilinear(point: { x: number; y: number }, quad: { x: number; y: number }[]) {
-    let u = 0.5
-    let v = 0.5
-    for (let i = 0; i < 8; i++) {
-      const p = bilinearPoint(quad, u, v)
-      const du = {
-        x: (1 - v) * (quad[1].x - quad[0].x) + v * (quad[2].x - quad[3].x),
-        y: (1 - v) * (quad[1].y - quad[0].y) + v * (quad[2].y - quad[3].y),
-      }
-      const dv = {
-        x: (1 - u) * (quad[3].x - quad[0].x) + u * (quad[2].x - quad[1].x),
-        y: (1 - u) * (quad[3].y - quad[0].y) + u * (quad[2].y - quad[1].y),
-      }
-      const ex = p.x - point.x
-      const ey = p.y - point.y
-      const det = du.x * dv.y - du.y * dv.x
-      if (Math.abs(det) < 1e-6) break
-      u -= (ex * dv.y - ey * dv.x) / det
-      v -= (du.x * ey - du.y * ex) / det
-    }
-    return { u, v }
-  }
-
-  function bilinearPoint(quad: { x: number; y: number }[], u: number, v: number) {
-    const a = (1 - u) * (1 - v)
-    const b = u * (1 - v)
-    const c = u * v
-    const d = (1 - u) * v
-    return {
-      x: quad[0].x * a + quad[1].x * b + quad[2].x * c + quad[3].x * d,
-      y: quad[0].y * a + quad[1].y * b + quad[2].y * c + quad[3].y * d,
-    }
-  }
-
-  function sampleCanvasImage(img: ImageData, x: number, y: number, smooth: boolean) {
-    if (!smooth) {
-      const sx = Math.max(0, Math.min(img.width - 1, Math.round(x)))
-      const sy = Math.max(0, Math.min(img.height - 1, Math.round(y)))
-      const i = (sy * img.width + sx) * 4
-      return { r: img.data[i], g: img.data[i + 1], b: img.data[i + 2], a: img.data[i + 3] }
-    }
-    const x0 = Math.max(0, Math.min(img.width - 1, Math.floor(x)))
-    const y0 = Math.max(0, Math.min(img.height - 1, Math.floor(y)))
-    const x1 = Math.max(0, Math.min(img.width - 1, x0 + 1))
-    const y1 = Math.max(0, Math.min(img.height - 1, y0 + 1))
-    const tx = x - x0
-    const ty = y - y0
-    const at = (px: number, py: number, c: number) => img.data[(py * img.width + px) * 4 + c]
-    const mix = (c: number) =>
-      at(x0, y0, c) * (1 - tx) * (1 - ty) +
-      at(x1, y0, c) * tx * (1 - ty) +
-      at(x0, y1, c) * (1 - tx) * ty +
-      at(x1, y1, c) * tx * ty
-    return { r: mix(0), g: mix(1), b: mix(2), a: mix(3) }
-  }
-
   const onPointerEnter = () => {
     const cur = cursorRef.current
     if (cur) cur.style.opacity = cur.firstElementChild ? "1" : "0"
@@ -6116,17 +6064,7 @@ export function CanvasView() {
   const onPointerLeave = () => {
     const cur = cursorRef.current
     if (cur) cur.style.opacity = "0"
-    // Previously this called onPointerUp with a synthesised
-    // { clientX: 0, clientY: 0 } event. That produced a stroke commit at
-    // canvas coordinates (0, 0), tainting every layer with a stray dab
-    // in the top-left corner whenever the pointer crossed out of the
-    // canvas mid-stroke. Strokes now stay in progress when the pointer
-    // leaves; the real onPointerUp on the window/document still fires
-    // when the user releases the button (browsers route a captured
-    // pointer's pointerup back to the captured element regardless of
-    // the leave). For non-stroke transient state (marquee preview, pan)
-    // there is nothing to commit on leave, so simply hiding the cursor
-    // is sufficient.
+    // Keep strokes in progress on leave; captured pointerup still commits.
   }
 
   const showBrushCursor =

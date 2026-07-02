@@ -6,17 +6,34 @@
     "max": 0
   },
   "oversizeFiles": {
-    "max": 20,
+    "max": 14,
     "maxLines": 1500
   },
   "useEditorImports": {
-    "max": 50
+    "max": 15
   },
   "topLargestFiles": {
     "count": 10,
-    "maxTotalLines": 34000
+    "maxTotalLines": 29000
   },
   "directClientStorage": {
     "max": 0
+  },
+  "hookDependencySuppressions": {
+    "max": 6
+  },
+  "coordinationFiles": {
+    "components/photoshop/canvas-view.tsx": {
+      "maxImports": 49,
+      "maxFanIn": 3
+    },
+    "components/photoshop/editor-context.tsx": {
+      "maxImports": 28,
+      "maxFanIn": 100
+    },
+    "components/photoshop/menu-bar.tsx": {
+      "maxImports": 32,
+      "maxFanIn": 3
+    }
   }
 }

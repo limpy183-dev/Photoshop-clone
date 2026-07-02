@@ -21,6 +21,9 @@ export const metadata: Metadata = {
 void marketingFontVariables
 const isGithubPages = process.env.GITHUB_PAGES === 'true'
 const publicBasePath = isGithubPages ? '/Photoshop-clone' : ''
+const analyticsEnabled =
+  process.env.VERCEL === '1' ||
+  Boolean(process.env.NEXT_PUBLIC_VERCEL_ENV)
 
 export default async function RootLayout({
   children,
@@ -54,7 +57,7 @@ export default async function RootLayout({
         />
         {children}
         <Toaster position="bottom-right" richColors closeButton />
-        {process.env.NODE_ENV === 'production' && <Analytics />}
+        {analyticsEnabled && <Analytics />}
       </body>
     </html>
   )

@@ -13,7 +13,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { downloadText } from "./document-io"
 import { dispatchPhotoshopEvent } from "./events"
-import { useEditor, makeCanvas } from "./editor-context"
+import { useActiveDocument, useEditorCommands, makeCanvas } from "./editor-context"
 import { capabilityWarningsForDocument } from "./capabilities"
 import { supportedIccProfileNames } from "./color-pipeline"
 import { diagnoseDocumentFonts } from "./typography-engine"
@@ -357,7 +357,8 @@ function _analyzePreflight(doc: PsDocument): LegacyPreflightItem[] {
 }
 
 export function PreflightDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
-  const { activeDoc, dispatch, commit, requestRender } = useEditor()
+  const activeDoc = useActiveDocument()
+  const { dispatch, commit, requestRender } = useEditorCommands()
   const [categoryFilter, setCategoryFilter] = React.useState<PreflightCategory | "All">("All")
   const [statusFilter, setStatusFilter] = React.useState<PreflightStatus | "All">("All")
   const [profileTarget, setProfileTarget] = React.useState<ColorManagementSettings["assignedProfile"]>("sRGB IEC61966-2.1")

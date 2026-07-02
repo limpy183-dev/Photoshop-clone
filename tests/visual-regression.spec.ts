@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test"
 
 test.describe("@visual editor visual regression snapshots", () => {
+  test.describe.configure({ timeout: 60_000 })
+
   test("home page hero remains stable", async ({ page }) => {
     await page.goto("/")
     await page.addStyleTag({

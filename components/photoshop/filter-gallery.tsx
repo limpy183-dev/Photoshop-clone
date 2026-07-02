@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { Checkbox } from "@/components/ui/checkbox"
 import { compositeFilterImageData, FILTERS, type FilterDef, type FilterParam } from "./filters"
-import { useEditor } from "./editor-context"
+import { useActiveDocument, useActiveLayer, useEditorCommands } from "./editor-context"
 import { Trash2, Plus, Eye, EyeOff, ChevronDown, ChevronRight, ChevronUp, GripVertical, Link2, Link2Off, Copy } from "lucide-react"
 import type { BlendMode, SmartFilter } from "./types"
 import { normalizeSmartFilterMaskDensity, normalizeSmartFilterMaskFeather, smartFilterMaskToImageData } from "./smart-filter-masks"
@@ -101,7 +101,9 @@ export function FilterGalleryDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
 }) {
-  const { activeLayer, activeDoc, commit, dispatch, requestRender } = useEditor()
+  const activeLayer = useActiveLayer()
+  const activeDoc = useActiveDocument()
+  const { commit, dispatch, requestRender } = useEditorCommands()
   const categories = React.useMemo(getFilterCategories, [])
   const categoryNames = React.useMemo(() => Object.keys(categories).sort(), [categories])
 

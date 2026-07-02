@@ -33,6 +33,7 @@ yarn.lock
 artifacts/*.log
 artifacts/dev-server-*.out.log
 artifacts/dev-server-*.err.log
+artifacts/webpack-stats.json
 
 # Local codex dev-process artifacts (PIDs, captured stdout/stderr)
 .codex-*.pid
@@ -42,6 +43,7 @@ artifacts/dev-server-*.err.log
 # Playwright test artifacts
 test-results/
 playwright-report/
+coverage/
 
 # GSAP external resources
 gsap-public/

@@ -46,10 +46,24 @@ export class InvalidJsonBodyError extends Error {
   }
 }
 
+export type MarketingStoreQuotaReason = "quota-exceeded" | "record-quota" | "byte-quota"
+export type MarketingStoreUnavailableReason =
+  | "invalid-response"
+  | "request-failed"
+  | "unconfigured"
+  | "upstream-timeout"
+  | "upstream-unavailable"
+
 export class MarketingStoreQuotaError extends Error {
-  constructor(message = "Marketing store quota exceeded.") {
+  reason: MarketingStoreQuotaReason
+
+  constructor(
+    message = "Marketing store quota exceeded.",
+    reason: MarketingStoreQuotaReason = "quota-exceeded",
+  ) {
     super(message)
     this.name = "MarketingStoreQuotaError"
+    this.reason = reason
   }
 }
 
@@ -80,9 +94,15 @@ export type RateLimitOptions = {
 }
 
 export class MarketingStoreUnavailableError extends Error {
-  constructor(message = "Marketing record storage is unavailable.") {
+  reason: MarketingStoreUnavailableReason
+
+  constructor(
+    message = "Marketing record storage is unavailable.",
+    reason: MarketingStoreUnavailableReason = "upstream-unavailable",
+  ) {
     super(message)
     this.name = "MarketingStoreUnavailableError"
+    this.reason = reason
   }
 }
 
@@ -299,6 +319,41 @@ export async function readAll<T extends StoredRecord>(name: string): Promise<T[]
   return records
 }
 
+function normalizeQuotaReason(value: unknown): MarketingStoreQuotaReason {
+  return value === "record-quota" || value === "byte-quota" ? value : "quota-exceeded"
+}
+
+function normalizeUnavailableReason(value: unknown): MarketingStoreUnavailableReason {
+  if (
+    value === "invalid-response" ||
+    value === "request-failed" ||
+    value === "unconfigured" ||
+    value === "upstream-timeout" ||
+    value === "upstream-unavailable"
+  ) {
+    return value
+  }
+  if (value === "unavailable") return "upstream-unavailable"
+  return "upstream-unavailable"
+}
+
+async function readRemoteStorePayload(response: Response): Promise<Record<string, unknown> | null> {
+  try {
+    const contentType = response.headers.get("content-type") ?? ""
+    if (!contentType.includes("application/json")) return null
+    const payload = await response.json()
+    return payload && typeof payload === "object" && !Array.isArray(payload)
+      ? payload as Record<string, unknown>
+      : null
+  } catch {
+    return null
+  }
+}
+
+function isTimeoutError(error: unknown) {
+  return error instanceof DOMException && error.name === "TimeoutError"
+}
+
 export async function appendRecord<T extends StoredRecord>(
   name: string,
   record: T,
@@ -319,15 +374,45 @@ export async function appendRecord<T extends StoredRecord>(
         signal: AbortSignal.timeout(5_000),
       })
       if (!response.ok) {
-        if (response.status === 409 || response.status === 413 || response.status === 429) {
-          throw new MarketingStoreQuotaError()
+        const payload = await readRemoteStorePayload(response)
+        const reason = payload?.reason
+        if (response.status === 409 || response.status === 413 || response.status === 429 || reason === "quota-exceeded") {
+          throw new MarketingStoreQuotaError(
+            "Marketing store quota exceeded.",
+            normalizeQuotaReason(reason),
+          )
         }
-        throw new MarketingStoreUnavailableError()
+        throw new MarketingStoreUnavailableError(
+          "Marketing record storage is unavailable.",
+          normalizeUnavailableReason(reason),
+        )
       }
-      return await response.json() as { added: boolean; total: number; record: T }
+      const payload = await readRemoteStorePayload(response)
+      if (
+        !payload ||
+        typeof payload.added !== "boolean" ||
+        !Number.isFinite(Number(payload.total)) ||
+        !payload.record ||
+        typeof payload.record !== "object" ||
+        Array.isArray(payload.record)
+      ) {
+        throw new MarketingStoreUnavailableError(
+          "Marketing record storage returned an invalid response.",
+          "invalid-response",
+        )
+      }
+      return {
+        added: payload.added,
+        total: Number(payload.total),
+        record: payload.record as T,
+      }
     } catch (error) {
       if (error instanceof MarketingStoreQuotaError) throw error
-      throw new MarketingStoreUnavailableError()
+      if (error instanceof MarketingStoreUnavailableError) throw error
+      throw new MarketingStoreUnavailableError(
+        "Marketing record storage is unavailable.",
+        isTimeoutError(error) ? "upstream-timeout" : "request-failed",
+      )
     }
   }
   if (
@@ -336,6 +421,7 @@ export async function appendRecord<T extends StoredRecord>(
   ) {
     throw new MarketingStoreUnavailableError(
       "MARKETING_RECORD_STORE_URL is required in production.",
+      "unconfigured",
     )
   }
 
@@ -385,12 +471,12 @@ async function assertStoreCanAppend(
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES
 
   if (currentRecords >= maxRecords) {
-    throw new MarketingStoreQuotaError(`${name} record quota reached.`)
+    throw new MarketingStoreQuotaError(`${name} record quota reached.`, "record-quota")
   }
 
   const currentBytes = await getFileSize(file)
   if (currentBytes + appendBytes > maxBytes) {
-    throw new MarketingStoreQuotaError(`${name} byte quota reached.`)
+    throw new MarketingStoreQuotaError(`${name} byte quota reached.`, "byte-quota")
   }
 }
 

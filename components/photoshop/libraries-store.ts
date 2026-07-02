@@ -12,6 +12,7 @@
  */
 
 import { dispatchPhotoshopEvent } from "./events"
+import { openRegisteredIndexedDB, STORAGE_RESOURCES } from "./storage-registry"
 
 export interface LibraryAssetRecord {
   id: string
@@ -44,8 +45,6 @@ export interface LibraryAssetFilter {
   group?: string
 }
 
-const DB_NAME = "ps-libraries"
-const DB_VERSION = 1
 const STORE_NAME = "assets"
 const CHANGE_EVENT = "ps-libraries-changed"
 const MAX_THUMB_DIM = 192
@@ -93,7 +92,7 @@ function isIndexedDBAvailable() {
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION)
+    const request = openRegisteredIndexedDB(STORAGE_RESOURCES.libraries)
     request.onupgradeneeded = () => {
       const db = request.result
       if (!db.objectStoreNames.contains(STORE_NAME)) {

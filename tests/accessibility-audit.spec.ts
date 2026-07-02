@@ -39,7 +39,7 @@ test("accessibility audit reports keyboard focus touch and panel metadata", () =
     ]),
   )
   expect(PANEL_DEFINITIONS.find((panel) => panel.id === "accessibility-audit")).toMatchObject({
-    label: "Accessibility Audit",
+    label: "Editor Accessibility Metadata Audit",
     category: "Inspection and Guides",
   })
   expect(formatAccessibilityAuditReport(report)).toContain("Panel and Tab ARIA")

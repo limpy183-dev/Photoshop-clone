@@ -25,7 +25,7 @@ export function AccessibilityAuditPanel() {
       shortcuts: DEFAULT_SHORTCUTS,
       panels: [
         { id: "browser-diagnostics", label: "Browser Diagnostics", category: "Inspection and Guides", keywords: ["diagnostics", "health", "webgl"] },
-        { id: "accessibility-audit", label: "Accessibility Audit", category: "Inspection and Guides", keywords: ["accessibility", "keyboard", "aria"] },
+        { id: "accessibility-audit", label: "Editor Accessibility Metadata Audit", category: "Inspection and Guides", keywords: ["accessibility", "keyboard", "aria"] },
       ],
       dialogs: KNOWN_DIALOGS,
       controls: COMPACT_CONTROLS,

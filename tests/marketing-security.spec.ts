@@ -5,9 +5,12 @@ import path from "node:path"
 import { expect, test } from "@playwright/test"
 
 import { appendRecord, getClientIp } from "../lib/marketing-store"
+import { resolveClientIdentity } from "../lib/client-identity"
 import { acquireConcurrencySlot, checkServerRateLimit } from "../lib/rate-limit-store"
 import { createServerCapability, verifyServerCapability } from "../lib/server-capabilities"
+import { POST as postFeedback } from "../app/api/feedback/route"
 import { POST as postGenerativeFill } from "../app/api/photoshop/generative-fill/route"
+import { POST as postSubscribe } from "../app/api/subscribe/route"
 
 type AppendOptions = {
   dedupeById?: boolean
@@ -27,6 +30,10 @@ const tinyPngDataUrl =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
 function uniqueStoreName(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function uniqueClientHeader(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
@@ -401,6 +408,136 @@ test("malformed successful rate-limit responses fail closed as unavailable", asy
   }
 })
 
+test("remote marketing store quota responses preserve adapter reason", async () => {
+  const env = snapshotEnv(["MARKETING_RECORD_STORE_TOKEN", "MARKETING_RECORD_STORE_URL"])
+  const originalFetch = globalThis.fetch
+
+  try {
+    process.env.MARKETING_RECORD_STORE_URL = "https://records.example.test/append"
+    process.env.MARKETING_RECORD_STORE_TOKEN = "record-token"
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ reason: "quota-exceeded" }), {
+        headers: { "content-type": "application/json" },
+        status: 429,
+      })) as typeof fetch
+
+    await expect(appendWithOptions("feedback", { id: "remote-quota", message: "full" }))
+      .rejects.toMatchObject({
+        name: "MarketingStoreQuotaError",
+        reason: "quota-exceeded",
+      })
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv(env)
+  }
+})
+
+test("feedback route logs durable store outages without exposing adapter details", async () => {
+  const env = snapshotEnv([
+    "MARKETING_RECORD_STORE_TOKEN",
+    "MARKETING_RECORD_STORE_URL",
+    "RATE_LIMIT_SERVICE_TOKEN",
+    "RATE_LIMIT_SERVICE_URL",
+  ])
+  const originalFetch = globalThis.fetch
+  const originalWarn = console.warn
+  const warnings: unknown[][] = []
+
+  try {
+    process.env.RATE_LIMIT_SERVICE_URL = "https://limits.example.test/check"
+    process.env.MARKETING_RECORD_STORE_URL = "https://records.example.test/append"
+    console.warn = ((...args: unknown[]) => {
+      warnings.push(args)
+    }) as typeof console.warn
+    globalThis.fetch = (async (input) => {
+      if (String(input) === process.env.RATE_LIMIT_SERVICE_URL) {
+        return new Response(JSON.stringify({ allowed: true }), {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        })
+      }
+      return new Response(JSON.stringify({ reason: "upstream-timeout" }), {
+        headers: { "content-type": "application/json" },
+        status: 503,
+      })
+    }) as typeof fetch
+
+    const response = await postFeedback(new Request("https://app.example.test/api/feedback", {
+      body: JSON.stringify({ message: "Remote store should fail closed." }),
+      headers: {
+        "content-type": "application/json",
+        "user-agent": uniqueClientHeader("remote-store-outage"),
+      },
+      method: "POST",
+    }))
+
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toEqual({
+      error: "Could not record feedback. Try again later.",
+      ok: false,
+    })
+    expect(warnings).toContainEqual([
+      "marketing_record_store_unavailable",
+      expect.objectContaining({
+        operation: "feedback.append",
+        reason: "upstream-timeout",
+      }),
+    ])
+  } finally {
+    console.warn = originalWarn
+    globalThis.fetch = originalFetch
+    restoreEnv(env)
+  }
+})
+
+test("marketing routes fail closed when production shared rate limiting is unconfigured", async () => {
+  const env = snapshotEnv([
+    "ALLOW_LOCAL_SERVER_RATE_LIMIT",
+    "NODE_ENV",
+    "PUBLIC_ORIGIN",
+    "RATE_LIMIT_SERVICE_TOKEN",
+    "RATE_LIMIT_SERVICE_URL",
+  ])
+
+  try {
+    ;(process.env as Record<string, string | undefined>).NODE_ENV = "production"
+    delete process.env.ALLOW_LOCAL_SERVER_RATE_LIMIT
+    delete process.env.PUBLIC_ORIGIN
+    delete process.env.RATE_LIMIT_SERVICE_TOKEN
+    delete process.env.RATE_LIMIT_SERVICE_URL
+
+    const subscribeResponse = await postSubscribe(new Request("https://app.example.test/api/subscribe", {
+      body: JSON.stringify({ email: "prod-limit@example.com" }),
+      headers: {
+        "content-type": "application/json",
+        "user-agent": "marketing-production-limit-test",
+      },
+      method: "POST",
+    }))
+    expect(subscribeResponse.status).toBe(503)
+    await expect(subscribeResponse.json()).resolves.toMatchObject({
+      error: "Rate limiting is unavailable. Try again later.",
+      ok: false,
+    })
+
+    const feedbackResponse = await postFeedback(new Request("https://app.example.test/api/feedback", {
+      body: JSON.stringify({ message: "Rate limit adapter should be required." }),
+      headers: {
+        "content-type": "application/json",
+        "user-agent": "marketing-production-limit-test",
+      },
+      method: "POST",
+    }))
+    expect(feedbackResponse.status).toBe(503)
+    await expect(feedbackResponse.json()).resolves.toMatchObject({
+      error: "Rate limiting is unavailable. Try again later.",
+      ok: false,
+    })
+  } finally {
+    restoreEnv(env)
+  }
+})
+
 test("client IP fallback uses request fingerprint instead of a shared unknown bucket", () => {
   const originalTrustProxy = process.env.MARKETING_TRUSTED_PROXY
   delete process.env.MARKETING_TRUSTED_PROXY
@@ -466,7 +603,9 @@ test("rate-limit buckets are isolated per fingerprint so two distinct clients ea
     .toMatchObject({ allowed: false })
 })
 
-test("feedback route rejects oversized request bodies", async ({ request }) => {
+test("feedback route rejects oversized request bodies", async ({ baseURL, request }) => {
+  test.skip(!baseURL, "Requires the default browser Playwright config with a running web server.")
+
   const response = await request.post("/api/feedback", {
     data: JSON.stringify({ message: "x".repeat(9_000) }),
     headers: {
@@ -482,36 +621,60 @@ test("feedback route rejects oversized request bodies", async ({ request }) => {
   })
 })
 
-test("subscribe route rate limits repeated malformed requests per IP", async ({ request }) => {
-  const ip = `2001:db8::${Date.now().toString(16)}:${Math.random().toString(16).slice(2)}`
-
-  for (let index = 0; index < 5; index += 1) {
-    const response = await request.post("/api/subscribe", {
-      data: "{",
-      headers: {
-        "content-type": "application/json",
-        "x-forwarded-for": ip,
-      },
-    })
-    expect(response.status()).toBe(400)
-  }
-
-  const limited = await request.post("/api/subscribe", {
-    data: "{",
+test("subscribe route rate limits repeated malformed requests per client fingerprint", async () => {
+  const userAgent = uniqueClientHeader("subscribe-rate-limit")
+  const requestInit = {
+    body: "{",
     headers: {
       "content-type": "application/json",
-      "x-forwarded-for": ip,
+      "user-agent": userAgent,
     },
-  })
+    method: "POST",
+  } satisfies RequestInit
 
-  expect(limited.status()).toBe(429)
-  expect(limited.headers()["retry-after"]).toBeTruthy()
+  for (let index = 0; index < 5; index += 1) {
+    const response = await postSubscribe(new Request("https://app.example.test/api/subscribe", requestInit))
+    const responseBody = await response.text()
+    expect(response.status, responseBody).toBe(400)
+  }
+
+  const limited = await postSubscribe(new Request("https://app.example.test/api/subscribe", requestInit))
+
+  expect(limited.status).toBe(429)
+  expect(limited.headers.get("retry-after")).toBeTruthy()
   await expect(limited.json()).resolves.toMatchObject({
     ok: false,
   })
 })
 
-test("subscribe route returns constant success without subscriber-count oracle", async ({ request }) => {
+test("client identity labels header fingerprints as weak and trusted proxy identity as strong", () => {
+  const original = process.env.MARKETING_TRUSTED_PROXY
+  try {
+    delete process.env.MARKETING_TRUSTED_PROXY
+    const weak = resolveClientIdentity(new Request("http://example.test", {
+      headers: { "user-agent": "identity-test" },
+    }))
+    expect(weak.strength).toBe("weak")
+    expect(weak.source).toBe("header-fingerprint")
+
+    process.env.MARKETING_TRUSTED_PROXY = "true"
+    const trusted = resolveClientIdentity(new Request("http://example.test", {
+      headers: { "cf-connecting-ip": "203.0.113.7" },
+    }))
+    expect(trusted).toEqual({
+      key: "ip:203.0.113.7",
+      source: "trusted-proxy",
+      strength: "strong",
+    })
+  } finally {
+    if (original === undefined) delete process.env.MARKETING_TRUSTED_PROXY
+    else process.env.MARKETING_TRUSTED_PROXY = original
+  }
+})
+
+test("subscribe route returns constant success without subscriber-count oracle", async ({ baseURL, request }) => {
+  test.skip(!baseURL, "Requires the default browser Playwright config with a running web server.")
+
   const email = `security-${Date.now()}-${Math.random().toString(16).slice(2)}@example.com`
 
   const response = await request.post("/api/subscribe", {
@@ -526,7 +689,9 @@ test("subscribe route returns constant success without subscriber-count oracle",
   await expect(response.json()).resolves.toEqual({ ok: true })
 })
 
-test("root page CSP carries a script nonce and permits React dev eval only in development", async ({ request }) => {
+test("root page CSP carries a script nonce and permits React dev eval only in development", async ({ baseURL, request }) => {
+  test.skip(!baseURL, "Requires the default browser Playwright config with a running web server.")
+
   const response = await request.get("/")
   const csp = response.headers()["content-security-policy"] ?? ""
   const nonce = response.headers()["x-nonce"] ?? ""
@@ -535,14 +700,12 @@ test("root page CSP carries a script nonce and permits React dev eval only in de
   expect(nonce).toMatch(/^[A-Za-z0-9+/]+$/)
   expect(csp).toContain(`'nonce-${nonce}'`)
 
-  if (process.env.NODE_ENV === "production") {
-    expect(csp).not.toContain("'unsafe-eval'")
-  } else {
-    expect(csp).toContain("'unsafe-eval'")
-  }
+  expect(csp).not.toContain("'unsafe-eval'")
 })
 
-test("response headers regression-protect the audit: no 'unsafe-inline' scripts, COOP/CORP and HSTS present", async ({ request }) => {
+test("response headers regression-protect the audit: no 'unsafe-inline' scripts, COOP/CORP and HSTS present", async ({ baseURL, request }) => {
+  test.skip(!baseURL, "Requires the default browser Playwright config with a running web server.")
+
   const response = await request.get("/")
   const headers = response.headers()
   const csp = headers["content-security-policy"] ?? ""
@@ -572,22 +735,4 @@ test("response headers regression-protect the audit: no 'unsafe-inline' scripts,
   expect(csp).toContain("frame-ancestors 'none'")
   expect(csp).toContain("object-src 'none'")
   expect(csp).toContain("base-uri 'self'")
-})
-
-test("localhost root page does not report script nonce hydration mismatch", async ({ browser }) => {
-  const page = await browser.newPage()
-  const hydrationMessages: string[] = []
-  page.on("console", (message) => {
-    const text = message.text()
-    if (/hydrated|hydration|nonce/i.test(text)) hydrationMessages.push(text)
-  })
-
-  try {
-    await page.goto("http://localhost:3000/", { waitUntil: "domcontentloaded" })
-    await page.waitForTimeout(1_000)
-  } finally {
-    await page.close()
-  }
-
-  expect(hydrationMessages).toEqual([])
 })

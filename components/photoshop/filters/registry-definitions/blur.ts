@@ -40,7 +40,7 @@ export const blurFilters: Record<string, FilterDef> = {
     name: "Motion Blur",
     category: "Blur",
     params: [
-      { type: "slider", key: "angle", label: "Angle", min: -180, max: 180, step: 1, default: 0, suffix: "Â°" },
+      { type: "slider", key: "angle", label: "Angle", min: -180, max: 180, step: 1, default: 0, suffix: "°" },
       { type: "slider", key: "distance", label: "Distance", min: 1, max: 100, step: 1, default: 12, suffix: "px" },
     ],
     apply: (src, p) => motionBlur(src, Number(p.distance), Number(p.angle)),

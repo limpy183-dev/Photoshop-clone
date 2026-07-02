@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import { featherMask, selectionFromMask, selectionToMaskCanvas, smoothSelectionMask } from "./tool-helpers"
 
 export function RefineEdgeDialog({
@@ -20,7 +20,8 @@ export function RefineEdgeDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
 }) {
-  const { activeDoc, dispatch } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
   const [feather, setFeather] = React.useState(0)
   const [smooth, setSmooth] = React.useState(0)
   const [contrast, setContrast] = React.useState(0)

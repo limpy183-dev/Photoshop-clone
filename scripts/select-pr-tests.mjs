@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, appendFileSync } from "node:fs"
+import { existsSync, readFileSync, appendFileSync, writeFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const TEST_COMMAND_CONFIG = "--config=playwright.node.config.ts"
 const PRODUCTION_SOURCE = /^(?:app\/|components\/|hooks\/|lib\/|types\/|proxy\.ts$|next\.config\.mjs$)/
-const BROAD_FALLBACK_COMMAND = "npx playwright test --grep-invert @visual"
+const MANIFEST_PATH = ".pr-test-invocations.json"
 
 const GROUPS = [
   {
@@ -13,6 +13,9 @@ const GROUPS = [
     match: [
       /^components\/photoshop\/document-/,
       /^components\/photoshop\/raster-codecs\.ts$/,
+      /^components\/photoshop\/raster-codec-/,
+      /^components\/photoshop\/raster-[^/]+-encoders\.ts$/,
+      /^components\/photoshop\/raster-metadata-/,
       /^components\/photoshop\/psd-/,
       /^components\/photoshop\/export-/,
       /^components\/photoshop\/file-info-dialog\.tsx$/,
@@ -40,6 +43,8 @@ const GROUPS = [
       /^components\/photoshop\/canvas-/,
       /^components\/photoshop\/canvas-view\.tsx$/,
       /^components\/photoshop\/brush-/,
+      /^components\/photoshop\/filter-worker/,
+      /^components\/photoshop\/filter-registry-worker/,
       /^components\/photoshop\/selection-/,
       /^components\/photoshop\/filters?(\.ts|\/)/,
     ],
@@ -54,6 +59,18 @@ const GROUPS = [
       "tests/canvas-tools.spec.ts",
       "tests/canvas-transform-geometry.spec.ts",
       "tests/canvas-view-runtime.spec.ts",
+      "tests/filters-algorithms.spec.ts",
+      "tests/io-color-filter-hardening.spec.ts",
+    ],
+  },
+  {
+    id: "tile-only-large-documents",
+    match: [
+      /^components\/photoshop\/tile-only-/,
+      /^components\/photoshop\/large-document-/,
+    ],
+    tests: [
+      "tests/large-document-tile-only.spec.ts",
     ],
   },
   {
@@ -149,18 +166,34 @@ const GROUPS = [
     ],
   },
   {
+    id: "capabilities-diagnostics",
+    match: [
+      /^components\/photoshop\/capabilit(?:y|ies)-/,
+      /^components\/photoshop\/capabilities\.ts$/,
+      /^components\/photoshop\/browser-diagnostics\.ts$/,
+      /^components\/photoshop\/document-compatibility\.ts$/,
+      /^components\/photoshop\/preflight-engine\.ts$/,
+    ],
+    tests: [
+      "tests/capabilities.spec.ts",
+      "tests/browser-diagnostics.spec.ts",
+      "tests/document-io-preflight.spec.ts",
+    ],
+  },
+  {
     id: "panels-timeline",
     match: [
       /^components\/photoshop\/panels\//,
       /^components\/photoshop\/panel-/,
       /^components\/photoshop\/timeline-/,
-      /^components\/photoshop\/three-d-video-/,
+      /^components\/photoshop\/three-d-/,
     ],
     tests: [
       "tests/panel-completion-helpers.spec.ts",
       "tests/panel-dock-ux.spec.ts",
       "tests/panels-layers.spec.ts",
       "tests/right-panel-status-context.spec.ts",
+      "tests/three-d-video-depth.spec.ts",
       "tests/timeline-animation.spec.ts",
     ],
   },
@@ -183,13 +216,25 @@ function normalizePath(file) {
   return String(file).trim().replace(/\\/g, "/").replace(/^\.\//, "")
 }
 
-function commandForTests(tests, config = TEST_COMMAND_CONFIG) {
+function invocationForTests(tests, config = TEST_COMMAND_CONFIG) {
   const existingTests = tests.filter((file) => existsSync(file))
   if (!existingTests.length) return null
-  return `npx playwright test ${existingTests.join(" ")}${config ? ` ${config}` : ""}`
+  return {
+    executable: "npx",
+    args: [
+      "playwright",
+      "test",
+      ...existingTests,
+      ...(config ? [config] : []),
+    ],
+  }
 }
 
-export function selectPrTestCommands(changedFiles) {
+function invocationToCommand(invocation) {
+  return [invocation.executable, ...invocation.args].join(" ")
+}
+
+export function selectPrTestInvocations(changedFiles) {
   const files = changedFiles.map(normalizePath).filter(Boolean)
   const selectedNodeTests = []
   const selectedBrowserTests = []
@@ -217,13 +262,20 @@ export function selectPrTestCommands(changedFiles) {
   }
 
   if (files.some((file) => PRODUCTION_SOURCE.test(file) && !matchedFiles.has(file))) {
-    return [BROAD_FALLBACK_COMMAND]
+    return [{
+      executable: "npx",
+      args: ["playwright", "test", "--grep-invert", "@visual"],
+    }]
   }
 
   return [
-    commandForTests(selectedNodeTests),
-    commandForTests(selectedBrowserTests, ""),
+    invocationForTests(selectedNodeTests),
+    invocationForTests(selectedBrowserTests, ""),
   ].filter(Boolean)
+}
+
+export function selectPrTestCommands(changedFiles) {
+  return selectPrTestInvocations(changedFiles).map(invocationToCommand)
 }
 
 function readChangedFilesFromCli(argv) {
@@ -234,23 +286,24 @@ function readChangedFilesFromCli(argv) {
   return readFileSync(0, "utf8").split(/\r?\n/)
 }
 
-function writeGitHubOutput(commands) {
+function writeGitHubOutput(commands, manifestPath) {
   if (!process.env.GITHUB_OUTPUT) return
   appendFileSync(
     process.env.GITHUB_OUTPUT,
     [
       `count=${commands.length}`,
-      "commands<<EOF",
-      ...commands,
-      "EOF",
+      `manifest=${manifestPath}`,
       "",
     ].join("\n"),
   )
 }
 
 if (fileURLToPath(import.meta.url) === resolve(process.argv[1] ?? "")) {
-  const commands = selectPrTestCommands(readChangedFilesFromCli(process.argv.slice(2)))
-  writeGitHubOutput(commands)
+  const changedFiles = readChangedFilesFromCli(process.argv.slice(2))
+  const invocations = selectPrTestInvocations(changedFiles)
+  const commands = invocations.map(invocationToCommand)
+  writeFileSync(MANIFEST_PATH, `${JSON.stringify(invocations, null, 2)}\n`)
+  writeGitHubOutput(commands, MANIFEST_PATH)
   process.stdout.write(commands.join("\n"))
   if (commands.length) process.stdout.write("\n")
 }

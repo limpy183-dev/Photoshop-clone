@@ -141,7 +141,8 @@ async function getScratchDir(): Promise<OPFSDirectoryHandleLike | null> {
   }
   _scratchDir = (async () => {
     try {
-      const root = await sm.getDirectory!()
+      const root = await openRegisteredOpfsRoot(STORAGE_RESOURCES.scratch, sm)
+      if (!root) return null
       const dirHandle = (root as unknown as {
         getDirectoryHandle?: (name: string, options?: { create?: boolean }) => Promise<OPFSDirectoryHandleLike>
       }).getDirectoryHandle
@@ -264,3 +265,4 @@ export function _resetScratchStateForTests(): void {
   _scratchDir = null
   _memoryFallback.clear()
 }
+import { openRegisteredOpfsRoot, STORAGE_RESOURCES } from "./storage-registry"

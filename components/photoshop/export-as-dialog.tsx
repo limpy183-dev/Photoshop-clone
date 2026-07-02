@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import { AlertTriangle, Copy, Download, FileImage, FileJson, RefreshCw, Save, Trash2, Upload } from "lucide-react"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import {
   buildRasterExportCanvas,
   createDocumentReport,
@@ -85,7 +85,9 @@ export function ExportAsDialog({
   onOpenChange: (v: boolean) => void
   initial?: ExportPresetPayload
 }) {
-  const { activeDoc, dispatch, commit } = useEditor()
+  const activeDoc = useEditorSelector((editor) => editor.activeDoc)
+  const dispatch = useEditorSelector((editor) => editor.dispatch)
+  const commit = useEditorSelector((editor) => editor.commit)
   const previewRef = React.useRef<HTMLCanvasElement>(null)
   const presetImportRef = React.useRef<HTMLInputElement | null>(null)
   const [format, setFormat] = React.useState<ExportFormat>("png")
@@ -797,6 +799,7 @@ export function ExportAsDialog({
                   onValueChange={(v) => setScale(v[0])}
                 />
                 <Input
+                  aria-label="Export scale percent"
                   type="number"
                   value={scale}
                   min={1}
@@ -1193,6 +1196,7 @@ export function ExportAsDialog({
                 <div className="grid gap-1.5 mt-3">
                   <Label className="text-[11px]">Matte color</Label>
                   <Input
+                    aria-label="Matte color"
                     type="color"
                     value={matte}
                     onChange={(e) => setMatte(e.target.value)}
@@ -1236,6 +1240,7 @@ export function ExportAsDialog({
                   <div className="grid gap-1.5">
                     <Label className="text-[11px]">Matte color</Label>
                     <Input
+                      aria-label="SVG matte color"
                       type="color"
                       value={matte}
                       onChange={(e) => setMatte(e.target.value)}

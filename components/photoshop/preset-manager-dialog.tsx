@@ -40,7 +40,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { downloadText } from "./document-io"
-import { useEditor } from "./editor-context"
+import { useActiveDocument, useActiveLayer, useEditorCommands, useEditorStateSelector, type Action } from "./editor-context"
 import type {
   AssetLibraryItem,
   BrushPreset,
@@ -160,7 +160,10 @@ export function PresetManagerDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const { activeDoc, activeLayer, brushPresets, dispatch, commit } = useEditor()
+  const activeDoc = useActiveDocument()
+  const activeLayer = useActiveLayer()
+  const brushPresets = useEditorStateSelector((state) => state.brushPresets)
+  const { dispatch, commit } = useEditorCommands()
 
   const [swatches, setSwatches] = React.useState<ManagerSwatchEntry[]>(() => loadManagedSwatches(activeDoc?.id))
   const [gradients, setGradients] = React.useState<ManagerGradientEntry[]>(loadManagedGradients)
@@ -1146,7 +1149,7 @@ function itemToGradientSettings(item: UnifiedPresetItem): Partial<GradientSettin
 
 function applyToolPreset(
   payload: ToolPresetPayload,
-  dispatch: ReturnType<typeof useEditor>["dispatch"],
+  dispatch: React.Dispatch<Action>,
 ) {
   if (payload.tool) dispatch({ type: "set-tool", tool: payload.tool })
   if (payload.brush) dispatch({ type: "set-brush", brush: payload.brush })

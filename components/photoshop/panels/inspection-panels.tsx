@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useEditor, useRenderSubscription } from "../editor-context"
+import { useActiveDocument, useRenderSubscription } from "../editor-context"
 import { compositeLayer } from "../blend-modes"
 import { getFilter } from "../filters"
 import { applyLayerStyle } from "../layer-styles"
@@ -173,7 +173,7 @@ function applyAdjustmentForPanel(ctx: CanvasRenderingContext2D, layer: Layer, wi
 }
 
 export function NavigatorPanel() {
-  const { activeDoc, dispatch: _dispatch } = useEditor()
+  const activeDoc = useActiveDocument()
   const canvasRef = React.useRef<HTMLCanvasElement>(null)
 
   const draw = React.useCallback(() => {
@@ -369,7 +369,7 @@ function maxFiniteFloatValue(data: Float32Array) {
 }
 
 export function HistogramPanel() {
-  const { activeDoc } = useEditor()
+  const activeDoc = useActiveDocument()
   const canvasRef = React.useRef<HTMLCanvasElement>(null)
   const previewRef = React.useRef<HTMLCanvasElement>(null)
   const [channel, setChannel] = React.useState<HistogramChannel>("composite")
@@ -525,7 +525,7 @@ export function HistogramPanel() {
 }
 
 export function InfoPanel() {
-  const { activeDoc } = useEditor()
+  const activeDoc = useActiveDocument()
   const compositeRef = React.useRef<HTMLCanvasElement | null>(null)
   const previewImageDataRef = React.useRef<ImageData | null>(null)
   const highBitSourceRef = React.useRef<{ image: HighBitImage; label: string } | null>(null)

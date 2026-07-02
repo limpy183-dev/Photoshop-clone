@@ -1,11 +1,18 @@
 import { expect, type Page, test } from "@playwright/test"
+import {
+  assertEditorGeometry,
+  assertRuntimeHealthy,
+  installRuntimeGuard,
+  waitForEditorReady,
+} from "./support/runtime-guard"
 
 const commandShortcut = process.platform === "darwin" ? "Meta+K" : "Control+K"
 const commandSearchPlaceholder = "Search tools, filters, panels, and commands"
 
 async function openEditor(page: Page) {
+  installRuntimeGuard(page)
   await page.goto("/editor", { waitUntil: "load" })
-  await expect(page.locator("[data-canvas-stage]")).toBeVisible({ timeout: 30000 })
+  await waitForEditorReady(page)
 }
 
 async function selectBrushTool(page: Page) {
@@ -72,12 +79,15 @@ async function performStroke(
   from: { x: number; y: number },
   to: { x: number; y: number },
 ) {
+  await assertEditorGeometry(page)
   const start = await canvasScreenPoint(page, from.x, from.y)
   const end = await canvasScreenPoint(page, to.x, to.y)
   await page.mouse.move(start.x, start.y)
   await page.mouse.down()
   await page.mouse.move(end.x, end.y, { steps: 8 })
   await page.mouse.up()
+  await assertEditorGeometry(page)
+  assertRuntimeHealthy(page)
 }
 
 // Regression test for "3 brush strokes then a single undo erases all 3" bug.

@@ -11,9 +11,21 @@ interface ResizeHandleProps {
   onResizeEnd?: () => void
   className?: string
   ariaLabel?: string
+  ariaValueNow?: number
+  ariaValueMin?: number
+  ariaValueMax?: number
 }
 
-export function ResizeHandle({ direction, onResize, onResizeEnd, className, ariaLabel }: ResizeHandleProps) {
+export function ResizeHandle({
+  direction,
+  onResize,
+  onResizeEnd,
+  className,
+  ariaLabel,
+  ariaValueNow = 50,
+  ariaValueMin = 0,
+  ariaValueMax = 100,
+}: ResizeHandleProps) {
   const handleRef = React.useRef<HTMLDivElement>(null)
   const dragging = React.useRef(false)
   const lastPos = React.useRef(0)
@@ -123,6 +135,9 @@ export function ResizeHandle({ direction, onResize, onResizeEnd, className, aria
       tabIndex={0}
       aria-label={ariaLabel ?? (isH ? "Resize horizontally" : "Resize vertically")}
       aria-orientation={isH ? "vertical" : "horizontal"}
+      aria-valuenow={ariaValueNow}
+      aria-valuemin={ariaValueMin}
+      aria-valuemax={ariaValueMax}
       className={cn(
         "group relative flex-shrink-0 bg-transparent transition-colors z-30 focus-visible:outline-none",
         isH

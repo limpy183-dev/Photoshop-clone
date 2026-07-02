@@ -73,15 +73,17 @@ test("Edit menu and command palette wire purge commands to notifications", () =>
 
 test("purge implementation integrates histories, tile caches, preview caches, and video cache", () => {
   const contextSource = fs.readFileSync(path.join(process.cwd(), "components/photoshop/editor-context.tsx"), "utf8")
+  const reducerSource = fs.readFileSync(path.join(process.cwd(), "components/photoshop/editor-reducer-late.ts"), "utf8")
+  const historyStorageSource = fs.readFileSync(path.join(process.cwd(), "components/photoshop/editor-history-storage.ts"), "utf8")
   const psbTileSource = fs.readFileSync(path.join(process.cwd(), "components/photoshop/psb-tile-view.ts"), "utf8")
   const tiledStoreSource = fs.readFileSync(path.join(process.cwd(), "components/photoshop/tiled-backing-store.ts"), "utf8")
 
-  expect(contextSource).toContain('case "purge-undo"')
-  expect(contextSource).toContain('case "purge-histories"')
-  expect(contextSource).toContain("releaseEntriesBlobs")
+  expect(reducerSource).toContain('case "purge-undo"')
+  expect(reducerSource).toContain('case "purge-histories"')
+  expect(historyStorageSource).toContain("releaseEntriesBlobs")
   expect(contextSource).toContain("purgeFilterPreviewCache(filterPreviewsRef.current)")
   expect(contextSource).toContain("purgePsbTileViewCaches()")
-  expect(contextSource).toContain('case "purge-video-cache"')
+  expect(reducerSource).toContain('case "purge-video-cache"')
 
   expect(psbTileSource).toContain("purgePsbTileViewCaches")
   expect(tiledStoreSource).toContain("estimateCacheBytes")

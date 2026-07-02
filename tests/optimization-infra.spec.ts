@@ -114,7 +114,7 @@ test("autosave planner skips unchanged documents and avoids large localStorage m
 })
 
 test("PSD codec is dynamically imported instead of bundled into the editor shell", () => {
-  const source = fs.readFileSync(path.join(process.cwd(), "components/photoshop/document-io.ts"), "utf8")
+  const source = fs.readFileSync(path.join(process.cwd(), "components/photoshop/document-io-shared.ts"), "utf8")
 
   expect(source).not.toContain('import { readPsd, writePsd } from "ag-psd"')
   expect(source).toContain('import("ag-psd")')

@@ -1,7 +1,7 @@
 "use client"
 
-const DB_NAME = "ps-startup-file-handoff"
-const DB_VERSION = 1
+import { openRegisteredIndexedDB, STORAGE_RESOURCES } from "./storage-registry"
+
 const STORE_NAME = "imports"
 
 export const STARTUP_IMAGE_IMPORT_PARAM = "startupImport"
@@ -29,7 +29,7 @@ function openStartupImportDB(): Promise<IDBDatabase> {
       reject(new Error("Browser storage is not available for image handoff."))
       return
     }
-    const request = indexedDB.open(DB_NAME, DB_VERSION)
+    const request = openRegisteredIndexedDB(STORAGE_RESOURCES.startupHandoff)
     request.onupgradeneeded = () => {
       const db = request.result
       if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME, { keyPath: "id" })

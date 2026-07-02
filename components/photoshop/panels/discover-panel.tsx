@@ -18,26 +18,22 @@ import {
   type LearningIndexItem,
 } from "../learning-index"
 import { LEARNING_PANEL_SOURCES } from "../learning-panel-sources"
+import {
+  readRegisteredSessionString,
+  STORAGE_RESOURCES,
+  writeRegisteredSessionString,
+} from "../storage-registry"
 
-const LEARNING_QUERY_KEY = "ps-learning-index-query"
 
 const TYPE_FILTERS = ["all", "command", "tool", "panel", "filter", "workflow", "doc"] as const
 type TypeFilter = (typeof TYPE_FILTERS)[number]
 
 function readQuery(): string {
-  if (typeof window === "undefined") return ""
-  try {
-    return sessionStorage.getItem(LEARNING_QUERY_KEY) ?? ""
-  } catch {
-    return ""
-  }
+  return readRegisteredSessionString(STORAGE_RESOURCES.learningQuery) ?? ""
 }
 
 function writeQuery(value: string) {
-  if (typeof window === "undefined") return
-  try {
-    sessionStorage.setItem(LEARNING_QUERY_KEY, value)
-  } catch {}
+  writeRegisteredSessionString(STORAGE_RESOURCES.learningQuery, value)
 }
 
 export function DiscoverPanel() {
