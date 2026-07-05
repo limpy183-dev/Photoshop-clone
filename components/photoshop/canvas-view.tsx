@@ -1,7 +1,11 @@
 "use client"
 
 import * as React from "react"
-import { useEditor } from "./editor-context"
+import {
+  shallowEqualEditorSelection,
+  useEditorSelector,
+  useEditorStoreApi,
+} from "./editor-context"
 import { compositeLayer } from "./blend-modes"
 import { applyModeAndColorManagement } from "./document-color-management"
 import {
@@ -45,7 +49,7 @@ import { planMemoryBudget } from "./memory-budget"
 import { planProgressiveRender } from "./progressive-renderer"
 import { createRafCoalescer, type RafCoalescer } from "./raf-coalescer"
 import { isEmptyDirtyRect } from "./dirty-rect"
-import { planDocumentTileRecomposition } from "./layer-tile-renderer"
+import { planDocumentTileRecomposition } from "./document-tile-recomposition"
 import {
   composeDocumentTile,
   planTileOnlyDefaultCompositor,
@@ -268,7 +272,29 @@ interface StrokeCompositeState {
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v))
 
 export function CanvasView() {
-  const ed = useEditor()
+  const editorStore = useEditorStoreApi()
+  const ed = useEditorSelector((editor) => ({
+    activeDoc: editor.activeDoc,
+    activeLayer: editor.activeLayer,
+    tool: editor.tool,
+    foreground: editor.foreground,
+    background: editor.background,
+    brush: editor.brush,
+    gradient: editor.gradient,
+    paintBucket: editor.paintBucket,
+    eraser: editor.eraser,
+    cloneSource: editor.cloneSource,
+    selectionOptions: editor.selectionOptions,
+    symmetry: editor.symmetry,
+    commit: editor.commit,
+    editSmartObject: editor.editSmartObject,
+    dispatch: editor.dispatch,
+    requestRender: editor.requestRender,
+    subscribeRender: editor.subscribeRender,
+    toggleQuickMask: editor.toggleQuickMask,
+    filterPreviews: editor.filterPreviews,
+    activeSmartFilterMaskTarget: editor.activeSmartFilterMaskTarget,
+  }), shallowEqualEditorSelection)
   const {
     activeDoc,
     activeLayer,
@@ -289,7 +315,6 @@ export function CanvasView() {
     subscribeRender,
     toggleQuickMask,
     filterPreviews,
-    history,
     activeSmartFilterMaskTarget,
   } = ed
 
@@ -579,7 +604,11 @@ export function CanvasView() {
         dirtyByLayer: change.dirtyByLayer!,
         tileSize: 512,
       })
-      if (dirtyPlan.strategy === "tile-isolated" && !isEmptyDirtyRect(dirtyPlan.compositeRect)) {
+      if (
+        dirtyPlan.strategy === "tile-isolated" &&
+        dirtyPlan.reasons.length === 0 &&
+        !isEmptyDirtyRect(dirtyPlan.compositeRect)
+      ) {
         const rect = dirtyPlan.compositeRect
         for (const tile of dirtyPlan.tiles) {
           const tileCanvas = composeDocumentTile(activeDoc, {
@@ -1915,6 +1944,9 @@ export function CanvasView() {
 
   function historySourceCanvasForActiveLayer() {
     if (!activeLayer) return null
+    const current = editorStore.getSnapshot()
+    const docId = current.activeDocId
+    const history = docId ? current.histories[docId]?.entries ?? [] : []
     const sourceEntry = history.find((entry) => entry.layers.some((snap) => snap.id === activeLayer.id && snap.canvas)) ?? history[0]
     const snap = sourceEntry?.layers.find((candidate) => candidate.id === activeLayer.id)
     return snap?.canvas && typeof snap.canvas.getContext === "function" ? snap.canvas : null

@@ -47,7 +47,7 @@ export interface EditorContextValue {
    * undo, +1 for redo). Returns true if the step was issued, false if
    * already at the bound. Reads bounds from the latest reducer state via
    * stateRef so it stays correct even when push-history renders are
-   * deferred via React.startTransition.
+   * frame-coalesced for nonessential UI projection updates.
    */
   stepHistoryBy: (delta: number) => boolean
   createHistorySnapshot: (name?: string) => void

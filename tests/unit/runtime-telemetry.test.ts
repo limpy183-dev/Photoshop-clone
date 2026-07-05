@@ -45,10 +45,18 @@ describe("runtime diagnostics", () => {
     const report = buildDiagnosticsExport({
       appVersion: "test",
       capabilities: { webgl: true },
+      recovery: {
+        available: true,
+        lastSuccessfulAutosaveAt: "2026-07-03T10:00:00.000Z",
+      },
     })
     expect(report.schemaVersion).toBe(1)
     expect(report.capabilities.webgl).toBe(true)
     expect(report.runtimeEvents[0].type).toBe("storage-failure")
+    expect(report.recovery).toEqual({
+      available: true,
+      lastSuccessfulAutosaveAt: "2026-07-03T10:00:00.000Z",
+    })
   })
 })
 

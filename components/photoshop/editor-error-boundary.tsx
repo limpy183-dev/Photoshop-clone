@@ -5,16 +5,20 @@ import { emitRuntimeEvent } from "./runtime-telemetry"
 
 interface EditorErrorBoundaryState {
   error: Error | null
+  recovery: {
+    available: boolean
+    lastSuccessfulAutosaveAt: number | null
+  } | null
 }
 
 export class EditorErrorBoundary extends React.Component<
   { children: React.ReactNode },
   EditorErrorBoundaryState
 > {
-  state: EditorErrorBoundaryState = { error: null }
+  state: EditorErrorBoundaryState = { error: null, recovery: null }
 
   static getDerivedStateFromError(error: Error): EditorErrorBoundaryState {
-    return { error }
+    return { error, recovery: null }
   }
 
   componentDidCatch(error: Error) {
@@ -23,6 +27,25 @@ export class EditorErrorBoundary extends React.Component<
       code: error.name,
       recoverable: true,
     })
+    void import("./recent-documents")
+      .then(({ readAutosavesAsync }) => readAutosavesAsync())
+      .then((autosaves) => {
+        const lastSuccessfulAutosaveAt = autosaves.reduce(
+          (latest, autosave) => Math.max(latest, autosave.updatedAt),
+          0,
+        )
+        this.setState({
+          recovery: {
+            available: autosaves.length > 0,
+            lastSuccessfulAutosaveAt: lastSuccessfulAutosaveAt || null,
+          },
+        })
+      })
+      .catch(() => {
+        this.setState({
+          recovery: { available: false, lastSuccessfulAutosaveAt: null },
+        })
+      })
   }
 
   render() {
@@ -35,7 +58,11 @@ export class EditorErrorBoundary extends React.Component<
         >
           <h1 className="text-lg font-semibold">The editor hit a runtime error</h1>
           <p className="mt-2 text-sm text-white/70">
-            Recovery data remains in browser storage. Reload the editor to restore the latest autosave.
+            {this.state.recovery === null
+              ? "Checking browser storage for recovery data."
+              : this.state.recovery.available
+                ? `Recovery data is available${this.state.recovery.lastSuccessfulAutosaveAt ? ` from ${new Date(this.state.recovery.lastSuccessfulAutosaveAt).toLocaleString()}` : ""}. Reload the editor to restore it.`
+                : "No autosave recovery was found. Reloading will restart the editor without a recovered document."}
           </p>
           <button
             type="button"
@@ -49,4 +76,3 @@ export class EditorErrorBoundary extends React.Component<
     )
   }
 }
-

@@ -5,7 +5,6 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Button } from "@/components/ui/button"
 import { toast } from "sonner"
 import { planAutosaveDocuments, planIncrementalAutosave, type IncrementalAutosaveManifest } from "./autosave-planner"
-import { deserializeProject, serializeProject } from "./document-io"
 import { useEditorSelector } from "./editor-context"
 import { addPhotoshopEventListener } from "./events"
 import { writeScratchBlob } from "./opfs-scratch"
@@ -26,6 +25,7 @@ function autosavePreferences() {
 
 export function AutosaveRecovery() {
   const documents = useEditorSelector((editor) => editor.documents)
+  const activeDocId = useEditorSelector((editor) => editor.activeDocId)
   const createDocument = useEditorSelector((editor) => editor.createDocument)
   const documentStatuses = useEditorSelector((editor) => editor.documentStatuses)
   const documentHistoryVersions = useEditorSelector((editor) => editor.documentHistoryVersions)
@@ -52,7 +52,7 @@ export function AutosaveRecovery() {
   const autosaveManifestRef = React.useRef<IncrementalAutosaveManifest>({ entries: {} })
   const writingRef = React.useRef(false)
 
-  const runAutosave = React.useCallback(() => {
+  const runAutosave = React.useCallback(async () => {
     if (writingRef.current) return
     writingRef.current = true
     try {
@@ -78,6 +78,7 @@ export function AutosaveRecovery() {
 
       if (!plan.documentsToSerialize.length && !pruned) return
 
+      const { serializeProject } = await import("./document-project-io")
       const serializedLengths: Record<string, number> = {}
       const serializedIds: string[] = []
       for (const planDoc of plan.documentsToSerialize) {
@@ -132,7 +133,7 @@ export function AutosaveRecovery() {
         }
         // Mark versions saved only once the write actually lands somewhere,
         // so failed writes are retried on the next tick.
-        void writeAutosaves(payload).then((persisted) => {
+        void writeAutosaves(payload, { activeDocumentId: activeDocId }).then((persisted) => {
           if (!persisted) return
           lastSavedVersionsRef.current = { ...lastSavedVersionsRef.current, ...savedVersions }
         })
@@ -144,13 +145,13 @@ export function AutosaveRecovery() {
     } finally {
       writingRef.current = false
     }
-  }, [])
+  }, [activeDocId])
 
   const scheduleAutosave = React.useCallback(() => {
     if (typeof requestIdleCallback === "function") {
-      requestIdleCallback(runAutosave, { timeout: 3000 })
+      requestIdleCallback(() => void runAutosave(), { timeout: 3000 })
     } else {
-      window.setTimeout(runAutosave, 0)
+      window.setTimeout(() => void runAutosave(), 0)
     }
   }, [runAutosave])
 
@@ -211,6 +212,7 @@ export function AutosaveRecovery() {
   const restore = async () => {
     if (!candidate) return
     try {
+      const { deserializeProject } = await import("./document-project-io")
       const doc = await deserializeProject(candidate.serialized)
       doc.name = `${doc.name} (Recovered)`
       createDocument(doc, "Recover Autosave")

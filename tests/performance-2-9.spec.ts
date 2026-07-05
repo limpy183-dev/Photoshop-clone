@@ -7,13 +7,13 @@ import {
 import {
   layerTileAddressForLayer,
   materializeLayerContentCanvas,
-  planDocumentTileRecomposition,
   planLayerTileRender,
   renderLayerContentTile,
   renderLayerTileForBackingStore,
   renderThreeDLayerTilePreview,
   renderTileCanvas,
 } from "../components/photoshop/layer-tile-renderer"
+import { planDocumentTileRecomposition } from "../components/photoshop/document-tile-recomposition"
 import {
   createProgressiveTileRefiner,
 } from "../components/photoshop/progressive-renderer"
@@ -524,7 +524,7 @@ test("smart object and 3D layer tiles materialize through the backing store cach
   expect(threeDTile.height).toBe(32)
 })
 
-test("document tile recomposition stays layer-isolated with masks, effects, adjustments, and clipping", () => {
+test("document tile recomposition promotes unsupported full-compositor semantics to a full frame", () => {
   installFixtureDom()
   const baseCanvas = document.createElement("canvas")
   baseCanvas.width = 128
@@ -600,10 +600,84 @@ test("document tile recomposition stays layer-isolated with masks, effects, adju
     dirtyByLayer: { base: [{ x: 8, y: 8, w: 32, h: 24 }] },
     tileSize: 32,
   })
-  expect(plan.strategy).toBe("tile-isolated")
-  expect(plan.tiles.map((tile) => tile.key)).toEqual(["0:0", "1:0"])
+  expect(plan.strategy).toBe("full-frame")
+  expect(plan.tiles).toEqual([])
   expect(plan.layersNeedingRecomposition).toEqual(["base", "clipped", "adjustment"])
   expect(plan.reasons).toEqual(expect.arrayContaining(["mask", "effects", "adjustment", "clipping-group"]))
+})
+
+test("document tile recomposition stays partial for a plain RGB raster stack", () => {
+  installFixtureDom()
+  const layer = {
+    id: "paint",
+    name: "Paint",
+    kind: "raster",
+    visible: true,
+    locked: false,
+    opacity: 1,
+    blendMode: "normal",
+    canvas: fixtureCanvas(128, 96),
+  } satisfies Layer
+  const doc = {
+    id: "doc",
+    name: "Doc",
+    width: 128,
+    height: 96,
+    zoom: 1,
+    layers: [layer],
+    activeLayerId: layer.id,
+    selectedLayerIds: [layer.id],
+    background: "#ffffff",
+    colorMode: "RGB",
+    bitDepth: 8,
+    selection: { bounds: null, shape: "rect" },
+  } satisfies PsDocument
+
+  const plan = planDocumentTileRecomposition(doc, {
+    dirtyByLayer: { paint: [{ x: 8, y: 8, w: 16, h: 16 }] },
+    tileSize: 32,
+  })
+
+  expect(plan.strategy).toBe("tile-isolated")
+  expect(plan.tiles.map((tile) => tile.key)).toEqual(["0:0"])
+  expect(plan.reasons).toEqual([])
+
+  const colorManaged = planDocumentTileRecomposition({
+    ...doc,
+    colorManagement: {
+      assignedProfile: "Adobe RGB (1998)",
+      workingSpace: "Adobe RGB (1998)",
+      renderingIntent: "relative-colorimetric",
+      blackPointCompensation: true,
+      proofProfile: "None",
+      proofColors: false,
+      gamutWarning: false,
+    },
+  }, {
+    dirtyByLayer: { paint: [{ x: 8, y: 8, w: 16, h: 16 }] },
+    tileSize: 32,
+  })
+  expect(colorManaged.strategy).toBe("full-frame")
+  expect(colorManaged.reasons).toContain("color-management")
+
+  const knockout = planDocumentTileRecomposition({
+    ...doc,
+    layers: [{
+      ...layer,
+      advancedBlending: {
+        fillOpacity: 1,
+        knockout: "deep",
+        channels: { r: true, g: true, b: true },
+        blendIfThis: { black: 0, blackFeather: 0, whiteFeather: 255, white: 255 },
+        blendIfUnderlying: { black: 0, blackFeather: 0, whiteFeather: 255, white: 255 },
+      },
+    }],
+  }, {
+    dirtyByLayer: { paint: [{ x: 8, y: 8, w: 16, h: 16 }] },
+    tileSize: 32,
+  })
+  expect(knockout.strategy).toBe("full-frame")
+  expect(knockout.reasons).toContain("knockout")
 })
 
 test("renderTileCanvas crops non-raster layer pixels to stable tile dimensions", () => {

@@ -12,7 +12,7 @@ import {
   type ApplyImageTargetChannel,
   type PixelChannel,
 } from "./color-channel-ops"
-import { makeCanvas, makeDocument, useEditor } from "./editor-context"
+import { makeCanvas, makeDocument, useEditorSelector } from "./editor-context"
 import { downloadText, loadRasterCanvasFromFile, renderDocumentComposite } from "./document-io"
 import {
   focusStackImageData,
@@ -87,7 +87,7 @@ export function GapWorkflowDialog({
   workflow: GapWorkflowKind | null
   onOpenChange: (open: boolean) => void
 }) {
-  const { documents, activeDoc, activeLayer, dispatch, commit, createDocument } = useEditor()
+  const { documents, activeDoc, activeLayer, dispatch, commit, createDocument } = useEditorSelector((editor) => editor)
   const [sourceId, setSourceId] = React.useState<ChannelWorkflowSource>("merged")
   const [sourceId2, setSourceId2] = React.useState<ChannelWorkflowSource>("merged")
   const [sourceChannel, setSourceChannel] = React.useState<PixelChannel>("rgb")

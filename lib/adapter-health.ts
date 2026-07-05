@@ -12,6 +12,10 @@ function configured(name: AdapterHealth["name"], value: string | undefined, loca
   return { name, configured: false, reason: "unconfigured" }
 }
 
+function enabled(value: string | undefined) {
+  return value === "true" || value === "1"
+}
+
 export function getAdapterHealth(): AdapterHealth[] {
   return [
     configured(
@@ -26,9 +30,8 @@ export function getAdapterHealth(): AdapterHealth[] {
     ),
     configured(
       "client-identity",
-      process.env.MARKETING_TRUSTED_PROXY,
+      enabled(process.env.MARKETING_TRUSTED_PROXY) ? "true" : undefined,
       false,
     ),
   ]
 }
-

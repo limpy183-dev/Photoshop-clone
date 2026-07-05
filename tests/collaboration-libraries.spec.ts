@@ -1,4 +1,6 @@
 import { expect, test, type Page } from "@playwright/test"
+import { libraryAssetFromFile } from "../components/photoshop/libraries-store"
+import { installFixtureDom } from "./photoshop-fixtures"
 
 async function openCommand(page: Page, query: string) {
   await page.locator("body").click({ position: { x: 20, y: 20 } })
@@ -7,6 +9,31 @@ async function openCommand(page: Page, query: string) {
   await page.getByPlaceholder("Search tools, filters, panels, and commands").fill(query)
   await page.keyboard.press("Enter")
 }
+
+test("library file import captures bitmap dimensions before closing it", async () => {
+  installFixtureDom()
+  const previousCreateImageBitmap = globalThis.createImageBitmap
+  let width = 17
+  let height = 23
+  globalThis.createImageBitmap = async () => ({
+    get width() { return width },
+    get height() { return height },
+    close() {
+      width = 0
+      height = 0
+    },
+  }) as ImageBitmap
+
+  try {
+    const record = await libraryAssetFromFile(
+      new File(["pixels"], "reference.png", { type: "image/png" }),
+    )
+    expect(record.width).toBe(17)
+    expect(record.height).toBe(23)
+  } finally {
+    globalThis.createImageBitmap = previousCreateImageBitmap
+  }
+})
 
 test("comments panel supports threaded open and resolved review states", async ({ page }) => {
   await page.goto("/editor")

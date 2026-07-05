@@ -1,9 +1,9 @@
 "use client"
 
 import * as React from "react"
-import { useEditor, useRenderSubscription } from "../editor-context"
+import { useEditorSelector, useRenderSubscription } from "../editor-context"
 import { makeCanvas } from "../editor-context"
-import { FILTERS } from "../filters"
+import { FILTER_META } from "../filters-meta"
 import {
   Eye,
   EyeOff,
@@ -321,7 +321,7 @@ export function LayersPanel() {
     requestRender,
     selectedLayers,
     activeSmartFilterMaskTarget,
-  } = useEditor()
+  } = useEditorSelector((editor) => editor)
   const [search, setSearch] = React.useState("")
   const [filterKind, setFilterKind] = React.useState<FilterKind>("all")
   const [dragId, setDragId] = React.useState<string | null>(null)
@@ -629,7 +629,7 @@ export function LayersPanel() {
   }
 
   const createAdjustmentLayer = (filterId: AdjustmentType) => {
-    const filter = FILTERS[filterId]
+    const filter = FILTER_META[filterId]
     if (!filter) return
     const layer = createAdjustmentLayerModel({
       filterId,
@@ -1831,7 +1831,7 @@ function KindIcon({ kind }: { kind: LayerKind }) {
 }
 
 function AdjustmentThumb({ layer }: { layer: Layer }) {
-  const label = layer.adjustment ? FILTERS[layer.adjustment.type]?.name ?? layer.adjustment.type : "Adjustment"
+  const label = layer.adjustment ? FILTER_META[layer.adjustment.type]?.name ?? layer.adjustment.type : "Adjustment"
   return (
     <div
       data-testid={`adjustment-thumb-${layer.name}`}

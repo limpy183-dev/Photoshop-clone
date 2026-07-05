@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { expect, test } from "@playwright/test"
 import {
   clearRuntimeEvents,
@@ -45,5 +45,12 @@ test("route and editor error boundaries are present", () => {
   expect(existsSync("app/error.tsx")).toBe(true)
   expect(existsSync("app/global-error.tsx")).toBe(true)
   expect(existsSync("components/photoshop/editor-error-boundary.tsx")).toBe(true)
+  expect(existsSync("components/photoshop/feature-error-boundary.tsx")).toBe(true)
 })
 
+test("panel stacks and menu dialogs have local error isolation", () => {
+  const panelDock = readFileSync("components/photoshop/panel-dock.tsx", "utf8")
+  const menuDialogs = readFileSync("components/photoshop/menus/menu-dialogs.tsx", "utf8")
+  expect(panelDock).toContain("<FeatureErrorBoundary")
+  expect(menuDialogs).toContain("<FeatureErrorBoundary")
+})

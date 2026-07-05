@@ -10,7 +10,8 @@ import {
   type BrowserDiagnosticsDocumentSnapshot,
   type BrowserDiagnosticsReport,
 } from "../browser-diagnostics"
-import { downloadText } from "../document-io"
+import { downloadDiagnosticsExport } from "../diagnostics-export"
+import { downloadText } from "../document-file-system"
 import { useEditorSelector } from "../editor-context"
 import { loadPreferencesFromStorage } from "../preferences-engine"
 import { readAutosaves } from "../recent-documents"
@@ -209,6 +210,29 @@ export function BrowserDiagnosticsPanel() {
     setMessage("Report exported")
   }
 
+  const downloadDiagnostics = () => {
+    const autosaves = readAutosaves()
+    const latestAutosave = autosaves.reduce(
+      (latest, entry) => Math.max(latest, entry.updatedAt),
+      0,
+    )
+    downloadDiagnosticsExport({
+      appVersion: "0.1.0",
+      capabilities: {
+        reportAvailable: !!report,
+        fallbackCount: report?.fallbacks.length ?? 0,
+        recoveryCount: autosaves.length,
+      },
+      recovery: {
+        available: autosaves.length > 0,
+        lastSuccessfulAutosaveAt: latestAutosave
+          ? new Date(latestAutosave).toISOString()
+          : null,
+      },
+    })
+    setMessage("Diagnostics downloaded")
+  }
+
   return (
     <div data-testid="browser-diagnostics-panel" className="flex max-h-full flex-col gap-2 p-2 text-[11px] text-[var(--ps-text)]">
       <div className="flex items-center gap-1">
@@ -241,6 +265,16 @@ export function BrowserDiagnosticsPanel() {
           className="flex h-7 w-7 items-center justify-center rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)] disabled:opacity-50"
         >
           <Download className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          aria-label="Download diagnostics JSON"
+          title="Download diagnostics JSON"
+          onClick={downloadDiagnostics}
+          className="flex h-7 items-center justify-center gap-1 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[10px] text-[var(--ps-text-dim)] hover:bg-[var(--ps-tool-hover)] hover:text-[var(--ps-text)]"
+        >
+          <Download className="h-3.5 w-3.5" />
+          JSON
         </button>
         <div className="min-w-0 flex-1 text-right text-[10px] text-[var(--ps-text-dim)]">
           {report ? new Date(report.generatedAt).toLocaleTimeString() : loading ? "Scanning" : "Not scanned"}

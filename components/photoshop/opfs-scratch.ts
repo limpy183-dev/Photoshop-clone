@@ -184,10 +184,17 @@ export async function writeScratchBlob(key: string, blob: Blob): Promise<"persis
     return "in-memory"
   }
   try {
-    const fileHandle = await dir.getFileHandle(key, { create: true })
-    const writable = await fileHandle.createWritable()
-    await writable.write(blob)
-    await writable.close()
+    await writeWithRegisteredQuotaRecovery(
+      STORAGE_RESOURCES.scratch,
+      async () => {
+        const fileHandle = await dir.getFileHandle(key, { create: true })
+        const writable = await fileHandle.createWritable()
+        await writable.write(blob)
+        await writable.close()
+      },
+      clearScratchDirectory,
+    )
+    _memoryFallback.delete(key)
     return "persisted"
   } catch {
     _memoryFallback.set(key, blob)
@@ -197,13 +204,15 @@ export async function writeScratchBlob(key: string, blob: Blob): Promise<"persis
 
 export async function readScratchBlob(key: string): Promise<Blob | null> {
   assertValidScratchKey(key)
+  const fallback = _memoryFallback.get(key)
+  if (fallback) return fallback
   const dir = await getScratchDir()
-  if (!dir) return _memoryFallback.get(key) ?? null
+  if (!dir) return null
   try {
     const fileHandle = await dir.getFileHandle(key, { create: false })
     return await fileHandle.getFile()
   } catch {
-    return _memoryFallback.get(key) ?? null
+    return null
   }
 }
 
@@ -265,4 +274,8 @@ export function _resetScratchStateForTests(): void {
   _scratchDir = null
   _memoryFallback.clear()
 }
-import { openRegisteredOpfsRoot, STORAGE_RESOURCES } from "./storage-registry"
+import {
+  openRegisteredOpfsRoot,
+  STORAGE_RESOURCES,
+  writeWithRegisteredQuotaRecovery,
+} from "./storage-registry"

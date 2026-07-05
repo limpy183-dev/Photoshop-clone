@@ -28,9 +28,9 @@
     }
   },
   "totals": {
-    "chunkCount": 155,
+    "chunkCount": 161,
     "initialFiles": 5,
-    "initialJsBytes": 542569
+    "initialJsBytes": 542687
   },
   "largest": [
     {
@@ -42,16 +42,12 @@
       "bytes": 779006
     },
     {
-      "file": ".next/static/chunks/9044.001c908eb8e6672f.js",
-      "bytes": 484947
+      "file": ".next/static/chunks/9044.8bf7804b93f9dac2.js",
+      "bytes": 480565
     },
     {
-      "file": ".next/static/chunks/1873.94a299c08ad53f7a.js",
-      "bytes": 478018
-    },
-    {
-      "file": ".next/static/chunks/2153.495bfd7107864d9a.js",
-      "bytes": 371464
+      "file": ".next/static/chunks/8120.7f897b171ff2be71.js",
+      "bytes": 454027
     },
     {
       "file": ".next/static/chunks/8478.1157d0ca8f8cb00d.js",
@@ -74,15 +70,23 @@
       "bytes": 189700
     },
     {
+      "file": ".next/static/chunks/2217.9508be9b29d91434.js",
+      "bytes": 180937
+    },
+    {
       "file": ".next/static/chunks/main-4ab15addd4deb4eb.js",
       "bytes": 132570
+    },
+    {
+      "file": ".next/static/chunks/4244.80cc4399e8968626.js",
+      "bytes": 131206
     },
     {
       "file": ".next/static/chunks/7443.812955d0fdcef420.js",
       "bytes": 130779
     },
     {
-      "file": ".next/static/chunks/2318.ec703366da75cd9e.js",
+      "file": ".next/static/chunks/2318.73b0e4d0dabf001c.js",
       "bytes": 118549
     },
     {
@@ -98,20 +102,16 @@
       "bytes": 84285
     },
     {
-      "file": ".next/static/chunks/8534-0247730dc740c58d.js",
-      "bytes": 71307
-    },
-    {
-      "file": ".next/static/chunks/2941.c481f4cbf008e225.js",
-      "bytes": 70719
+      "file": ".next/static/chunks/8534-5939ae03055370a7.js",
+      "bytes": 73308
     },
     {
       "file": ".next/static/chunks/486.db36d5a4ad6bf6bd.js",
       "bytes": 63788
     },
     {
-      "file": ".next/static/chunks/7696.312b23c36ded5356.js",
-      "bytes": 62194
+      "file": ".next/static/chunks/7696.bc01d60086ec34ac.js",
+      "bytes": 62198
     }
   ],
   "decoderChunks": [
@@ -184,8 +184,8 @@
       ]
     },
     {
-      "file": ".next/static/chunks/9044.001c908eb8e6672f.js",
-      "bytes": 484947,
+      "file": ".next/static/chunks/9044.8bf7804b93f9dac2.js",
+      "bytes": 480565,
       "classification": "shared-or-dynamic",
       "routes": [],
       "moduleSamples": [],
@@ -213,8 +213,8 @@
       ]
     },
     {
-      "file": ".next/static/chunks/1873.94a299c08ad53f7a.js",
-      "bytes": 478018,
+      "file": ".next/static/chunks/8120.7f897b171ff2be71.js",
+      "bytes": 454027,
       "classification": "shared-or-dynamic",
       "routes": [],
       "moduleSamples": [],
@@ -235,36 +235,7 @@
         "components/photoshop/canvas-shape-helpers.ts",
         "components/photoshop/canvas-smart-guides.tsx"
       ],
-      "webpackStatsModuleSampleCount": 62,
-      "webpackStatsPath": "artifacts/webpack-stats.json",
-      "ownershipSources": [
-        "webpack-stats"
-      ]
-    },
-    {
-      "file": ".next/static/chunks/2153.495bfd7107864d9a.js",
-      "bytes": 371464,
-      "classification": "shared-or-dynamic",
-      "routes": [],
-      "moduleSamples": [],
-      "moduleSampleCount": 0,
-      "sourcemapModuleSamples": [],
-      "sourcemapModuleSampleCount": 0,
-      "webpackStatsModuleSamples": [
-        "components/photoshop/capability-warnings.ts",
-        "components/photoshop/document-compatibility.ts",
-        "components/photoshop/document-file-system.ts",
-        "components/photoshop/document-io-shared.ts",
-        "components/photoshop/document-io.ts",
-        "components/photoshop/document-project-io.ts",
-        "components/photoshop/document-psd-io.ts",
-        "components/photoshop/document-raster-export.ts",
-        "components/photoshop/document-rendering.ts",
-        "components/photoshop/export-worker.ts",
-        "components/photoshop/filter-worker-source.ts",
-        "components/photoshop/filter-worker.ts"
-      ],
-      "webpackStatsModuleSampleCount": 37,
+      "webpackStatsModuleSampleCount": 57,
       "webpackStatsPath": "artifacts/webpack-stats.json",
       "ownershipSources": [
         "webpack-stats"
@@ -403,6 +374,35 @@
       ]
     },
     {
+      "file": ".next/static/chunks/2217.9508be9b29d91434.js",
+      "bytes": 180937,
+      "classification": "shared-or-dynamic",
+      "routes": [],
+      "moduleSamples": [],
+      "moduleSampleCount": 0,
+      "sourcemapModuleSamples": [],
+      "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [
+        "components/photoshop/document-compatibility.ts",
+        "components/photoshop/document-io-shared.ts",
+        "components/photoshop/document-project-io.ts",
+        "components/photoshop/document-raster-export.ts",
+        "components/photoshop/document-rendering.ts",
+        "components/photoshop/export-worker.ts",
+        "components/photoshop/project-json-sanitizer.ts",
+        "components/photoshop/psd-channels-masks.ts",
+        "components/photoshop/psd-color-modes.ts",
+        "components/photoshop/psd-compatibility.ts",
+        "components/photoshop/psd-effects-adjustments.ts",
+        "components/photoshop/psd-resources-metadata.ts"
+      ],
+      "webpackStatsModuleSampleCount": 14,
+      "webpackStatsPath": "artifacts/webpack-stats.json",
+      "ownershipSources": [
+        "webpack-stats"
+      ]
+    },
+    {
       "file": ".next/static/chunks/main-4ab15addd4deb4eb.js",
       "bytes": 132570,
       "classification": "shared-or-dynamic",
@@ -426,6 +426,35 @@
         "node_modules/next/dist/client/detect-domain-locale.js"
       ],
       "webpackStatsModuleSampleCount": 106,
+      "webpackStatsPath": "artifacts/webpack-stats.json",
+      "ownershipSources": [
+        "webpack-stats"
+      ]
+    },
+    {
+      "file": ".next/static/chunks/4244.80cc4399e8968626.js",
+      "bytes": 131206,
+      "classification": "shared-or-dynamic",
+      "routes": [],
+      "moduleSamples": [],
+      "moduleSampleCount": 0,
+      "sourcemapModuleSamples": [],
+      "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [
+        "components/photoshop/filter-worker-source.ts",
+        "components/photoshop/filter-worker.ts",
+        "components/photoshop/layer-tile-renderer.ts",
+        "components/photoshop/tile-only-pipeline.ts",
+        "components/photoshop/tiled-backing-store.ts",
+        "components/photoshop/webgl-compositor.ts",
+        "components/photoshop/webgl-compositor/adjustment-shaders.ts",
+        "components/photoshop/webgl-compositor/color-pipeline.ts",
+        "components/photoshop/webgl-compositor/depth.ts",
+        "components/photoshop/webgl-compositor/document-compositor.ts",
+        "components/photoshop/webgl-compositor/pass-execution.ts",
+        "components/photoshop/webgl-compositor/planning.ts"
+      ],
+      "webpackStatsModuleSampleCount": 15,
       "webpackStatsPath": "artifacts/webpack-stats.json",
       "ownershipSources": [
         "webpack-stats"
@@ -461,7 +490,7 @@
       ]
     },
     {
-      "file": ".next/static/chunks/2318.ec703366da75cd9e.js",
+      "file": ".next/static/chunks/2318.73b0e4d0dabf001c.js",
       "bytes": 118549,
       "classification": "shared-or-dynamic",
       "routes": [],
@@ -559,8 +588,8 @@
       ]
     },
     {
-      "file": ".next/static/chunks/8534-0247730dc740c58d.js",
-      "bytes": 71307,
+      "file": ".next/static/chunks/8534-5939ae03055370a7.js",
+      "bytes": 73308,
       "classification": "shared-or-dynamic",
       "routes": [
         "/_global-error/page",
@@ -598,31 +627,6 @@
       ]
     },
     {
-      "file": ".next/static/chunks/2941.c481f4cbf008e225.js",
-      "bytes": 70719,
-      "classification": "shared-or-dynamic",
-      "routes": [],
-      "moduleSamples": [],
-      "moduleSampleCount": 0,
-      "sourcemapModuleSamples": [],
-      "sourcemapModuleSampleCount": 0,
-      "webpackStatsModuleSamples": [
-        "components/photoshop/color-mode-conversion.ts",
-        "components/photoshop/document-color-management.ts",
-        "components/photoshop/document-import-sniffers.ts",
-        "components/photoshop/raster-codec-utils.ts",
-        "components/photoshop/raster-codecs.ts",
-        "components/photoshop/raster-metadata-embeds.ts",
-        "components/photoshop/raster-openexr-encoders.ts",
-        "components/photoshop/raster-tiff-encoders.ts"
-      ],
-      "webpackStatsModuleSampleCount": 8,
-      "webpackStatsPath": "artifacts/webpack-stats.json",
-      "ownershipSources": [
-        "webpack-stats"
-      ]
-    },
-    {
       "file": ".next/static/chunks/486.db36d5a4ad6bf6bd.js",
       "bytes": 63788,
       "classification": "shared-or-dynamic",
@@ -652,8 +656,8 @@
       ]
     },
     {
-      "file": ".next/static/chunks/7696.312b23c36ded5356.js",
-      "bytes": 62194,
+      "file": ".next/static/chunks/7696.bc01d60086ec34ac.js",
+      "bytes": 62198,
       "classification": "shared-or-dynamic",
       "routes": [],
       "moduleSamples": [],
@@ -683,13 +687,13 @@
   "appOwnedStartupChunks": [
     {
       "route": "/",
-      "file": ".next/static/chunks/8534-0247730dc740c58d.js",
-      "decodedBodyBytes": 71307,
-      "encodedBodyBytes": 21559,
-      "transferBytes": 21859,
+      "file": ".next/static/chunks/8534-5939ae03055370a7.js",
+      "decodedBodyBytes": 73308,
+      "encodedBodyBytes": 22176,
+      "transferBytes": 22476,
       "owner": {
-        "file": ".next/static/chunks/8534-0247730dc740c58d.js",
-        "bytes": 71307,
+        "file": ".next/static/chunks/8534-5939ae03055370a7.js",
+        "bytes": 73308,
         "classification": "shared-or-dynamic",
         "routes": [
           "/_global-error/page",
@@ -723,110 +727,6 @@
         "webpackStatsPath": "artifacts/webpack-stats.json",
         "ownershipSources": [
           "client-reference-manifest",
-          "webpack-stats"
-        ]
-      }
-    },
-    {
-      "route": "/editor",
-      "file": ".next/static/chunks/1873.94a299c08ad53f7a.js",
-      "decodedBodyBytes": 478018,
-      "encodedBodyBytes": 130417,
-      "transferBytes": 130717,
-      "owner": {
-        "file": ".next/static/chunks/1873.94a299c08ad53f7a.js",
-        "bytes": 478018,
-        "classification": "shared-or-dynamic",
-        "routes": [],
-        "moduleSamples": [],
-        "moduleSampleCount": 0,
-        "sourcemapModuleSamples": [],
-        "sourcemapModuleSampleCount": 0,
-        "webpackStatsModuleSamples": [
-          "components/photoshop/canvas-brush-dynamics.ts",
-          "components/photoshop/canvas-compositor-cache.ts",
-          "components/photoshop/canvas-compositor.ts",
-          "components/photoshop/canvas-eraser-helpers.ts",
-          "components/photoshop/canvas-filter-overlays.ts",
-          "components/photoshop/canvas-overlays.tsx",
-          "components/photoshop/canvas-preview-drawing.ts",
-          "components/photoshop/canvas-rulers.tsx",
-          "components/photoshop/canvas-selection-helpers.ts",
-          "components/photoshop/canvas-selection-overlays.tsx",
-          "components/photoshop/canvas-shape-helpers.ts",
-          "components/photoshop/canvas-smart-guides.tsx"
-        ],
-        "webpackStatsModuleSampleCount": 62,
-        "webpackStatsPath": "artifacts/webpack-stats.json",
-        "ownershipSources": [
-          "webpack-stats"
-        ]
-      }
-    },
-    {
-      "route": "/editor",
-      "file": ".next/static/chunks/2153.495bfd7107864d9a.js",
-      "decodedBodyBytes": 371464,
-      "encodedBodyBytes": 111083,
-      "transferBytes": 111383,
-      "owner": {
-        "file": ".next/static/chunks/2153.495bfd7107864d9a.js",
-        "bytes": 371464,
-        "classification": "shared-or-dynamic",
-        "routes": [],
-        "moduleSamples": [],
-        "moduleSampleCount": 0,
-        "sourcemapModuleSamples": [],
-        "sourcemapModuleSampleCount": 0,
-        "webpackStatsModuleSamples": [
-          "components/photoshop/capability-warnings.ts",
-          "components/photoshop/document-compatibility.ts",
-          "components/photoshop/document-file-system.ts",
-          "components/photoshop/document-io-shared.ts",
-          "components/photoshop/document-io.ts",
-          "components/photoshop/document-project-io.ts",
-          "components/photoshop/document-psd-io.ts",
-          "components/photoshop/document-raster-export.ts",
-          "components/photoshop/document-rendering.ts",
-          "components/photoshop/export-worker.ts",
-          "components/photoshop/filter-worker-source.ts",
-          "components/photoshop/filter-worker.ts"
-        ],
-        "webpackStatsModuleSampleCount": 37,
-        "webpackStatsPath": "artifacts/webpack-stats.json",
-        "ownershipSources": [
-          "webpack-stats"
-        ]
-      }
-    },
-    {
-      "route": "/editor",
-      "file": ".next/static/chunks/2941.c481f4cbf008e225.js",
-      "decodedBodyBytes": 70719,
-      "encodedBodyBytes": 24598,
-      "transferBytes": 24898,
-      "owner": {
-        "file": ".next/static/chunks/2941.c481f4cbf008e225.js",
-        "bytes": 70719,
-        "classification": "shared-or-dynamic",
-        "routes": [],
-        "moduleSamples": [],
-        "moduleSampleCount": 0,
-        "sourcemapModuleSamples": [],
-        "sourcemapModuleSampleCount": 0,
-        "webpackStatsModuleSamples": [
-          "components/photoshop/color-mode-conversion.ts",
-          "components/photoshop/document-color-management.ts",
-          "components/photoshop/document-import-sniffers.ts",
-          "components/photoshop/raster-codec-utils.ts",
-          "components/photoshop/raster-codecs.ts",
-          "components/photoshop/raster-metadata-embeds.ts",
-          "components/photoshop/raster-openexr-encoders.ts",
-          "components/photoshop/raster-tiff-encoders.ts"
-        ],
-        "webpackStatsModuleSampleCount": 8,
-        "webpackStatsPath": "artifacts/webpack-stats.json",
-        "ownershipSources": [
           "webpack-stats"
         ]
       }
@@ -869,13 +769,13 @@
     },
     {
       "route": "/editor",
-      "file": ".next/static/chunks/8534-0247730dc740c58d.js",
-      "decodedBodyBytes": 71307,
-      "encodedBodyBytes": 21559,
-      "transferBytes": 21859,
+      "file": ".next/static/chunks/8534-5939ae03055370a7.js",
+      "decodedBodyBytes": 73308,
+      "encodedBodyBytes": 22176,
+      "transferBytes": 22476,
       "owner": {
-        "file": ".next/static/chunks/8534-0247730dc740c58d.js",
-        "bytes": 71307,
+        "file": ".next/static/chunks/8534-5939ae03055370a7.js",
+        "bytes": 73308,
         "classification": "shared-or-dynamic",
         "routes": [
           "/_global-error/page",
@@ -915,13 +815,13 @@
     },
     {
       "route": "/editor",
-      "file": ".next/static/chunks/9044.001c908eb8e6672f.js",
-      "decodedBodyBytes": 484947,
-      "encodedBodyBytes": 154424,
-      "transferBytes": 154724,
+      "file": ".next/static/chunks/9044.8bf7804b93f9dac2.js",
+      "decodedBodyBytes": 480565,
+      "encodedBodyBytes": 152613,
+      "transferBytes": 152913,
       "owner": {
-        "file": ".next/static/chunks/9044.001c908eb8e6672f.js",
-        "bytes": 484947,
+        "file": ".next/static/chunks/9044.8bf7804b93f9dac2.js",
+        "bytes": 480565,
         "classification": "shared-or-dynamic",
         "routes": [],
         "moduleSamples": [],
@@ -1003,8 +903,8 @@
   "appOwnedStartupChunkReasons": [
     {
       "route": "/editor",
-      "file": ".next/static/chunks/9044.001c908eb8e6672f.js",
-      "decodedBodyBytes": 484947,
+      "file": ".next/static/chunks/9044.8bf7804b93f9dac2.js",
+      "decodedBodyBytes": 480565,
       "budget": 819200,
       "appOwnedModuleSamples": [
         "components/photoshop/action-conditionals.ts",
@@ -1019,54 +919,6 @@
         "components/photoshop/command-registry.ts",
         "components/photoshop/dialog-preload.ts",
         "components/photoshop/dirty-rect.ts"
-      ],
-      "ownershipSources": [
-        "webpack-stats"
-      ],
-      "reviewGuidance": "Review if new workflow-specific modules appear in this startup chunk."
-    },
-    {
-      "route": "/editor",
-      "file": ".next/static/chunks/1873.94a299c08ad53f7a.js",
-      "decodedBodyBytes": 478018,
-      "budget": 819200,
-      "appOwnedModuleSamples": [
-        "components/photoshop/canvas-brush-dynamics.ts",
-        "components/photoshop/canvas-compositor-cache.ts",
-        "components/photoshop/canvas-compositor.ts",
-        "components/photoshop/canvas-eraser-helpers.ts",
-        "components/photoshop/canvas-filter-overlays.ts",
-        "components/photoshop/canvas-overlays.tsx",
-        "components/photoshop/canvas-preview-drawing.ts",
-        "components/photoshop/canvas-rulers.tsx",
-        "components/photoshop/canvas-selection-helpers.ts",
-        "components/photoshop/canvas-selection-overlays.tsx",
-        "components/photoshop/canvas-shape-helpers.ts",
-        "components/photoshop/canvas-smart-guides.tsx"
-      ],
-      "ownershipSources": [
-        "webpack-stats"
-      ],
-      "reviewGuidance": "Review if new workflow-specific modules appear in this startup chunk."
-    },
-    {
-      "route": "/editor",
-      "file": ".next/static/chunks/2153.495bfd7107864d9a.js",
-      "decodedBodyBytes": 371464,
-      "budget": 819200,
-      "appOwnedModuleSamples": [
-        "components/photoshop/capability-warnings.ts",
-        "components/photoshop/document-compatibility.ts",
-        "components/photoshop/document-file-system.ts",
-        "components/photoshop/document-io-shared.ts",
-        "components/photoshop/document-io.ts",
-        "components/photoshop/document-project-io.ts",
-        "components/photoshop/document-psd-io.ts",
-        "components/photoshop/document-raster-export.ts",
-        "components/photoshop/document-rendering.ts",
-        "components/photoshop/export-worker.ts",
-        "components/photoshop/filter-worker-source.ts",
-        "components/photoshop/filter-worker.ts"
       ],
       "ownershipSources": [
         "webpack-stats"
@@ -1122,8 +974,8 @@
     },
     {
       "route": "/",
-      "file": ".next/static/chunks/8534-0247730dc740c58d.js",
-      "decodedBodyBytes": 71307,
+      "file": ".next/static/chunks/8534-5939ae03055370a7.js",
+      "decodedBodyBytes": 73308,
       "budget": 819200,
       "appOwnedModuleSamples": [
         "components/photoshop/start-workspace.tsx",
@@ -1147,8 +999,8 @@
     },
     {
       "route": "/editor",
-      "file": ".next/static/chunks/8534-0247730dc740c58d.js",
-      "decodedBodyBytes": 71307,
+      "file": ".next/static/chunks/8534-5939ae03055370a7.js",
+      "decodedBodyBytes": 73308,
       "budget": 819200,
       "appOwnedModuleSamples": [
         "components/photoshop/start-workspace.tsx",
@@ -1166,26 +1018,6 @@
       ],
       "ownershipSources": [
         "client-reference-manifest",
-        "webpack-stats"
-      ],
-      "reviewGuidance": "Review if new workflow-specific modules appear in this startup chunk."
-    },
-    {
-      "route": "/editor",
-      "file": ".next/static/chunks/2941.c481f4cbf008e225.js",
-      "decodedBodyBytes": 70719,
-      "budget": 819200,
-      "appOwnedModuleSamples": [
-        "components/photoshop/color-mode-conversion.ts",
-        "components/photoshop/document-color-management.ts",
-        "components/photoshop/document-import-sniffers.ts",
-        "components/photoshop/raster-codec-utils.ts",
-        "components/photoshop/raster-codecs.ts",
-        "components/photoshop/raster-metadata-embeds.ts",
-        "components/photoshop/raster-openexr-encoders.ts",
-        "components/photoshop/raster-tiff-encoders.ts"
-      ],
-      "ownershipSources": [
         "webpack-stats"
       ],
       "reviewGuidance": "Review if new workflow-specific modules appear in this startup chunk."
@@ -1193,23 +1025,23 @@
   ],
   "routeDeltas": {
     "/": {
-      "encodedBodyBytes": 2986,
-      "decodedBodyBytes": 7566,
+      "encodedBodyBytes": 3709,
+      "decodedBodyBytes": 9775,
       "requestCount": 1
     },
     "/editor": {
-      "encodedBodyBytes": 208356,
-      "decodedBodyBytes": 713285,
-      "requestCount": 18
+      "encodedBodyBytes": -141357,
+      "decodedBodyBytes": -461025,
+      "requestCount": 2
     },
     "/marketing": {
-      "encodedBodyBytes": 2162,
-      "decodedBodyBytes": 4072,
+      "encodedBodyBytes": 2264,
+      "decodedBodyBytes": 4263,
       "requestCount": 1
     },
     "/documentation": {
-      "encodedBodyBytes": 2452,
-      "decodedBodyBytes": 4801,
+      "encodedBodyBytes": 2554,
+      "decodedBodyBytes": 4992,
       "requestCount": 1
     }
   },
@@ -1224,36 +1056,11 @@
     "components/marketing/newsletter-cta.tsx",
     "components/marketing/tools-grid.tsx",
     "components/marketing/workflow-split.tsx",
-    "components/photoshop/canvas-brush-dynamics.ts",
-    "components/photoshop/canvas-compositor-cache.ts",
-    "components/photoshop/canvas-compositor.ts",
-    "components/photoshop/canvas-eraser-helpers.ts",
-    "components/photoshop/canvas-filter-overlays.ts",
-    "components/photoshop/canvas-overlays.tsx",
-    "components/photoshop/canvas-preview-drawing.ts",
-    "components/photoshop/canvas-rulers.tsx",
-    "components/photoshop/canvas-selection-helpers.ts",
-    "components/photoshop/canvas-selection-overlays.tsx",
-    "components/photoshop/canvas-shape-helpers.ts",
-    "components/photoshop/canvas-smart-guides.tsx",
     "components/photoshop/client-storage.ts",
     "components/photoshop/command-registry.ts",
     "components/photoshop/dialog-preload.ts",
     "components/photoshop/dirty-rect.ts",
-    "components/photoshop/document-color-management.ts",
-    "components/photoshop/document-compatibility.ts",
-    "components/photoshop/document-file-system.ts",
-    "components/photoshop/document-import-sniffers.ts",
-    "components/photoshop/document-io-shared.ts",
-    "components/photoshop/document-io.ts",
-    "components/photoshop/document-project-io.ts",
-    "components/photoshop/document-psd-io.ts",
-    "components/photoshop/document-raster-export.ts",
-    "components/photoshop/document-rendering.ts",
     "components/photoshop/events.ts",
-    "components/photoshop/export-worker.ts",
-    "components/photoshop/filter-worker-source.ts",
-    "components/photoshop/filter-worker.ts",
     "components/photoshop/filters/advanced-adjustment-algorithms.ts",
     "components/photoshop/filters/basic-algorithms.ts",
     "components/photoshop/filters/curve-helpers.ts",
@@ -1269,11 +1076,6 @@
     "components/photoshop/learning-index.ts",
     "components/photoshop/new-document-presets.ts",
     "components/photoshop/preferences-engine.ts",
-    "components/photoshop/raster-codec-utils.ts",
-    "components/photoshop/raster-codecs.ts",
-    "components/photoshop/raster-metadata-embeds.ts",
-    "components/photoshop/raster-openexr-encoders.ts",
-    "components/photoshop/raster-tiff-encoders.ts",
     "components/photoshop/recent-documents.ts",
     "components/photoshop/runtime-telemetry.ts",
     "components/photoshop/start-workspace.tsx",
@@ -1284,9 +1086,9 @@
   ],
   "routeMetrics": {
     "/": {
-      "encodedBodyBytes": 172606,
-      "decodedBodyBytes": 571687,
-      "transferBytes": 176206,
+      "encodedBodyBytes": 173329,
+      "decodedBodyBytes": 573896,
+      "transferBytes": 176929,
       "requestCount": 12,
       "largestStartupChunk": {
         "decodedBodyBytes": 222758,
@@ -1300,6 +1102,7 @@
           "encodedBodySize": 4021,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/1674-adca1a21a64925d4.js",
+          "responseEnd": 82.79999995231628,
           "transferSize": 4321
         },
         {
@@ -1307,6 +1110,7 @@
           "encodedBodySize": 60719,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/3794-c66b3d8325973459.js",
+          "responseEnd": 88.69999998807907,
           "transferSize": 61019
         },
         {
@@ -1314,6 +1118,7 @@
           "encodedBodySize": 62880,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js",
+          "responseEnd": 85.29999995231628,
           "transferSize": 63180
         },
         {
@@ -1321,27 +1126,31 @@
           "encodedBodySize": 9285,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/6609-078a8cdc853f87c6.js",
+          "responseEnd": 81.5,
           "transferSize": 9585
         },
         {
-          "decodedBodySize": 71307,
-          "encodedBodySize": 21559,
+          "decodedBodySize": 73308,
+          "encodedBodySize": 22176,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/8534-0247730dc740c58d.js",
-          "transferSize": 21859
+          "name": "http://bundle.local/_next/static/chunks/8534-5939ae03055370a7.js",
+          "responseEnd": 89.19999998807907,
+          "transferSize": 22476
         },
         {
-          "decodedBodySize": 1512,
-          "encodedBodySize": 865,
+          "decodedBodySize": 1585,
+          "encodedBodySize": 895,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/app/error-d0a6be4f67f2f0a9.js",
-          "transferSize": 1165
+          "name": "http://bundle.local/_next/static/chunks/app/error-f24c7b47070ae9ce.js",
+          "responseEnd": 89.89999997615814,
+          "transferSize": 1195
         },
         {
           "decodedBodySize": 915,
           "encodedBodySize": 915,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/global-error-a6188d2b0489ba9f.js",
+          "responseEnd": 88.89999997615814,
           "transferSize": 1215
         },
         {
@@ -1349,34 +1158,39 @@
           "encodedBodySize": 2156,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/layout-3e9b02b12b82768e.js",
+          "responseEnd": 90.19999998807907,
           "transferSize": 2456
         },
         {
-          "decodedBodySize": 17509,
-          "encodedBodySize": 5045,
+          "decodedBodySize": 17526,
+          "encodedBodySize": 5049,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/app/page-31d4ea5868b6f0a3.js",
-          "transferSize": 5345
+          "name": "http://bundle.local/_next/static/chunks/app/page-37119dec9c790b15.js",
+          "responseEnd": 87.39999997615814,
+          "transferSize": 5349
         },
         {
           "decodedBodySize": 484,
           "encodedBodySize": 484,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/main-app-0f4757ef7e5957f9.js",
+          "responseEnd": 76.09999996423721,
           "transferSize": 784
         },
         {
-          "decodedBodySize": 6863,
-          "encodedBodySize": 3819,
+          "decodedBodySize": 6981,
+          "encodedBodySize": 3891,
           "initiatorType": "link",
-          "name": "http://bundle.local/_next/static/chunks/webpack-f8734009e64c928b.js",
-          "transferSize": 4119
+          "name": "http://bundle.local/_next/static/chunks/webpack-f6aaa6d6e9d940e6.js",
+          "responseEnd": 71.19999998807907,
+          "transferSize": 4191
         },
         {
           "decodedBodySize": 1914,
           "encodedBodySize": 858,
           "initiatorType": "script",
           "name": "http://bundle.local/strip-extension-hydration-attributes.js",
+          "responseEnd": 70.29999995231628,
           "transferSize": 1158
         }
       ],
@@ -1388,92 +1202,39 @@
       }
     },
     "/editor": {
-      "encodedBodyBytes": 732815,
-      "decodedBodyBytes": 2422853,
-      "transferBytes": 742415,
-      "requestCount": 32,
+      "encodedBodyBytes": 383102,
+      "decodedBodyBytes": 1248543,
+      "transferBytes": 387902,
+      "requestCount": 16,
       "largestStartupChunk": {
-        "decodedBodyBytes": 484947,
-        "encodedBodyBytes": 154424,
-        "transferBytes": 154724,
-        "url": "http://bundle.local/_next/static/chunks/9044.001c908eb8e6672f.js"
+        "decodedBodyBytes": 480565,
+        "encodedBodyBytes": 152613,
+        "transferBytes": 152913,
+        "url": "http://bundle.local/_next/static/chunks/9044.8bf7804b93f9dac2.js"
       },
       "resources": [
-        {
-          "decodedBodySize": 478018,
-          "encodedBodySize": 130417,
-          "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/1873.94a299c08ad53f7a.js",
-          "transferSize": 130717
-        },
-        {
-          "decodedBodySize": 6235,
-          "encodedBodySize": 2289,
-          "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/2046.84ac4b2f2a4cb5ac.js",
-          "transferSize": 2589
-        },
-        {
-          "decodedBodySize": 371464,
-          "encodedBodySize": 111083,
-          "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/2153.495bfd7107864d9a.js",
-          "transferSize": 111383
-        },
         {
           "decodedBodySize": 22572,
           "encodedBodySize": 7100,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/2619.9aac8983f30c7c8a.js",
+          "responseEnd": 111.89999997615814,
           "transferSize": 7400
-        },
-        {
-          "decodedBodySize": 8655,
-          "encodedBodySize": 2701,
-          "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/2652.414dafc97d6081d6.js",
-          "transferSize": 3001
-        },
-        {
-          "decodedBodySize": 3728,
-          "encodedBodySize": 1586,
-          "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/2692.da114e5c06502437.js",
-          "transferSize": 1886
-        },
-        {
-          "decodedBodySize": 70719,
-          "encodedBodySize": 24598,
-          "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/2941.c481f4cbf008e225.js",
-          "transferSize": 24898
-        },
-        {
-          "decodedBodySize": 40292,
-          "encodedBodySize": 11980,
-          "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/3273.b6546db9bf2d8b20.js",
-          "transferSize": 12280
         },
         {
           "decodedBodySize": 222758,
           "encodedBodySize": 60719,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/3794-c66b3d8325973459.js",
+          "responseEnd": 65,
           "transferSize": 61019
-        },
-        {
-          "decodedBodySize": 5107,
-          "encodedBodySize": 2107,
-          "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/4067.54c185ef5d293bc3.js",
-          "transferSize": 2407
         },
         {
           "decodedBodySize": 63788,
           "encodedBodySize": 21052,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/486.db36d5a4ad6bf6bd.js",
+          "responseEnd": 113,
           "transferSize": 21352
         },
         {
@@ -1481,97 +1242,47 @@
           "encodedBodySize": 62880,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js",
+          "responseEnd": 64.39999997615814,
           "transferSize": 63180
-        },
-        {
-          "decodedBodySize": 11246,
-          "encodedBodySize": 4676,
-          "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/5145.5956998612eaedf9.js",
-          "transferSize": 4976
-        },
-        {
-          "decodedBodySize": 9395,
-          "encodedBodySize": 3947,
-          "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/6241.4babb8ae487ddd2d.js",
-          "transferSize": 4247
-        },
-        {
-          "decodedBodySize": 53389,
-          "encodedBodySize": 14923,
-          "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/6413.1d27cae866aebca3.js",
-          "transferSize": 15223
-        },
-        {
-          "decodedBodySize": 8413,
-          "encodedBodySize": 3343,
-          "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/6415.c4ffa611878183b2.js",
-          "transferSize": 3643
         },
         {
           "decodedBodySize": 33591,
           "encodedBodySize": 9285,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/6609-078a8cdc853f87c6.js",
+          "responseEnd": 62,
           "transferSize": 9585
-        },
-        {
-          "decodedBodySize": 5490,
-          "encodedBodySize": 2134,
-          "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/6902.a671efe09e8e36dd.js",
-          "transferSize": 2434
-        },
-        {
-          "decodedBodySize": 27462,
-          "encodedBodySize": 7791,
-          "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/6908.6269a268e7dfcfd9.js",
-          "transferSize": 8091
         },
         {
           "decodedBodySize": 130779,
           "encodedBodySize": 36142,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/7443.812955d0fdcef420.js",
+          "responseEnd": 114.89999997615814,
           "transferSize": 36442
         },
         {
-          "decodedBodySize": 26952,
-          "encodedBodySize": 8525,
+          "decodedBodySize": 73308,
+          "encodedBodySize": 22176,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/8272.b8981050e5cceebc.js",
-          "transferSize": 8825
+          "name": "http://bundle.local/_next/static/chunks/8534-5939ae03055370a7.js",
+          "responseEnd": 114.10000002384186,
+          "transferSize": 22476
         },
         {
-          "decodedBodySize": 71307,
-          "encodedBodySize": 21559,
+          "decodedBodySize": 480565,
+          "encodedBodySize": 152613,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/8534-0247730dc740c58d.js",
-          "transferSize": 21859
-        },
-        {
-          "decodedBodySize": 45555,
-          "encodedBodySize": 16521,
-          "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/8819.90a68713ebfd0423.js",
-          "transferSize": 16821
-        },
-        {
-          "decodedBodySize": 484947,
-          "encodedBodySize": 154424,
-          "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/9044.001c908eb8e6672f.js",
-          "transferSize": 154724
+          "name": "http://bundle.local/_next/static/chunks/9044.8bf7804b93f9dac2.js",
+          "responseEnd": 123.69999998807907,
+          "transferSize": 152913
         },
         {
           "decodedBodySize": 540,
           "encodedBodySize": 540,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/editor/layout-2b0461034ced0471.js",
+          "responseEnd": 57.30000001192093,
           "transferSize": 840
         },
         {
@@ -1579,20 +1290,23 @@
           "encodedBodySize": 1396,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/editor/page-37aa13597e39908f.js",
+          "responseEnd": 58.89999997615814,
           "transferSize": 1696
         },
         {
-          "decodedBodySize": 1512,
-          "encodedBodySize": 865,
+          "decodedBodySize": 1585,
+          "encodedBodySize": 895,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/app/error-d0a6be4f67f2f0a9.js",
-          "transferSize": 1165
+          "name": "http://bundle.local/_next/static/chunks/app/error-f24c7b47070ae9ce.js",
+          "responseEnd": 60.80000001192093,
+          "transferSize": 1195
         },
         {
           "decodedBodySize": 915,
           "encodedBodySize": 915,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/global-error-a6188d2b0489ba9f.js",
+          "responseEnd": 59.80000001192093,
           "transferSize": 1215
         },
         {
@@ -1600,6 +1314,7 @@
           "encodedBodySize": 2156,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/layout-3e9b02b12b82768e.js",
+          "responseEnd": 62.80000001192093,
           "transferSize": 2456
         },
         {
@@ -1607,20 +1322,23 @@
           "encodedBodySize": 484,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/main-app-0f4757ef7e5957f9.js",
+          "responseEnd": 56.80000001192093,
           "transferSize": 784
         },
         {
-          "decodedBodySize": 6863,
-          "encodedBodySize": 3819,
+          "decodedBodySize": 6981,
+          "encodedBodySize": 3891,
           "initiatorType": "link",
-          "name": "http://bundle.local/_next/static/chunks/webpack-f8734009e64c928b.js",
-          "transferSize": 4119
+          "name": "http://bundle.local/_next/static/chunks/webpack-f6aaa6d6e9d940e6.js",
+          "responseEnd": 56.10000002384186,
+          "transferSize": 4191
         },
         {
           "decodedBodySize": 1914,
           "encodedBodySize": 858,
           "initiatorType": "script",
           "name": "http://bundle.local/strip-extension-hydration-attributes.js",
+          "responseEnd": 51.80000001192093,
           "transferSize": 1158
         }
       ],
@@ -1632,9 +1350,9 @@
       }
     },
     "/marketing": {
-      "encodedBodyBytes": 215392,
-      "decodedBodyBytes": 677868,
-      "transferBytes": 220192,
+      "encodedBodyBytes": 215494,
+      "decodedBodyBytes": 678059,
+      "transferBytes": 220294,
       "requestCount": 16,
       "largestStartupChunk": {
         "decodedBodyBytes": 222758,
@@ -1648,6 +1366,7 @@
           "encodedBodySize": 4021,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/1674-adca1a21a64925d4.js",
+          "responseEnd": 93.10000002384186,
           "transferSize": 4321
         },
         {
@@ -1655,6 +1374,7 @@
           "encodedBodySize": 60719,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/3794-c66b3d8325973459.js",
+          "responseEnd": 96.30000001192093,
           "transferSize": 61019
         },
         {
@@ -1662,6 +1382,7 @@
           "encodedBodySize": 1878,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/3882.94bd6d79af3557e0.js",
+          "responseEnd": 370.10000002384186,
           "transferSize": 2178
         },
         {
@@ -1669,6 +1390,7 @@
           "encodedBodySize": 1707,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/4125.b5dda0e8250c0ce0.js",
+          "responseEnd": 370.30000001192093,
           "transferSize": 2007
         },
         {
@@ -1676,6 +1398,7 @@
           "encodedBodySize": 33883,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/4486-38125abcbf0c0834.js",
+          "responseEnd": 97.60000002384186,
           "transferSize": 34183
         },
         {
@@ -1683,6 +1406,7 @@
           "encodedBodySize": 62880,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js",
+          "responseEnd": 95.10000002384186,
           "transferSize": 63180
         },
         {
@@ -1690,6 +1414,7 @@
           "encodedBodySize": 9285,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/6609-078a8cdc853f87c6.js",
+          "responseEnd": 93.40000003576279,
           "transferSize": 9585
         },
         {
@@ -1697,20 +1422,23 @@
           "encodedBodySize": 919,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/7360.2a8d7f8d21392acf.js",
+          "responseEnd": 369.80000001192093,
           "transferSize": 1219
         },
         {
-          "decodedBodySize": 1512,
-          "encodedBodySize": 865,
+          "decodedBodySize": 1585,
+          "encodedBodySize": 895,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/app/error-d0a6be4f67f2f0a9.js",
-          "transferSize": 1165
+          "name": "http://bundle.local/_next/static/chunks/app/error-f24c7b47070ae9ce.js",
+          "responseEnd": 99.10000002384186,
+          "transferSize": 1195
         },
         {
           "decodedBodySize": 915,
           "encodedBodySize": 915,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/global-error-a6188d2b0489ba9f.js",
+          "responseEnd": 98.30000001192093,
           "transferSize": 1215
         },
         {
@@ -1718,6 +1446,7 @@
           "encodedBodySize": 2156,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/layout-3e9b02b12b82768e.js",
+          "responseEnd": 99.60000002384186,
           "transferSize": 2456
         },
         {
@@ -1725,6 +1454,7 @@
           "encodedBodySize": 11224,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/marketing/page-03f3d734cbc5214a.js",
+          "responseEnd": 96.80000001192093,
           "transferSize": 11524
         },
         {
@@ -1732,6 +1462,7 @@
           "encodedBodySize": 19779,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/c15bf2b0-d565fc5052a6465c.js",
+          "responseEnd": 90.19999998807907,
           "transferSize": 20079
         },
         {
@@ -1739,20 +1470,23 @@
           "encodedBodySize": 484,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/main-app-0f4757ef7e5957f9.js",
+          "responseEnd": 87.19999998807907,
           "transferSize": 784
         },
         {
-          "decodedBodySize": 6863,
-          "encodedBodySize": 3819,
+          "decodedBodySize": 6981,
+          "encodedBodySize": 3891,
           "initiatorType": "link",
-          "name": "http://bundle.local/_next/static/chunks/webpack-f8734009e64c928b.js",
-          "transferSize": 4119
+          "name": "http://bundle.local/_next/static/chunks/webpack-f6aaa6d6e9d940e6.js",
+          "responseEnd": 86.69999998807907,
+          "transferSize": 4191
         },
         {
           "decodedBodySize": 1914,
           "encodedBodySize": 858,
           "initiatorType": "script",
           "name": "http://bundle.local/strip-extension-hydration-attributes.js",
+          "responseEnd": 82.5,
           "transferSize": 1158
         }
       ],
@@ -1764,9 +1498,9 @@
       }
     },
     "/documentation": {
-      "encodedBodyBytes": 146233,
-      "decodedBodyBytes": 483102,
-      "transferBytes": 149533,
+      "encodedBodyBytes": 146335,
+      "decodedBodyBytes": 483293,
+      "transferBytes": 149635,
       "requestCount": 11,
       "largestStartupChunk": {
         "decodedBodyBytes": 222758,
@@ -1780,6 +1514,7 @@
           "encodedBodySize": 4021,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/1674-adca1a21a64925d4.js",
+          "responseEnd": 110.39999997615814,
           "transferSize": 4321
         },
         {
@@ -1787,6 +1522,7 @@
           "encodedBodySize": 60719,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/3794-c66b3d8325973459.js",
+          "responseEnd": 114.39999997615814,
           "transferSize": 61019
         },
         {
@@ -1794,6 +1530,7 @@
           "encodedBodySize": 62880,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js",
+          "responseEnd": 113.89999997615814,
           "transferSize": 63180
         },
         {
@@ -1801,6 +1538,7 @@
           "encodedBodySize": 9285,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/6609-078a8cdc853f87c6.js",
+          "responseEnd": 111.39999997615814,
           "transferSize": 9585
         },
         {
@@ -1808,20 +1546,23 @@
           "encodedBodySize": 231,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/documentation/%5Bslug%5D/page-c60e865f9277e38d.js",
+          "responseEnd": 109.59999996423721,
           "transferSize": 531
         },
         {
-          "decodedBodySize": 1512,
-          "encodedBodySize": 865,
+          "decodedBodySize": 1585,
+          "encodedBodySize": 895,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/app/error-d0a6be4f67f2f0a9.js",
-          "transferSize": 1165
+          "name": "http://bundle.local/_next/static/chunks/app/error-f24c7b47070ae9ce.js",
+          "responseEnd": 110.80000001192093,
+          "transferSize": 1195
         },
         {
           "decodedBodySize": 915,
           "encodedBodySize": 915,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/global-error-a6188d2b0489ba9f.js",
+          "responseEnd": 106.30000001192093,
           "transferSize": 1215
         },
         {
@@ -1829,6 +1570,7 @@
           "encodedBodySize": 2156,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/layout-3e9b02b12b82768e.js",
+          "responseEnd": 113.39999997615814,
           "transferSize": 2456
         },
         {
@@ -1836,20 +1578,23 @@
           "encodedBodySize": 484,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/main-app-0f4757ef7e5957f9.js",
+          "responseEnd": 105.89999997615814,
           "transferSize": 784
         },
         {
-          "decodedBodySize": 6863,
-          "encodedBodySize": 3819,
+          "decodedBodySize": 6981,
+          "encodedBodySize": 3891,
           "initiatorType": "link",
-          "name": "http://bundle.local/_next/static/chunks/webpack-f8734009e64c928b.js",
-          "transferSize": 4119
+          "name": "http://bundle.local/_next/static/chunks/webpack-f6aaa6d6e9d940e6.js",
+          "responseEnd": 105.39999997615814,
+          "transferSize": 4191
         },
         {
           "decodedBodySize": 1914,
           "encodedBodySize": 858,
           "initiatorType": "script",
           "name": "http://bundle.local/strip-extension-hydration-attributes.js",
+          "responseEnd": 102.39999997615814,
           "transferSize": 1158
         }
       ],
@@ -1865,88 +1610,5 @@
     "Next client-reference manifests expose route and client-module ownership for route chunks.",
     "Shared async chunks without manifest entries require sourcemaps or webpack stats for exact module attribution."
   ],
-  "violations": [
-    {
-      "rule": "decoded-startup-js",
-      "route": "/editor",
-      "value": 2422853,
-      "budget": 1572864,
-      "largestStartupChunk": {
-        "decodedBodyBytes": 484947,
-        "encodedBodyBytes": 154424,
-        "transferBytes": 154724,
-        "url": "http://bundle.local/_next/static/chunks/9044.001c908eb8e6672f.js"
-      },
-      "owner": {
-        "file": ".next/static/chunks/9044.001c908eb8e6672f.js",
-        "bytes": 484947,
-        "classification": "shared-or-dynamic",
-        "routes": [],
-        "moduleSamples": [],
-        "moduleSampleCount": 0,
-        "sourcemapModuleSamples": [],
-        "sourcemapModuleSampleCount": 0,
-        "webpackStatsModuleSamples": [
-          "components/photoshop/action-conditionals.ts",
-          "components/photoshop/adjustment-layers.ts",
-          "components/photoshop/blend-modes.ts",
-          "components/photoshop/blur-gallery-controls.ts",
-          "components/photoshop/canvas-limits.ts",
-          "components/photoshop/canvas-utils.ts",
-          "components/photoshop/color-channel-ops.ts",
-          "components/photoshop/color-pipeline.ts",
-          "components/photoshop/color-utils.ts",
-          "components/photoshop/command-registry.ts",
-          "components/photoshop/dialog-preload.ts",
-          "components/photoshop/dirty-rect.ts"
-        ],
-        "webpackStatsModuleSampleCount": 74,
-        "webpackStatsPath": "artifacts/webpack-stats.json",
-        "ownershipSources": [
-          "webpack-stats"
-        ]
-      }
-    },
-    {
-      "rule": "startup-js-requests",
-      "route": "/editor",
-      "value": 32,
-      "budget": 24,
-      "largestStartupChunk": {
-        "decodedBodyBytes": 484947,
-        "encodedBodyBytes": 154424,
-        "transferBytes": 154724,
-        "url": "http://bundle.local/_next/static/chunks/9044.001c908eb8e6672f.js"
-      },
-      "owner": {
-        "file": ".next/static/chunks/9044.001c908eb8e6672f.js",
-        "bytes": 484947,
-        "classification": "shared-or-dynamic",
-        "routes": [],
-        "moduleSamples": [],
-        "moduleSampleCount": 0,
-        "sourcemapModuleSamples": [],
-        "sourcemapModuleSampleCount": 0,
-        "webpackStatsModuleSamples": [
-          "components/photoshop/action-conditionals.ts",
-          "components/photoshop/adjustment-layers.ts",
-          "components/photoshop/blend-modes.ts",
-          "components/photoshop/blur-gallery-controls.ts",
-          "components/photoshop/canvas-limits.ts",
-          "components/photoshop/canvas-utils.ts",
-          "components/photoshop/color-channel-ops.ts",
-          "components/photoshop/color-pipeline.ts",
-          "components/photoshop/color-utils.ts",
-          "components/photoshop/command-registry.ts",
-          "components/photoshop/dialog-preload.ts",
-          "components/photoshop/dirty-rect.ts"
-        ],
-        "webpackStatsModuleSampleCount": 74,
-        "webpackStatsPath": "artifacts/webpack-stats.json",
-        "ownershipSources": [
-          "webpack-stats"
-        ]
-      }
-    }
-  ]
+  "violations": []
 }

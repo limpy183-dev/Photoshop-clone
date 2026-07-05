@@ -15,7 +15,7 @@ import {
   MenubarSubTrigger as DropdownMenuSubTrigger,
   MenubarTrigger as DropdownMenuTrigger,
 } from "@/components/ui/menubar"
-import { useEditor, makeDocument, makeCanvas, type DocumentLifecycleState, type FileSystemFileHandleLike } from "./editor-context"
+import { useEditorSelector, makeDocument, makeCanvas, type DocumentLifecycleState, type FileSystemFileHandleLike } from "./editor-context"
 import { compositeLayer } from "./blend-modes"
 import { FILTER_META } from "./filters-meta"
 import type { AdvancedSubsystemTab, ColorWorkflowMode } from "./advanced-subsystems-dialog"
@@ -122,7 +122,7 @@ export function MenuBar({
     reopenClosedDocument,
     markDocumentSaved,
     setDocumentLifecycle: _setDocumentLifecycle,
-  } = useEditor()
+  } = useEditorSelector((editor) => editor)
   const [openFilter, setOpenFilter] = React.useState<string | null>(null)
   const [lastFilter, setLastFilter] = React.useState<string | null>(null)
   const [imageSizeOpen, setImageSizeOpen] = React.useState(false)

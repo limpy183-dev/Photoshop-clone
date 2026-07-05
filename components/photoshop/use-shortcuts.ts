@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { makeCanvas, useEditor } from "./editor-context"
+import { makeCanvas, useEditorSelector } from "./editor-context"
 import { dispatchPhotoshopEvent } from "./events"
 import type { AdjustmentType, ToolId } from "./types"
 import {
@@ -90,7 +90,7 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
     pasteAsLayer,
     requestCloseDocument,
     requestRender,
-  } = useEditor()
+  } = useEditorSelector((editor) => editor)
 
   React.useEffect(() => {
     const handler = (e: KeyboardEvent) => {

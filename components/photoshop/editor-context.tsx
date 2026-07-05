@@ -38,9 +38,14 @@ filterPersistedEditorSettingsForHydration,
 loadPersistedEditorSettings,
 savePersistedEditorSettings,
 } from "./editor-persisted-settings"
-import { createEditorSelectorStore,EditorSelectorContext,type EditorSelectorStore } from "./editor-selector-store"
+import { projectEditorContextValue } from "./editor-context-projection"
 import { selectActiveDocument,selectActiveLayer,selectSelectedLayers } from "./editor-selectors"
-import { createEditorStore,type EditorStore } from "./editor-store"
+import {
+  createEditorStore,
+  createVersionedSelectionCache,
+  selectWithVersionedCache,
+  type EditorStore,
+} from "./editor-store"
 import { addPhotoshopEventListener,dispatchPhotoshopEvent } from "./events"
 import { createHistoryJumpScheduler,type HistoryJumpScheduler } from "./history-jump-scheduler"
 import { recordHistoryLogEntryFromStorage } from "./preferences-engine"
@@ -96,6 +101,7 @@ const EditorContext = React.createContext<EditorContextValue | null>(null)
 const EditorRenderContext = React.createContext<EditorRenderContextValue | null>(null)
 const EditorCommandContext = React.createContext<EditorCommands | null>(null)
 const EditorStateStoreContext = React.createContext<EditorStore<EditorState> | null>(null)
+const EditorValueRefContext = React.createContext<{ current: EditorContextValue } | null>(null)
 
 import { initialState } from "./editor-initial-state"
 
@@ -132,13 +138,9 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
   stateRef.current = state
   const historyJumpSchedulerRef = React.useRef<HistoryJumpScheduler | null>(null)
   const performHistoryJumpRef = React.useRef<(index: number) => void>(() => {})
-  // Tracks whether the current dispatch should be flushed urgently (sync
-  // render) or deferred via React.startTransition (non-blocking render).
-  // High-frequency dispatches like "push-history" set this to true so the
-  // pointer-up handler can return immediately while the render happens
-  // off the critical path. The reducer state itself is computed
-  // synchronously and stored in stateRef regardless, so any subsequent
-  // dispatch that reads stateRef sees the latest value.
+  // Reducer snapshots are published synchronously for consistency. Selected
+  // UI projections may coalesce their notification to the next animation
+  // frame; external-store updates cannot rely on startTransition semantics.
   const dispatch = React.useCallback((action: Action) => {
     const before = stateRef.current
     // Run the reducer once, here, so stateRef is always current immediately
@@ -167,17 +169,14 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
       historyJumpSchedulerRef.current?.cancel()
     }
 
-    // Schedule the React render. For high-frequency, non-urgent updates
-    // (history pushes during painting), use startTransition so React doesn't
-    // block the pointer-up handler with the cascading re-render of the 60+
-    // context consumers. Urgent UI changes (tool selection, dialog open
-    // etc.) still render synchronously.
+    // Coalesce nonessential React projections to one notification per frame.
+    // The snapshot itself is already current, so commands and the render bus
+    // remain immediately consistent.
     const isHighFrequency = HIGH_FREQUENCY_ACTION_TYPES.has(action.type)
-    const flush = () => stateStore.notify()
     if (isHighFrequency) {
-      React.startTransition(flush)
+      stateStore.scheduleNotify()
     } else {
-      flush()
+      stateStore.notify()
     }
   }, [stateStore])
 
@@ -525,8 +524,8 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
   // stepHistoryBy reads the current document's history bounds from stateRef
   // rather than from context-closure values. This guarantees the keyboard
   // handler sees the LATEST history index even when the most recent
-  // push-history dispatch was deferred via startTransition (so the React
-  // re-render hasn't committed yet and `useEditor().historyIndex` still
+  // push-history notification may be frame-coalesced (so the React
+  // re-render hasn't committed yet and context historyIndex still
   // shows the older value). Critical for "Ctrl+Z right after a stroke"
   // never-jumps-too-far correctness.
   const stepHistoryBy = React.useCallback((delta: number): boolean => {
@@ -1278,12 +1277,8 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     setFilterPreview,
   ])
 
-  const selectorStoreRef = React.useRef<EditorSelectorStore<EditorContextValue> | null>(null)
-  if (!selectorStoreRef.current) selectorStoreRef.current = createEditorSelectorStore(value)
-  React.useLayoutEffect(() => {
-    selectorStoreRef.current?.setSnapshot(value)
-  }, [value])
-  const selectorStore = selectorStoreRef.current
+  const valueRef = React.useRef(value)
+  valueRef.current = value
   const commandContextValue = React.useMemo<EditorCommands>(
     () => ({ dispatch, commit, requestRender, subscribeRender }),
     [dispatch, commit, requestRender, subscribeRender],
@@ -1306,7 +1301,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
     <EditorStateStoreContext.Provider value={stateStore}>
     <EditorCommandContext.Provider value={commandContextValue}>
     <EditorRenderContext.Provider value={renderContextValue}>
-    <EditorSelectorContext.Provider value={selectorStore}>
+    <EditorValueRefContext.Provider value={valueRef}>
     <EditorContext.Provider value={value}>
       {children}
       <EditorCloseDialog
@@ -1320,7 +1315,7 @@ export function EditorProvider({ children }: { children: React.ReactNode }) {
         onSave={savePendingClose}
       />
     </EditorContext.Provider>
-    </EditorSelectorContext.Provider>
+    </EditorValueRefContext.Provider>
     </EditorRenderContext.Provider>
     </EditorCommandContext.Provider>
     </EditorStateStoreContext.Provider>
@@ -1333,30 +1328,75 @@ export function useEditor() {
   return ctx
 }
 
-export function useEditorSelector<T>(selector: (value: EditorContextValue) => T): T {
-  const store = React.useContext(EditorSelectorContext) as EditorSelectorStore<EditorContextValue> | null
-  if (!store) throw new Error("useEditorSelector must be used within EditorProvider")
-  return React.useSyncExternalStore(
-    store.subscribe,
-    () => selector(store.getSnapshot()),
-    () => selector(store.getSnapshot()),
-  )
+export function useEditorSelector<T>(
+  selector: (value: EditorContextValue) => T,
+  equality: (left: T, right: T) => boolean = Object.is,
+): T {
+  const store = React.useContext(EditorStateStoreContext)
+  const valueRef = React.useContext(EditorValueRefContext)
+  if (!store || !valueRef) {
+    throw new Error("useEditorSelector must be used within EditorProvider")
+  }
+  const selectorRef = React.useRef(selector)
+  const equalityRef = React.useRef(equality)
+  selectorRef.current = selector
+  equalityRef.current = equality
+  const cacheRef = React.useRef(createVersionedSelectionCache<T>())
+  const getSelection = React.useCallback(() => {
+    return selectWithVersionedCache(
+      cacheRef.current,
+      store.getVersion(),
+      selectorRef.current,
+      equalityRef.current,
+      projectEditorContextValue(store.getSnapshot(), valueRef.current),
+    )
+  }, [store, valueRef])
+  return React.useSyncExternalStore(store.subscribe, getSelection, getSelection)
 }
 
-export function useEditorStateSelector<T>(selector: (state: EditorState) => T): T {
+export function useEditorStateSelector<T>(
+  selector: (state: EditorState) => T,
+  equality: (left: T, right: T) => boolean = Object.is,
+): T {
   const store = React.useContext(EditorStateStoreContext)
   if (!store) throw new Error("useEditorStateSelector must be used within EditorProvider")
-  return React.useSyncExternalStore(
-    store.subscribe,
-    () => selector(store.getSnapshot()),
-    () => selector(store.getSnapshot()),
-  )
+  const selectorRef = React.useRef(selector)
+  const equalityRef = React.useRef(equality)
+  selectorRef.current = selector
+  equalityRef.current = equality
+  const cacheRef = React.useRef(createVersionedSelectionCache<T>())
+  const getSelection = React.useCallback(() => {
+    return selectWithVersionedCache(
+      cacheRef.current,
+      store.getVersion(),
+      selectorRef.current,
+      equalityRef.current,
+      store.getSnapshot(),
+    )
+  }, [store])
+  return React.useSyncExternalStore(store.subscribe, getSelection, getSelection)
+}
+
+export function shallowEqualEditorSelection<T extends Record<string, unknown>>(
+  left: T,
+  right: T,
+): boolean {
+  if (Object.is(left, right)) return true
+  const leftKeys = Object.keys(left)
+  if (leftKeys.length !== Object.keys(right).length) return false
+  return leftKeys.every((key) => Object.is(left[key], right[key]))
 }
 
 export function useEditorCommands() {
   const commands = React.useContext(EditorCommandContext)
   if (!commands) throw new Error("useEditorCommands must be used within EditorProvider")
   return commands
+}
+
+export function useEditorStoreApi(): EditorStore<EditorState> {
+  const store = React.useContext(EditorStateStoreContext)
+  if (!store) throw new Error("useEditorStoreApi must be used within EditorProvider")
+  return store
 }
 
 export function useActiveDocument() {

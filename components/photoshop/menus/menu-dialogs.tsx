@@ -21,6 +21,7 @@ import type { PurgeTarget } from "../purge-commands"
 import type { RecentDocument } from "../recent-documents"
 import type { WorkflowPackId } from "../workflow-presets"
 import { preloadCanvasSizeDialog, preloadExportAsDialog, preloadImageSizeDialog } from "../dialog-preload"
+import { FeatureErrorBoundary } from "../feature-error-boundary"
 
 // All dialogs below are lazy-mounted: the JS chunk is fetched only the first
 // time the user opens the dialog, and the component returns null until then.
@@ -567,7 +568,8 @@ export function MenuDialogs({
   setLoadSelectionOpen,
 }: MenuDialogsProps) {
   return (
-    <>
+    <FeatureErrorBoundary feature="dialog workflow" resetKey={openFilter ?? "menu-dialogs"}>
+      <>
       <FilterDialog filterId={openFilter} onClose={() => setOpenFilter(null)} />
       <ImageSizeDialog open={imageSizeOpen} onOpenChange={setImageSizeOpen} />
       <CanvasSizeDialog open={canvasSizeOpen} onOpenChange={setCanvasSizeOpen} />
@@ -695,6 +697,7 @@ export function MenuDialogs({
       </AlertDialog>
       <SaveSelectionDialog open={saveSelectionOpen} onOpenChange={setSaveSelectionOpen} />
       <LoadSelectionDialog open={loadSelectionOpen} onOpenChange={setLoadSelectionOpen} />
-    </>
+      </>
+    </FeatureErrorBoundary>
   )
 }

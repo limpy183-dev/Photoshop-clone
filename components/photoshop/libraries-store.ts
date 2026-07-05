@@ -12,7 +12,11 @@
  */
 
 import { dispatchPhotoshopEvent } from "./events"
-import { openRegisteredIndexedDB, STORAGE_RESOURCES } from "./storage-registry"
+import {
+  openRegisteredIndexedDB,
+  runRegisteredAtomicTransaction,
+  STORAGE_RESOURCES,
+} from "./storage-registry"
 
 export interface LibraryAssetRecord {
   id: string
@@ -116,7 +120,13 @@ async function withStore<T>(mode: IDBTransactionMode, action: (store: IDBObjectS
       const tx = db.transaction(STORE_NAME, mode)
       const store = tx.objectStore(STORE_NAME)
       let result: T | undefined
-      Promise.resolve(action(store)).then((value) => {
+      runRegisteredAtomicTransaction(
+        () => Promise.resolve(action(store)),
+        {
+          commit: () => tx.commit?.(),
+          abort: () => tx.abort(),
+        },
+      ).then((value) => {
         result = value
       }).catch(reject)
       tx.oncomplete = () => resolve(result as T)
@@ -199,6 +209,8 @@ function emitChange() {
  */
 export async function libraryAssetFromFile(file: File): Promise<LibraryAssetRecord> {
   const bitmap = await createImageBitmap(file)
+  const width = bitmap.width
+  const height = bitmap.height
   const baseName = file.name.replace(/\.[^.]+$/, "") || "Asset"
   const thumbnail = await renderThumbnail(bitmap, MAX_THUMB_DIM)
   bitmap.close?.()
@@ -208,8 +220,8 @@ export async function libraryAssetFromFile(file: File): Promise<LibraryAssetReco
     kind: "image",
     mimeType: file.type || guessMime(file.name),
     blob: file,
-    width: bitmap.width,
-    height: bitmap.height,
+    width,
+    height,
     thumbnail,
     tags: [],
     group: "Imported",

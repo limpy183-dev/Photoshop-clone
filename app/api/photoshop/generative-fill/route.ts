@@ -1,12 +1,17 @@
 import { NextResponse } from "next/server"
 import { z } from "zod"
 import {
-  getClientIp,
   isAllowedOrigin,
   RequestBodyTooLargeError,
   readJsonWithLimit,
 } from "@/lib/marketing-store"
-import { acquireConcurrencySlot, checkServerRateLimit } from "@/lib/rate-limit-store"
+import {
+  generativeFillConcurrencyKey,
+  generativeFillDailyKey,
+  generativeFillMinuteKey,
+} from "@/lib/generative-fill-quota"
+import { recordOperationalMetric } from "@/lib/operational-metrics"
+import { acquireServerConcurrencySlot, checkServerRateLimit } from "@/lib/rate-limit-store"
 import { verifyServerCapability } from "@/lib/server-capabilities"
 
 export const runtime = "nodejs"
@@ -92,12 +97,17 @@ export async function POST(request: Request) {
   }
 
   const subject = capability.claims.sub
-  const clientIdentity = getClientIp(request)
   const rateLimit = await checkServerRateLimit(
-    `genfill:minute:${subject}:${clientIdentity}`,
+    generativeFillMinuteKey(subject),
     RATE_LIMIT,
   )
   if (!rateLimit.allowed) {
+    recordOperationalMetric("generative-fill.minute-quota", {
+      adapter: process.env.RATE_LIMIT_SERVICE_URL ? "remote" : "local",
+      outcome: "denied",
+      reason: rateLimit.reason ?? "limit",
+      status: rateLimit.reason ? 503 : 429,
+    })
     return NextResponse.json(
       {
         error: rateLimit.reason
@@ -135,21 +145,44 @@ export async function POST(request: Request) {
   }
 
   const concurrencyLimit = Math.max(1, Number(process.env.GENERATIVE_FILL_MAX_CONCURRENCY) || 2)
-  const concurrency = acquireConcurrencySlot(`genfill:${subject}`, concurrencyLimit)
+  const concurrency = await acquireServerConcurrencySlot(
+    generativeFillConcurrencyKey(subject),
+    concurrencyLimit,
+    { leaseMs: UPSTREAM_TIMEOUT_MS + 5_000 },
+  )
   if (!concurrency.acquired) {
+    recordOperationalMetric("generative-fill.concurrency", {
+      adapter: process.env.RATE_LIMIT_SERVICE_URL ? "remote" : "local",
+      outcome: "denied",
+      reason: concurrency.reason ?? "limit",
+      status: concurrency.reason ? 503 : 429,
+    })
     return NextResponse.json(
-      { error: "Too many concurrent generative fill requests." },
-      { headers: { "Retry-After": "1" }, status: 429 },
+      {
+        error: concurrency.reason
+          ? "Generative fill concurrency control is unavailable."
+          : "Too many concurrent generative fill requests.",
+      },
+      {
+        headers: { "Retry-After": String(concurrency.retryAfterSeconds ?? 1) },
+        status: concurrency.reason ? 503 : 429,
+      },
     )
   }
 
   try {
     const dailyLimit = Math.max(1, Number(process.env.GENERATIVE_FILL_DAILY_REQUEST_LIMIT) || 100)
     const dailyQuota = await checkServerRateLimit(
-      `genfill:day:${subject}`,
+      generativeFillDailyKey(subject),
       { limit: dailyLimit, windowMs: DAY_MS },
     )
     if (!dailyQuota.allowed) {
+      recordOperationalMetric("generative-fill.daily-quota", {
+        adapter: process.env.RATE_LIMIT_SERVICE_URL ? "remote" : "local",
+        outcome: "denied",
+        reason: dailyQuota.reason ?? "limit",
+        status: dailyQuota.reason ? 503 : 429,
+      })
       return NextResponse.json(
         {
           error: dailyQuota.reason
@@ -215,6 +248,6 @@ export async function POST(request: Request) {
       headers: { "content-type": contentType },
     })
   } finally {
-    concurrency.release()
+    await concurrency.release()
   }
 }

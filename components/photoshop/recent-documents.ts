@@ -9,7 +9,12 @@ import {
   type ClientStorageKey,
 } from "./client-storage"
 import { dispatchPhotoshopEvent } from "./events"
-import { openRegisteredIndexedDB, STORAGE_RESOURCES } from "./storage-registry"
+import {
+  migrateRegisteredPayload,
+  openRegisteredIndexedDB,
+  STORAGE_RESOURCES,
+  writeWithRegisteredQuotaRecovery,
+} from "./storage-registry"
 
 export interface RecentDocument {
   id: string
@@ -101,7 +106,7 @@ async function readAutosavesIDB(): Promise<AutosaveDocument[]> {
   })
 }
 
-async function writeAutosavesIDB(entries: AutosaveDocument[]): Promise<void> {
+async function writeAutosavesIDBRaw(entries: AutosaveDocument[]): Promise<void> {
   const db = await openAutosaveDB()
   return new Promise((resolve, reject) => {
     const tx = db.transaction(IDB_STORE, "readwrite")
@@ -113,6 +118,40 @@ async function writeAutosavesIDB(entries: AutosaveDocument[]): Promise<void> {
     tx.oncomplete = () => { db.close(); resolve() }
     tx.onerror = () => { db.close(); reject(tx.error) }
   })
+}
+
+export function rankAutosavesForQuotaRetry<T extends Pick<AutosaveDocument, "documentId" | "updatedAt">>(
+  entries: readonly T[],
+  activeDocumentId?: string | null,
+): T[] {
+  return [...entries].sort((left, right) => {
+    const leftActive = left.documentId === activeDocumentId ? 1 : 0
+    const rightActive = right.documentId === activeDocumentId ? 1 : 0
+    return rightActive - leftActive ||
+      right.updatedAt - left.updatedAt ||
+      left.documentId.localeCompare(right.documentId)
+  })
+}
+
+export function planAutosavesForQuotaRetry<T extends Pick<AutosaveDocument, "documentId" | "updatedAt">>(
+  entries: readonly T[],
+  activeDocumentId?: string | null,
+): T[] {
+  const ranked = rankAutosavesForQuotaRetry(entries, activeDocumentId)
+  return ranked.slice(0, Math.max(1, ranked.length - 1))
+}
+
+async function writeAutosavesIDB(
+  entries: AutosaveDocument[],
+  activeDocumentId?: string | null,
+): Promise<void> {
+  const retryEntries = planAutosavesForQuotaRetry(entries, activeDocumentId)
+  let attempt = 0
+  return writeWithRegisteredQuotaRecovery(
+    STORAGE_RESOURCES.recentDocuments,
+    () => writeAutosavesIDBRaw(attempt++ === 0 ? entries : retryEntries),
+    async () => {},
+  )
 }
 
 async function clearAutosaveIDB(): Promise<void> {
@@ -237,13 +276,57 @@ export function readAutosaves(): AutosaveDocument[] {
   if (!canUseStorage()) return []
   const parsed = readClientStorageJson(AUTOSAVE_COLLECTION_STORAGE)
   if (Array.isArray(parsed)) {
-    return parsed
+    const migrated = migrateRegisteredPayload(
+      STORAGE_RESOURCES.recentDocuments,
+      { schemaVersion: 2, payload: parsed },
+      migrateRecentDocumentsPayload,
+    )
+    return (migrated?.payload ?? [])
       .map(normalizeAutosaveDocument)
       .filter((item): item is AutosaveDocument => !!item)
       .sort((a, b) => b.updatedAt - a.updatedAt)
   }
   const legacy = readAutosave()
-  return legacy ? [{ ...legacy, kind: "autosave", documentId: legacy.id }] : []
+  if (!legacy) return []
+  const migrated = migrateRegisteredPayload(
+    STORAGE_RESOURCES.recentDocuments,
+    { schemaVersion: 0, payload: [legacy] },
+    migrateRecentDocumentsPayload,
+  )
+  return (migrated?.payload ?? [])
+    .map(normalizeAutosaveDocument)
+    .filter((item): item is AutosaveDocument => !!item)
+}
+
+export function migrateRecentDocumentsPayload(
+  payload: unknown[],
+  fromVersion: number,
+  toVersion: number,
+): unknown[] {
+  if (fromVersion === 0 && toVersion === 1) {
+    return payload.map((item) => {
+      if (!item || typeof item !== "object") return item
+      const record = item as Record<string, unknown>
+      return {
+        ...record,
+        documentId: typeof record.documentId === "string"
+          ? record.documentId
+          : record.id,
+      }
+    })
+  }
+  if (fromVersion === 1 && toVersion === 2) {
+    return payload.map((item) => {
+      if (!item || typeof item !== "object") return item
+      const record = item as Record<string, unknown>
+      return {
+        ...record,
+        kind: "autosave",
+        updatedAt: typeof record.updatedAt === "number" ? record.updatedAt : 0,
+      }
+    })
+  }
+  return payload
 }
 
 /** Async version that reads from IndexedDB first, falling back to localStorage. */
@@ -263,7 +346,10 @@ export async function readAutosavesAsync(): Promise<AutosaveDocument[]> {
  * IndexedDB has no practical size limit; localStorage is capped at ~5MB.
  * Resolves true when at least one backend accepted the write.
  */
-export function writeAutosaves(entries: Array<Omit<AutosaveDocument, "id" | "kind" | "updatedAt"> & { id?: string; updatedAt?: number }>): Promise<boolean> {
+export function writeAutosaves(
+  entries: Array<Omit<AutosaveDocument, "id" | "kind" | "updatedAt"> & { id?: string; updatedAt?: number }>,
+  options: { activeDocumentId?: string | null } = {},
+): Promise<boolean> {
   const payload: AutosaveDocument[] = entries
     .map((entry) => ({
       id: entry.id ?? `autosave_${entry.documentId}`,
@@ -278,7 +364,7 @@ export function writeAutosaves(entries: Array<Omit<AutosaveDocument, "id" | "kin
 
   // Write to IndexedDB (no size limit)
   const idbWrite = canUseIDB()
-    ? writeAutosavesIDB(payload).then(() => true, () => false)
+    ? writeAutosavesIDB(payload, options.activeDocumentId).then(() => true, () => false)
     : Promise.resolve(false)
 
   // Also write to localStorage (with size limit) as synchronous fallback.

@@ -1,10 +1,8 @@
-import { unionDirtyRects, type DirtyRect } from "./dirty-rect"
 import { compositeLayer } from "./blend-modes"
 import { getFilter } from "./filters"
-import { planTileGrid } from "./performance-engine"
 import { smartFilterMaskAmountAt, smartFilterMaskToImageData } from "./smart-filter-masks"
 import { planRayTraceTiles, rayTraceScene, rayTraceSceneTiled, type ThreeDTilePlan } from "./three-d-video-engine"
-import type { Layer, PsDocument } from "./types"
+import type { Layer } from "./types"
 import {
   createLayerTileAddress,
   type LayerTileAddress,
@@ -51,31 +49,6 @@ export interface LayerTileCanvasCodec {
 
 export interface LayerContentMaterializeOptions {
   documentSize?: { width: number; height: number }
-}
-
-export interface DocumentTileRecompositionInput {
-  dirtyByLayer: Readonly<Record<string, readonly DirtyRect[]>>
-  tileSize?: number
-}
-
-export interface DocumentRecompositionTile {
-  key: string
-  col: number
-  row: number
-  rect: TileCanvasRect
-}
-
-export interface DocumentTileRecompositionPlan {
-  strategy: "none" | "tile-isolated" | "full-frame"
-  tiles: DocumentRecompositionTile[]
-  compositeRect: TileCanvasRect
-  layersNeedingRecomposition: string[]
-  reasons: string[]
-}
-
-function positiveInt(value: number | undefined, fallback: number) {
-  if (!Number.isFinite(value) || value === undefined) return fallback
-  return Math.max(1, Math.round(value))
 }
 
 function tileRect(ref: LayerTileRef): TileCanvasRect {
@@ -514,99 +487,4 @@ export function renderThreeDLayerTilePreviewTiled(
     onTile: options.onTile,
   })
   return { image, plan }
-}
-
-function rectToTiles(rect: DirtyRect, width: number, height: number, tileSize: number): DocumentRecompositionTile[] {
-  const x0 = Math.max(0, Math.floor(rect.x))
-  const y0 = Math.max(0, Math.floor(rect.y))
-  const x1 = Math.min(width, Math.ceil(rect.x + rect.w))
-  const y1 = Math.min(height, Math.ceil(rect.y + rect.h))
-  if (x1 <= x0 || y1 <= y0) return []
-  const grid = planTileGrid(width, height, tileSize)
-  const col0 = Math.max(0, Math.floor(x0 / tileSize))
-  const row0 = Math.max(0, Math.floor(y0 / tileSize))
-  const col1 = Math.min(grid.tileColumns - 1, Math.floor((x1 - 1) / tileSize))
-  const row1 = Math.min(grid.tileRows - 1, Math.floor((y1 - 1) / tileSize))
-  const tiles: DocumentRecompositionTile[] = []
-  for (let row = row0; row <= row1; row++) {
-    for (let col = col0; col <= col1; col++) {
-      const x = col * tileSize
-      const y = row * tileSize
-      tiles.push({
-        key: `${col}:${row}`,
-        col,
-        row,
-        rect: {
-          x,
-          y,
-          w: Math.max(0, Math.min(tileSize, width - x)),
-          h: Math.max(0, Math.min(tileSize, height - y)),
-        },
-      })
-    }
-  }
-  return tiles
-}
-
-function tileUnion(tiles: DocumentRecompositionTile[]): TileCanvasRect {
-  if (!tiles.length) return { x: 0, y: 0, w: 0, h: 0 }
-  const rect = unionDirtyRects(tiles.map((tile) => tile.rect))
-  return { x: rect.x, y: rect.y, w: rect.w, h: rect.h }
-}
-
-function layerReasons(layer: Layer): string[] {
-  const reasons: string[] = []
-  if ((layer.mask && layer.maskEnabled !== false) || layer.vectorMask) reasons.push("mask")
-  if (layer.style || layer.smartFilters?.some((filter) => filter.enabled)) reasons.push("effects")
-  if (layer.kind === "adjustment" && layer.adjustment) reasons.push("adjustment")
-  if (layer.clipped) reasons.push("clipping-group")
-  if (layer.smartObject || layer.kind === "smart-object") reasons.push("smart-object")
-  if (layer.kind === "3d" || layer.threeD) reasons.push("3d")
-  if (layer.kind === "text") reasons.push("text")
-  if (layer.kind === "shape" || layer.path || layer.vectorMask) reasons.push("vector")
-  return reasons
-}
-
-export function planDocumentTileRecomposition(
-  doc: Pick<PsDocument, "width" | "height" | "layers">,
-  input: DocumentTileRecompositionInput,
-): DocumentTileRecompositionPlan {
-  const dirtyRects = Object.values(input.dirtyByLayer).flatMap((rects) => [...rects])
-  if (!dirtyRects.length) {
-    return { strategy: "none", tiles: [], compositeRect: { x: 0, y: 0, w: 0, h: 0 }, layersNeedingRecomposition: [], reasons: [] }
-  }
-
-  const tileSize = positiveInt(input.tileSize, 512)
-  const dirtyUnion = unionDirtyRects(dirtyRects)
-  const coverage = (dirtyUnion.w * dirtyUnion.h) / Math.max(1, doc.width * doc.height)
-  if (coverage >= 0.6) {
-    return {
-      strategy: "full-frame",
-      tiles: [],
-      compositeRect: { x: 0, y: 0, w: doc.width, h: doc.height },
-      layersNeedingRecomposition: doc.layers.filter((layer) => layer.visible && layer.kind !== "group").map((layer) => layer.id),
-      reasons: ["full-frame"],
-    }
-  }
-
-  const dirtyIds = new Set(Object.keys(input.dirtyByLayer))
-  let firstDirtyIndex = doc.layers.findIndex((layer) => dirtyIds.has(layer.id))
-  if (firstDirtyIndex < 0) firstDirtyIndex = 0
-  const layersNeedingRecomposition = doc.layers
-    .slice(firstDirtyIndex)
-    .filter((layer) => layer.visible && layer.kind !== "group")
-    .map((layer) => layer.id)
-  const reasons = new Set<string>()
-  for (const layer of doc.layers.slice(firstDirtyIndex)) {
-    if (!layer.visible || layer.kind === "group") continue
-    for (const reason of layerReasons(layer)) reasons.add(reason)
-  }
-  const tiles = rectToTiles(dirtyUnion, doc.width, doc.height, tileSize)
-  return {
-    strategy: tiles.length ? "tile-isolated" : "none",
-    tiles,
-    compositeRect: tileUnion(tiles),
-    layersNeedingRecomposition,
-    reasons: [...reasons].sort(),
-  }
 }

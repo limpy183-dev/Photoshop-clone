@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { CLIENT_STORAGE_KEYS, readClientStorageString } from "./client-storage"
-import { useEditor } from "./editor-context"
+import { useEditorSelector } from "./editor-context"
 import { useMounted } from "./use-mounted"
 import { requestCanvasZoom } from "./zoom-events"
 import { Slider } from "@/components/ui/slider"
@@ -85,7 +85,7 @@ const SHAPE_LIBRARY: { id: CustomShapeId; label: string; Icon: React.ComponentTy
 ]
 
 export function OptionsBar() {
-  const { tool, brush, dispatch, gradient, foreground, background, eraser, cloneSource, activeDoc } = useEditor()
+  const { tool, brush, dispatch, gradient, foreground, background, eraser, cloneSource, activeDoc } = useEditorSelector((editor) => editor)
   // brush.size is loaded from localStorage post-hydrate, so the Radix
   // Slider's internal `<SliderRange right="X%">` would mismatch between
   // SSR (defaults) and the first client render (persisted). We render a
@@ -513,7 +513,7 @@ export function OptionsBar() {
   }
 
   function MoveOptions() {
-    const { activeLayer, activeDoc, selectedLayers, dispatch, commit } = useEditor()
+    const { activeLayer, activeDoc, selectedLayers, dispatch, commit } = useEditorSelector((editor) => editor)
     const selectedIds = selectedLayers.map((layer) => layer.id)
     const canAlign = selectedLayers.filter((layer) => layer.kind !== "group" && !layer.locked && !layer.lockMove && !layer.lockAll).length >= 2
     const canDistribute = selectedLayers.filter((layer) => layer.kind !== "group" && !layer.locked && !layer.lockMove && !layer.lockAll).length >= 3
@@ -600,7 +600,7 @@ export function OptionsBar() {
   }
 
   function MarqueeOptions() {
-    const { selectionOptions } = useEditor()
+    const { selectionOptions } = useEditorSelector((editor) => editor)
     return (
       <>
         <Square className="w-3.5 h-3.5" />
@@ -658,7 +658,7 @@ export function OptionsBar() {
   }
 
   function SelectionToolOptions() {
-    const { selectionOptions } = useEditor()
+    const { selectionOptions } = useEditorSelector((editor) => editor)
     const quickLike = tool === "quick-selection"
     const wandLike = tool === "magic-wand" || quickLike || tool === "object-select"
     const magneticLike = tool === "lasso-magnetic"
@@ -891,7 +891,7 @@ export function OptionsBar() {
   }
 
   function TypeOptions() {
-    const { activeLayer, dispatch, commit, requestRender } = useEditor()
+    const { activeLayer, dispatch, commit, requestRender } = useEditorSelector((editor) => editor)
     const t = activeLayer?.kind === "text" ? activeLayer.text : null
     return (
       <>
@@ -1019,7 +1019,7 @@ export function OptionsBar() {
   }
 
   function ZoomOptions() {
-    const { activeDoc } = useEditor()
+    const { activeDoc } = useEditorSelector((editor) => editor)
     return (
       <>
         <ZoomIn className="w-3.5 h-3.5" />
@@ -1055,7 +1055,7 @@ export function OptionsBar() {
   }
 
   function RotateViewOptions() {
-    const { activeDoc, dispatch } = useEditor()
+    const { activeDoc, dispatch } = useEditorSelector((editor) => editor)
     const rotation = activeDoc?.rotation ?? 0
     const setRotation = (value: 0 | 90 | 180 | 270) => dispatch({ type: "set-rotation", rotation: value })
     return (
@@ -1387,7 +1387,7 @@ export function OptionsBar() {
   }
 
   function CountOptions() {
-    const { activeDoc, dispatch } = useEditor()
+    const { activeDoc, dispatch } = useEditorSelector((editor) => editor)
     return (
       <>
         <Hash className="w-3.5 h-3.5" />
@@ -1468,7 +1468,7 @@ export function OptionsBar() {
     }
     type NumericKey = "tx" | "ty" | "widthPct" | "heightPct" | "rotation" | "skewX" | "skewY"
 
-    const { activeLayer } = useEditor()
+    const { activeLayer } = useEditorSelector((editor) => editor)
     const canTransform = Boolean(activeLayer && !activeLayer.locked)
     const [draft, setDraft] = React.useState<TransformDraft>({
       tx: 0,
@@ -1632,7 +1632,7 @@ export function OptionsBar() {
   }
 
   function _TransformOptionsLegacy() {
-    const { activeLayer, dispatch: _dispatch } = useEditor()
+    const { activeLayer, dispatch: _dispatch } = useEditorSelector((editor) => editor)
     return (
       <>
         <button

@@ -20,6 +20,7 @@ export default defineConfig({
         "components/photoshop/storage-registry.ts",
         "components/photoshop/editor-store.ts",
         "components/photoshop/editor-selectors.ts",
+        "components/photoshop/editor-reducer-model.ts",
       ],
     },
   },

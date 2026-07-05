@@ -5,6 +5,9 @@ import { resolve } from "node:path"
 import { chromium } from "playwright"
 
 export const BUNDLE_ROUTES = ["/", "/editor", "/marketing", "/documentation"]
+const ROUTE_ENTRY_MARKS = {
+  "/editor": "photoshop-editor-entry-loaded",
+}
 const DECODER_RE = /decoder|raster|raw|heic|j2k|openjpeg|exr|tiff|pdfjs|dicom|wasm/i
 const REPORT_ORIGIN = "http://bundle.local"
 
@@ -53,6 +56,11 @@ export function sortBundleResources(resources) {
     a.initiatorType.localeCompare(b.initiatorType) ||
     a.decodedBodySize - b.decodedBodySize,
   )
+}
+
+export function selectInitialRouteResources(resources, routeEntryCutoff) {
+  if (!Number.isFinite(routeEntryCutoff)) return resources
+  return resources.filter((entry) => entry.responseEnd <= routeEntryCutoff)
 }
 
 function normalizeResource(entry) {
@@ -125,19 +133,25 @@ export async function measureRouteBundles({ root = process.cwd(), baseUrl: suppl
         const context = await browser.newContext()
         const page = await context.newPage()
         await page.goto(new URL(route, baseUrl).href, { waitUntil: "networkidle" })
-        const resources = await page.evaluate(() =>
-          performance.getEntriesByType("resource").map((raw) => {
+        const measurement = await page.evaluate((routeEntryMark) => ({
+          routeEntryCutoff: routeEntryMark
+            ? performance.getEntriesByName(routeEntryMark, "mark").at(-1)?.startTime
+            : undefined,
+          resources: performance.getEntriesByType("resource").map((raw) => {
             const entry = raw
             return {
               decodedBodySize: entry.decodedBodySize,
               encodedBodySize: entry.encodedBodySize,
               initiatorType: entry.initiatorType,
               name: entry.name,
+              responseEnd: entry.responseEnd,
               transferSize: entry.transferSize,
             }
           }),
+        }), ROUTE_ENTRY_MARKS[route])
+        routeMetrics[route] = resourceSummary(
+          selectInitialRouteResources(measurement.resources, measurement.routeEntryCutoff),
         )
-        routeMetrics[route] = resourceSummary(resources)
         await context.close()
       }
       return routeMetrics

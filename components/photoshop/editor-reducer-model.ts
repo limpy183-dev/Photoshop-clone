@@ -608,12 +608,11 @@ export const DEFAULT_BRUSH_PRESETS: BrushPreset[] = [
   },
 ]
 
-// Actions whose React render can be deferred via startTransition without
+// Actions whose nonessential React notification can be frame-coalesced without
 // hurting interactivity. Currently only "push-history" qualifies — paint
 // strokes generate them rapidly and the cascade of context-consumer
 // re-renders that follows is the dominant source of "lag/freeze after
-// stroke" perception. The reducer itself still runs synchronously (see the
-// dispatch wrapper) so undo/redo correctness is unaffected.
+// stroke" perception. The reducer and canonical snapshot remain synchronous.
 export const BRUSH_PRESET_VISUAL_RESET: Partial<BrushSettings> = {
   sizeControl: "off",
   angleControl: "off",
@@ -700,5 +699,4 @@ export function mutateActiveDoc(state: EditorState, fn: (d: PsDocument) => PsDoc
     documents: state.documents.map((d) => (d.id === state.activeDocId ? fn(d) : d)),
   }
 }
-
 

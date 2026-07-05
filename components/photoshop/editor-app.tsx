@@ -4,7 +4,7 @@ import * as React from "react"
 import dynamic from "next/dynamic"
 import { useSearchParams } from "next/navigation"
 import { toast } from "sonner"
-import { EditorProvider, makeHistoryEntry, useEditor } from "@/components/photoshop/editor-context"
+import { EditorProvider, makeHistoryEntry, useEditorSelector } from "@/components/photoshop/editor-context"
 import { EditorErrorBoundary } from "@/components/photoshop/editor-error-boundary"
 import { useShortcuts } from "@/components/photoshop/use-shortcuts"
 import { useMounted } from "@/components/photoshop/use-mounted"
@@ -37,6 +37,10 @@ import {
   preloadImageSizeDialog,
   preloadNewDocumentDialog,
 } from "@/components/photoshop/dialog-preload"
+
+if (typeof performance !== "undefined") {
+  performance.mark("photoshop-editor-entry-loaded")
+}
 
 // Heavy dialogs / overlays are rarely visible — load them lazily so their
 // JS, Radix portals, and event listeners don't bloat first paint or
@@ -126,7 +130,7 @@ function useIsNarrowViewport() {
 // here: it lives in a sibling overlay so opening/positioning the menu
 // doesn't re-render the heavy MenuBar / Canvas / PanelDock tree.
 function Workspace() {
-  const { activeDocId, activeDoc, dispatch } = useEditor()
+  const { activeDocId, activeDoc, dispatch } = useEditorSelector((editor) => editor)
   const [newOpen, setNewOpen] = React.useState(false)
   const [commandOpen, setCommandOpen] = React.useState(false)
   const [imageSizeOpen, setImageSizeOpen] = React.useState(false)
@@ -418,7 +422,7 @@ function Workspace() {
 
 function StartupRouteEffects() {
   const searchParams = useSearchParams()
-  const { dispatch, requestRender } = useEditor()
+  const { dispatch, requestRender } = useEditorSelector((editor) => editor)
   const presetName = searchParams.get("preset")
   const recentId = searchParams.get("recent")
   const learnId = searchParams.get("learn")

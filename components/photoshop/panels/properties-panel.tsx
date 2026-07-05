@@ -1,13 +1,14 @@
 "use client"
 
 import * as React from "react"
-import { useEditor, makeCanvas, useRenderSubscription } from "../editor-context"
+import { useEditorSelector, makeCanvas, useRenderSubscription } from "../editor-context"
 import { dispatchPhotoshopEvent } from "../events"
 import type { MergedRenderChange } from "../render-bus"
 import { FILTERS, type FilterParam } from "../filters"
 import { Slider } from "@/components/ui/slider"
 import { Type as TypeIcon, Square, Pen, Image, Layers as LayersIcon, Paintbrush, Eraser, Move, Scissors, Wand2, Eye, EyeOff, Link2, Link2Off } from "lucide-react"
-import type { Layer, BlendMode, ToolId } from "../types"
+import type { Layer, BlendMode, PsDocument, ToolId } from "../types"
+import type { ActiveSmartFilterMaskTarget } from "../editor-reducer"
 import { renderThreeDScene } from "../advanced-subsystems"
 import {
   applyTextInsideShape,
@@ -67,7 +68,7 @@ function smartFilterMaskState(mask: HTMLCanvasElement | null | undefined, enable
 }
 
 export function PropertiesPanel() {
-  const { activeDoc, activeLayer, tool, brush, eraser, cloneSource, dispatch, foreground, background, commit, requestRender, activeSmartFilterMaskTarget } = useEditor()
+  const { activeDoc, activeLayer, tool, brush, eraser, cloneSource, dispatch, foreground, background, commit, requestRender, activeSmartFilterMaskTarget } = useEditorSelector((editor) => editor)
   if (!activeDoc) return <EmptyState text="No document open" />
   const globalLight = activeDoc.globalLight ?? { angle: 120, altitude: 30 }
   const setGlobalLight = (patch: Partial<typeof globalLight>) => {
@@ -192,11 +193,11 @@ function LayerSection({
   activeSmartFilterMaskTarget,
 }: {
   layer: Layer
-  doc: NonNullable<ReturnType<typeof useEditor>["activeDoc"]>
+  doc: PsDocument
   dispatch: (a: import("../editor-context").Action) => void
   commit: (label: string, changedLayerIds?: string[]) => void
   requestRender: () => void
-  activeSmartFilterMaskTarget: ReturnType<typeof useEditor>["activeSmartFilterMaskTarget"]
+  activeSmartFilterMaskTarget: ActiveSmartFilterMaskTarget | null
 }) {
   const [draggedSmartFilterId, setDraggedSmartFilterId] = React.useState<string | null>(null)
   const commitLayerChange = (label: string) => {

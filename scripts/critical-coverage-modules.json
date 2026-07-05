@@ -1,0 +1,11 @@
+{
+  "patterns": [
+    "(?:^|/)filters?/",
+    "reducer",
+    "serializer",
+    "sanitizer",
+    "(?:^|[/.-])algorithms?(?:[/.-]|$)"
+  ],
+  "minimumChangedStatementPercent": 100,
+  "minimumChangedBranchPercent": 100
+}

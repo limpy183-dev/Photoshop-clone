@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { FeatureErrorBoundary } from "./feature-error-boundary"
 import {
   ChevronLeft,
   ChevronRight,
@@ -895,7 +896,11 @@ function PanelStackView({
         />
       ) : null}
 
-      <div className="flex-1 min-h-0 overflow-hidden overflow-y-auto">{activePanel.render()}</div>
+      <div className="flex-1 min-h-0 overflow-hidden overflow-y-auto">
+        <FeatureErrorBoundary feature={`${activePanel.label} panel`} resetKey={activePanel.id}>
+          {activePanel.render()}
+        </FeatureErrorBoundary>
+      </div>
     </div>
   )
 }

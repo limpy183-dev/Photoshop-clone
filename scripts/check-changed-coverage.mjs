@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
 import { relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { findMissingCoverageFiles, matchesCriticalModule } from "./changed-coverage-policy.mjs"
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)))
 const coveragePath = resolve(root, process.argv[2] ?? "coverage/coverage-final.json")
@@ -33,13 +34,28 @@ for (const line of diff.split(/\r?\n/)) {
 }
 
 const coverage = JSON.parse(readFileSync(coveragePath, "utf8"))
+const policy = JSON.parse(
+  readFileSync(resolve(root, "scripts/critical-coverage-modules.json"), "utf8"),
+)
 const failures = []
-const criticalPureModule = /(?:filters?\/|reducer|serializer|sanitizer|algorithms)/
-for (const [absoluteFile, fileCoverage] of Object.entries(coverage)) {
-  const file = relative(root, absoluteFile).replace(/\\/g, "/")
-  if (!criticalPureModule.test(file)) continue
-  const lines = changed.get(file)
-  if (!lines?.size) continue
+const coverageByFile = new Map(
+  Object.entries(coverage).map(([absoluteFile, fileCoverage]) => [
+    relative(root, absoluteFile).replace(/\\/g, "/"),
+    fileCoverage,
+  ]),
+)
+for (const file of findMissingCoverageFiles(
+  [...changed.keys()],
+  new Set(coverageByFile.keys()),
+  policy.patterns,
+)) {
+  failures.push(`${file}: changed critical module has no coverage entry`)
+}
+
+for (const [file, lines] of changed) {
+  if (!matchesCriticalModule(file, policy.patterns) || !lines.size) continue
+  const fileCoverage = coverageByFile.get(file)
+  if (!fileCoverage) continue
 
   for (const [id, location] of Object.entries(fileCoverage.statementMap ?? {})) {
     const touchesChange = [...lines].some(
@@ -61,4 +77,4 @@ if (failures.length) {
   console.error(failures.join("\n"))
   process.exit(1)
 }
-console.log("Changed-line coverage check passed for covered pure modules.")
+console.log("Changed-line coverage check passed for all changed critical modules.")

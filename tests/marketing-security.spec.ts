@@ -7,6 +7,7 @@ import { expect, test } from "@playwright/test"
 import { appendRecord, getClientIp } from "../lib/marketing-store"
 import { resolveClientIdentity } from "../lib/client-identity"
 import { acquireConcurrencySlot, checkServerRateLimit } from "../lib/rate-limit-store"
+import { generativeFillConcurrencyKey } from "../lib/generative-fill-quota"
 import { createServerCapability, verifyServerCapability } from "../lib/server-capabilities"
 import { POST as postFeedback } from "../app/api/feedback/route"
 import { POST as postGenerativeFill } from "../app/api/photoshop/generative-fill/route"
@@ -307,7 +308,7 @@ test("concurrency-rejected generative fill requests do not consume daily quota",
   const originalFetch = globalThis.fetch
   const subject = `quota-concurrency-${Date.now()}-${Math.random().toString(16).slice(2)}`
   const payload = { prompt: "fill the selected area", sourcePng: tinyPngDataUrl }
-  const heldSlot = acquireConcurrencySlot(`genfill:${subject}`, 1)
+  const heldSlot = acquireConcurrencySlot(generativeFillConcurrencyKey(subject), 1)
   let upstreamCalls = 0
 
   if (!heldSlot.acquired) throw new Error("Could not reserve the test concurrency slot.")

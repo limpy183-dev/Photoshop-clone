@@ -9,6 +9,7 @@ export function GET() {
   return NextResponse.json(
     {
       ok: healthy,
+      readiness: healthy,
       adapters,
     },
     {
@@ -17,4 +18,3 @@ export function GET() {
     },
   )
 }
-

@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
-import { useEditor, makeCanvas } from "./editor-context"
+import { useEditorSelector, makeCanvas } from "./editor-context"
 import { downloadText, loadRasterCanvasFromFile } from "./document-io"
 import { buildContentAwareFillPlan, contentAwareFill, focusAreaMask, rasterizeText, selectionFromMask, selectionToMaskCanvas } from "./tool-helpers"
 import {
@@ -78,7 +78,7 @@ const smallInput = "h-8 bg-[var(--ps-panel-2)] text-[11px]"
 
 
 export function AlgorithmicOperationsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
-  const editor = useEditor()
+  const editor = useEditorSelector((value) => value)
   const {
     activeDoc,
     activeLayer,
