@@ -64,13 +64,15 @@ export function selectInitialRouteResources(resources, routeEntryCutoff) {
 }
 
 function normalizeResource(entry) {
+  const stableEntry = { ...entry }
+  delete stableEntry.responseEnd
   return {
-    ...entry,
+    ...stableEntry,
     name: normalizeBundleReportUrl(entry.name),
   }
 }
 
-function resourceSummary(resources) {
+export function summarizeRouteResources(resources) {
   const scripts = sortBundleResources(resources).filter((entry) =>
     entry.initiatorType === "script" || /\.js(?:\?|$)/i.test(entry.name),
   ).map(normalizeResource)
@@ -149,7 +151,7 @@ export async function measureRouteBundles({ root = process.cwd(), baseUrl: suppl
             }
           }),
         }), ROUTE_ENTRY_MARKS[route])
-        routeMetrics[route] = resourceSummary(
+        routeMetrics[route] = summarizeRouteResources(
           selectInitialRouteResources(measurement.resources, measurement.routeEntryCutoff),
         )
         await context.close()

@@ -1102,7 +1102,6 @@
           "encodedBodySize": 4021,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/1674-adca1a21a64925d4.js",
-          "responseEnd": 82.79999995231628,
           "transferSize": 4321
         },
         {
@@ -1110,7 +1109,6 @@
           "encodedBodySize": 60719,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/3794-c66b3d8325973459.js",
-          "responseEnd": 88.69999998807907,
           "transferSize": 61019
         },
         {
@@ -1118,7 +1116,6 @@
           "encodedBodySize": 62880,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js",
-          "responseEnd": 85.29999995231628,
           "transferSize": 63180
         },
         {
@@ -1126,7 +1123,6 @@
           "encodedBodySize": 9285,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/6609-078a8cdc853f87c6.js",
-          "responseEnd": 81.5,
           "transferSize": 9585
         },
         {
@@ -1134,7 +1130,6 @@
           "encodedBodySize": 22176,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/8534-5939ae03055370a7.js",
-          "responseEnd": 89.19999998807907,
           "transferSize": 22476
         },
         {
@@ -1142,7 +1137,6 @@
           "encodedBodySize": 895,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/error-f24c7b47070ae9ce.js",
-          "responseEnd": 89.89999997615814,
           "transferSize": 1195
         },
         {
@@ -1150,7 +1144,6 @@
           "encodedBodySize": 915,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/global-error-a6188d2b0489ba9f.js",
-          "responseEnd": 88.89999997615814,
           "transferSize": 1215
         },
         {
@@ -1158,7 +1151,6 @@
           "encodedBodySize": 2156,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/layout-3e9b02b12b82768e.js",
-          "responseEnd": 90.19999998807907,
           "transferSize": 2456
         },
         {
@@ -1166,7 +1158,6 @@
           "encodedBodySize": 5049,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/page-37119dec9c790b15.js",
-          "responseEnd": 87.39999997615814,
           "transferSize": 5349
         },
         {
@@ -1174,7 +1165,6 @@
           "encodedBodySize": 484,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/main-app-0f4757ef7e5957f9.js",
-          "responseEnd": 76.09999996423721,
           "transferSize": 784
         },
         {
@@ -1182,7 +1172,6 @@
           "encodedBodySize": 3891,
           "initiatorType": "link",
           "name": "http://bundle.local/_next/static/chunks/webpack-f6aaa6d6e9d940e6.js",
-          "responseEnd": 71.19999998807907,
           "transferSize": 4191
         },
         {
@@ -1190,7 +1179,6 @@
           "encodedBodySize": 858,
           "initiatorType": "script",
           "name": "http://bundle.local/strip-extension-hydration-attributes.js",
-          "responseEnd": 70.29999995231628,
           "transferSize": 1158
         }
       ],
@@ -1218,7 +1206,6 @@
           "encodedBodySize": 7100,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/2619.9aac8983f30c7c8a.js",
-          "responseEnd": 111.89999997615814,
           "transferSize": 7400
         },
         {
@@ -1226,7 +1213,6 @@
           "encodedBodySize": 60719,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/3794-c66b3d8325973459.js",
-          "responseEnd": 65,
           "transferSize": 61019
         },
         {
@@ -1234,7 +1220,6 @@
           "encodedBodySize": 21052,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/486.db36d5a4ad6bf6bd.js",
-          "responseEnd": 113,
           "transferSize": 21352
         },
         {
@@ -1242,7 +1227,6 @@
           "encodedBodySize": 62880,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js",
-          "responseEnd": 64.39999997615814,
           "transferSize": 63180
         },
         {
@@ -1250,7 +1234,6 @@
           "encodedBodySize": 9285,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/6609-078a8cdc853f87c6.js",
-          "responseEnd": 62,
           "transferSize": 9585
         },
         {
@@ -1258,7 +1241,6 @@
           "encodedBodySize": 36142,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/7443.812955d0fdcef420.js",
-          "responseEnd": 114.89999997615814,
           "transferSize": 36442
         },
         {
@@ -1266,7 +1248,6 @@
           "encodedBodySize": 22176,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/8534-5939ae03055370a7.js",
-          "responseEnd": 114.10000002384186,
           "transferSize": 22476
         },
         {
@@ -1274,7 +1255,6 @@
           "encodedBodySize": 152613,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/9044.8bf7804b93f9dac2.js",
-          "responseEnd": 123.69999998807907,
           "transferSize": 152913
         },
         {
@@ -1282,7 +1262,6 @@
           "encodedBodySize": 540,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/editor/layout-2b0461034ced0471.js",
-          "responseEnd": 57.30000001192093,
           "transferSize": 840
         },
         {
@@ -1290,7 +1269,6 @@
           "encodedBodySize": 1396,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/editor/page-37aa13597e39908f.js",
-          "responseEnd": 58.89999997615814,
           "transferSize": 1696
         },
         {
@@ -1298,7 +1276,6 @@
           "encodedBodySize": 895,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/error-f24c7b47070ae9ce.js",
-          "responseEnd": 60.80000001192093,
           "transferSize": 1195
         },
         {
@@ -1306,7 +1283,6 @@
           "encodedBodySize": 915,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/global-error-a6188d2b0489ba9f.js",
-          "responseEnd": 59.80000001192093,
           "transferSize": 1215
         },
         {
@@ -1314,7 +1290,6 @@
           "encodedBodySize": 2156,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/layout-3e9b02b12b82768e.js",
-          "responseEnd": 62.80000001192093,
           "transferSize": 2456
         },
         {
@@ -1322,7 +1297,6 @@
           "encodedBodySize": 484,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/main-app-0f4757ef7e5957f9.js",
-          "responseEnd": 56.80000001192093,
           "transferSize": 784
         },
         {
@@ -1330,7 +1304,6 @@
           "encodedBodySize": 3891,
           "initiatorType": "link",
           "name": "http://bundle.local/_next/static/chunks/webpack-f6aaa6d6e9d940e6.js",
-          "responseEnd": 56.10000002384186,
           "transferSize": 4191
         },
         {
@@ -1338,7 +1311,6 @@
           "encodedBodySize": 858,
           "initiatorType": "script",
           "name": "http://bundle.local/strip-extension-hydration-attributes.js",
-          "responseEnd": 51.80000001192093,
           "transferSize": 1158
         }
       ],
@@ -1366,7 +1338,6 @@
           "encodedBodySize": 4021,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/1674-adca1a21a64925d4.js",
-          "responseEnd": 93.10000002384186,
           "transferSize": 4321
         },
         {
@@ -1374,7 +1345,6 @@
           "encodedBodySize": 60719,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/3794-c66b3d8325973459.js",
-          "responseEnd": 96.30000001192093,
           "transferSize": 61019
         },
         {
@@ -1382,7 +1352,6 @@
           "encodedBodySize": 1878,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/3882.94bd6d79af3557e0.js",
-          "responseEnd": 370.10000002384186,
           "transferSize": 2178
         },
         {
@@ -1390,7 +1359,6 @@
           "encodedBodySize": 1707,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/4125.b5dda0e8250c0ce0.js",
-          "responseEnd": 370.30000001192093,
           "transferSize": 2007
         },
         {
@@ -1398,7 +1366,6 @@
           "encodedBodySize": 33883,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/4486-38125abcbf0c0834.js",
-          "responseEnd": 97.60000002384186,
           "transferSize": 34183
         },
         {
@@ -1406,7 +1373,6 @@
           "encodedBodySize": 62880,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js",
-          "responseEnd": 95.10000002384186,
           "transferSize": 63180
         },
         {
@@ -1414,7 +1380,6 @@
           "encodedBodySize": 9285,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/6609-078a8cdc853f87c6.js",
-          "responseEnd": 93.40000003576279,
           "transferSize": 9585
         },
         {
@@ -1422,7 +1387,6 @@
           "encodedBodySize": 919,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/7360.2a8d7f8d21392acf.js",
-          "responseEnd": 369.80000001192093,
           "transferSize": 1219
         },
         {
@@ -1430,7 +1394,6 @@
           "encodedBodySize": 895,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/error-f24c7b47070ae9ce.js",
-          "responseEnd": 99.10000002384186,
           "transferSize": 1195
         },
         {
@@ -1438,7 +1401,6 @@
           "encodedBodySize": 915,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/global-error-a6188d2b0489ba9f.js",
-          "responseEnd": 98.30000001192093,
           "transferSize": 1215
         },
         {
@@ -1446,7 +1408,6 @@
           "encodedBodySize": 2156,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/layout-3e9b02b12b82768e.js",
-          "responseEnd": 99.60000002384186,
           "transferSize": 2456
         },
         {
@@ -1454,7 +1415,6 @@
           "encodedBodySize": 11224,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/marketing/page-03f3d734cbc5214a.js",
-          "responseEnd": 96.80000001192093,
           "transferSize": 11524
         },
         {
@@ -1462,7 +1422,6 @@
           "encodedBodySize": 19779,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/c15bf2b0-d565fc5052a6465c.js",
-          "responseEnd": 90.19999998807907,
           "transferSize": 20079
         },
         {
@@ -1470,7 +1429,6 @@
           "encodedBodySize": 484,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/main-app-0f4757ef7e5957f9.js",
-          "responseEnd": 87.19999998807907,
           "transferSize": 784
         },
         {
@@ -1478,7 +1436,6 @@
           "encodedBodySize": 3891,
           "initiatorType": "link",
           "name": "http://bundle.local/_next/static/chunks/webpack-f6aaa6d6e9d940e6.js",
-          "responseEnd": 86.69999998807907,
           "transferSize": 4191
         },
         {
@@ -1486,7 +1443,6 @@
           "encodedBodySize": 858,
           "initiatorType": "script",
           "name": "http://bundle.local/strip-extension-hydration-attributes.js",
-          "responseEnd": 82.5,
           "transferSize": 1158
         }
       ],
@@ -1514,7 +1470,6 @@
           "encodedBodySize": 4021,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/1674-adca1a21a64925d4.js",
-          "responseEnd": 110.39999997615814,
           "transferSize": 4321
         },
         {
@@ -1522,7 +1477,6 @@
           "encodedBodySize": 60719,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/3794-c66b3d8325973459.js",
-          "responseEnd": 114.39999997615814,
           "transferSize": 61019
         },
         {
@@ -1530,7 +1484,6 @@
           "encodedBodySize": 62880,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js",
-          "responseEnd": 113.89999997615814,
           "transferSize": 63180
         },
         {
@@ -1538,7 +1491,6 @@
           "encodedBodySize": 9285,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/6609-078a8cdc853f87c6.js",
-          "responseEnd": 111.39999997615814,
           "transferSize": 9585
         },
         {
@@ -1546,7 +1498,6 @@
           "encodedBodySize": 231,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/documentation/%5Bslug%5D/page-c60e865f9277e38d.js",
-          "responseEnd": 109.59999996423721,
           "transferSize": 531
         },
         {
@@ -1554,7 +1505,6 @@
           "encodedBodySize": 895,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/error-f24c7b47070ae9ce.js",
-          "responseEnd": 110.80000001192093,
           "transferSize": 1195
         },
         {
@@ -1562,7 +1512,6 @@
           "encodedBodySize": 915,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/global-error-a6188d2b0489ba9f.js",
-          "responseEnd": 106.30000001192093,
           "transferSize": 1215
         },
         {
@@ -1570,7 +1519,6 @@
           "encodedBodySize": 2156,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/app/layout-3e9b02b12b82768e.js",
-          "responseEnd": 113.39999997615814,
           "transferSize": 2456
         },
         {
@@ -1578,7 +1526,6 @@
           "encodedBodySize": 484,
           "initiatorType": "script",
           "name": "http://bundle.local/_next/static/chunks/main-app-0f4757ef7e5957f9.js",
-          "responseEnd": 105.89999997615814,
           "transferSize": 784
         },
         {
@@ -1586,7 +1533,6 @@
           "encodedBodySize": 3891,
           "initiatorType": "link",
           "name": "http://bundle.local/_next/static/chunks/webpack-f6aaa6d6e9d940e6.js",
-          "responseEnd": 105.39999997615814,
           "transferSize": 4191
         },
         {
@@ -1594,7 +1540,6 @@
           "encodedBodySize": 858,
           "initiatorType": "script",
           "name": "http://bundle.local/strip-extension-hydration-attributes.js",
-          "responseEnd": 102.39999997615814,
           "transferSize": 1158
         }
       ],

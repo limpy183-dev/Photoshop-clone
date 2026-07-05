@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import { assertBundleReportHasNoViolations } from "../../scripts/bundle-report-policy"
-import { selectInitialRouteResources } from "../../scripts/measure-route-bundles.mjs"
+import {
+  selectInitialRouteResources,
+  summarizeRouteResources,
+} from "../../scripts/measure-route-bundles.mjs"
 
 describe("bundle report policy", () => {
   it("excludes client-loaded dynamic chunks after the route entry cutoff", () => {
@@ -33,6 +36,29 @@ describe("bundle report policy", () => {
     ]
 
     expect(selectInitialRouteResources(resources, 25)).toEqual(resources.slice(0, 2))
+  })
+
+  it("omits nondeterministic response timings from persisted route resources", () => {
+    const summary = summarizeRouteResources([
+      {
+        decodedBodySize: 100,
+        encodedBodySize: 40,
+        initiatorType: "script",
+        name: "http://bundle.local/_next/static/chunks/main.js",
+        responseEnd: 12.5,
+        transferSize: 60,
+      },
+    ])
+
+    expect(summary.resources).toEqual([
+      {
+        decodedBodySize: 100,
+        encodedBodySize: 40,
+        initiatorType: "script",
+        name: "http://bundle.local/_next/static/chunks/main.js",
+        transferSize: 60,
+      },
+    ])
   })
 
   it("accepts a report without violations", () => {
