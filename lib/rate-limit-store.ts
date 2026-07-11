@@ -1,4 +1,6 @@
 import { checkRateLimit, type RateLimitOptions } from "./marketing-store"
+import { readBoundedJsonResponse } from "./bounded-json"
+import { isAuthenticatedServiceConfigured } from "./remote-service"
 
 export interface RateLimitDecision {
   allowed: boolean
@@ -66,6 +68,9 @@ export async function checkServerRateLimit(
     if (!localAllowed) return { allowed: false, reason: "unconfigured" }
     return checkRateLimit(key, options)
   }
+  if (!isAuthenticatedServiceConfigured(endpoint, process.env.RATE_LIMIT_SERVICE_TOKEN)) {
+    return { allowed: false, reason: "unconfigured" }
+  }
 
   try {
     const response = await fetch(endpoint, {
@@ -84,7 +89,7 @@ export async function checkServerRateLimit(
       signal: AbortSignal.timeout(3_000),
     })
     if (!response.ok) return { allowed: false, reason: "unavailable" }
-    return normalizeRemoteDecision(await response.json())
+    return normalizeRemoteDecision(await readBoundedJsonResponse(response))
   } catch {
     return { allowed: false, reason: "unavailable" }
   }
@@ -140,6 +145,9 @@ export async function acquireServerConcurrencySlot(
       ? { acquired: true, release: async () => local.release() }
       : { acquired: false }
   }
+  if (!isAuthenticatedServiceConfigured(endpoint, process.env.RATE_LIMIT_SERVICE_TOKEN)) {
+    return { acquired: false, reason: "unconfigured" }
+  }
 
   const leaseMs = Math.max(1_000, Math.min(120_000, options.leaseMs ?? 35_000))
   try {
@@ -155,13 +163,13 @@ export async function acquireServerConcurrencySlot(
       signal: AbortSignal.timeout(3_000),
     })
     if (!response.ok) return { acquired: false, reason: "unavailable" }
-    const value = await response.json() as {
+    const value = await readBoundedJsonResponse(response) as {
       allowed?: unknown
       leaseId?: unknown
       reason?: unknown
       retryAfterSeconds?: unknown
     }
-    if (value.allowed !== true || typeof value.leaseId !== "string" || !value.leaseId) {
+    if (!value || typeof value !== "object" || value.allowed !== true || typeof value.leaseId !== "string" || !value.leaseId) {
       const reason = normalizeDeniedReason(value.reason)
       return {
         acquired: false,

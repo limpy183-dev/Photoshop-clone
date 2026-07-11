@@ -104,9 +104,23 @@ interface CompiledClutProfile {
   bToA: IccLutData | null
 }
 
+/**
+ * ICC device-link profile: a single LUT chain mapping source device values
+ * directly to destination device values with no PCS crossing. The link
+ * defines the entire conversion, so when one is active the regular
+ * source/target PCS pipeline is bypassed.
+ */
+interface CompiledLinkProfile {
+  kind: "link"
+  name: IccProfileName | string
+  lut: IccLutData
+  inputKind: DeviceKind
+  outputKind: DeviceKind
+}
+
 type CompiledGrayProfile = GrayProfileDefinition
 type CompiledCmykProfile = CmykProfileDefinition
-type CompiledProfile = CompiledRgbProfile | CompiledGrayProfile | CompiledCmykProfile | CompiledClutProfile
+type CompiledProfile = CompiledRgbProfile | CompiledGrayProfile | CompiledCmykProfile | CompiledClutProfile | CompiledLinkProfile
 
 export interface IccLutDiagnostic {
   tag: string
@@ -688,7 +702,9 @@ function parseIccProfileInternal(value: Uint8Array | ArrayBuffer): ParsedIccProf
     diagnostics.push(`CLUT/device table tags parsed for diagnostics: ${lutTags.map((tag) => `${tag.tag} ${tag.type.trim()} ${tag.inputChannels}->${tag.outputChannels}`).join(", ")}.`)
   }
   if (deviceLink) {
-    diagnostics.push("ICC device-link profile parsed for diagnostics only; browser-local transform execution remains an approximation.")
+    diagnostics.push(aToB
+      ? "ICC device-link profile executes browser-locally through its A2B table (uncertified; not a substitute for a vendor CMM)."
+      : "ICC device-link profile has no readable A2B table; parsed for diagnostics only.")
   }
   return {
     name,
@@ -847,10 +863,29 @@ function compileProfile(name: IccProfileName): CompiledProfile {
   return compiled
 }
 
+function deviceKindForConnectionSpace(space: string): DeviceKind {
+  const cleaned = space.trim().toUpperCase()
+  if (cleaned === "CMYK") return "cmyk"
+  if (cleaned === "GRAY") return "gray"
+  return "rgb"
+}
+
 function compileProfileData(value: Uint8Array | ArrayBuffer | undefined): CompiledProfile | null {
   if (!value) return null
   const parsed = parseIccProfileInternal(value)
   if (!parsed) return null
+  if (parsed.deviceLink && parsed.aToB) {
+    // Device-link: the A2B chain maps source device values straight to
+    // destination device values; its "connection space" header field names
+    // the OUTPUT device space, not a PCS.
+    return {
+      kind: "link",
+      name: parsed.name,
+      lut: parsed.aToB,
+      inputKind: parsed.kind,
+      outputKind: deviceKindForConnectionSpace(parsed.connectionSpace),
+    }
+  }
   if (parsed.kind === "rgb" && parsed.rgbToXyzD50 && parsed.transfer) {
     return {
       kind: "rgb",
@@ -999,6 +1034,69 @@ function interpolateClut(lut: IccLutData, input: number[]): number[] | null {
   return result
 }
 
+/**
+ * Apply a LUT chain in device order: input curves -> CLUT -> output curves.
+ * This is the execution path for device-link A2B chains, where no PCS or
+ * matrix stage applies.
+ */
+function applyLutDeviceChain(lut: IccLutData, deviceInput: number[]): number[] | null {
+  let input = deviceInput.slice(0, lut.inputChannels)
+  while (input.length < lut.inputChannels) input.push(0)
+  if (lut.inputCurves) {
+    input = input.map((v, i) => sampleCurve(lut.inputCurves![i], v))
+  }
+  const clutResult = interpolateClut(lut, input)
+  if (!clutResult) return null
+  if (lut.outputCurves) {
+    return clutResult.map((v, i) => sampleCurve(lut.outputCurves![i], v))
+  }
+  return clutResult
+}
+
+/** Map an app RGB color onto device-link input channel values. */
+function deviceInputFromRgb(rgb: RgbColor, kind: DeviceKind, channels: number): number[] {
+  if (kind === "cmyk") {
+    // Same naive-separation convention as the CLUT device path.
+    return [1 - rgb.r / 255, 1 - rgb.g / 255, 1 - rgb.b / 255, 0].slice(0, Math.max(4, channels))
+  }
+  if (kind === "gray") {
+    return [clamp(luma(rgb))]
+  }
+  return [rgb.r / 255, rgb.g / 255, rgb.b / 255].slice(0, Math.max(3, channels))
+}
+
+/** Map device-link output channel values back onto a displayable RGB color. */
+function rgbFromDeviceOutput(output: number[], kind: DeviceKind): RgbColor {
+  if (kind === "cmyk" && output.length >= 4) {
+    const c = clamp(output[0])
+    const m = clamp(output[1])
+    const y = clamp(output[2])
+    const k = clamp(output[3])
+    return {
+      r: clamp8(255 * (1 - c) * (1 - k)),
+      g: clamp8(255 * (1 - m) * (1 - k)),
+      b: clamp8(255 * (1 - y) * (1 - k)),
+    }
+  }
+  if (kind === "gray") {
+    const value = clamp8((output[0] ?? 0) * 255)
+    return { r: value, g: value, b: value }
+  }
+  return {
+    r: clamp8((output[0] ?? 0) * 255),
+    g: clamp8((output[1] ?? 0) * 255),
+    b: clamp8((output[2] ?? 0) * 255),
+  }
+}
+
+/** Execute a device-link conversion for one color. Returns null when the chain cannot run. */
+function applyDeviceLink(link: CompiledLinkProfile, rgb: RgbColor): RgbColor | null {
+  const input = deviceInputFromRgb(rgb, link.inputKind, link.lut.inputChannels)
+  const output = applyLutDeviceChain(link.lut, input)
+  if (!output) return null
+  return rgbFromDeviceOutput(output, link.outputKind)
+}
+
 function applyClutAToB(profile: CompiledClutProfile, deviceInput: number[]): number[] | null {
   const lut = profile.aToB
   if (!lut) return null
@@ -1091,6 +1189,12 @@ function rgbToXyzD50(rgb: RgbColor, profile: CompiledProfile): Vec3 {
     if (pcs) return pcsToXyzD50(pcs, profile.aToB?.pcs ?? "XYZ")
     return rgbToXyzD50(rgb, compileProfile("sRGB IEC61966-2.1"))
   }
+  if (profile.kind === "link") {
+    // A device-link has no PCS; approximate by running the link and
+    // interpreting its output as display RGB.
+    const linked = applyDeviceLink(profile, rgb)
+    return rgbToXyzD50(linked ?? rgb, compileProfile("sRGB IEC61966-2.1"))
+  }
   const linear: Vec3 = [
     decodeRgbTransfer(rgb.r / 255, profile.transfer, 0),
     decodeRgbTransfer(rgb.g / 255, profile.transfer, 1),
@@ -1140,6 +1244,12 @@ function xyzD50ToRgb(xyz: Vec3, profile: CompiledProfile, clip = true): { rgb: R
       }
     }
     return xyzD50ToRgb(xyz, compileProfile("sRGB IEC61966-2.1"), clip)
+  }
+  if (profile.kind === "link") {
+    // Convert to display RGB first, then run the link's device chain.
+    const srgb = xyzD50ToRgb(xyz, compileProfile("sRGB IEC61966-2.1"), clip)
+    const linked = applyDeviceLink(profile, srgb.rgb)
+    return { rgb: linked ?? srgb.rgb, clipped: srgb.clipped }
   }
   const linear = multiplyMatVec(profile.xyzD50ToRgb, xyz)
   const clipped =
@@ -1221,6 +1331,7 @@ export function normalizeIccProfileName(value: unknown, fallback: IccProfileName
 export function iccProfileDeviceKind(value: unknown): DeviceKind {
   const profile = compileProfile(profileName(value))
   if (profile.kind === "clut") return profile.deviceKind
+  if (profile.kind === "link") return profile.outputKind
   return profile.kind
 }
 
@@ -1229,6 +1340,20 @@ export function transformRgbColor(rgb: RgbColor, options: IccTransformOptions = 
   const target = resolveCompiledProfile(options.targetProfile, options.targetProfileData)
   const sourceName = source.name
   const targetName = target.name
+  // A device-link profile defines the complete source->destination
+  // conversion by itself: run its device chain and bypass the PCS pipeline.
+  const link = source.kind === "link" ? source : target.kind === "link" ? target : null
+  if (link) {
+    const linked = applyDeviceLink(link, rgb)
+    if (linked) {
+      return {
+        rgb: linked,
+        clipped: false,
+        sourceProfile: source.kind === "link" ? link.name : sourceName,
+        targetProfile: link.name,
+      }
+    }
+  }
   const sourceXyz = rgbToXyzD50(rgb, source)
   const converted = xyzD50ToRgb(sourceXyz, target)
   let targetXyz = rgbToXyzD50(converted.rgb, target)
@@ -1252,6 +1377,32 @@ export function applyIccTransformToImageData(source: ImageData, options: IccTran
     out[i] = result.rgb.r
     out[i + 1] = result.rgb.g
     out[i + 2] = result.rgb.b
+  }
+  return new ImageData(out, source.width, source.height)
+}
+
+/** True when the bytes parse as an ICC device-link profile with an executable A2B chain. */
+export function isExecutableDeviceLinkProfile(value: Uint8Array | ArrayBuffer): boolean {
+  const parsed = parseIccProfileInternal(value)
+  return !!parsed?.deviceLink && !!parsed.aToB
+}
+
+/**
+ * Run an ICC device-link profile over image pixels. The link's own A2B
+ * chain performs the entire conversion (no PCS crossing). Returns null when
+ * the bytes are not an executable device-link profile.
+ */
+export function applyDeviceLinkToImageData(source: ImageData, profileData: Uint8Array | ArrayBuffer): ImageData | null {
+  const compiled = compileProfileData(profileData)
+  if (!compiled || compiled.kind !== "link") return null
+  const out = new Uint8ClampedArray(source.data)
+  for (let i = 0; i < out.length; i += 4) {
+    if (out[i + 3] === 0) continue
+    const linked = applyDeviceLink(compiled, { r: out[i], g: out[i + 1], b: out[i + 2] })
+    if (!linked) continue
+    out[i] = linked.r
+    out[i + 1] = linked.g
+    out[i + 2] = linked.b
   }
   return new ImageData(out, source.width, source.height)
 }

@@ -201,6 +201,50 @@ function cropCanvasToBounds(
   return canvas
 }
 
+/* ---------- Raster layer mask: app -> native writer ---------- */
+
+export interface NativeMaskPlaneInput {
+  top: number
+  left: number
+  bottom: number
+  right: number
+  defaultColor: number
+  disabled: boolean
+  /** 8-bit luminance plane covering the rect, row-major. Empty for uniform masks. */
+  data: Uint8Array
+}
+
+/**
+ * Convert a layer's raster mask into the plane payload consumed by the
+ * native (high-bit / non-RGB) PSD writer: absolute rect, default color,
+ * and an 8-bit luminance plane trimmed to the non-uniform region.
+ */
+export function appLayerMaskToNativeMaskInput(layer: Layer): NativeMaskPlaneInput | undefined {
+  const mask = layer.mask
+  if (!mask || typeof mask.getContext !== "function") return undefined
+  const image = readMaskImageData(mask)
+  if (!image) return undefined
+
+  const defaultColor = sampleCornerLuminance(image)
+  const disabled = layer.maskEnabled === false
+  const bounds = computeMaskBounds(image, defaultColor)
+  if (!bounds) {
+    // Uniform mask; the writer emits a zero-size rect and lets
+    // `defaultColor` carry the meaning.
+    return { top: 0, left: 0, bottom: 0, right: 0, defaultColor, disabled, data: new Uint8Array() }
+  }
+
+  const width = bounds.right - bounds.left
+  const height = bounds.bottom - bounds.top
+  const data = new Uint8Array(width * height)
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      data[y * width + x] = Math.max(0, Math.min(255, Math.round(luminanceAt(image, bounds.left + x, bounds.top + y))))
+    }
+  }
+  return { top: bounds.top, left: bounds.left, bottom: bounds.bottom, right: bounds.right, defaultColor, disabled, data }
+}
+
 /* ---------- Raster layer mask: app -> PSD ---------- */
 
 export function appLayerMaskToPsd(

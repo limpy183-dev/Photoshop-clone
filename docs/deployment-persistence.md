@@ -36,7 +36,8 @@ RATE_LIMIT_SERVICE_TOKEN=replace-me PORT=8788 \
 ```
 
 Point `MARKETING_RECORD_STORE_URL` at `/records` and
-`RATE_LIMIT_SERVICE_URL` at `/check`. Both services expose unauthenticated
+`RATE_LIMIT_SERVICE_URL` at `/check`. Both services require their respective
+Bearer token for every POST; they expose unauthenticated
 `GET /health` endpoints containing status only, never credentials or records.
 Their JSON-file transactions are atomic within one service process. Multi-region
 or horizontally scaled deployments must replace them with a database/Redis
@@ -49,8 +50,8 @@ contract. Production refuses the JSONL fallback unless
 
 The in-process limiter is capped at 10,000 live buckets. It remains a
 development fallback, not a cross-instance control. In production,
-`RATE_LIMIT_SERVICE_URL` must identify a shared HTTP/edge adapter (and
-`RATE_LIMIT_SERVICE_TOKEN` should authenticate it). The application fails
+`RATE_LIMIT_SERVICE_URL` must identify a shared HTTPS/edge adapter and
+`RATE_LIMIT_SERVICE_TOKEN` must authenticate it. The application fails
 closed when this adapter is absent unless `ALLOW_LOCAL_SERVER_RATE_LIMIT=true`
 is explicitly set for a single-process deployment.
 
@@ -75,6 +76,7 @@ requires:
 - an authenticated session layer that mints a signed capability scoped to
   `generative-fill`, with a subject, nonce, and maximum 15-minute lifetime;
 - `RATE_LIMIT_SERVICE_URL` in production;
+- `RATE_LIMIT_SERVICE_TOKEN` in production;
 - provider/account spend alerts or hard billing limits.
 
 The route rejects missing browser origin/fetch metadata, invalid capabilities,
@@ -148,3 +150,9 @@ The adapter must make the increment/check atomic and return one of:
 ```
 
 Any malformed success response is treated as unavailable and fails closed.
+
+The bundled reference services bind to `127.0.0.1` by default and refuse to
+start without a token. Set `ADAPTER_HOST` explicitly only when a private,
+authenticated network boundary is in place. The rate-limit adapter also
+implements the `acquire-concurrency` and `release-concurrency` operations
+used by generative fill.

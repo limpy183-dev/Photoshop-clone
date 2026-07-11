@@ -1,6 +1,8 @@
 import { createReadStream, promises as fs } from "node:fs"
 import { createHash } from "node:crypto"
 import path from "node:path"
+import { readBoundedJsonResponse } from "./bounded-json"
+import { isAuthenticatedServiceConfigured } from "./remote-service"
 
 /**
  * Lightweight JSON-Lines-ish store used by the marketing API routes.
@@ -339,9 +341,7 @@ function normalizeUnavailableReason(value: unknown): MarketingStoreUnavailableRe
 
 async function readRemoteStorePayload(response: Response): Promise<Record<string, unknown> | null> {
   try {
-    const contentType = response.headers.get("content-type") ?? ""
-    if (!contentType.includes("application/json")) return null
-    const payload = await response.json()
+    const payload = await readBoundedJsonResponse(response)
     return payload && typeof payload === "object" && !Array.isArray(payload)
       ? payload as Record<string, unknown>
       : null
@@ -361,6 +361,12 @@ export async function appendRecord<T extends StoredRecord>(
 ): Promise<{ added: boolean; total: number; record: T }> {
   const remoteStore = process.env.MARKETING_RECORD_STORE_URL?.trim()
   if (remoteStore) {
+    if (!isAuthenticatedServiceConfigured(remoteStore, process.env.MARKETING_RECORD_STORE_TOKEN)) {
+      throw new MarketingStoreUnavailableError(
+        "Marketing record storage credentials are not configured.",
+        "unconfigured",
+      )
+    }
     try {
       const response = await fetch(remoteStore, {
         method: "POST",

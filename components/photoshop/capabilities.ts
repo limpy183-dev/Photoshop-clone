@@ -307,9 +307,9 @@ const records = [
     label: "PSD Layer Effects and Adjustment Layers",
     kind: "format",
     status: "approximation",
-    summary: "Layer effects (drop/inner shadow, outer/inner glow, bevel, satin, color/gradient/pattern overlay, stroke) and 22 adjustment layer types round-trip; 16 use native ag-psd descriptors and 6 use marker-name encoding.",
+    summary: "Layer effects (drop/inner shadow, outer/inner glow, bevel, satin, color/gradient/pattern overlay, stroke) and 22 adjustment layer types round-trip; all 16 of Photoshop's native adjustment-layer types use native descriptors.",
     limitations: [
-      "Adjustment descriptors lacking native ag-psd support are recovered via marker layers; opening in older Photoshop builds may show generic adjustment labels.",
+      "The remaining 6 app adjustment types (shadows-highlights, hdr-toning, desaturate, match-color, replace-color, equalize) are destructive commands in Photoshop with no adjustment-layer descriptor in the PSD format; they export as visually equivalent native proxy adjustments (curves/hue-saturation/exposure) with exact app parameters recovered from the preset marker.",
       "Layer style global-light tracking follows the document's globalLight resource.",
     ],
     testCoverage: "unit",

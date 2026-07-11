@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createServer } from "node:http"
+import { randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -26,6 +27,9 @@ async function readJson(request) {
 }
 
 export function createRateLimitServer({ directory, token }) {
+  if (typeof token !== "string" || !token.trim()) {
+    throw new Error("RATE_LIMIT_SERVICE_TOKEN is required to start the rate-limit service.")
+  }
   let writeChain = Promise.resolve()
   const transact = (operation) => {
     const result = writeChain.then(operation, operation)
@@ -42,7 +46,7 @@ export function createRateLimitServer({ directory, token }) {
       json(response, 404, { allowed: false, reason: "unavailable" })
       return
     }
-    if (token && request.headers.authorization !== `Bearer ${token}`) {
+    if (request.headers.authorization !== `Bearer ${token}`) {
       json(response, 401, { allowed: false, reason: "unavailable" })
       return
     }
@@ -50,9 +54,88 @@ export function createRateLimitServer({ directory, token }) {
     try {
       const input = await readJson(request)
       const key = typeof input?.key === "string" ? input.key.slice(0, 512) : ""
+      const operation = typeof input?.operation === "string" ? input.operation : "check-rate-limit"
+      if (!key) {
+        json(response, 400, { allowed: false, reason: "unavailable" })
+        return
+      }
+
+      if (operation === "acquire-concurrency") {
+        const limit = Math.max(1, Math.min(1_000, Math.round(Number(input?.limit) || 0)))
+        const leaseMs = Math.max(1_000, Math.min(120_000, Math.round(Number(input?.leaseMs) || 0)))
+        if (!Number.isFinite(limit) || !Number.isFinite(leaseMs)) {
+          json(response, 400, { allowed: false, reason: "unavailable" })
+          return
+        }
+        const decision = await transact(async () => {
+          await mkdir(directory, { recursive: true })
+          const file = join(directory, "concurrency-leases.json")
+          let leases = {}
+          try {
+            leases = JSON.parse(await readFile(file, "utf8"))
+            if (!leases || typeof leases !== "object" || Array.isArray(leases)) leases = {}
+          } catch (error) {
+            if (error?.code !== "ENOENT") throw error
+          }
+          const now = Date.now()
+          for (const [leaseId, lease] of Object.entries(leases)) {
+            if (!lease || Number(lease.expiresAt) <= now) delete leases[leaseId]
+          }
+          const active = Object.entries(leases).filter(([, lease]) => lease?.key === key)
+          if (active.length >= limit) {
+            const nextExpiry = Math.min(...active.map(([, lease]) => Number(lease.expiresAt)))
+            return {
+              allowed: false,
+              reason: "capacity",
+              retryAfterSeconds: Math.max(1, Math.ceil((nextExpiry - now) / 1_000)),
+            }
+          }
+          const leaseId = randomUUID()
+          leases[leaseId] = { key, expiresAt: now + leaseMs }
+          const temporary = `${file}.${process.pid}.tmp`
+          await writeFile(temporary, `${JSON.stringify(leases)}\n`, { mode: 0o600 })
+          await rename(temporary, file)
+          return { allowed: true, leaseId }
+        })
+        json(response, 200, decision)
+        return
+      }
+
+      if (operation === "release-concurrency") {
+        const leaseId = typeof input?.leaseId === "string" ? input.leaseId : ""
+        if (!leaseId || leaseId.length > 128) {
+          json(response, 400, { allowed: false, reason: "unavailable" })
+          return
+        }
+        await transact(async () => {
+          await mkdir(directory, { recursive: true })
+          const file = join(directory, "concurrency-leases.json")
+          let leases = {}
+          try {
+            leases = JSON.parse(await readFile(file, "utf8"))
+            if (!leases || typeof leases !== "object" || Array.isArray(leases)) leases = {}
+          } catch (error) {
+            if (error?.code !== "ENOENT") throw error
+          }
+          if (leases[leaseId]?.key === key) {
+            delete leases[leaseId]
+            const temporary = `${file}.${process.pid}.tmp`
+            await writeFile(temporary, `${JSON.stringify(leases)}\n`, { mode: 0o600 })
+            await rename(temporary, file)
+          }
+        })
+        json(response, 200, { released: true })
+        return
+      }
+
+      if (operation !== "check-rate-limit") {
+        json(response, 400, { allowed: false, reason: "unavailable" })
+        return
+      }
+
       const limit = Math.max(1, Math.min(100_000, Math.round(Number(input?.limit) || 0)))
       const windowMs = Math.max(1_000, Math.min(86_400_000, Math.round(Number(input?.windowMs) || 0)))
-      if (!key || !Number.isFinite(limit) || !Number.isFinite(windowMs)) {
+      if (!Number.isFinite(limit) || !Number.isFinite(windowMs)) {
         json(response, 400, { allowed: false, reason: "unavailable" })
         return
       }
@@ -71,6 +154,9 @@ export function createRateLimitServer({ directory, token }) {
           if (!bucket || Number(bucket.resetAt) <= now) delete buckets[bucketKey]
         }
         const current = buckets[key]
+        if (!current && Object.keys(buckets).length >= 10_000) {
+          return { allowed: false, reason: "capacity", retryAfterSeconds: 60 }
+        }
         if (current && Number(current.count) >= limit) {
           return {
             allowed: false,
@@ -97,8 +183,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const directory = process.env.ADAPTER_DATA_DIR || ".adapter-data/rate-limit"
   const token = process.env.RATE_LIMIT_SERVICE_TOKEN
   const port = Number(process.env.PORT || 8788)
-  createRateLimitServer({ directory, token }).listen(port, "0.0.0.0", () => {
+  const host = process.env.ADAPTER_HOST || "127.0.0.1"
+  createRateLimitServer({ directory, token }).listen(port, host, () => {
     console.log(`rate-limit adapter listening on ${port}`)
   })
 }
-

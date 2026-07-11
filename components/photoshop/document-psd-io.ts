@@ -30,6 +30,7 @@ import {
 appAlphaChannelsToMarkerLayers,
 appAlphaChannelsToPsd,
 appClippingToPsd,
+appLayerMaskToNativeMaskInput,
 appLayerMaskToPsd,
 appVectorMaskOnLayerToPsd,
 isAlphaChannelMarkerLayer,
@@ -69,6 +70,7 @@ import {
 canWriteNativeLayeredPsd,
 writeNativeCompositePsd,
 writeNativeLayeredPsd,
+type NativeExtraChannelInput,
 type NativeLayeredPsdLayerInput,
 } from "./psd-native-writer"
 import {
@@ -834,17 +836,89 @@ function nativeLayerImageInput(
     opacity: layer.opacity,
     hidden: !layer.visible,
     hasHighBitSource: !!source,
+    mask: appLayerMaskToNativeMaskInput(layer),
+    clipping: !!layer.clipped,
+    transparencyProtected: !!layer.lockTransparency,
   }
 }
 
-function nativeLayerInputsFromDocument(
+const NATIVE_GROUP_DIVIDER_NAME = "</Layer group>"
+
+/**
+ * Convert the document's saved alpha/spot channels into native extra
+ * composite channels for the native PSD writer (8-bit luminance planes at
+ * document size plus display metadata).
+ */
+function nativeExtraChannelsFromDocument(doc: PsDocument): NativeExtraChannelInput[] {
+  const { displayInfo } = appAlphaChannelsToPsd(doc)
+  const channels = doc.channels ?? []
+  if (!displayInfo || !channels.length) return []
+  const out: NativeExtraChannelInput[] = []
+  for (let i = 0; i < channels.length; i++) {
+    const channel = channels[i]
+    const info = displayInfo[i]
+    if (!channel?.canvas || typeof channel.canvas.getContext !== "function" || !info) continue
+    const surface = makeIoCanvas(doc.width, doc.height)
+    const ctx = surface.getContext("2d")
+    if (!ctx) continue
+    ctx.drawImage(channel.canvas, 0, 0)
+    const image = ctx.getImageData(0, 0, doc.width, doc.height)
+    const plane = new Uint8Array(doc.width * doc.height)
+    for (let p = 0; p < plane.length; p++) {
+      const o = p * 4
+      plane[p] = Math.max(
+        0,
+        Math.min(255, Math.round((image.data[o] + image.data[o + 1] + image.data[o + 2]) / 3)),
+      )
+    }
+    out.push({
+      name: info.name,
+      kind: info.kind,
+      color: info.color,
+      opacity: info.opacity,
+      data: plane,
+    })
+  }
+  return out
+}
+
+/**
+ * Walk the document's layer tree (flat array linked by `parentId`) into the
+ * bottom-most-first entry list the native writer expects, preserving group
+ * hierarchy through folder/divider section records.
+ */
+function nativeLayerEntriesFromDocument(
   doc: PsDocument,
   bitDepth: 1 | 8 | 16 | 32,
 ): NativeLayeredPsdLayerInput[] {
-  return [...doc.layers]
-    .reverse()
-    .map((layer) => nativeLayerImageInput(doc, layer, bitDepth))
-    .filter((layer): layer is NativeLayeredPsdLayerInput => !!layer)
+  const walk = (parentId: string | undefined): NativeLayeredPsdLayerInput[] => {
+    const direct = doc.layers.filter((layer) => layer.parentId === parentId)
+    const out: NativeLayeredPsdLayerInput[] = []
+    // doc.layers is top-most-first within each parent; PSD wants bottom-first.
+    for (const layer of [...direct].reverse()) {
+      if (layer.kind === "group" || layer.kind === "artboard") {
+        out.push({
+          name: NATIVE_GROUP_DIVIDER_NAME,
+          section: "divider",
+          hidden: true,
+        })
+        out.push(...walk(layer.id))
+        out.push({
+          name: layer.name.slice(0, MAX_LAYER_NAME_LENGTH),
+          section: layer.expanded === false ? "closed" : "open",
+          blendMode: layer.blendMode,
+          opacity: layer.opacity,
+          hidden: !layer.visible,
+          mask: appLayerMaskToNativeMaskInput(layer),
+        })
+        continue
+      }
+      const input = nativeLayerImageInput(doc, layer, bitDepth)
+      if (input) out.push(input)
+    }
+    return out
+  }
+  return walk(undefined)
 }
 
 export async function serializePsd(doc: PsDocument, options: PsdSerializeOptions = {}): Promise<Blob> {
@@ -910,14 +984,15 @@ export async function serializePsd(doc: PsDocument, options: PsdSerializeOptions
           },
         )
     if (canWriteNativeLayeredPsd(doc)) {
-      const nativeLayers = nativeLayerInputsFromDocument(doc, bitsPerChannel)
+      const nativeLayers = nativeLayerEntriesFromDocument(doc, bitsPerChannel)
       if (nativeLayers.length) {
-        const buffer = writeNativeLayeredPsd(doc, {
+        const buffer = await writeNativeLayeredPsd(doc, {
           psb: options.psb,
           xmpMetadata,
           colorModeData: colorModeExport.colorModeData,
           composite,
           layers: nativeLayers,
+          extraChannels: nativeExtraChannelsFromDocument(doc),
         })
         return new Blob([buffer], { type: "image/vnd.adobe.photoshop" })
       }

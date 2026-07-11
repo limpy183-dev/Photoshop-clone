@@ -13,6 +13,7 @@ import {
 import { recordOperationalMetric } from "@/lib/operational-metrics"
 import { acquireServerConcurrencySlot, checkServerRateLimit } from "@/lib/rate-limit-store"
 import { verifyServerCapability } from "@/lib/server-capabilities"
+import { isValidServiceUrl } from "@/lib/remote-service"
 
 export const runtime = "nodejs"
 
@@ -72,10 +73,10 @@ async function readUpstreamTextWithLimit(
 export async function POST(request: Request) {
   const endpoint = process.env.GENERATIVE_IMAGE_ENDPOINT
   const apiKey = process.env.GENERATIVE_IMAGE_API_KEY
-  if (!endpoint || !apiKey) {
+  if (!endpoint || !apiKey || !isValidServiceUrl(endpoint)) {
     return NextResponse.json(
-      { error: "GENERATIVE_IMAGE_ENDPOINT and GENERATIVE_IMAGE_API_KEY are required for model-backed generative fill." },
-      { status: 501 },
+      { error: "Generative fill service is not configured." },
+      { status: 503 },
     )
   }
 
@@ -248,6 +249,8 @@ export async function POST(request: Request) {
       headers: { "content-type": contentType },
     })
   } finally {
-    await concurrency.release()
+    // A slow release adapter must not delay the user-visible response. The
+    // remote lease still expires if this best-effort request cannot complete.
+    void concurrency.release().catch(() => undefined)
   }
 }

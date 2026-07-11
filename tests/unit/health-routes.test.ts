@@ -45,4 +45,28 @@ describe("health routes", () => {
     expect(getAdapterHealth().find((adapter) => adapter.name === "client-identity"))
       .toMatchObject({ configured: true, reason: "configured" })
   })
+
+  it("does not call a remote adapter healthy without its bearer credential", () => {
+    vi.stubEnv("NODE_ENV", "production")
+    vi.stubEnv("MARKETING_RECORD_STORE_URL", "https://records.example")
+    vi.stubEnv("RATE_LIMIT_SERVICE_URL", "https://limits.example")
+    vi.stubEnv("MARKETING_TRUSTED_PROXY", "true")
+    vi.stubEnv("MARKETING_RECORD_STORE_TOKEN", "")
+    vi.stubEnv("RATE_LIMIT_SERVICE_TOKEN", "")
+
+    const adapters = getAdapterHealth()
+    expect(adapters.find((adapter) => adapter.name === "marketing-record-store"))
+      .toMatchObject({ configured: false, reason: "unconfigured" })
+    expect(adapters.find((adapter) => adapter.name === "rate-limit-service"))
+      .toMatchObject({ configured: false, reason: "unconfigured" })
+  })
+
+  it("does not mask an explicitly misconfigured remote adapter in development", () => {
+    vi.stubEnv("NODE_ENV", "development")
+    vi.stubEnv("RATE_LIMIT_SERVICE_URL", "https://limits.example")
+    vi.stubEnv("RATE_LIMIT_SERVICE_TOKEN", "")
+
+    expect(getAdapterHealth().find((adapter) => adapter.name === "rate-limit-service"))
+      .toMatchObject({ configured: false, reason: "unconfigured" })
+  })
 })

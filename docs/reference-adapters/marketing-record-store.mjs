@@ -26,6 +26,9 @@ async function readJson(request, maxBytes = 64 * 1024) {
 }
 
 export function createMarketingRecordStoreServer({ directory, token }) {
+  if (typeof token !== "string" || !token.trim()) {
+    throw new Error("MARKETING_RECORD_STORE_TOKEN is required to start the marketing record store.")
+  }
   let writeChain = Promise.resolve()
   const transact = (operation) => {
     const result = writeChain.then(operation, operation)
@@ -42,7 +45,7 @@ export function createMarketingRecordStoreServer({ directory, token }) {
       json(response, 404, { ok: false })
       return
     }
-    if (token && request.headers.authorization !== `Bearer ${token}`) {
+    if (request.headers.authorization !== `Bearer ${token}`) {
       json(response, 401, { ok: false })
       return
     }
@@ -69,8 +72,9 @@ export function createMarketingRecordStoreServer({ directory, token }) {
         } catch (error) {
           if (error?.code !== "ENOENT") throw error
         }
-        const maxRecords = Math.max(1, Math.min(100_000, Number(input.options?.maxRecords) || 5_000))
-        const maxBytes = Math.max(1_024, Math.min(100_000_000, Number(input.options?.maxBytes) || 1_000_000))
+        // These quotas are server-owned. Never let a caller expand them.
+        const maxRecords = input.name === "feedback" ? 1_000 : 5_000
+        const maxBytes = 1_000_000
         if (input.options?.dedupeById && input.record.id && records.some((item) => item?.id === input.record.id)) {
           return { added: false, total: records.length, record: input.record }
         }
@@ -100,8 +104,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const directory = process.env.ADAPTER_DATA_DIR || ".adapter-data/marketing"
   const token = process.env.MARKETING_RECORD_STORE_TOKEN
   const port = Number(process.env.PORT || 8787)
-  createMarketingRecordStoreServer({ directory, token }).listen(port, "0.0.0.0", () => {
+  const host = process.env.ADAPTER_HOST || "127.0.0.1"
+  createMarketingRecordStoreServer({ directory, token }).listen(port, host, () => {
     console.log(`marketing record adapter listening on ${port}`)
   })
 }
-

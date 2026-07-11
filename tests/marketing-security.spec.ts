@@ -343,6 +343,59 @@ test("concurrency-rejected generative fill requests do not consume daily quota",
   }
 })
 
+test("generative fill does not wait for a slow best-effort lease release", async () => {
+  const env = snapshotEnv([
+    "ALLOW_LOCAL_SERVER_RATE_LIMIT",
+    "GENERATIVE_FILL_CAPABILITY_SECRET",
+    "GENERATIVE_FILL_DAILY_REQUEST_LIMIT",
+    "GENERATIVE_FILL_MAX_CONCURRENCY",
+    "GENERATIVE_IMAGE_API_KEY",
+    "GENERATIVE_IMAGE_ENDPOINT",
+    "RATE_LIMIT_SERVICE_TOKEN",
+    "RATE_LIMIT_SERVICE_URL",
+  ])
+  const originalFetch = globalThis.fetch
+  const subject = `release-latency-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  let releaseStarted = false
+
+  try {
+    configureGenerativeFillEnv()
+    process.env.RATE_LIMIT_SERVICE_URL = "https://limits.example.test/check"
+    process.env.RATE_LIMIT_SERVICE_TOKEN = "limit-token"
+    globalThis.fetch = (async (input, init) => {
+      if (String(input) === process.env.RATE_LIMIT_SERVICE_URL) {
+        const operation = JSON.parse(String(init?.body ?? "{}")).operation
+        if (operation === "acquire-concurrency") {
+          return new Response(JSON.stringify({ allowed: true, leaseId: "lease-1" }), { status: 200 })
+        }
+        if (operation === "release-concurrency") {
+          releaseStarted = true
+          return new Promise<Response>(() => undefined)
+        }
+        return new Response(JSON.stringify({ allowed: true }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { "content-type": "application/json" },
+        status: 200,
+      })
+    }) as typeof fetch
+
+    const response = await Promise.race([
+      postGenerativeFill(generativeFillRequest(subject, {
+        prompt: "fill the selected area",
+        sourcePng: tinyPngDataUrl,
+      })),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("response was blocked by lease release")), 100)),
+    ])
+
+    expect(response.status).toBe(200)
+    expect(releaseStarted).toBe(true)
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv(env)
+  }
+})
+
 test("remote rate-limit adapter preserves outage reasons from successful JSON responses", async () => {
   const env = snapshotEnv(["RATE_LIMIT_SERVICE_TOKEN", "RATE_LIMIT_SERVICE_URL"])
   const originalFetch = globalThis.fetch
@@ -388,7 +441,7 @@ test("malformed successful rate-limit responses fail closed as unavailable", asy
 
   try {
     process.env.RATE_LIMIT_SERVICE_URL = "https://limits.example.test/check"
-    delete process.env.RATE_LIMIT_SERVICE_TOKEN
+    process.env.RATE_LIMIT_SERVICE_TOKEN = "limit-token"
     globalThis.fetch = (async () =>
       new Response(JSON.stringify({ retryAfterSeconds: 12 }), {
         headers: { "content-type": "application/json" },
@@ -433,6 +486,26 @@ test("remote marketing store quota responses preserve adapter reason", async () 
   }
 })
 
+test("remote marketing store rejects oversized adapter responses", async () => {
+  const env = snapshotEnv(["MARKETING_RECORD_STORE_TOKEN", "MARKETING_RECORD_STORE_URL"])
+  const originalFetch = globalThis.fetch
+
+  try {
+    process.env.MARKETING_RECORD_STORE_URL = "https://records.example.test/append"
+    process.env.MARKETING_RECORD_STORE_TOKEN = "record-token"
+    globalThis.fetch = (async () => new Response("x".repeat(65 * 1024), { status: 200 })) as typeof fetch
+
+    await expect(appendWithOptions("feedback", { id: "remote-oversized", message: "full" }))
+      .rejects.toMatchObject({
+        name: "MarketingStoreUnavailableError",
+        reason: "invalid-response",
+      })
+  } finally {
+    globalThis.fetch = originalFetch
+    restoreEnv(env)
+  }
+})
+
 test("feedback route logs durable store outages without exposing adapter details", async () => {
   const env = snapshotEnv([
     "MARKETING_RECORD_STORE_TOKEN",
@@ -446,7 +519,9 @@ test("feedback route logs durable store outages without exposing adapter details
 
   try {
     process.env.RATE_LIMIT_SERVICE_URL = "https://limits.example.test/check"
+    process.env.RATE_LIMIT_SERVICE_TOKEN = "limit-token"
     process.env.MARKETING_RECORD_STORE_URL = "https://records.example.test/append"
+    process.env.MARKETING_RECORD_STORE_TOKEN = "record-token"
     console.warn = ((...args: unknown[]) => {
       warnings.push(args)
     }) as typeof console.warn
