@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation"
 import { toast } from "sonner"
 import { EditorProvider, makeHistoryEntry, useEditorSelector } from "@/components/photoshop/editor-context"
 import { EditorErrorBoundary } from "@/components/photoshop/editor-error-boundary"
+import { FeatureErrorBoundary } from "@/components/photoshop/feature-error-boundary"
 import { useShortcuts } from "@/components/photoshop/use-shortcuts"
 import { useMounted } from "@/components/photoshop/use-mounted"
 import {
@@ -256,6 +257,9 @@ function Workspace() {
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "F" || event.key === "f") {
+        // Bare F only — Ctrl/Cmd/Alt+F belong to other shortcuts (browser
+        // find, search fields), and repeat events would strobe the chrome.
+        if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) return
         const target = event.target as HTMLElement | null
         if (target?.closest("input, textarea, [contenteditable=true], [role=textbox]")) return
         event.preventDefault()
@@ -389,32 +393,57 @@ function Workspace() {
         onHudColorPicker={(x, y) => setColorPicker({ target: "foreground", surface: "hud", x, y })}
       />
 
+      {/* Each workspace dialog gets its own error boundary so a crash in one
+          dialog degrades to an inline alert instead of unmounting the whole
+          editor through the top-level EditorErrorBoundary. */}
       <React.Suspense fallback={null}>
-        {newOpen ? <NewDocumentDialog open={newOpen} onOpenChange={setNewDialogOpen} /> : null}
-        {imageSizeOpen ? <ImageSizeDialog open={imageSizeOpen} onOpenChange={setImageSizeOpen} /> : null}
-        {canvasSizeOpen ? <CanvasSizeDialog open={canvasSizeOpen} onOpenChange={setCanvasSizeOpen} /> : null}
-        {commandOpen ? <CommandPalette open={commandOpen} onOpenChange={setCommandPaletteOpen} onOpenNew={openNew} /> : null}
+        {newOpen ? (
+          <FeatureErrorBoundary feature="New Document dialog" resetKey={String(newOpen)}>
+            <NewDocumentDialog open={newOpen} onOpenChange={setNewDialogOpen} />
+          </FeatureErrorBoundary>
+        ) : null}
+        {imageSizeOpen ? (
+          <FeatureErrorBoundary feature="Image Size dialog" resetKey={String(imageSizeOpen)}>
+            <ImageSizeDialog open={imageSizeOpen} onOpenChange={setImageSizeOpen} />
+          </FeatureErrorBoundary>
+        ) : null}
+        {canvasSizeOpen ? (
+          <FeatureErrorBoundary feature="Canvas Size dialog" resetKey={String(canvasSizeOpen)}>
+            <CanvasSizeDialog open={canvasSizeOpen} onOpenChange={setCanvasSizeOpen} />
+          </FeatureErrorBoundary>
+        ) : null}
+        {commandOpen ? (
+          <FeatureErrorBoundary feature="command palette" resetKey={String(commandOpen)}>
+            <CommandPalette open={commandOpen} onOpenChange={setCommandPaletteOpen} onOpenNew={openNew} />
+          </FeatureErrorBoundary>
+        ) : null}
         {colorPicker?.surface === "dialog" ? (
-          <ColorPickerDialog
-            open
-            target={colorPicker.target}
-            onOpenChange={(open) => {
-              if (!open) setColorPicker(null)
-            }}
-          />
+          <FeatureErrorBoundary feature="color picker" resetKey={colorPicker.target}>
+            <ColorPickerDialog
+              open
+              target={colorPicker.target}
+              onOpenChange={(open) => {
+                if (!open) setColorPicker(null)
+              }}
+            />
+          </FeatureErrorBoundary>
         ) : null}
         {colorPicker?.surface === "hud" ? (
-          <ColorPickerHud
-            open
-            target={colorPicker.target}
-            position={{ x: colorPicker.x, y: colorPicker.y }}
-            onOpenChange={(open) => {
-              if (!open) setColorPicker(null)
-            }}
-            onOpenFull={() => setColorPicker((current) => current ? { ...current, surface: "dialog" } : null)}
-          />
+          <FeatureErrorBoundary feature="HUD color picker" resetKey={colorPicker.target}>
+            <ColorPickerHud
+              open
+              target={colorPicker.target}
+              position={{ x: colorPicker.x, y: colorPicker.y }}
+              onOpenChange={(open) => {
+                if (!open) setColorPicker(null)
+              }}
+              onOpenFull={() => setColorPicker((current) => current ? { ...current, surface: "dialog" } : null)}
+            />
+          </FeatureErrorBoundary>
         ) : null}
-        <AutosaveRecovery />
+        <FeatureErrorBoundary feature="autosave recovery prompt">
+          <AutosaveRecovery />
+        </FeatureErrorBoundary>
       </React.Suspense>
     </main>
   )

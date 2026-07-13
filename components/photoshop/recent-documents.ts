@@ -9,6 +9,7 @@ import {
   type ClientStorageKey,
 } from "./client-storage"
 import { dispatchPhotoshopEvent } from "./events"
+import { emitRuntimeEvent } from "./runtime-telemetry"
 import {
   migrateRegisteredPayload,
   openRegisteredIndexedDB,
@@ -237,7 +238,14 @@ export function rememberRecentDocument(entry: Omit<RecentDocument, "id" | "updat
     const result = writeClientStorageJson(RECENTS_STORAGE, [next, ...recents].slice(0, limit))
     if (!result.ok) throw result.error ?? new Error(result.reason)
     dispatchPhotoshopEvent("ps-recents-changed")
-  } catch {
+  } catch (error) {
+    emitRuntimeEvent("storage-failure", {
+      component: "recent-documents",
+      operation: "remember-recent",
+      reason: error instanceof Error ? error.name : "unknown",
+      fallback: "prune",
+      recoverable: true,
+    })
     pruneRecentDocuments()
   }
 }
@@ -258,7 +266,14 @@ export function pruneRecentDocuments() {
     }
     const recents = readRecentDocuments().slice(0, Math.max(1, Math.floor(limit / 2)))
     writeClientStorageJson(RECENTS_STORAGE, recents)
-  } catch { }
+  } catch (error) {
+    emitRuntimeEvent("storage-failure", {
+      component: "recent-documents",
+      operation: "prune-recents",
+      reason: error instanceof Error ? error.name : "unknown",
+      recoverable: true,
+    })
+  }
 }
 
 export function readAutosave(): RecentDocument | null {
@@ -335,7 +350,15 @@ export async function readAutosavesAsync(): Promise<AutosaveDocument[]> {
     try {
       const results = await readAutosavesIDB()
       if (results.length) return results
-    } catch {}
+    } catch (error) {
+      emitRuntimeEvent("storage-failure", {
+        component: "recent-documents",
+        operation: "read-autosaves-idb",
+        reason: error instanceof Error ? error.name : "unknown",
+        fallback: "local-storage",
+        recoverable: true,
+      })
+    }
   }
   return readAutosaves()
 }
@@ -379,7 +402,15 @@ export function writeAutosaves(
         const legacyResult = writeClientStorageJson(AUTOSAVE_STORAGE, lsPayload[0])
         if (collectionResult.ok || legacyResult.ok) storedLocally = true
       }
-    } catch {}
+    } catch (error) {
+      emitRuntimeEvent("storage-failure", {
+        component: "recent-documents",
+        operation: "write-autosaves-local",
+        reason: error instanceof Error ? error.name : "unknown",
+        fallback: "indexed-db",
+        recoverable: true,
+      })
+    }
   }
 
   return idbWrite.then((storedInIDB) => storedInIDB || storedLocally)
@@ -400,7 +431,14 @@ export function writeAutosave(entry: Omit<RecentDocument, "id" | "kind" | "updat
       updatedAt: Date.now(),
     }
     writeClientStorageJson(AUTOSAVE_STORAGE, payload)
-  } catch {
+  } catch (error) {
+    emitRuntimeEvent("storage-failure", {
+      component: "recent-documents",
+      operation: "write-autosave",
+      reason: error instanceof Error ? error.name : "unknown",
+      fallback: "clear-autosave",
+      recoverable: true,
+    })
     removeClientStorageItem(AUTOSAVE_STORAGE)
   }
 }
@@ -430,7 +468,14 @@ export function removeAutosave(documentId: string) {
     }
     writeClientStorageJson(AUTOSAVE_COLLECTION_STORAGE, remaining)
     writeClientStorageJson(AUTOSAVE_STORAGE, remaining[0])
-  } catch {}
+  } catch (error) {
+    emitRuntimeEvent("storage-failure", {
+      component: "recent-documents",
+      operation: "remove-autosave",
+      reason: error instanceof Error ? error.name : "unknown",
+      recoverable: true,
+    })
+  }
 }
 
 function hashString(value: string) {
