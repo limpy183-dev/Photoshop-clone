@@ -449,7 +449,7 @@ function buildRules(state) {
 
 function main() {
   const capabilitiesSrc = load("components/photoshop/capabilities.ts")
-  const advancedSrc = load("components/photoshop/advanced-subsystems.ts")
+  const advancedSrc = load("components/photoshop/advanced-subsystems-format-capabilities.ts")
   const videoSourcePaths = [
     "components/photoshop/three-d-video-engine.ts",
     "components/photoshop/three-d-video/video.ts",
