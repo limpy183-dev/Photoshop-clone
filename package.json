@@ -8,7 +8,8 @@
   },
   "scripts": {
     "predev": "npm run check:node",
-    "dev": "next dev",
+    "dev": "node scripts/start-dev.mjs",
+    "dev:turbo": "next dev --turbopack",
     "prebuild": "npm run check:node",
     "build": "next build --webpack && node scripts/normalize-next-env.mjs",
     "build:static": "npm run check:capabilities && npm run check:architecture && node scripts/build-static-export.mjs",

@@ -169,12 +169,23 @@ const nextConfig = {
     },
   },
   webpack(config, { isServer }) {
+    // Writing the detailed module graph is useful to the production bundle
+    // analyzer, but serializing it after every Fast Refresh makes webpack dev
+    // unnecessarily CPU- and disk-intensive.
     if (!isServer) {
-      addBundleStatsPlugin(config)
+      if (process.env.NODE_ENV === "production") addBundleStatsPlugin(config)
       config.resolve = config.resolve ?? {}
       config.resolve.alias = {
         ...(config.resolve.alias ?? {}),
         fs: emptyNodeFs,
+      }
+      // Some optional WASM codecs retain an Emscripten Node branch behind a
+      // runtime guard. Webpack still resolves that branch while producing its
+      // async chunk, so explicitly mark Node's filesystem API unavailable in
+      // the browser build instead of failing the editor compilation.
+      config.resolve.fallback = {
+        ...(config.resolve.fallback ?? {}),
+        fs: false,
       }
       config.optimization = config.optimization ?? {}
       config.optimization.splitChunks = {

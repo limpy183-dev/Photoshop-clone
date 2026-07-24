@@ -3,7 +3,6 @@ import { sniffRasterDimensions } from "./document-import-sniffers"
 import { imageDataFromRgba, readAscii } from "./raster-codec-utils"
 import { clamp8, scaleSample, TGA_DEVELOPER_PREFIX, TGA_DEVELOPER_TAG_METADATA, TGA_SIGNATURE } from "./raster-codecs-internal"
 import { readExrChannelInfo, readExrDataWindow } from "./raster-codecs-exr-inspect"
-import { decodeJpeg2000Buffer } from "./raster-codecs-jpeg2000"
 import type { DecodedRaster } from "./raster-codecs-types"
 
 type LibRawDecodeSettings = Record<string, unknown>
@@ -108,7 +107,13 @@ export async function decodeAdvancedRasterBufferAsync(buffer: ArrayBuffer, name 
 
   if (signature.isExr) return decodeExrBuffer(buffer)
   if (signature.isHeif) return decodeHeifBuffer(buffer)
-  if (signature.isJpeg2000) return decodeJpeg2000Buffer(buffer)
+  // The OpenJPEG WASM wrapper is unusually large and contains a Node-only
+  // `fs` branch. Keep it out of the editor's startup graph; it is only
+  // needed after a user actually opens a JPEG 2000 file.
+  if (signature.isJpeg2000) {
+    const { decodeJpeg2000Buffer } = await import("./raster-codecs-jpeg2000")
+    return decodeJpeg2000Buffer(buffer)
+  }
   if (signature.isRaw) {
     const raw = await decodeRawBuffer(buffer)
     if (raw) return raw

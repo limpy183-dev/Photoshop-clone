@@ -58,7 +58,13 @@ export {
   decodeTiffBuffer,
 } from "./raster-codecs-decoders"
 export { inspectExrHeader } from "./raster-codecs-exr-inspect"
-export { encodeJpeg2000ImageData } from "./raster-codecs-jpeg2000"
+export async function encodeJpeg2000ImageData(
+  imageData: ImageData,
+  options: import("./raster-codecs-types").Jpeg2000EncodeOptions = {},
+) {
+  const { encodeJpeg2000ImageData: encode } = await import("./raster-codecs-jpeg2000")
+  return encode(imageData, options)
+}
 export {
   encodeHeicImageData,
   encodeHeifImageData,
