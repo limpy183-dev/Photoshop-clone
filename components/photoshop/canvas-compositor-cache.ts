@@ -22,12 +22,33 @@ export function adjustmentParamsFingerprint(params: unknown): string {
   return fp
 }
 
+// Path and advanced-blending fingerprints are recomputed for every layer on
+// every composite. `JSON.stringify` over a vector path (which can carry
+// hundreds of points, each with two control points) was one of the largest
+// per-frame main-thread costs during pointer interaction. Paths and blending
+// descriptors are replaced immutably by the reducer, exactly like the
+// adjustment params and layer styles already cached below, so keying the
+// fingerprint on object identity is safe and keeps the returned string
+// byte-for-byte identical.
+const pathFingerprintCache = new WeakMap<PathProps, string>()
 export function pathFingerprint(path: PathProps | null | undefined): string {
-  return path ? JSON.stringify(path) : ""
+  if (!path) return ""
+  const cached = pathFingerprintCache.get(path)
+  if (cached !== undefined) return cached
+  const fp = JSON.stringify(path)
+  pathFingerprintCache.set(path, fp)
+  return fp
 }
 
+type AdvancedBlending = NonNullable<Layer["advancedBlending"]>
+const advancedBlendingFingerprintCache = new WeakMap<AdvancedBlending, string>()
 export function advancedBlendingFingerprint(advanced: Layer["advancedBlending"]): string {
-  return advanced ? JSON.stringify(normalizeAdvancedBlending(advanced)) : ""
+  if (!advanced) return ""
+  const cached = advancedBlendingFingerprintCache.get(advanced)
+  if (cached !== undefined) return cached
+  const fp = JSON.stringify(normalizeAdvancedBlending(advanced))
+  advancedBlendingFingerprintCache.set(advanced, fp)
+  return fp
 }
 
 export function offsetPath(path: PathProps | null | undefined, dx: number, dy: number): PathProps | null | undefined {
@@ -51,8 +72,19 @@ export function invalidateMaskAlphaCache() {
   maskAlphaEpoch++
 }
 
-export function smartFilterCacheKey(smartFilters: NonNullable<Layer["smartFilters"]>): string {
-  return smartFilters
+type SmartFilters = NonNullable<Layer["smartFilters"]>
+
+// Smart-filter keys stringify every enabled filter's params on every
+// composite. The filter list is replaced immutably when it changes, so the key
+// only needs recomputing when the list identity changes or a mask's alpha is
+// invalidated - the epoch is part of the cache key so mask edits still bust it,
+// preserving the previous invalidation semantics exactly.
+const smartFilterCacheKeyCache = new WeakMap<SmartFilters, { epoch: number; key: string }>()
+
+export function smartFilterCacheKey(smartFilters: SmartFilters): string {
+  const cached = smartFilterCacheKeyCache.get(smartFilters)
+  if (cached !== undefined && cached.epoch === maskAlphaEpoch) return cached.key
+  const key = smartFilters
     .filter((sf) => sf.enabled)
     .map((sf) => {
       const maskId = sf.mask ? canvasIdFor(sf.mask) : ""
@@ -60,6 +92,8 @@ export function smartFilterCacheKey(smartFilters: NonNullable<Layer["smartFilter
       return `${sf.id}:${sf.filterId}:${JSON.stringify(sf.params)}:${sf.opacity ?? 1}:${sf.blendMode ?? "normal"}:${sf.maskEnabled === false ? 0 : 1}:${maskId}:${sf.maskDensity ?? 1}:${sf.maskFeather ?? 0}:${maskEpoch}`
     })
     .join("|")
+  smartFilterCacheKeyCache.set(smartFilters, { epoch: maskAlphaEpoch, key })
+  return key
 }
 
 function styleEffectFp(prefix: string, effect: Record<string, unknown> | undefined): string {

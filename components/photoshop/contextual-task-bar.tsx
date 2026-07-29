@@ -3,7 +3,7 @@
 import * as React from "react"
 import { Brush, GripVertical, ImageDown, Layers, MousePointer2, SlidersHorizontal, Sparkles, Type } from "lucide-react"
 import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
-import { useActiveDocument, useActiveLayer, useEditorSelector } from "./editor-context"
+import { useActiveDocument, useActiveLayer, useEditorCommands, useEditorStateSelector } from "./editor-context"
 import { dispatchPhotoshopEvent } from "./events"
 
 const DEFAULT_POSITION = { x: 28, y: 36 }
@@ -15,9 +15,13 @@ function clamp(value: number, min: number, max: number) {
 export function ContextualTaskBar() {
   const activeDoc = useActiveDocument()
   const activeLayer = useActiveLayer()
-  const tool = useEditorSelector((editor) => editor.tool)
-  const dispatch = useEditorSelector((editor) => editor.dispatch)
-  const commit = useEditorSelector((editor) => editor.commit)
+  // `tool`, `dispatch` and `commit` are all passthroughs on the context
+  // projection, so reading them via `useEditorSelector` built the full
+  // projection once per subscription per notification for no benefit. Reading
+  // the raw snapshot and the stable command context instead takes this
+  // component off the projection path entirely, with identical values.
+  const tool = useEditorStateSelector((state) => state.tool)
+  const { commit, dispatch } = useEditorCommands()
   const barRef = React.useRef<HTMLDivElement>(null)
   const dragOffsetRef = React.useRef({ x: 0, y: 0 })
   const [position, setPosition] = React.useState(DEFAULT_POSITION)
