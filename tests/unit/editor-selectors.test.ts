@@ -15,8 +15,7 @@ import type { Layer, PsDocument } from "@/components/photoshop/types"
 // selectors actually read, so they are built structurally and narrowed rather
 // than constructed as complete documents.
 
-type ToolSettingsState = Parameters<typeof selectToolSettings>[0]
-type PersistenceState = Parameters<typeof selectPersistenceState>[0]
+type EditorSelectorState = Parameters<typeof selectToolSettings>[0]
 
 function makeLayer(id: string): Layer {
   return {
@@ -48,7 +47,7 @@ function makeDocument(
   } as unknown as PsDocument
 }
 
-function makeToolState(patch: Record<string, unknown> = {}): ToolSettingsState {
+function makeSelectorState(patch: Record<string, unknown> = {}): EditorSelectorState {
   return {
     documents: [],
     activeDocId: null,
@@ -61,7 +60,7 @@ function makeToolState(patch: Record<string, unknown> = {}): ToolSettingsState {
     background: "#ffffff",
     histories: {},
     ...patch,
-  } as unknown as ToolSettingsState
+  } as unknown as EditorSelectorState
 }
 
 describe("selectActiveDocument / selectActiveLayer", () => {
@@ -121,7 +120,7 @@ describe("selectSelectedLayers", () => {
 describe("selectToolSettings", () => {
   it("projects the tool slice", () => {
     const brush = { size: 24 }
-    const state = makeToolState({ tool: "eraser", brush })
+    const state = makeSelectorState({ tool: "eraser", brush })
     const selected = selectToolSettings(state)
 
     expect(selected.tool).toBe("eraser")
@@ -129,7 +128,7 @@ describe("selectToolSettings", () => {
   })
 
   it("is identity-stable for the same snapshot", () => {
-    const state = makeToolState()
+    const state = makeSelectorState()
 
     expect(selectToolSettings(state)).toBe(selectToolSettings(state))
   })
@@ -141,8 +140,8 @@ describe("selectToolSettings", () => {
     // snapshots inside one tick, which evicted that slot and handed back a
     // brand new object identity each time a snapshot was revisited - defeating
     // Object.is equality and forcing a re-render on every notification.
-    const first = makeToolState({ brush: { size: 4 } })
-    const second = makeToolState({ brush: { size: 64 } })
+    const first = makeSelectorState({ brush: { size: 4 } })
+    const second = makeSelectorState({ brush: { size: 64 } })
 
     const firstSelection = selectToolSettings(first)
     const secondSelection = selectToolSettings(second)
@@ -160,8 +159,8 @@ describe("selectToolSettings", () => {
       gradient: { type: "radial" },
       eraser: { size: 3 },
     }
-    const before = makeToolState(shared)
-    const after = makeToolState(shared)
+    const before = makeSelectorState(shared)
+    const after = makeSelectorState(shared)
 
     expect(selectToolSettings(after)).toBe(selectToolSettings(before))
   })
@@ -170,7 +169,7 @@ describe("selectToolSettings", () => {
 describe("selectPersistenceState", () => {
   it("projects the persisted slice", () => {
     const symmetry = { enabled: true }
-    const state = makeToolState({ foreground: "#112233", symmetry }) as unknown as PersistenceState
+    const state = makeSelectorState({ foreground: "#112233", symmetry })
     const selected = selectPersistenceState(state)
 
     expect(selected.foreground).toBe("#112233")
@@ -178,8 +177,8 @@ describe("selectPersistenceState", () => {
   })
 
   it("is identity-stable and does not thrash across interleaved snapshots", () => {
-    const first = makeToolState({ foreground: "#000000" }) as unknown as PersistenceState
-    const second = makeToolState({ foreground: "#ffffff" }) as unknown as PersistenceState
+    const first = makeSelectorState({ foreground: "#000000" })
+    const second = makeSelectorState({ foreground: "#ffffff" })
 
     const firstSelection = selectPersistenceState(first)
     const secondSelection = selectPersistenceState(second)
