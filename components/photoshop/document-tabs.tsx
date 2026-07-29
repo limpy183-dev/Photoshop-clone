@@ -140,7 +140,7 @@ export function DocumentTabs() {
                 <DropdownMenuItem
                   onSelect={() => dispatchPhotoshopEvent("ps-reveal-source", { docId: d.id })}
                 >
-                  Reveal Source...
+                  Reveal Source…
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => reopenClosedDocument()} disabled={!closedDocuments.length}>
