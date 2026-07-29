@@ -23,14 +23,32 @@ function autosavePreferences() {
   }
 }
 
+/**
+ * Every recoverable snapshot is offered, newest first, one snapshot per
+ * document. Recovering or discarding one entry must never touch the others.
+ */
+function collectRecoveryCandidates(entries: AutosaveDocument[]): AutosaveDocument[] {
+  const seen = new Set<string>()
+  return entries
+    .filter((entry) => Date.now() - entry.updatedAt >= 10_000)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .filter((entry) => {
+      if (seen.has(entry.documentId)) return false
+      seen.add(entry.documentId)
+      return true
+    })
+}
+
 export function AutosaveRecovery() {
   const documents = useEditorSelector((editor) => editor.documents)
   const activeDocId = useEditorSelector((editor) => editor.activeDocId)
   const createDocument = useEditorSelector((editor) => editor.createDocument)
   const documentStatuses = useEditorSelector((editor) => editor.documentStatuses)
   const documentHistoryVersions = useEditorSelector((editor) => editor.documentHistoryVersions)
-  const [candidate, setCandidate] = React.useState<AutosaveDocument | null>(null)
+  const [pending, setPending] = React.useState<AutosaveDocument[]>([])
+  const [busy, setBusy] = React.useState(false)
   const [prefs, setPrefs] = React.useState<{ enabled: boolean; intervalMs: number } | null>(null)
+  const candidate = pending[0] ?? null
 
   // Keep a live ref to documents so the autosave interval can read the
   // latest snapshot without re-running its effect (and resetting its
@@ -170,22 +188,22 @@ export function AutosaveRecovery() {
     if (prefs === null) return
     if (!prefs.enabled) {
       clearAutosave()
-      setCandidate(null)
+      setPending([])
       return
     }
     // Try IndexedDB first (larger capacity), then fall back to localStorage
     let cancelled = false
     readAutosavesAsync().then((entries) => {
       if (cancelled) return
-      const saved = entries.find((entry) => Date.now() - entry.updatedAt >= 10_000)
-      if (saved) { setCandidate(saved); return }
+      const found = collectRecoveryCandidates(entries)
+      if (found.length) { setPending(found); return }
       // Fallback to sync localStorage reader
-      const lsEntry = readAutosaves().find((entry) => Date.now() - entry.updatedAt >= 10_000)
-      if (lsEntry) setCandidate(lsEntry)
+      const fallback = collectRecoveryCandidates(readAutosaves())
+      if (fallback.length) setPending(fallback)
     }).catch(() => {
       if (cancelled) return
-      const saved = readAutosaves().find((entry) => Date.now() - entry.updatedAt >= 10_000)
-      if (saved) setCandidate(saved)
+      const fallback = collectRecoveryCandidates(readAutosaves())
+      if (fallback.length) setPending(fallback)
     })
     return () => { cancelled = true }
   }, [prefs])
@@ -209,44 +227,108 @@ export function AutosaveRecovery() {
     scheduleAutosave()
   }, [prefs?.enabled, documents, documentStatuses, documentHistoryVersions, scheduleAutosave])
 
+  const restoreEntry = async (entry: AutosaveDocument) => {
+    const { deserializeProject } = await import("./document-project-io")
+    const doc = await deserializeProject(entry.serialized)
+    doc.name = `${doc.name} (Recovered)`
+    createDocument(doc, "Recover Autosave")
+    // Only this document's snapshot is consumed; the rest stay recoverable.
+    removeAutosave(entry.documentId)
+  }
+
   const restore = async () => {
-    if (!candidate) return
+    if (!candidate || busy) return
+    setBusy(true)
     try {
-      const { deserializeProject } = await import("./document-project-io")
-      const doc = await deserializeProject(candidate.serialized)
-      doc.name = `${doc.name} (Recovered)`
-      createDocument(doc, "Recover Autosave")
-      removeAutosave(candidate.documentId)
-      setCandidate(null)
+      await restoreEntry(candidate)
+      setPending((queue) => queue.filter((entry) => entry.documentId !== candidate.documentId))
       toast.success("Recovered autosaved document")
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not recover autosave")
+    } finally {
+      setBusy(false)
     }
   }
 
-  const dismiss = () => {
-    if (candidate) removeAutosave(candidate.documentId)
-    setCandidate(null)
+  const restoreAll = async () => {
+    if (!pending.length || busy) return
+    setBusy(true)
+    const queue = pending
+    const failedIds = new Set<string>()
+    let recovered = 0
+    for (const entry of queue) {
+      try {
+        await restoreEntry(entry)
+        recovered += 1
+      } catch {
+        failedIds.add(entry.documentId)
+      }
+    }
+    setPending((current) => current.filter((entry) => failedIds.has(entry.documentId)))
+    if (recovered) {
+      toast.success(`Recovered ${recovered} autosaved document${recovered === 1 ? "" : "s"}`)
+    }
+    if (failedIds.size) {
+      toast.error(`Could not recover ${failedIds.size} autosaved document${failedIds.size === 1 ? "" : "s"}`)
+    }
+    setBusy(false)
   }
 
+  const dismiss = () => {
+    if (busy) return
+    if (!candidate) return
+    removeAutosave(candidate.documentId)
+    setPending((queue) => queue.filter((entry) => entry.documentId !== candidate.documentId))
+  }
+
+  const dismissAll = () => {
+    if (busy) return
+    for (const entry of pending) removeAutosave(entry.documentId)
+    setPending([])
+  }
+
+  const total = pending.length
+
   return (
-    <Dialog open={!!candidate} onOpenChange={(open) => !open && setCandidate(null)}>
+    // Closing the dialog keeps the snapshots on disk so they can be offered again.
+    <Dialog open={!!candidate} onOpenChange={(open) => !open && setPending([])}>
       <DialogContent className="max-w-[420px] border-[var(--ps-divider)] bg-[var(--ps-panel)] text-[var(--ps-text)]">
         <DialogHeader>
           <DialogTitle>Recover Autosave?</DialogTitle>
         </DialogHeader>
         <div className="space-y-2 text-sm text-[var(--ps-text-dim)]">
-          <p>An autosaved document is available.</p>
+          <p>
+            {total > 1
+              ? `${total} autosaved documents are available.`
+              : "An autosaved document is available."}
+          </p>
           <p className="text-[12px]">
+            {total > 1 ? <span className="text-[var(--ps-text)]">1 of {total}: </span> : null}
             {candidate?.name} · {candidate ? new Date(candidate.updatedAt).toLocaleString() : ""}
           </p>
+          {total > 1 ? (
+            <ul className="max-h-24 overflow-y-auto text-[11px]">
+              {pending.slice(1).map((entry) => (
+                <li key={entry.documentId} className="truncate">
+                  {entry.name} · {new Date(entry.updatedAt).toLocaleString()}
+                </li>
+              ))}
+            </ul>
+          ) : null}
           <p className="text-[11px]">
-            Recovery is stored in browser localStorage per open document, not in the original file.
+            Recovery snapshots are stored in this browser (IndexedDB, falling back to
+            localStorage) per open document, not in the original file.
           </p>
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={dismiss}>Discard</Button>
-          <Button onClick={restore}>Recover</Button>
+        <DialogFooter className="flex-wrap gap-2">
+          {total > 1 ? (
+            <Button variant="ghost" onClick={dismissAll} disabled={busy}>Discard All</Button>
+          ) : null}
+          <Button variant="outline" onClick={dismiss} disabled={busy}>Discard</Button>
+          {total > 1 ? (
+            <Button variant="secondary" onClick={restoreAll} disabled={busy}>Recover All</Button>
+          ) : null}
+          <Button onClick={restore} disabled={busy}>Recover</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -9,22 +9,34 @@ interface ResizeHandleProps {
   /** Callback with px delta: positive = grows right/down, negative = shrinks */
   onResize: (delta: number) => void
   onResizeEnd?: () => void
+  /** Optional reset to the default size (Enter/Space or double-click) */
+  onReset?: () => void
   className?: string
   ariaLabel?: string
   ariaValueNow?: number
   ariaValueMin?: number
   ariaValueMax?: number
+  /** px per arrow key press */
+  step?: number
+  /** px per arrow key press while Shift is held */
+  fineStep?: number
+  /** px per PageUp/PageDown press */
+  largeStep?: number
 }
 
 export function ResizeHandle({
   direction,
   onResize,
   onResizeEnd,
+  onReset,
   className,
   ariaLabel,
   ariaValueNow = 50,
   ariaValueMin = 0,
   ariaValueMax = 100,
+  step = 16,
+  fineStep = 1,
+  largeStep = 64,
 }: ResizeHandleProps) {
   const handleRef = React.useRef<HTMLDivElement>(null)
   const dragging = React.useRef(false)
@@ -33,6 +45,7 @@ export function ResizeHandle({
   const previousUserSelect = React.useRef("")
   const onResizeRef = React.useRef(onResize)
   const onResizeEndRef = React.useRef(onResizeEnd)
+  const onResetRef = React.useRef(onReset)
   const isH = direction === "horizontal"
 
   React.useEffect(() => {
@@ -42,6 +55,10 @@ export function ResizeHandle({
   React.useEffect(() => {
     onResizeEndRef.current = onResizeEnd
   }, [onResizeEnd])
+
+  React.useEffect(() => {
+    onResetRef.current = onReset
+  }, [onReset])
 
   const finishDrag = React.useCallback(
     (pointerId?: number) => {
@@ -94,35 +111,69 @@ export function ResizeHandle({
     [finishDrag],
   )
 
+  // Interrupted input (touch cancel, lost capture, tab switch) must not leave
+  // the handle in a dragging state with the body cursor/selection overridden.
+  const handlePointerCancel = React.useCallback(
+    (e: React.PointerEvent) => {
+      finishDrag(e.pointerId)
+    },
+    [finishDrag],
+  )
+
   const handleKeyDown = React.useCallback(
     (e: React.KeyboardEvent) => {
-      let delta = 0
-      if (isH) {
-        if (e.key === "ArrowLeft") delta = -16
-        else if (e.key === "ArrowRight") delta = 16
-      } else {
-        if (e.key === "ArrowUp") delta = -16
-        else if (e.key === "ArrowDown") delta = 16
+      if (e.key === "Escape") {
+        if (!dragging.current) return
+        e.preventDefault()
+        finishDrag()
+        return
       }
+
+      if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+        if (!onResetRef.current) return
+        e.preventDefault()
+        onResetRef.current()
+        return
+      }
+
+      const nudge = e.shiftKey ? fineStep : step
+      let delta = 0
+
+      if (isH) {
+        if (e.key === "ArrowLeft") delta = -nudge
+        else if (e.key === "ArrowRight") delta = nudge
+      } else {
+        if (e.key === "ArrowUp") delta = -nudge
+        else if (e.key === "ArrowDown") delta = nudge
+      }
+
+      if (e.key === "PageUp") delta = -largeStep
+      else if (e.key === "PageDown") delta = largeStep
+      else if (e.key === "Home") delta = ariaValueMin - ariaValueNow
+      else if (e.key === "End") delta = ariaValueMax - ariaValueNow
+
       if (!delta) return
       e.preventDefault()
       onResizeRef.current(delta)
       // Each step is a complete resize so persisted sizes stay in sync
       onResizeEndRef.current?.()
     },
-    [isH],
+    [ariaValueMax, ariaValueMin, ariaValueNow, fineStep, finishDrag, isH, largeStep, step],
   )
 
   React.useEffect(() => {
     const move = (event: PointerEvent) => handlePointerMove(event as unknown as React.PointerEvent)
     const up = (event: PointerEvent) => finishDrag(event.pointerId)
+    const cancel = (event: PointerEvent) => finishDrag(event.pointerId)
     const blur = () => finishDrag()
     window.addEventListener("pointermove", move)
     window.addEventListener("pointerup", up)
+    window.addEventListener("pointercancel", cancel)
     window.addEventListener("blur", blur)
     return () => {
       window.removeEventListener("pointermove", move)
       window.removeEventListener("pointerup", up)
+      window.removeEventListener("pointercancel", cancel)
       window.removeEventListener("blur", blur)
       finishDrag()
     }
@@ -135,9 +186,10 @@ export function ResizeHandle({
       tabIndex={0}
       aria-label={ariaLabel ?? (isH ? "Resize horizontally" : "Resize vertically")}
       aria-orientation={isH ? "vertical" : "horizontal"}
-      aria-valuenow={ariaValueNow}
-      aria-valuemin={ariaValueMin}
-      aria-valuemax={ariaValueMax}
+      aria-valuenow={Math.round(ariaValueNow)}
+      aria-valuemin={Math.round(ariaValueMin)}
+      aria-valuemax={Math.round(ariaValueMax)}
+      aria-keyshortcuts={onReset ? "ArrowLeft ArrowRight ArrowUp ArrowDown PageUp PageDown Home End Enter" : "ArrowLeft ArrowRight ArrowUp ArrowDown PageUp PageDown Home End"}
       className={cn(
         "group relative flex-shrink-0 bg-transparent transition-colors z-30 focus-visible:outline-none",
         isH
@@ -148,6 +200,9 @@ export function ResizeHandle({
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
+      onLostPointerCapture={handlePointerCancel}
+      onDoubleClick={onReset ? (event) => { event.preventDefault(); onResetRef.current?.() } : undefined}
       onKeyDown={handleKeyDown}
       style={{ touchAction: "none" }}
     />
