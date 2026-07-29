@@ -57,6 +57,15 @@ export function DocumentTabs() {
     } catch {}
   }
 
+  // Arrow/Home/End move focus with activation, matching the tabs pattern.
+  const activateTabAt = (from: HTMLElement, index: number) => {
+    const next = documents[index]
+    if (!next) return
+    dispatch({ type: "activate-document", id: next.id })
+    const tabs = from.closest('[role="toolbar"]')?.querySelectorAll<HTMLElement>('[role="tab"]')
+    tabs?.[index]?.focus()
+  }
+
   return (
     <div role="toolbar" aria-label="Open documents" className="h-7 bg-[var(--ps-chrome)] border-b border-[var(--ps-divider)] flex items-end gap-px overflow-x-auto">
       {documents.map((d) => {
@@ -79,6 +88,12 @@ export function DocumentTabs() {
               }
             }}
             onDrop={(event) => onTabDrop(event, d.id)}
+            onAuxClick={(event) => {
+              // Middle-click closes the tab, like every other tabbed editor.
+              if (event.button !== 1) return
+              event.preventDefault()
+              requestCloseDocument(d.id)
+            }}
           >
             <div role="tablist" aria-label={`Document ${d.name}`} className="flex min-w-0 flex-1">
             <button
@@ -89,15 +104,25 @@ export function DocumentTabs() {
               className="flex min-w-0 flex-1 items-center text-left"
               onClick={() => dispatch({ type: "activate-document", id: d.id })}
               onKeyDown={(event) => {
+                const index = documents.findIndex((doc) => doc.id === d.id)
                 if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
                   event.preventDefault()
-                  const index = documents.findIndex((doc) => doc.id === d.id)
-                  const nextIndex = event.key === "ArrowLeft" ? index - 1 : index + 1
-                  const next = documents[nextIndex]
-                  if (!next) return
-                  dispatch({ type: "activate-document", id: next.id })
-                  const tabs = event.currentTarget.closest('[role="toolbar"]')?.querySelectorAll<HTMLElement>('[role="tab"]')
-                  tabs?.[nextIndex]?.focus()
+                  activateTabAt(event.currentTarget, event.key === "ArrowLeft" ? index - 1 : index + 1)
+                  return
+                }
+                if (event.key === "Home") {
+                  event.preventDefault()
+                  activateTabAt(event.currentTarget, 0)
+                  return
+                }
+                if (event.key === "End") {
+                  event.preventDefault()
+                  activateTabAt(event.currentTarget, documents.length - 1)
+                  return
+                }
+                if (event.key === "Delete" || event.key === "Backspace") {
+                  event.preventDefault()
+                  requestCloseDocument(d.id)
                 }
               }}
             >
@@ -112,8 +137,9 @@ export function DocumentTabs() {
                 <button
                   type="button"
                   onClick={(e) => e.stopPropagation()}
-                  className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-[var(--ps-tool-hover)] rounded-sm w-4 h-4 flex items-center justify-center"
+                  className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-[var(--ps-tool-hover)] rounded-sm w-5 h-5 flex items-center justify-center"
                   aria-label={`Document options for ${d.name}`}
+                  title={`Document options for ${d.name}`}
                 >
                   <Copy className="w-3 h-3" />
                 </button>
@@ -146,8 +172,9 @@ export function DocumentTabs() {
                 e.stopPropagation()
                 requestCloseDocument(d.id)
               }}
-              className="ml-auto opacity-50 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-[var(--ps-tool-hover)] rounded-sm w-4 h-4 flex items-center justify-center"
+              className="ml-auto opacity-50 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-[var(--ps-tool-hover)] rounded-sm w-5 h-5 flex items-center justify-center"
               aria-label="Close document"
+              title={`Close ${d.name}`}
             >
               <X className="w-3 h-3" />
             </button>
