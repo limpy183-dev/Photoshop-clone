@@ -11,7 +11,7 @@ import {
   selectSelectedLayers,
 } from "./editor-selectors"
 
-export function projectEditorContextValue(
+function computeEditorContextProjection(
   state: EditorState,
   base: EditorContextValue,
 ): EditorContextValue {
@@ -73,4 +73,44 @@ export function projectEditorContextValue(
     clipboard: state.clipboard,
     styleClipboard: state.styleClipboard,
   }
+}
+
+// The projection is a pure function of the immutable reducer snapshot plus the
+// provider's base context value, but it is far from free: it walks every
+// document, recomputes lifecycle/history bookkeeping for each one, and
+// allocates a fresh ~40-key object.
+//
+// `useEditorSelector` calls this from inside its `getSnapshot`. React invokes
+// `getSnapshot` several times per render (and once per subscriber per store
+// notification), so a single dispatch used to fan out into dozens of full
+// projections. Worse, every call produced fresh `documentStatuses`,
+// `selectedLayers` and `closedDocuments` identities, so selectors that derive
+// objects from the projection (for example `useDocumentLifecycle`) compared
+// unequal under `Object.is` on every notification and re-rendered even when
+// nothing they actually read had changed.
+//
+// Memoising on `(state, base)` identity keeps every returned value exactly the
+// same while making repeat calls O(1) and identity-stable. Both keys are
+// replaced immutably by the reducer/provider, so a cached pair can never go
+// stale, and the nested `WeakMap` means neither key is retained once React
+// drops it.
+const projectionCache = new WeakMap<
+  EditorState,
+  WeakMap<EditorContextValue, EditorContextValue>
+>()
+
+export function projectEditorContextValue(
+  state: EditorState,
+  base: EditorContextValue,
+): EditorContextValue {
+  let byBase = projectionCache.get(state)
+  if (!byBase) {
+    byBase = new WeakMap<EditorContextValue, EditorContextValue>()
+    projectionCache.set(state, byBase)
+  }
+  const cached = byBase.get(base)
+  if (cached !== undefined) return cached
+  const projected = computeEditorContextProjection(state, base)
+  byBase.set(base, projected)
+  return projected
 }
