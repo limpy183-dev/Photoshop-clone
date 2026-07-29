@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useEditorSelector } from "./editor-context"
+import { useEditorCommands, useEditorSelector, useEditorStateSelector } from "./editor-context"
 import { dispatchPhotoshopEvent } from "./events"
 import { Copy, RotateCcw, X } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -14,11 +14,19 @@ import {
 } from "@/components/ui/dropdown-menu"
 
 export function DocumentTabs() {
-  const documents = useEditorSelector((editor) => editor.documents)
-  const activeDocId = useEditorSelector((editor) => editor.activeDocId)
+  // `documents`, `activeDocId` and `dispatch` are passthroughs on the context
+  // projection (it assigns `documents: state.documents` etc., and `dispatch`
+  // comes straight from the provider), so reading them through
+  // `useEditorSelector` paid for a full projection per subscription with no
+  // benefit. `useEditorStateSelector` reads the raw snapshot and
+  // `useEditorCommands` is a plain context of stable callbacks, so neither
+  // touches the projection. Values and identities are unchanged.
+  const documents = useEditorStateSelector((state) => state.documents)
+  const activeDocId = useEditorStateSelector((state) => state.activeDocId)
+  const { dispatch } = useEditorCommands()
+  // Genuinely derived by the projection - these must stay on useEditorSelector.
   const closedDocuments = useEditorSelector((editor) => editor.closedDocuments)
   const documentStatuses = useEditorSelector((editor) => editor.documentStatuses)
-  const dispatch = useEditorSelector((editor) => editor.dispatch)
   const duplicateDocument = useEditorSelector((editor) => editor.duplicateDocument)
   const requestCloseDocument = useEditorSelector((editor) => editor.requestCloseDocument)
   const closeOtherDocuments = useEditorSelector((editor) => editor.closeOtherDocuments)
@@ -132,7 +140,7 @@ export function DocumentTabs() {
                 <DropdownMenuItem
                   onSelect={() => dispatchPhotoshopEvent("ps-reveal-source", { docId: d.id })}
                 >
-                  Reveal Source…
+                  Reveal Source...
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={() => reopenClosedDocument()} disabled={!closedDocuments.length}>
