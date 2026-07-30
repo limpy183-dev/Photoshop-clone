@@ -18,12 +18,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+
+      - name: Pin npm version
+        run: npm install --global npm@11.5.2
 
       - name: Install dependencies
         run: npm ci
@@ -37,11 +42,6 @@ jobs:
       - name: Collect changed files
         if: github.event_name == 'pull_request'
         run: |
-          # actions/checkout defaults to a shallow HEAD checkout. Fetching the
-          # base branch at depth 1 leaves no merge base when the PR is a single
-          # commit directly on top of main, so the triple-dot diff aborts.
-          # Fetch the complete base ref so changed-file selection is reliable.
-          git fetch --no-tags origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
           git diff --name-only "origin/${{ github.base_ref }}...HEAD" > .pr-changed-files.txt
 
       - name: Select targeted PR tests
@@ -75,19 +75,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
+        with:
+          fetch-depth: 0
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-
+      - name: Pin npm version
+        run: npm install --global npm@11.5.2
       - name: Install dependencies
         run: npm ci
-
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
-
       - name: Full Playwright shard
         run: npm run test:full:shard -- ${{ matrix.shard }}/4
 
@@ -102,6 +102,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Pin npm version
+        run: npm install --global npm@11.5.2
       - name: Install dependencies
         run: npm ci
       - name: Audit production and development dependencies
@@ -118,6 +120,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Pin npm version
+        run: npm install --global npm@11.5.2
       - name: Install dependencies
         run: npm ci
       - name: Install Playwright Chromium
@@ -133,18 +137,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-
+      - name: Pin npm version
+        run: npm install --global npm@11.5.2
       - name: Install dependencies
         run: npm ci
-
       - name: Install Playwright Chromium
         run: npx playwright install chromium
-
       - name: Verify visual baselines
         run: npm run test:visual
