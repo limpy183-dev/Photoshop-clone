@@ -37,7 +37,11 @@ jobs:
       - name: Collect changed files
         if: github.event_name == 'pull_request'
         run: |
-          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+          # actions/checkout defaults to a shallow HEAD checkout. Fetching the
+          # base branch at depth 1 leaves no merge base when the PR is a single
+          # commit directly on top of main, so the triple-dot diff aborts.
+          # Fetch the complete base ref so changed-file selection is reliable.
+          git fetch --no-tags origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
           git diff --name-only "origin/${{ github.base_ref }}...HEAD" > .pr-changed-files.txt
 
       - name: Select targeted PR tests
