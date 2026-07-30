@@ -1,0 +1,11 @@
+# Default owner for everything in the repository.
+* @limpy183-dev
+
+# Files where a mistake is expensive and review should be deliberate.
+/.github/workflows/         @limpy183-dev
+/scripts/                   @limpy183-dev
+/next.config.mjs            @limpy183-dev
+/proxy.ts                   @limpy183-dev
+/lib/security-policy.mjs    @limpy183-dev
+/app/api/                   @limpy183-dev
+/BOUNDARIES.md              @limpy183-dev

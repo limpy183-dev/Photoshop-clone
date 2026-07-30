@@ -18,6 +18,18 @@ out/
 # Editor / agent local config
 .claude/
 
+# AI agent scratch state: brainstorm dev-servers, PID files, plan/progress
+# journals. These were tracked historically; the files are removed on this
+# branch. If you still have local copies, untrack them with:
+#   git rm -r --cached .superpowers .tocodex tocodex-docs
+.superpowers/
+.tocodex/
+tocodex-docs/
+
+# Build + analysis output (bundle stats, generated exports, scratch renders)
+artifacts/
+output/
+
 # Marketing site file-backed storage (subscribers / feedback)
 .data/
 
@@ -55,4 +67,3 @@ SKILL.md
 # Dated security audit drafts (committed audit reports — e.g. vulnerabilities_report.txt
 # — should be added explicitly with `git add -f` if you want them tracked)
 security_audit_*.txt
-

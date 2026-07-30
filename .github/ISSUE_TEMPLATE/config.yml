@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/limpy183-dev/Photoshop-clone/security/advisories/new
+    about: Please report vulnerabilities privately. Do not open a public issue.
+  - name: Intentionally out of scope
+    url: https://github.com/limpy183-dev/Photoshop-clone/blob/main/BOUNDARIES.md
+    about: Adobe cloud/AI services, native plugin runtimes, certified CMM and codec parity are non-goals. Read this first.

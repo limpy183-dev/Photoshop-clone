@@ -12,8 +12,61 @@ on:
 permissions:
   contents: read
 
+# A force-push mid-review used to run a full duplicate pipeline. Cancel the
+# superseded run on pull requests; never cancel a push to main or a scheduled
+# run, because those produce the signal we archive.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Pinned to match packageManager in package.json.
+  NPM_VERSION: "11.5.2"
+
+# The three fast jobs below (static-checks, unit-tests, e2e) collectively run
+# every step of `npm run verify:quality`, which remains the single local
+# contract documented in CLAUDE.md. They are split so that a lint or typecheck
+# failure reports in ~2 minutes instead of waiting behind a production build.
 jobs:
-  quality:
+  static-checks:
+    name: Static checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Pin npm version
+        run: npm install --global npm@${{ env.NPM_VERSION }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Strict lint
+        run: npm run lint:strict
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Source hygiene
+        run: npm run check:source-hygiene
+
+      - name: Capability checks
+        run: npm run check:capabilities
+
+      - name: Architecture budgets
+        run: npm run check:architecture
+
+      - name: Unused scaffolds
+        run: npm run check:unused-scaffolds
+
+  unit-tests:
+    name: Unit tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -28,16 +81,66 @@ jobs:
           cache: npm
 
       - name: Pin npm version
-        run: npm install --global npm@11.5.2
+        run: npm install --global npm@${{ env.NPM_VERSION }}
 
       - name: Install dependencies
         run: npm ci
 
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: Changed-line pure-module coverage
+        if: github.event_name == 'pull_request'
+        env:
+          COVERAGE_BASE_REF: origin/${{ github.base_ref }}
+        run: npm run test:coverage:changed
+
+  e2e:
+    name: Build, bundle budgets and browser tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Pin npm version
+        run: npm install --global npm@${{ env.NPM_VERSION }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Playwright downloads ~150 MB of browser per job. Key on the lockfile so
+      # the cache invalidates exactly when @playwright/test moves.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
       - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium
 
-      - name: Local verification contract
-        run: npm run verify
+      - name: Install Playwright system dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+
+      - name: Production build
+        run: npm run build
+
+      - name: Startup bundle budgets
+        run: npm run analyze:bundle
+
+      - name: Smoke matrix
+        run: npm run test:smoke
 
       - name: Collect changed files
         if: github.event_name == 'pull_request'
@@ -53,17 +156,46 @@ jobs:
         if: github.event_name == 'pull_request' && steps.targeted-tests.outputs.count != '0'
         run: node scripts/run-selected-tests.mjs "${{ steps.targeted-tests.outputs.manifest }}"
 
-      - name: Changed-line pure-module coverage
-        if: github.event_name == 'pull_request'
-        env:
-          COVERAGE_BASE_REF: origin/${{ github.base_ref }}
-        run: npm run test:coverage:changed
-
       - name: Critical production interaction
         if: github.event_name == 'pull_request'
         env:
           PLAYWRIGHT_REPEAT_EACH: "3"
         run: npm run test:repeat:critical
+
+  # Non-blocking on purpose. This project's entire pitch is "browser-native",
+  # but every other job here is Chromium-only. This job exists to make the
+  # Firefox/WebKit gap visible and measurable; promote it to a required check
+  # once the smoke matrix is green on all three engines.
+  cross-browser-smoke:
+    name: Cross-browser smoke (non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Pin npm version
+        run: npm install --global npm@${{ env.NPM_VERSION }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium firefox webkit
+
+      - name: Production build
+        run: npm run build
+
+      - name: Smoke matrix on all engines
+        env:
+          PLAYWRIGHT_CROSS_BROWSER: "true"
+        run: npm run test:smoke
 
   full-playwright:
     if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -83,16 +215,28 @@ jobs:
           node-version: 22
           cache: npm
       - name: Pin npm version
-        run: npm install --global npm@11.5.2
+        run: npm install --global npm@${{ env.NPM_VERSION }}
       - name: Install dependencies
         run: npm ci
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium
+      - name: Install Playwright system dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
       - name: Full Playwright shard
         run: npm run test:full:shard -- ${{ matrix.shard }}/4
 
+  # Moved onto pull requests. The dependency tree carries RAW, DICOM, PDF and
+  # JPEG 2000 decoders that all parse untrusted bytes; a weekly-only audit is
+  # too slow a feedback loop for that surface.
   dependency-audit:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -103,7 +247,7 @@ jobs:
           node-version: 22
           cache: npm
       - name: Pin npm version
-        run: npm install --global npm@11.5.2
+        run: npm install --global npm@${{ env.NPM_VERSION }}
       - name: Install dependencies
         run: npm ci
       - name: Audit production and development dependencies
@@ -121,7 +265,7 @@ jobs:
           node-version: 22
           cache: npm
       - name: Pin npm version
-        run: npm install --global npm@11.5.2
+        run: npm install --global npm@${{ env.NPM_VERSION }}
       - name: Install dependencies
         run: npm ci
       - name: Install Playwright Chromium
@@ -133,6 +277,9 @@ jobs:
 
   visual-regression:
     if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # NOTE: baselines are Windows-font-and-driver shaped, so contributors on
+    # macOS/Linux cannot reproduce a failure locally. Tracked as a follow-up to
+    # move rendering into a container.
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -143,7 +290,7 @@ jobs:
           node-version: 22
           cache: npm
       - name: Pin npm version
-        run: npm install --global npm@11.5.2
+        run: npm install --global npm@${{ env.NPM_VERSION }}
       - name: Install dependencies
         run: npm ci
       - name: Install Playwright Chromium

@@ -1,0 +1,59 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 8
+    versioning-strategy: increase
+    commit-message:
+      prefix: "deps"
+      prefix-development: "deps-dev"
+    groups:
+      # 30+ separate Radix packages would otherwise produce 30 separate PRs.
+      radix:
+        patterns:
+          - "@radix-ui/*"
+      # The React + Next + type-definitions set must move together or the
+      # typecheck breaks in confusing ways.
+      react-and-next:
+        patterns:
+          - "next"
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+      # Decoder stack: heavy, security-relevant, reviewed as one unit because
+      # every one of these parses untrusted bytes.
+      raster-and-document-decoders:
+        patterns:
+          - "@abasb75/jpeg2000-decoder"
+          - "@cornerstonejs/codec-openjpeg"
+          - "@discourse/heic"
+          - "@jsquash/*"
+          - "ag-psd"
+          - "dicom-parser"
+          - "libraw-wasm"
+          - "parse-exr"
+          - "pdf-lib"
+          - "pdfjs-dist"
+          - "utif2"
+      tooling:
+        patterns:
+          - "@playwright/test"
+          - "@vitest/*"
+          - "eslint"
+          - "eslint-plugin-*"
+          - "typescript"
+          - "typescript-eslint"
+          - "vitest"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "ci"
