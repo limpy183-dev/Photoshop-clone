@@ -1,0 +1,82 @@
+name: Audit finding
+description: A prioritised finding from a codebase, security, performance or accessibility audit
+labels: ["audit", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this to move a finding out of a scratch text file and into tracked
+        work. One issue per finding. If a finding is already fixed, open it and
+        close it immediately with a link to the fixing commit, so the record is
+        unambiguous.
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - "P0 - data integrity or security, fix before anything else"
+        - "P1 - correctness or coverage gap"
+        - "P2 - architecture, accessibility or platform"
+        - "P3 - polish"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - Correctness / state
+        - Rendering / performance
+        - Security
+        - Privacy
+        - Accessibility
+        - Mobile / responsive
+        - Architecture / modularity
+        - Testing
+        - CI/CD
+        - Bundle / dependencies
+        - Repo hygiene / process
+        - Product claims
+    validations:
+      required: true
+
+  - type: textarea
+    id: finding
+    attributes:
+      label: Finding
+      description: What is wrong, and what is the concrete user-visible consequence?
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: File and line references, test output, or measurements.
+      placeholder: "components/photoshop/editor-context.tsx:4451"
+    validations:
+      required: true
+
+  - type: textarea
+    id: remedy
+    attributes:
+      label: Proposed remedy
+    validations:
+      required: true
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: How we will know it is fixed
+      description: The test or gate that would fail today and pass afterwards.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: status
+    attributes:
+      label: Status
+      options:
+        - label: I have confirmed this is still present on `main`

@@ -1,0 +1,83 @@
+name: Bug report
+description: Something in the editor behaves incorrectly
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: check [BOUNDARIES.md](https://github.com/limpy183-dev/Photoshop-clone/blob/main/BOUNDARIES.md).
+        Features listed there are intentional non-goals, not defects.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Open /editor
+        2. Create a 4096x4096 document
+        3. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Canvas / rendering
+        - Tools / brush engine
+        - Layers / masks / adjustments
+        - Selections
+        - Filters
+        - File I/O (PSD, raster, project)
+        - Colour management
+        - Typography
+        - Timeline / video
+        - Automation / scripting / plugins
+        - Panels / dock / UI shell
+        - Accessibility
+        - Performance / memory
+        - Marketing site
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and OS
+      placeholder: "Chrome 141 / Windows 11, or Firefox 145 / macOS 15"
+    validations:
+      required: true
+
+  - type: input
+    id: document
+    attributes:
+      label: Document size and colour mode
+      description: Large documents and non-8-bit RGB modes take different code paths.
+      placeholder: "4096x4096, 16-bit RGB"
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Browser diagnostics output
+      description: >-
+        Window > Browser Diagnostics, or the preflight report. This captures the
+        active WebGL, OPFS, memory and codec limits, which is usually the answer.
+      render: text
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I read BOUNDARIES.md and this is not an intentional non-goal
+          required: true
