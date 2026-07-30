@@ -687,9 +687,12 @@ function ContextMenuLayer({
     }
     const onPointerUp = (event: MouseEvent) => {
       if (event.button !== 2) return
+      // Chromium can dispatch `contextmenu` after `mouseup`. Keep the gesture
+      // record alive long enough for that event so a right-button drag is not
+      // misclassified as a click and shown as a menu.
       window.setTimeout(() => {
         rightClickGestureRef.current = null
-      }, 0)
+      }, 100)
     }
     window.addEventListener("contextmenu", onContextMenu)
     window.addEventListener("mousedown", onPointerDown)
