@@ -127,7 +127,7 @@ import {
   type DirectShapeHandleId,
 } from "./canvas-shape-helpers"
 import { SmartGuidesOverlay, smartSnapLayerDelta } from "./canvas-smart-guides"
-import { MaskSelectionOverlay, SelectionOverlay, TextEditOverlay } from "./canvas-selection-overlays"
+import { MaskSelectionOverlay, SelectionOverlay, TextEditOverlay, type TextEditState } from "./canvas-selection-overlays"
 import { Rulers } from "./canvas-rulers"
 import {
   adjustmentParamsFingerprint,
@@ -151,6 +151,7 @@ import {
   autoPickLayer,
   clipToSelection,
   createRemoveMask,
+  pickTextLayerAt,
   selectBackgroundMaskFromImage,
 } from "./canvas-selection-helpers"
 import {
@@ -235,7 +236,7 @@ import { ColorPickerHud, hexToHsv, hsvToHex, pickFromHud, type ColorPickerHudHsv
 import { MagneticLassoIndicator, GridOverlay, PixelGridOverlay, GuidesOverlay, RetouchFeedbackOverlay } from "./canvas-overlays"
 import { SelectionTransformOverlay } from "./selection-transform-overlay"
 import { applyThreeDMaterialDrop } from "./three-d-video-engine"
-import type { Layer, PathPoint, PathProps, PsDocument, Selection } from "./types"
+import type { Layer, PathPoint, PathProps, PsDocument, Selection, TextProps } from "./types"
 
 type BrushInput = BrushDynamicsInput
 
@@ -6330,9 +6331,11 @@ export function CanvasView() {
           {editingText && activeDoc ? (
             <TextEditOverlay
               doc={activeDoc}
+              zoom={viewZoom}
               state={editingText}
               setState={setEditingText}
               commit={commitTextEdit}
+              cancel={cancelTextEdit}
             />
           ) : null}
         </div>

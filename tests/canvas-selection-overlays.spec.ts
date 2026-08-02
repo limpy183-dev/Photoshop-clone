@@ -76,17 +76,21 @@ test("text edit overlay resolves layers and retains scaled typography styles", (
   expect(resolveTextEditLayer(doc, "missing")).toBeNull()
   expect(resolveTextEditLayer(documentWithLayers([textLayer({ text: undefined })]), "text-layer")).toBeNull()
 
-  expect(textEditOverlayStyle(doc, layer.text!)).toEqual({
-    left: "10%",
-    top: "30%",
-    minWidth: 100,
-    minHeight: 50.4,
+  // The stage is laid out at doc.width * zoom CSS px, so document coordinates
+  // scale straight through — no percentages.
+  expect(textEditOverlayStyle(layer.text!, 1.5)).toEqual({
+    left: 30,
+    top: 45,
+    width: 64,
+    height: undefined,
+    minHeight: 43.199999999999996,
     fontFamily: "Inter",
     fontSize: 36,
     fontWeight: 700,
     fontStyle: "italic",
     color: "#123456",
     textAlign: "center",
-    lineHeight: 1.2,
+    lineHeight: "43.199999999999996px",
+    writingMode: undefined,
   })
 })
