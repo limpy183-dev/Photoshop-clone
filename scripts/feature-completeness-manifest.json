@@ -1,0 +1,15 @@
+{
+  "$comment": "Every user-facing feature named in the panel registry or capability registry should have an explicit depth assessment. Keep this file honest: data-model-only is not rendered support.",
+  "features": [
+    {"id":"clone-source","label":"Clone Source presets","status":"stub","depth":"ui-and-state","evidence":"Preset save uses document center instead of the captured sampling point; apply does not restore source coordinates."},
+    {"id":"scripting","label":"Safe scripting DSL","status":"approximation","depth":"partial-actions","evidence":"Only a small command vocabulary is exposed and applyFilter bypasses worker, tiled, high-bit, progress and cancellation paths."},
+    {"id":"libraries","label":"Local Libraries","status":"usable","depth":"local-image-assets","evidence":"IndexedDB image/color assets can be imported and placed; Adobe cloud sync is unsupported."},
+    {"id":"3d-material-rendering","label":"3D UV/material rendering","status":"approximation","depth":"browser-raster-preview","evidence":"UV paint data is sampled by the preview renderer; this remains a CPU painter preview, not a production 3D renderer."},
+    {"id":"paths","label":"Paths panel","status":"approximation","depth":"layer-attached-paths","evidence":"Paths are derived from layer paths, vector masks and shape layers; there is no independent document-level named path store."},
+    {"id":"animation","label":"Animation panel","status":"approximation","depth":"timeline-alias","evidence":"AnimationPanel is currently a direct alias of TimelinePanel and has no frame-animation-specific mode."},
+    {"id":"psd-color-depth","label":"PSD color mode and bit depth","status":"approximation","depth":"metadata-and-raster-preview","evidence":"ag-psd writes RGB/8 bpc; non-RGB and high-bit intent is preserved as app metadata, not native pixels."},
+    {"id":"raw-dng","label":"RAW/DNG","status":"approximation","depth":"decoder-dependent-preview","evidence":"LibRaw/embedded preview path exists but coverage is reachability-only and camera/lens databases are approximated."},
+    {"id":"generative-fill","label":"Generative Fill","status":"approximation","depth":"local-inpainting-or-byok-endpoint","evidence":"Default local fallback is deterministic inpainting, not a generative model; model quality depends on a configured endpoint."},
+    {"id":"cloud-libraries","label":"Creative Cloud Libraries","status":"unsupported","depth":"local-only","evidence":"No Adobe account, licensing or cloud sync integration."}
+  ]
+}
