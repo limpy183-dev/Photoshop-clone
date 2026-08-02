@@ -6,7 +6,7 @@
     "max": 0
   },
   "oversizeFiles": {
-    "max": 14,
+    "max": 15,
     "maxLines": 1500
   },
   "useEditorImports": {
