@@ -64,7 +64,7 @@ export interface CanvasViewportController {
   visualZoomRef: React.RefObject<number>
   applyStageTransform: (transientScale?: number) => void
   applyViewZoom: (zoom: number) => void
-  onWheel: (event: React.WheelEvent<HTMLDivElement>) => void
+  onWheel: (event: WheelEvent) => void
 }
 
 export function useCanvasViewportController({
@@ -175,7 +175,7 @@ export function useCanvasViewportController({
     })
   }, [activeDoc, applyViewZoom, canvasPrefs.printResolution, canvasPrefs.screenDpi])
 
-  const onWheel = React.useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+  const onWheel = React.useCallback((event: WheelEvent) => {
     if (!activeDoc) return
     const change = wheelViewportChange({
       deltaX: event.deltaX,

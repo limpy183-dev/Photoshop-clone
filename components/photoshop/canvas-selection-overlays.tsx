@@ -110,58 +110,130 @@ export function resolveTextEditLayer(doc: PsDocument, layerId: string): Layer | 
   return layer?.text ? layer : null
 }
 
+export type TextEditState = {
+  layerId: string
+  value: string
+  /** Layer was created by this placement gesture — cancelling discards it. */
+  isNew: boolean
+}
+
+/**
+ * The editor box lives inside the canvas stage, which is laid out at
+ * `doc.width * zoom` CSS pixels with no additional scale transform, so document
+ * coordinates convert to CSS pixels by multiplying with the live view zoom.
+ * `contentWidth` is the measured width of the longest line (CSS px) and is only
+ * used when the text has no fixed paragraph box.
+ */
 export function textEditOverlayStyle(
-  doc: PsDocument,
   text: NonNullable<Layer["text"]>,
+  zoom: number,
+  contentWidth = 0,
 ): React.CSSProperties {
+  const lineHeight = (text.leading ?? text.size * 1.2) * zoom
+  const boxWidth = text.boxWidth ? text.boxWidth * zoom : Math.max(64, contentWidth + text.size * zoom * 0.6)
+  const boxHeight = text.boxHeight ? text.boxHeight * zoom : undefined
   return {
-    left: `${(text.x / doc.width) * 100}%`,
-    top: `${(text.y / doc.height) * 100}%`,
-    minWidth: 100,
-    minHeight: text.size * doc.zoom * 1.4,
+    left: text.x * zoom,
+    top: text.y * zoom,
+    width: boxWidth,
+    height: boxHeight,
+    minHeight: lineHeight,
     fontFamily: text.font,
-    fontSize: text.size * doc.zoom,
+    fontSize: text.size * zoom,
     fontWeight: text.weight,
     fontStyle: text.italic ? "italic" : "normal",
     color: text.color,
     textAlign: text.align,
-    lineHeight: 1.2,
+    lineHeight: `${lineHeight}px`,
+    writingMode: text.vertical ? "vertical-rl" : undefined,
   }
+}
+
+function measureTextWidth(lines: string[], style: React.CSSProperties): number {
+  if (typeof document === "undefined") return 0
+  const canvas = document.createElement("canvas")
+  const ctx = canvas.getContext("2d")
+  if (!ctx) return 0
+  ctx.font = `${style.fontStyle === "italic" ? "italic " : ""}${style.fontWeight ?? "normal"} ${Number(style.fontSize) || 16}px ${style.fontFamily ?? "sans-serif"}`
+  let width = 0
+  for (const line of lines) width = Math.max(width, ctx.measureText(line).width)
+  return width
 }
 
 export function TextEditOverlay({
   doc,
+  zoom,
   state,
   setState,
   commit,
+  cancel,
 }: {
   doc: PsDocument
-  state: { layerId: string; value: string }
-  setState: React.Dispatch<React.SetStateAction<{ layerId: string; value: string } | null>>
+  zoom: number
+  state: TextEditState
+  setState: React.Dispatch<React.SetStateAction<TextEditState | null>>
   commit: () => void
+  cancel: () => void
 }) {
+  const ref = React.useRef<HTMLTextAreaElement>(null)
   const layer = resolveTextEditLayer(doc, state.layerId)
-  if (!layer || !layer.text) return null
-  const t = layer.text
+  const text = layer?.text
+
+  // Focus and select-all on mount so an empty box takes keystrokes immediately
+  // and re-editing an existing layer behaves like Photoshop's type tool.
+  React.useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+  }, [state.layerId])
+
+  if (!layer || !text) return null
+
+  const baseStyle = textEditOverlayStyle(text, zoom)
+  const style = text.boxWidth
+    ? baseStyle
+    : textEditOverlayStyle(text, zoom, measureTextWidth(state.value.split("\n"), baseStyle))
+
   return (
     <textarea
-      autoFocus
+      ref={ref}
+      data-testid="text-edit-overlay"
+      spellCheck={false}
       value={state.value}
+      placeholder="Type here…"
       onChange={(e) => setState({ ...state, value: e.target.value })}
       onBlur={commit}
+      // The editor sits inside the canvas stage, which routes pointer events to
+      // the drawing tools. Without this the first click into the box would be
+      // read as another canvas gesture (and, with the type tool, would place a
+      // second text layer).
+      onPointerDown={(e) => e.stopPropagation()}
+      onPointerMove={(e) => e.stopPropagation()}
+      onPointerUp={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
         if (e.key === "Escape") {
-          setState(null)
+          e.preventDefault()
           e.stopPropagation()
+          cancel()
+          return
         }
         if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-          commit()
           e.preventDefault()
+          e.stopPropagation()
+          commit()
+          return
         }
         e.stopPropagation()
       }}
-      className="absolute outline outline-2 outline-cyan-500 bg-transparent resize-none p-0 m-0 z-30"
-      style={textEditOverlayStyle(doc, t)}
+      className={cn(
+        "absolute z-30 m-0 resize-none overflow-hidden whitespace-pre-wrap bg-transparent p-0",
+        "outline outline-1 outline-dashed outline-cyan-400 focus:outline-cyan-300",
+        "caret-cyan-400 placeholder:text-current placeholder:opacity-40",
+      )}
+      style={style}
     />
   )
 }

@@ -270,6 +270,12 @@ const RETOUCH_FEEDBACK_TOOLS = new Set([
   "art-history-brush",
 ])
 
+/** Below this drag distance (document px) the type tool places point text. */
+const TEXT_BOX_DRAG_THRESHOLD = 8
+
+const DEFAULT_TEXT_FONT = "Geist, system-ui, sans-serif"
+const DEFAULT_TEXT_SIZE = 48
+
 interface StampOptions {
   includeBrushOpacity?: boolean
   enforceTransparencyLock?: boolean
@@ -285,6 +291,24 @@ interface StrokeCompositeState {
   targetKind?: "smart-filter-mask"
   opacity: number
   flow: number
+}
+
+/**
+ * One shared probe context for capability detection. Creating a fresh WebGL
+ * context per compose() blows past the browser's context limit and evicts the
+ * compositor's own contexts.
+ */
+let sharedGLProbe: WebGLRenderingContext | WebGL2RenderingContext | null | undefined
+function getSharedGLProbe() {
+  if (sharedGLProbe !== undefined) return sharedGLProbe
+  try {
+    if (typeof document === "undefined") return (sharedGLProbe = null)
+    const probe = document.createElement("canvas")
+    sharedGLProbe = probe.getContext("webgl2") || probe.getContext("webgl")
+  } catch {
+    sharedGLProbe = null
+  }
+  return sharedGLProbe
 }
 
 export function CanvasView() {
@@ -667,15 +691,7 @@ export function CanvasView() {
       return
     }
 
-    const glProbe = (() => {
-      try {
-        if (typeof document === "undefined") return null
-        const probe = document.createElement("canvas")
-        return probe.getContext("webgl2") || probe.getContext("webgl")
-      } catch {
-        return null
-      }
-    })()
+    const glProbe = getSharedGLProbe()
     const webglPlan = planWebGLCompositor({
       width: cv.width,
       height: cv.height,
@@ -873,7 +889,7 @@ export function CanvasView() {
       if (cancelled) return
       const canvas = compositeRef.current
       const box = stage.getBoundingClientRect()
-      const context = canvas?.getContext("2d", { willReadFrequently: true })
+      const context = canvas?.getContext("2d")
       if (canvas && context && box.width > 0 && box.height > 0 && canvas.width > 0 && canvas.height > 0) {
         const x = Math.min(canvas.width - 1, Math.floor(canvas.width / 2))
         const y = Math.min(canvas.height - 1, Math.floor(canvas.height / 2))
@@ -897,6 +913,15 @@ export function CanvasView() {
       if (progressiveFrameRef.current !== null) cancelAnimationFrame(progressiveFrameRef.current)
     }
   }, [])
+
+  // Native listener: React attaches wheel passively, so preventDefault() on
+  // ctrl+wheel zoom would be ignored (and the page would zoom instead).
+  React.useEffect(() => {
+    const root = containerRef.current
+    if (!root) return
+    root.addEventListener("wheel", onWheel, { passive: false, capture: true })
+    return () => root.removeEventListener("wheel", onWheel, { capture: true })
+  }, [onWheel, activeDoc?.id])
 
   /* ---- coords ---- */
 
@@ -2267,6 +2292,32 @@ export function CanvasView() {
     ctx.restore()
   }
 
+  /**
+   * Dashed placement box for the type tool. A bare click shows a caret-height
+   * box at the insertion point; dragging shows the paragraph box being defined.
+   */
+  function drawTextBoxPreview(start: { x: number; y: number }, end: { x: number; y: number }) {
+    const ov = overlayRef.current
+    if (!ov || !activeDoc) return
+    const ctx = ov.getContext("2d")!
+    ctx.clearRect(0, 0, ov.width, ov.height)
+    const x = Math.min(start.x, end.x)
+    const y = Math.min(start.y, end.y)
+    const w = Math.abs(end.x - start.x)
+    const h = Math.abs(end.y - start.y)
+    const size = activeTextDefaults().size
+    ctx.save()
+    ctx.lineWidth = Math.max(1, 1 / Math.max(0.1, visualZoomRef.current))
+    ctx.setLineDash([4, 3])
+    ctx.strokeStyle = "rgba(34,211,238,0.95)"
+    if (w < TEXT_BOX_DRAG_THRESHOLD && h < TEXT_BOX_DRAG_THRESHOLD) {
+      ctx.strokeRect(start.x + 0.5, start.y + 0.5, Math.max(2, size * 0.6), size * 1.2)
+    } else {
+      ctx.strokeRect(x + 0.5, y + 0.5, w, h)
+    }
+    ctx.restore()
+  }
+
   function drawRulerPreview(start: { x: number; y: number }, end: { x: number; y: number }) {
     const ov = overlayRef.current
     if (!ov || !activeDoc) return
@@ -2959,6 +3010,7 @@ export function CanvasView() {
     | "patch-lasso"
     | "patch-drag"
     | "brush-resize"
+    | "text-box"
     | null
     last?: { x: number; y: number }
     start?: { x: number; y: number }
@@ -3087,6 +3139,13 @@ export function CanvasView() {
     }
 
     if (e.button === 2) return
+
+    // A click on the canvas while the type editor is open commits that edit
+    // (Photoshop behaviour) and is consumed, so it cannot start a second box.
+    if (editingTextRef.current) {
+      commitTextEditRef.current()
+      return
+    }
 
     if (handleBlurGalleryPointerDown(pt, e)) {
       e.preventDefault()
@@ -3340,37 +3399,17 @@ export function CanvasView() {
       return
     }
 
-    // Type tools
+    // Type tools: click places a caret box, drag defines a paragraph box.
+    // Clicking existing type re-enters editing on that layer instead.
     if (tool === "type" || tool === "type-vertical") {
-      const id = `text_${Math.random().toString(36).slice(2, 9)}`
-      const cv = makeCanvas(activeDoc.width, activeDoc.height)
-      const vertical = tool === "type-vertical"
-      const layer: Layer = {
-        id,
-        name: vertical ? "Vertical Text" : "Text",
-        kind: "text",
-        visible: true,
-        locked: false,
-        opacity: 1,
-        blendMode: "normal",
-        canvas: cv,
-        text: {
-          content: vertical ? "Vertical" : "Type here…",
-          font: "Geist, system-ui, sans-serif",
-          size: 48,
-          weight: "bold",
-          italic: false,
-          color: foreground,
-          align: "left",
-          x: pt.x,
-          y: pt.y,
-          vertical,
-        },
+      const existing = pickTextLayerAt(activeDoc, pt)
+      if (existing) {
+        dispatch({ type: "set-active-layer", id: existing.id })
+        beginTextEdit(existing, false)
+        return
       }
-      rasterizeText(cv, layer.text!)
-      dispatch({ type: "add-layer", layer })
-      setTimeout(() => commit(vertical ? "Vertical Type" : "Type", [id]), 0)
-      dispatchPhotoshopEvent("ps-edit-text", { layerId: id })
+      drawingRef.current = { type: "text-box", start: pt, last: pt }
+      drawTextBoxPreview(pt, pt)
       return
     }
 
@@ -3869,6 +3908,12 @@ export function CanvasView() {
       return
     }
 
+    if (drag.type === "text-box" && drag.start) {
+      drawTextBoxPreview(drag.start, pt)
+      drag.last = pt
+      return
+    }
+
     if (drag.type === "rotate-view" && activeDoc && drag.rotateStartAngle !== undefined && drag.rotateStartValue !== undefined) {
       const center = { x: activeDoc.width / 2, y: activeDoc.height / 2 }
       const angle = Math.atan2(pt.y - center.y, pt.x - center.x)
@@ -4239,6 +4284,38 @@ export function CanvasView() {
       }
       brushResizeRef.current = null
       drawingRef.current = { type: null }
+      return
+    }
+
+    if (drag.type === "text-box" && drag.start && activeDoc) {
+      const start = drag.start
+      drawingRef.current = { type: null }
+      const ov = overlayRef.current
+      if (ov) ov.getContext("2d")!.clearRect(0, 0, ov.width, ov.height)
+      const w = Math.abs(pt.x - start.x)
+      const h = Math.abs(pt.y - start.y)
+      const paragraph = w >= TEXT_BOX_DRAG_THRESHOLD && h >= TEXT_BOX_DRAG_THRESHOLD
+      const vertical = tool === "type-vertical"
+      const id = `text_${Math.random().toString(36).slice(2, 9)}`
+      const layer: Layer = {
+        id,
+        name: vertical ? "Vertical Text" : "Text",
+        kind: "text",
+        visible: true,
+        locked: false,
+        opacity: 1,
+        blendMode: "normal",
+        canvas: makeCanvas(activeDoc.width, activeDoc.height),
+        text: {
+          ...activeTextDefaults(),
+          x: paragraph ? Math.min(start.x, pt.x) : start.x,
+          y: paragraph ? Math.min(start.y, pt.y) : start.y,
+          vertical,
+          ...(paragraph ? { boxWidth: w, boxHeight: h } : {}),
+        },
+      }
+      dispatch({ type: "add-layer", layer })
+      beginTextEdit(layer, true)
       return
     }
 
@@ -4723,12 +4800,22 @@ export function CanvasView() {
       drawingRef.current = { type: null }
       return
     }
-    // edit text on double click
-    const hit = autoPickLayer(activeDoc, pt)
-    if (hit && hit.kind === "text") {
-      dispatchPhotoshopEvent("ps-edit-text", { layerId: hit.id })
+    // Edit text on double click. Text is matched by its box rather than by
+    // glyph coverage so clicking the gap between letters still enters editing.
+    const textHit = pickTextLayerAt(activeDoc, pt)
+    if (textHit) {
+      if (transformRef.current) {
+        transformRef.current = null
+        const ov = overlayRef.current
+        if (ov) ov.getContext("2d")!.clearRect(0, 0, ov.width, ov.height)
+      }
+      drawingRef.current = { type: null }
+      dispatch({ type: "set-active-layer", id: textHit.id })
+      beginTextEdit(textHit, false)
+      requestRender()
       return
     }
+    const hit = autoPickLayer(activeDoc, pt)
     if (hit && (hit.smartObject || hit.kind === "smart-object")) {
       editSmartObject(hit)
       return
@@ -4857,17 +4944,64 @@ export function CanvasView() {
 
   /* ---- text editing overlay (DOM) ---- */
 
-  const [editingText, setEditingText] = React.useState<{ layerId: string; value: string } | null>(null)
+  const [editingText, setEditingText] = React.useState<TextEditState | null>(null)
+  const editingTextRef = React.useRef<TextEditState | null>(null)
+  editingTextRef.current = editingText
+  // The original content, kept so Escape can restore a layer that was cleared
+  // for editing without going through history.
+  const editingTextOriginalRef = React.useRef<string>("")
+
+  /** Text properties a newly placed type layer starts from. */
+  function activeTextDefaults(): TextProps {
+    const source = activeLayer?.kind === "text" ? activeLayer.text : null
+    return {
+      content: "",
+      font: source?.font ?? DEFAULT_TEXT_FONT,
+      size: source?.size ?? DEFAULT_TEXT_SIZE,
+      weight: source?.weight ?? "bold",
+      italic: source?.italic ?? false,
+      color: foreground,
+      align: source?.align ?? "left",
+      x: 0,
+      y: 0,
+    }
+  }
+
+  /**
+   * Enter the DOM text editor for a layer. The rasterized glyphs are cleared
+   * while editing so the textarea is the only rendering of the text — otherwise
+   * the caret sits on top of a stale raster and typing looks doubled.
+   */
+  function beginTextEdit(layer: Layer, isNew: boolean) {
+    if (layer.kind !== "text" || !layer.text) return
+    editingTextOriginalRef.current = layer.text.content
+    if (layer.text.content) {
+      dispatch({ type: "set-layer-text", id: layer.id, text: { ...layer.text, content: "" } })
+      requestRender()
+    }
+    setEditingText({ layerId: layer.id, value: editingTextOriginalRef.current, isNew })
+  }
+
   React.useEffect(() => {
     function handler(e: Event) {
       const id = (e as CustomEvent<{ layerId?: string }>).detail?.layerId
-      if (!id || !activeDoc) return
-      const layer = activeDoc.layers.find((l) => l.id === id)
+      if (!id) return
+      const layer = activeDocRef.current?.layers.find((l) => l.id === id)
       if (!layer || layer.kind !== "text" || !layer.text) return
-      setEditingText({ layerId: id, value: layer.text.content })
+      beginTextEditRef.current(layer, false)
     }
     return addPhotoshopEventListener("ps-edit-text", (_detail, event) => handler(event))
-  }, [activeDoc])
+    // Reads the live document/handler through refs so it never resubscribes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Switching tools or documents mid-edit commits what has been typed rather
+  // than stranding an invisible (cleared) text layer.
+  React.useEffect(() => {
+    if (!editingTextRef.current) return
+    commitTextEditRef.current()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tool, activeDoc?.id])
 
   /* ---- color picker HUD (Alt+Shift+RightClick) ---- */
 
@@ -5073,16 +5207,52 @@ export function CanvasView() {
   }, [activeDoc, applyStageTransform, panRef, visualZoomRef])
 
   function commitTextEdit() {
-    if (!editingText || !activeDoc) return
-    const layer = activeDoc.layers.find((l) => l.id === editingText.layerId)
-    if (layer && layer.kind === "text" && layer.text) {
-      layer.text.content = editingText.value
-      rasterizeText(layer.canvas, layer.text)
-      requestRender()
-      commit("Edit Text", [layer.id])
-    }
+    const editing = editingTextRef.current
+    if (!editing || !activeDoc) return
+    editingTextRef.current = null
     setEditingText(null)
+    const layer = activeDoc.layers.find((l) => l.id === editing.layerId)
+    if (!layer || layer.kind !== "text" || !layer.text) return
+    const value = editing.value
+    // An empty box that was never typed into leaves nothing behind.
+    if (!value && editing.isNew) {
+      dispatch({ type: "remove-layer", id: layer.id })
+      requestRender()
+      return
+    }
+    dispatch({ type: "set-layer-text", id: layer.id, text: { ...layer.text, content: value } })
+    requestRender()
+    if (value !== editingTextOriginalRef.current || editing.isNew) {
+      commit(editing.isNew ? (layer.text.vertical ? "Vertical Type" : "Type") : "Edit Text", [layer.id])
+    }
   }
+
+  function cancelTextEdit() {
+    const editing = editingTextRef.current
+    if (!editing || !activeDoc) return
+    editingTextRef.current = null
+    setEditingText(null)
+    const layer = activeDoc.layers.find((l) => l.id === editing.layerId)
+    if (!layer || layer.kind !== "text" || !layer.text) return
+    if (editing.isNew) {
+      dispatch({ type: "remove-layer", id: layer.id })
+    } else {
+      // Restore the raster that beginTextEdit cleared.
+      dispatch({
+        type: "set-layer-text",
+        id: layer.id,
+        text: { ...layer.text, content: editingTextOriginalRef.current },
+      })
+    }
+    requestRender()
+  }
+
+  const beginTextEditRef = React.useRef(beginTextEdit)
+  const commitTextEditRef = React.useRef(commitTextEdit)
+  const activeDocRef = React.useRef(activeDoc)
+  beginTextEditRef.current = beginTextEdit
+  commitTextEditRef.current = commitTextEdit
+  activeDocRef.current = activeDoc
 
   /* ---- Crop logic ---- */
 
@@ -5991,7 +6161,6 @@ export function CanvasView() {
       ref={containerRef}
       data-canvas-root
       className="flex-1 relative overflow-hidden bg-[var(--ps-canvas-bg)]"
-      onWheelCapture={onWheel}
       role="region"
       aria-label="Image editor canvas"
     >

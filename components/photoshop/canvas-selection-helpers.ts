@@ -157,6 +157,44 @@ export function alphaBounds(canvas: HTMLCanvasElement): AlphaBoundsRect {
   return result
 }
 
+/**
+ * Hit-test text layers by their *box*, not by glyph coverage.
+ *
+ * `autoPickLayer` requires an opaque pixel, so clicking the gap between two
+ * letters (or inside a counter) misses the layer entirely — which made
+ * double-click-to-edit feel broken. Text editing wants the looser bounding-box
+ * behaviour Photoshop has, so this walks top-down and returns the first text
+ * layer whose rendered bounds (or declared paragraph box, when the raster is
+ * empty because the layer is mid-edit) contain the point.
+ */
+export function pickTextLayerAt(
+  document: PsDocument,
+  point: { x: number; y: number },
+  padding = 6,
+): Layer | null {
+  for (let index = document.layers.length - 1; index >= 0; index--) {
+    const layer = document.layers[index] as Layer
+    if (!layer.visible || layer.kind !== "text" || !layer.text) continue
+    if (typeof layer.canvas.getContext !== "function") continue
+    const text = layer.text
+    const bounds = alphaBounds(layer.canvas) ?? {
+      x: text.x,
+      y: text.y,
+      w: text.boxWidth ?? text.size * 4,
+      h: text.boxHeight ?? (text.leading ?? text.size * 1.2),
+    }
+    if (
+      point.x >= bounds.x - padding &&
+      point.x <= bounds.x + bounds.w + padding &&
+      point.y >= bounds.y - padding &&
+      point.y <= bounds.y + bounds.h + padding
+    ) {
+      return layer
+    }
+  }
+  return null
+}
+
 export function applySelectionMaskToCanvas(
   canvas: HTMLCanvasElement,
   document: PsDocument,
