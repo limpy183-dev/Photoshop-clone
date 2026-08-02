@@ -21,11 +21,32 @@ export type CapabilityKind =
   | "performance"
   | "preferences"
 
+/**
+ * Status answers "can a user invoke this?"; depth answers "how much of the
+ * promised feature is actually implemented?". Keeping these axes separate
+ * prevents a rich data model from being mistaken for a complete renderer.
+ */
+export type CapabilityDepth =
+  | "ui-only"
+  | "ui-and-state"
+  | "partial-actions"
+  | "layer-attached-paths"
+  | "local-only"
+  | "metadata-and-raster-preview"
+  | "browser-raster-preview"
+  | "decoder-dependent-preview"
+  | "local-inpainting-or-byok-endpoint"
+  | "rendered"
+  | "round-trip"
+  | "full"
+
 export interface CapabilityRecord {
   id: string
   label: string
   kind: CapabilityKind
   status: CapabilityStatus
+  /** Optional depth classification for gradual migration of existing records. */
+  depth?: CapabilityDepth
   summary: string
   limitations?: string[]
   recommendedAction?: string
