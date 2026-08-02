@@ -1,18 +1,10 @@
-import type { ThreeDMaterial, ThreeDObject, ThreeDScene, Vec3 } from "./types"
+import type { ThreeDMaterial, ThreeDObject, ThreeDScene, Vec3, ThreeDUv } from "./types"
 import { hexToRgb } from "./color-utils"
 import { uid } from "./uid"
 import { clamp, createSubsystemCanvas } from "./advanced-subsystems-shared"
 
 function rgbToHex(r: number, g: number, b: number) {
   return `#${[r, g, b].map((v) => clamp(Math.round(v)).toString(16).padStart(2, "0")).join("")}`
-}
-
-function _mixColor(a: { r: number; g: number; b: number }, b: { r: number; g: number; b: number }, t: number) {
-  return {
-    r: a.r + (b.r - a.r) * t,
-    g: a.g + (b.g - a.g) * t,
-    b: a.b + (b.b - a.b) * t,
-  }
 }
 
 function vec(x = 0, y = 0, z = 0): Vec3 {
@@ -76,8 +68,38 @@ function project(point: Vec3, scene: ThreeDScene, width: number, height: number)
   return { x: width / 2 + (dot(rel, right) / z) * f, y: height / 2 - (dot(rel, up) / z) * f, z }
 }
 
-function shadedColor(material: ThreeDMaterial, normal: Vec3, center: Vec3, scene: ThreeDScene) {
-  const base = hexToRgb(material.color)
+function wrapUv(value: number, mode: "repeat" | "clamp" | "mirror" = "repeat") {
+  if (mode === "clamp") return clamp(value, 0, 1)
+  if (mode === "mirror") {
+    const cycle = ((value % 2) + 2) % 2
+    return cycle <= 1 ? cycle : 2 - cycle
+  }
+  return ((value % 1) + 1) % 1
+}
+
+function sampleTexture(material: ThreeDMaterial, uv: ThreeDUv | null) {
+  if (!uv || !material.texture?.pixels.length) return null
+  const scale = material.uvScale ?? { u: 1, v: 1 }
+  const offset = material.uvOffset ?? { u: 0, v: 0 }
+  const wrap = material.maps?.diffuse?.wrap ?? "repeat"
+  const u = wrapUv(uv.u * scale.u + offset.u, wrap)
+  const v = wrapUv(uv.v * scale.v + offset.v, wrap)
+  let best: { distance: number; color: string; opacity: number } | null = null
+  for (const pixel of material.texture.pixels) {
+    const du = Math.abs(u - wrapUv(pixel.u, wrap))
+    const dv = Math.abs(v - wrapUv(pixel.v, wrap))
+    const distance = Math.hypot(du, dv)
+    if (!best || distance < best.distance) best = { distance, color: pixel.color, opacity: pixel.opacity }
+  }
+  if (!best) return null
+  const radius = Math.max(0.001, (material.texture.pixels[0]?.radius ?? 0.05) / Math.max(material.texture.width, material.texture.height))
+  if (best.distance > radius * 3) return null
+  return { color: best.color, opacity: clamp(best.opacity, 0, 1) }
+}
+
+function shadedColor(material: ThreeDMaterial, normal: Vec3, center: Vec3, scene: ThreeDScene, uv: ThreeDUv | null) {
+  const texture = sampleTexture(material, uv)
+  const base = hexToRgb(texture?.color ?? material.color)
   let amount = 0
   for (const light of scene.lights) {
     if (light.kind === "ambient") {
@@ -85,11 +107,14 @@ function shadedColor(material: ThreeDMaterial, normal: Vec3, center: Vec3, scene
     } else if (light.kind === "directional") {
       amount += Math.max(0, dot(normal, normalize(mul(light.direction ?? vec(-0.4, -0.6, -0.5), -1)))) * light.intensity
     } else {
-      amount += Math.max(0, dot(normal, normalize(sub(light.position ?? vec(2, 2, 2), center)))) * light.intensity
+      const toLight = sub(light.position ?? vec(2, 2, 2), center)
+      const distance = Math.max(1, Math.hypot(toLight.x, toLight.y, toLight.z))
+      amount += Math.max(0, dot(normal, normalize(toLight))) * light.intensity / (1 + distance * 0.08)
     }
   }
   amount = clamp(amount, 0.08, 1.4)
-  const metal = material.metallic * 0.25
+  const roughness = clamp(material.roughness, 0, 1)
+  const metal = material.metallic * (0.12 + (1 - roughness) * 0.28)
   return rgbToHex(base.r * amount + 255 * metal, base.g * amount + 255 * metal, base.b * amount + 255 * metal)
 }
 
@@ -104,6 +129,7 @@ export function renderThreeDScene(scene: ThreeDScene, width: number, height: num
     normal: Vec3
     center: Vec3
     material: ThreeDMaterial
+    uv: ThreeDUv | null
   }[] = []
 
   for (const object of scene.objects) {
@@ -116,12 +142,17 @@ export function renderThreeDScene(scene: ThreeDScene, width: number, height: num
       const center = face.indices.reduce((acc, index) => add(acc, world[index]), vec())
       const averaged = mul(center, 1 / face.indices.length)
       const normal = normalize(cross(sub(world[face.indices[1]], world[face.indices[0]]), sub(world[face.indices[2] ?? face.indices[1]], world[face.indices[0]])))
+      const faceUvs = face.uvIndices?.map((index) => object.uvs?.[index]).filter((uv): uv is ThreeDUv => !!uv) ?? []
+      const uv = faceUvs.length
+        ? { u: faceUvs.reduce((sum, value) => sum + value.u, 0) / faceUvs.length, v: faceUvs.reduce((sum, value) => sum + value.v, 0) / faceUvs.length }
+        : null
       drawFaces.push({
         depth: points.reduce((sum, point) => sum + (point?.z ?? 0), 0) / points.length,
         points: points as { x: number; y: number; z: number }[],
         normal,
         center: averaged,
         material: materialById.get(face.materialId ?? object.materialId) ?? scene.materials[0] ?? defaultMaterial(),
+        uv,
       })
     }
   }
@@ -135,8 +166,8 @@ export function renderThreeDScene(scene: ThreeDScene, width: number, height: num
     })
     ctx.closePath()
     if (scene.renderMode !== "wireframe") {
-      ctx.globalAlpha = face.material.opacity
-      ctx.fillStyle = shadedColor(face.material, face.normal, face.center, scene)
+      ctx.globalAlpha = face.material.opacity * (sampleTexture(face.material, face.uv)?.opacity ?? 1)
+      ctx.fillStyle = shadedColor(face.material, face.normal, face.center, scene, face.uv)
       ctx.fill()
       ctx.globalAlpha = 1
     }

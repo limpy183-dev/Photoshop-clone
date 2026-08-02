@@ -30,12 +30,13 @@ export function CommentsPanel() {
   const [replyText, setReplyText] = React.useState<Record<string, string>>({})
   const [status, setStatus] = React.useState<"open" | "resolved" | "all">("open")
   if (!activeDoc) return <PanelEmpty text="No document open" />
+  const author = activeDoc.metadata?.author?.trim() || "Reviewer"
   const add = () => {
     const note = createReviewThread({
       id: uid("comment"),
       x: activeDoc.width / 2,
       y: activeDoc.height / 2,
-      author: "Reviewer",
+      author,
       text,
       color: "#38bdf8",
       now: Date.now(),
@@ -59,7 +60,7 @@ export function CommentsPanel() {
   const addReply = (note: Note) => {
     const reply = replyText[note.id]?.trim()
     if (!reply) return
-    const next = appendThreadReply(note, { id: uid("reply"), author: "Reviewer", text: reply, now: Date.now() })
+    const next = appendThreadReply(note, { id: uid("reply"), author, text: reply, now: Date.now() })
     patchThread(note, { replies: next.replies, updatedAt: next.updatedAt, kind: next.kind }, "Reply to Comment")
     setReplyText((current) => ({ ...current, [note.id]: "" }))
   }
@@ -73,10 +74,10 @@ export function CommentsPanel() {
       <div className="text-[10px] uppercase tracking-wide text-[var(--ps-text-dim)]">Open threads</div>
       <div className="grid grid-cols-[1fr_auto] gap-1">
         <input aria-label="Comment text" value={text} onChange={(event) => setText(event.target.value)} className={inputClass} />
-        <SmallButton label="Add comment" onClick={add} />
+        <SmallButton label={`Add comment as ${author}`} ariaLabel={`Add comment as ${author}`} onClick={add} />
       </div>
       <div className="grid grid-cols-[1fr_auto] gap-1">
-        <select value={status} onChange={(event) => setStatus(event.target.value as typeof status)} className={inputClass}>
+        <select value={status} onChange={(event) => setStatus(event.target.value as typeof status)} className={inputClass} aria-label="Comment status filter">
           <option value="open">Open</option>
           <option value="resolved">Resolved</option>
           <option value="all">All</option>
@@ -101,7 +102,7 @@ export function CommentsPanel() {
               label={(note.status ?? "open") === "resolved" ? "Reopen" : "Resolve"}
               ariaLabel={`${(note.status ?? "open") === "resolved" ? "Reopen" : "Resolve"} ${note.text}`}
               onClick={() => {
-                const next = setThreadResolved(note, (note.status ?? "open") !== "resolved", { by: "Reviewer", now: Date.now() })
+                const next = setThreadResolved(note, (note.status ?? "open") !== "resolved", { by: author, now: Date.now() })
                 patchThread(note, { status: next.status, resolvedAt: next.resolvedAt, resolvedBy: next.resolvedBy, updatedAt: next.updatedAt }, "Update Comment")
               }}
             />
@@ -121,7 +122,7 @@ export function CommentsPanel() {
               onChange={(event) => setReplyText((current) => ({ ...current, [note.id]: event.target.value }))}
               className={inputClass}
               aria-label={`Reply to ${note.text}`}
-              placeholder="Reply"
+              placeholder={`Reply as ${author}`}
             />
             <SmallButton label="Reply" ariaLabel={`Add reply to ${note.text}`} onClick={() => addReply(note)} />
           </div>
