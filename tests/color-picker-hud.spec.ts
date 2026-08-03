@@ -6,7 +6,7 @@ import {
   pickFromHud,
   rgbToHsv,
   hsvToRgb,
-} from "../components/photoshop/color-picker-hud"
+} from "@/components/photoshop/color/picker-hud"
 
 test.describe("color-picker-hud math", () => {
   test("rgbToHsv handles primary colors", () => {

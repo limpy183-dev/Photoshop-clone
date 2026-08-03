@@ -94,4 +94,26 @@ export default tseslint.config(
       "prefer-const": "warn",
     },
   },
+  {
+    // One import style. The editor source was split across `editor/` (engine) and
+    // `components/photoshop/` (React layer); relative paths made every file move a
+    // diff in its neighbours, and the same directory used to split ~267 alias vs
+    // ~250 relative. `@/` is stable under `git mv`, so it is the only form allowed
+    // in application source. Node-resolved files (scripts/, next.config.mjs,
+    // proxy.ts) are excluded because they never see the tsconfig path mapping.
+    files: ["app/**/*.{ts,tsx}", "components/**/*.{ts,tsx}", "editor/**/*.{ts,tsx}", "hooks/**/*.{ts,tsx}", "lib/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["./*", "../*"],
+              message: "Use the '@/' alias instead of a relative import (see eslint.config.mjs).",
+            },
+          ],
+        },
+      ],
+    },
+  },
 )

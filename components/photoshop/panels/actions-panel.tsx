@@ -3,13 +3,13 @@
 import * as React from "react"
 import { Circle, Copy, Download, Folder, GitBranch, Play, Plus, Route, Square, Trash2, Upload, X } from "lucide-react"
 import { toast } from "sonner"
-import { makeHistoryEntry, useActiveDocument, useEditorCommands, useEditorSelector, useEditorStateSelector } from "../editor-context"
-import { canvasFromDataUrl, downloadText } from "../document-io"
-import { MAX_CANVAS_DIMENSION, MAX_PROJECT_LAYERS } from "../canvas-limits"
+import { makeHistoryEntry, useActiveDocument, useEditorCommands, useEditorSelector, useEditorStateSelector } from "@/components/photoshop/editor/context"
+import { canvasFromDataUrl, downloadText } from "@/editor/document/io"
+import { MAX_CANVAS_DIMENSION, MAX_PROJECT_LAYERS } from "@/editor/canvas/limits"
 import { cn } from "@/lib/utils"
-import { CLIENT_STORAGE_KEYS, readClientStorageString, writeClientStorageString } from "../client-storage"
-import type { CanvasPatch, HistoryEntry, LayerSnapshot, MacroAction, MacroStep, SmartFilter } from "../types"
-import { uid } from "../uid"
+import { CLIENT_STORAGE_KEYS, readClientStorageString, writeClientStorageString } from "@/editor/client-storage"
+import type { CanvasPatch, HistoryEntry, LayerSnapshot, MacroAction, MacroStep, SmartFilter } from "@/editor/types"
+import { uid } from "@/editor/uid"
 import {
   loadActionEnvelopes,
   normalizePlaybackSpeed,
@@ -20,7 +20,7 @@ import {
   type ActionPlaybackSpeed,
   type ConditionAttribute,
   type StepEnvelope,
-} from "../action-conditionals"
+} from "@/editor/action-conditionals"
 
 export { playbackSpeedToDelayMs }
 

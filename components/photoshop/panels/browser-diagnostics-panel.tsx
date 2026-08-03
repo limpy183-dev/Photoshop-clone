@@ -9,14 +9,14 @@ import {
   type BrowserDiagnosticRow,
   type BrowserDiagnosticsDocumentSnapshot,
   type BrowserDiagnosticsReport,
-} from "../browser-diagnostics"
-import { downloadDiagnosticsExport } from "../diagnostics-export"
-import { downloadText } from "../document-file-system"
-import { useEditorSelector } from "../editor-context"
-import { loadPreferencesFromStorage } from "../preferences-engine"
-import { readAutosaves } from "../recent-documents"
-import { createTileOnlyCapabilityDashboard, type TileOnlyCapabilityDashboard, type TileOnlyCapabilityStatus } from "../tile-only-export-planning"
-import type { PsDocument } from "../types"
+} from "@/editor/browser-diagnostics"
+import { downloadDiagnosticsExport } from "@/editor/diagnostics-export"
+import { downloadText } from "@/editor/document/file-system"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { loadPreferencesFromStorage } from "@/editor/preferences-engine"
+import { readAutosaves } from "@/editor/recent-documents"
+import { createTileOnlyCapabilityDashboard, type TileOnlyCapabilityDashboard, type TileOnlyCapabilityStatus } from "@/editor/tile-only-export-planning"
+import type { PsDocument } from "@/editor/types"
 
 function documentSnapshot(doc: PsDocument | null | undefined): BrowserDiagnosticsDocumentSnapshot | null {
   if (!doc) return null

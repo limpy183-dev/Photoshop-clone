@@ -3,10 +3,10 @@
 import * as React from "react"
 import { Download, Plus, RotateCcw, Trash2, Upload, X } from "lucide-react"
 import { toast } from "sonner"
-import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson, type ClientStorageKey } from "../client-storage"
-import { downloadText } from "../document-io"
-import { useEditorSelector } from "../editor-context"
-import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "../events"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson, type ClientStorageKey } from "@/editor/client-storage"
+import { downloadText } from "@/editor/document/io"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "@/editor/events"
 import { Input } from "@/components/ui/input"
 
 interface PatternEntry {

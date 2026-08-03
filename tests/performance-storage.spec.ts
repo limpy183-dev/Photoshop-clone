@@ -3,29 +3,29 @@ import { expect, test } from "@playwright/test"
 import {
   planIncrementalAutosave,
   planAutosaveDocuments,
-} from "../components/photoshop/autosave-planner"
+} from "@/editor/autosave-planner"
 import {
   canUseOffscreenCanvas,
   planCanvasSurface,
-} from "../components/photoshop/offscreen-canvas"
+} from "@/editor/offscreen-canvas"
 import {
   dirtyRectToTileKeys,
   planTiledBackingStore,
-} from "../components/photoshop/tiled-backing-store"
+} from "@/editor/tiled-backing-store"
 import {
   planMemoryBudget,
-} from "../components/photoshop/memory-budget"
+} from "@/editor/memory-budget"
 import {
   planProgressiveRender,
-} from "../components/photoshop/progressive-renderer"
+} from "@/editor/progressive-renderer"
 import {
   exportRasterImageDataToBlob,
   planRasterExportExecution,
-} from "../components/photoshop/export-worker"
+} from "@/editor/export/worker"
 import {
   getFilterWorkerSupport,
   isFilterWorkerSupported,
-} from "../components/photoshop/filter-worker"
+} from "@/editor/filters/worker"
 
 class TestImageData {
   data: Uint8ClampedArray

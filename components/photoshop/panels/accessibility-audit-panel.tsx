@@ -2,9 +2,9 @@
 
 import * as React from "react"
 import { Download, RefreshCw } from "lucide-react"
-import { createAccessibilityAuditReport, formatAccessibilityAuditReport, type AccessibilityAuditReport } from "../accessibility-audit"
-import { downloadText } from "../document-io"
-import { DEFAULT_SHORTCUTS } from "../shortcuts"
+import { createAccessibilityAuditReport, formatAccessibilityAuditReport, type AccessibilityAuditReport } from "@/editor/accessibility-audit"
+import { downloadText } from "@/editor/document/io"
+import { DEFAULT_SHORTCUTS } from "@/editor/shortcuts"
 
 const KNOWN_DIALOGS = [
   { id: "keyboard-shortcuts", label: "Keyboard Shortcuts", usesFocusTrap: true, ariaTitle: true, ariaDescription: true },

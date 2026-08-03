@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test"
-import { libraryAssetFromFile } from "../components/photoshop/libraries-store"
-import { installFixtureDom } from "./photoshop-fixtures"
+import { libraryAssetFromFile } from "@/editor/libraries-store"
+import { installFixtureDom } from "@/tests/photoshop-fixtures"
 
 async function openCommand(page: Page, query: string) {
   await page.locator("body").click({ position: { x: 20, y: 20 } })

@@ -10,8 +10,8 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
-import { useEditorSelector } from "./editor-context"
-import { makeCanvas } from "./tool-helpers"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { makeCanvas } from "@/editor/tool/helpers"
 
 interface Pin {
   id: string

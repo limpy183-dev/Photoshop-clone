@@ -7,8 +7,8 @@ import {
   MenubarSeparator as DropdownMenuSeparator,
   MenubarTrigger as DropdownMenuTrigger,
 } from "@/components/ui/menubar"
-import type { AdvancedSubsystemTab, ColorWorkflowMode } from "../advanced-subsystems-dialog"
-import type { PsDocument } from "../types"
+import type { AdvancedSubsystemTab, ColorWorkflowMode } from "@/components/photoshop/advanced/subsystems-dialog"
+import type { PsDocument } from "@/editor/types"
 
 type MediaWorkspaceMenusProps = {
   menuClass: string

@@ -27,13 +27,13 @@ import {
   transformRgbColor,
   toneMapFloatBufferToImageData,
   toneMapHighBitImageToImageData,
-} from "../components/photoshop/color-pipeline"
+} from "@/editor/color/pipeline"
 import {
   applyHighBitFilter,
   applyHighBitPaintDab,
   syncHighBitLayerFromCanvasDelta,
-} from "../components/photoshop/high-bit-document"
-import type { ColorManagementSettings } from "../components/photoshop/types"
+} from "@/editor/high-bit-document"
+import type { ColorManagementSettings } from "@/editor/types"
 
 class TestImageData {
   data: Uint8ClampedArray

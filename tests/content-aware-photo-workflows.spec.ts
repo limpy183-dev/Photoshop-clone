@@ -3,13 +3,13 @@ import { expect, test } from "@playwright/test"
 import {
   buildContentAwareFillPlan,
   buildSelectionHeuristicMaskData,
-} from "../components/photoshop/tool-helpers"
+} from "@/editor/tool/helpers"
 import {
   applyPromptInpaintImageData,
   buildGenerativeFillPlan,
   classifyGenerativeFillProvider,
   createModelBackedGenerativeFillRequest,
-} from "../components/photoshop/generative-fill-engine"
+} from "@/editor/generative-fill-engine"
 import {
   autoAlignImageStack,
   autoBlendImageStack,
@@ -24,8 +24,8 @@ import {
   perspectiveCropImageData,
   seamCarveImageData,
   solveProjectiveTransformFromPointPairs,
-} from "../components/photoshop/photo-workflow-engine"
-import type { HighBitImage } from "../components/photoshop/color-pipeline"
+} from "@/editor/photo-workflow-engine"
+import type { HighBitImage } from "@/editor/color/pipeline"
 
 class TestImageData {
   data: Uint8ClampedArray

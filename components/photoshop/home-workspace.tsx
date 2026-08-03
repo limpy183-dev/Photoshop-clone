@@ -16,27 +16,27 @@ import {
   Sparkles,
 } from "lucide-react"
 import { toast } from "sonner"
-import { makeHistoryEntry, useEditorSelector } from "./editor-context"
-import { deserializeProject } from "./document-io"
-import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
-import { buildLearningIndex, runLearningIndexItem, type LearningIndexItem } from "./learning-index"
+import { makeHistoryEntry, useEditorSelector } from "@/components/photoshop/editor/context"
+import { deserializeProject } from "@/editor/document/io"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "@/editor/events"
+import { buildLearningIndex, runLearningIndexItem, type LearningIndexItem } from "@/editor/learning-index"
 import {
   estimateDocumentMemoryMb,
   NEW_DOCUMENT_PRESET_GROUPS,
   NEW_DOCUMENT_PRESETS,
   type NewDocumentPreset,
-} from "./new-document-presets"
+} from "@/editor/new-document-presets"
 import {
   loadPreferencesFromStorage,
   togglePinnedFile,
-} from "./preferences-engine"
+} from "@/editor/preferences-engine"
 import {
   readRecentDocuments,
   rememberRecentDocument,
   type RecentDocument,
-} from "./recent-documents"
-import { createDocumentFromPreset } from "./startup-documents"
-import type { DocumentFileKind, DocumentStorageKind } from "./editor-context"
+} from "@/editor/recent-documents"
+import { createDocumentFromPreset } from "@/editor/startup-documents"
+import type { DocumentFileKind, DocumentStorageKind } from "@/components/photoshop/editor/context"
 
 // Featured-preset names surfaced as large tiles on the Home grid. Picked to
 // give one anchor per preset group so first-run users see the full breadth

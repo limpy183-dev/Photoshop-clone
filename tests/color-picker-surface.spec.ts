@@ -6,11 +6,11 @@ import {
   hsbToRgb,
   normalizeWebColor,
   rgbToHsb,
-} from "../components/photoshop/color-picker-model"
+} from "@/editor/color/picker-model"
 import {
   captureSwatchEntry,
   normalizeSwatches,
-} from "../components/photoshop/swatches-store"
+} from "@/editor/swatches-store"
 
 test("color picker model exposes HSB, RGB, Lab, CMYK, and Web values from one color", () => {
   const described = describePickerColor("#336699")

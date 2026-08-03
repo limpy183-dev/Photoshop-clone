@@ -10,14 +10,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { useEditorSelector } from "./editor-context"
-import type { ColorManagementSettings, DocumentMetadata, PrintSettings } from "./types"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import type { ColorManagementSettings, DocumentMetadata, PrintSettings } from "@/editor/types"
 import {
   revealSourceInBrowser,
   sourceInfoForDocument,
   sourceInfoForSmartObject,
   type SourceLocationInfo,
-} from "./source-location"
+} from "@/editor/source-location"
 import { toast } from "sonner"
 
 const PROFILE_OPTIONS: ColorManagementSettings["assignedProfile"][] = [

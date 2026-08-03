@@ -7,9 +7,9 @@ import {
   createBrowserDiagnosticsReport,
   formatBrowserDiagnosticsReport,
   type BrowserDiagnosticsSnapshot,
-} from "../components/photoshop/browser-diagnostics"
-import { getCapability } from "../components/photoshop/capabilities"
-import { PANEL_DEFINITIONS } from "../components/photoshop/panel-registry"
+} from "@/editor/browser-diagnostics"
+import { getCapability } from "@/editor/capabilities"
+import { PANEL_DEFINITIONS } from "@/components/photoshop/panel-registry"
 
 const MIB = 1024 * 1024
 

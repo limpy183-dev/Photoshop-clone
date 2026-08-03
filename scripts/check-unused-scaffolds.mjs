@@ -23,7 +23,7 @@ function walk(directory, files = []) {
   return files
 }
 
-const productionSources = walk("components")
+const productionSources = [...walk("components"), ...walk("editor")]
   .filter((file) => !file.endsWith("storage-registry.ts"))
   .map((file) => readFileSync(file, "utf8"))
   .join("\n")

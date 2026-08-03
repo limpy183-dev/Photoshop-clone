@@ -13,9 +13,9 @@ import {
   layerAllowsDrawing,
   layerAllowsMoving,
   layerBlocksAllEdits,
-} from "../components/photoshop/canvas-view-runtime"
-import { DEFAULT_PREFERENCES } from "../components/photoshop/preferences-engine"
-import type { Layer, ShapeProps } from "../components/photoshop/types"
+} from "@/editor/canvas/view-runtime"
+import { DEFAULT_PREFERENCES } from "@/editor/preferences-engine"
+import type { Layer, ShapeProps } from "@/editor/types"
 
 test.beforeEach(() => {
   Object.defineProperty(globalThis, "window", {

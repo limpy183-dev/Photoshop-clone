@@ -10,8 +10,8 @@ import {
   generateSVGDocument,
   generateSVGPath,
   shouldChangeMode,
-} from "../components/photoshop/automation-commands"
-import { installFixtureDom } from "./photoshop-fixtures"
+} from "@/editor/automation-commands"
+import { installFixtureDom } from "@/tests/photoshop-fixtures"
 
 test.beforeAll(() => {
   installFixtureDom()

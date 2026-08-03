@@ -10,7 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import type { LargeDocumentOpenPlan } from "./large-document"
+import type { LargeDocumentOpenPlan } from "@/editor/large-document"
 
 export function LargeDocumentRecoveryDialog({
   open,

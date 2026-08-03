@@ -4,7 +4,7 @@ import {
   colorDistance,
   connectedEraserMask,
   localPatchGradient,
-} from "../components/photoshop/canvas-eraser-helpers"
+} from "@/editor/canvas/eraser-helpers"
 
 function imageDataFromLuma(width: number, height: number, luma: (x: number, y: number) => number): ImageData {
   const data = new Uint8ClampedArray(width * height * 4)

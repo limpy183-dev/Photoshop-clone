@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test"
 
-import { buildPrintPreviewReport } from "../components/photoshop/advanced-subsystems"
-import type { PrintSettings } from "../components/photoshop/types"
-import { fixtureCanvas, richFixtureDocument } from "./photoshop-fixtures"
+import { buildPrintPreviewReport } from "@/editor/advanced/subsystems"
+import type { PrintSettings } from "@/editor/types"
+import { fixtureCanvas, richFixtureDocument } from "@/tests/photoshop-fixtures"
 
 /**
  * Regression coverage for the print preview report mark enumeration.

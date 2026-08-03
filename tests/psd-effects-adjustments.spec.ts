@@ -11,8 +11,8 @@ import {
   psdLayerToAppAdjustment,
   psdToAppAdvancedBlending,
   psdToAppSmartFilters,
-} from "../components/photoshop/psd-effects-adjustments"
-import { createBlurGalleryMeshResource, formatFieldBlurPins } from "../components/photoshop/blur-gallery-controls"
+} from "@/editor/psd/effects-adjustments"
+import { createBlurGalleryMeshResource, formatFieldBlurPins } from "@/editor/blur-gallery-controls"
 import type {
   AdjustmentProps,
   AdjustmentType,
@@ -20,7 +20,7 @@ import type {
   Layer,
   LayerStyle,
   SmartFilter,
-} from "../components/photoshop/types"
+} from "@/editor/types"
 
 /* -------------------------------------------------------------------------- */
 /* Fixtures                                                                    */

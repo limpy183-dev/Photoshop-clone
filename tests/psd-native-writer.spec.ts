@@ -3,14 +3,14 @@ import { inflateSync } from "node:zlib"
 import { expect, test } from "@playwright/test"
 import { readPsd } from "ag-psd"
 
-import type { HighBitImage } from "../components/photoshop/color-pipeline"
-import { rgbToCmyk as pipelineRgbToCmyk } from "../components/photoshop/color-pipeline"
+import type { HighBitImage } from "@/editor/color/pipeline"
+import { rgbToCmyk as pipelineRgbToCmyk } from "@/editor/color/pipeline"
 import {
   canWriteNativeLayeredPsd,
   writeNativeLayeredPsd,
   type NativeLayeredPsdLayerInput,
-} from "../components/photoshop/psd-native-writer"
-import type { PsDocument } from "../components/photoshop/types"
+} from "@/editor/psd/native-writer"
+import type { PsDocument } from "@/editor/types"
 
 /* ---------- Fixtures ---------- */
 

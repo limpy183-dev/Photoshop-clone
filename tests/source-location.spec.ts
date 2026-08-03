@@ -4,8 +4,8 @@ import {
   revealSourceInBrowser,
   sourceInfoForDocument,
   sourceInfoForSmartObject,
-} from "../components/photoshop/source-location"
-import { richFixtureDocument } from "./photoshop-fixtures"
+} from "@/editor/source-location"
+import { richFixtureDocument } from "@/tests/photoshop-fixtures"
 
 function fileHandle(name: string, patch: Partial<FileSystemFileHandle> = {}) {
   return {

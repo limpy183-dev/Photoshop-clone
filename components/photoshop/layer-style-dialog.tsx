@@ -13,8 +13,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { useEditorSelector } from "./editor-context"
-import { defaultStyle } from "./layer-styles"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { defaultStyle } from "@/editor/layer-styles"
 import {
   defaultAdvancedBlending,
   defaultBlendIfRange,
@@ -22,7 +22,7 @@ import {
   normalizeAdvancedBlending,
   setBlendIfRangeForChannel,
   setBlendIfRangeHandle,
-} from "./layer-workflows"
+} from "@/editor/layer-workflows"
 import type {
   AdvancedBlending,
   BlendIfChannel,
@@ -31,7 +31,7 @@ import type {
   GradientStop,
   LayerStyle,
   MultiGradient,
-} from "./types"
+} from "@/editor/types"
 
 type StyleKey =
   | "blending"
@@ -551,7 +551,7 @@ export function LayerStyleDialog({
 
 function mergeStyle(base: LayerStyle, incoming: LayerStyle | undefined) {
   if (!incoming) return base
-  const next: Partial<import("./types").LayerStyle> = { ...base }
+  const next: Partial<import("@/editor/types").LayerStyle> = { ...base }
   for (const { key } of EFFECTS) {
     if (key === "blending") continue
     const current = (incoming as Record<string, unknown>)[key]

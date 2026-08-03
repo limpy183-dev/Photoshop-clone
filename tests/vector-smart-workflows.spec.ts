@@ -23,7 +23,7 @@ import {
   shapeToEditablePath,
   togglePathAnchorSelection,
   updateRoundedRectCornerRadius,
-} from "../components/photoshop/vector-path-operations"
+} from "@/editor/vector-path-operations"
 import {
   exportCustomShapeLibrary,
   mergeCustomShapeLibraries,
@@ -31,24 +31,24 @@ import {
   organizeCustomShapeLibrary,
   shapeAssetToPreset,
   shapePresetToAsset,
-} from "../components/photoshop/custom-shape-library"
+} from "@/editor/custom-shape-library"
 import {
   activePathToolForModifiers,
   constrainPointTo45,
   pathModifierIntent,
-} from "../components/photoshop/path-modifier-keys"
-import { copyLayerCss, copyLayerSvg } from "../components/photoshop/vector-clipboard"
-import { planStrokePathBrushSamples } from "../components/photoshop/vector-stroke-dynamics"
-import { appShapeToPsd, psdShapeToApp } from "../components/photoshop/psd-vector-text"
+} from "@/editor/path-modifier-keys"
+import { copyLayerCss, copyLayerSvg } from "@/editor/vector-clipboard"
+import { planStrokePathBrushSamples } from "@/editor/vector-stroke-dynamics"
+import { appShapeToPsd, psdShapeToApp } from "@/editor/psd/vector-text"
 import {
   applySmartObjectStackMode,
   convertSmartObjectToLayers,
   createSmartObjectEditDocument,
   reorderSmartFilters,
   saveSmartObjectEditDocumentBack,
-} from "../components/photoshop/smart-objects"
-import type { ShapeProps, SmartFilter } from "../components/photoshop/types"
-import { installFixtureDom, richFixtureDocument } from "./photoshop-fixtures"
+} from "@/editor/smart-objects"
+import type { ShapeProps, SmartFilter } from "@/editor/types"
+import { installFixtureDom, richFixtureDocument } from "@/tests/photoshop-fixtures"
 
 class TestImageData {
   data: Uint8ClampedArray

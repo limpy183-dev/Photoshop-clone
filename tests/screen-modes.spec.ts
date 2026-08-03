@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
 
-import { addPhotoshopEventListener } from "../components/photoshop/events"
+import { addPhotoshopEventListener } from "@/editor/events"
 import {
   SCREEN_MODE_CYCLE,
   applyScreenMode,
@@ -12,8 +12,8 @@ import {
   isFullscreenApiAvailable,
   resolveScreenModeState,
   screenModeLabel,
-} from "../components/photoshop/screen-modes"
-import { requestCanvasZoom, requestPrintSizeView } from "../components/photoshop/zoom-events"
+} from "@/editor/screen-modes"
+import { requestCanvasZoom, requestPrintSizeView } from "@/editor/zoom-events"
 
 type FullscreenDocumentStub = {
   documentElement: Record<string, unknown>

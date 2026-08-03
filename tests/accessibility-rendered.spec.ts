@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright"
 import { expect, test, type Page } from "@playwright/test"
-import { installRuntimeGuard, assertRuntimeHealthy, waitForEditorReady } from "./support/runtime-guard"
+import { installRuntimeGuard, assertRuntimeHealthy, waitForEditorReady } from "@/tests/support/runtime-guard"
 
 async function expectNoSeriousViolations(
   page: Page,

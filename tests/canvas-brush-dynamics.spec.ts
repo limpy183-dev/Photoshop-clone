@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test"
 import {
   resolveErodibleTipSimulation,
   type BrushDynamicsInput,
-} from "../components/photoshop/brush-engine"
+} from "@/editor/brush-engine"
 import {
   applyCanvasBrushColorDynamics,
   applyCanvasBrushShapeDynamics,
@@ -12,8 +12,8 @@ import {
   canvasBrushSimulationSeed,
   hexToHsl,
   hslToHex,
-} from "../components/photoshop/canvas-brush-dynamics"
-import type { BrushSettings } from "../components/photoshop/types"
+} from "@/editor/canvas/brush-dynamics"
+import type { BrushSettings } from "@/editor/types"
 
 const baseBrush: BrushSettings = {
   size: 40,

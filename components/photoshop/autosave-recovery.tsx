@@ -4,12 +4,12 @@ import * as React from "react"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { toast } from "sonner"
-import { planAutosaveDocuments, planIncrementalAutosave, type IncrementalAutosaveManifest } from "./autosave-planner"
-import { useEditorSelector } from "./editor-context"
-import { addPhotoshopEventListener } from "./events"
-import { writeScratchBlob } from "./opfs-scratch"
-import { loadPreferencesFromStorage } from "./preferences-engine"
-import { clearAutosave, readAutosaves, readAutosavesAsync, removeAutosave, writeAutosaves, type AutosaveDocument } from "./recent-documents"
+import { planAutosaveDocuments, planIncrementalAutosave, type IncrementalAutosaveManifest } from "@/editor/autosave-planner"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { addPhotoshopEventListener } from "@/editor/events"
+import { writeScratchBlob } from "@/editor/opfs-scratch"
+import { loadPreferencesFromStorage } from "@/editor/preferences-engine"
+import { clearAutosave, readAutosaves, readAutosavesAsync, removeAutosave, writeAutosaves, type AutosaveDocument } from "@/editor/recent-documents"
 
 function autosavePreferences() {
   try {
@@ -78,7 +78,7 @@ export function AutosaveRecovery() {
 
       if (!plan.documentsToSerialize.length && !pruned) return
 
-      const { serializeProject } = await import("./document-project-io")
+      const { serializeProject } = await import("@/editor/document/project-io")
       const serializedLengths: Record<string, number> = {}
       const serializedIds: string[] = []
       for (const planDoc of plan.documentsToSerialize) {
@@ -212,7 +212,7 @@ export function AutosaveRecovery() {
   const restore = async () => {
     if (!candidate) return
     try {
-      const { deserializeProject } = await import("./document-project-io")
+      const { deserializeProject } = await import("@/editor/document/project-io")
       const doc = await deserializeProject(candidate.serialized)
       doc.name = `${doc.name} (Recovered)`
       createDocument(doc, "Recover Autosave")

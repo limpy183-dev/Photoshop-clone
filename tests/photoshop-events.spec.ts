@@ -3,7 +3,7 @@ import {
   addPhotoshopEventListener,
   dispatchPhotoshopEvent,
   type PhotoshopEventMap,
-} from "../components/photoshop/events"
+} from "@/editor/events"
 
 test("typed photoshop event helpers dispatch detail and return an unsubscribe", () => {
   const received: PhotoshopEventMap["ps-request-zoom"][] = []

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
 
-import { createHistoryJumpScheduler } from "../components/photoshop/history-jump-scheduler"
+import { createHistoryJumpScheduler } from "@/editor/history-jump-scheduler"
 
 test("history jump scheduler coalesces rapid absolute-index requests to the latest target", () => {
   // `request(absoluteIndex)` is the scrubbing path — when the user drags

@@ -14,21 +14,21 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { makeCanvas, useEditor } from "./editor-context"
-import { selectionToMaskCanvas } from "./tool-helpers"
-import { WORKSPACE_PRESET_OPTIONS, type WorkspacePresetId } from "./panel-registry"
-import type { RecentDocument } from "./recent-documents"
-import { downloadText } from "./document-io"
-import { dispatchPhotoshopEvent } from "./events"
+import { makeCanvas, useEditor } from "@/components/photoshop/editor/context"
+import { selectionToMaskCanvas } from "@/editor/tool/helpers"
+import { WORKSPACE_PRESET_OPTIONS, type WorkspacePresetId } from "@/components/photoshop/panel-registry"
+import type { RecentDocument } from "@/editor/recent-documents"
+import { downloadText } from "@/editor/document/io"
+import { dispatchPhotoshopEvent } from "@/editor/events"
 import {
   mergeWorkspaceLibraries,
   normalizeWorkspaceLibrary,
   readWorkspaceLibrary,
   serializeWorkspaceLibrary,
   writeWorkspaceLibrary,
-} from "./workspace-layouts"
-import { uid } from "./uid"
-import type { AlphaChannel } from "./types"
+} from "@/editor/workspace-layouts"
+import { uid } from "@/editor/uid"
+import type { AlphaChannel } from "@/editor/types"
 
 type WorkspaceSummary = { name: string; savedAt?: number }
 export type SelectionOperation = "expand" | "contract" | "grow" | "similar" | "transform" | "feather" | "border" | "smooth"

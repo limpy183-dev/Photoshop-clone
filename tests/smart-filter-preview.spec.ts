@@ -3,12 +3,12 @@ import { expect, test } from "@playwright/test"
 import {
   firstDirtySmartFilterPreviewIndex,
   smartFilterPreviewEntryKey,
-} from "../components/photoshop/smart-filter-preview"
+} from "@/editor/smart-filter-preview"
 import {
   buildFilterPreviewQualityModel,
   getFilterPreviewDisplayModes,
   planFilterPreviewExecution,
-} from "../components/photoshop/filter-preview"
+} from "@/editor/filters/preview"
 
 test("smart filter preview keys are stable for equivalent entry state", () => {
   const a = smartFilterPreviewEntryKey({

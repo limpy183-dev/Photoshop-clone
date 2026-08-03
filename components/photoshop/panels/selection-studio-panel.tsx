@@ -2,8 +2,8 @@
 
 import * as React from "react"
 import { toast } from "sonner"
-import { useEditorSelector } from "../editor-context"
-import { dispatchPhotoshopEvent } from "../events"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { dispatchPhotoshopEvent } from "@/editor/events"
 import {
   focusAreaMask,
   selectionFromMask,
@@ -12,9 +12,9 @@ import {
   selectBackgroundMask,
   selectSkyMask,
   selectSubjectMask,
-} from "../tool-helpers"
-import type { ToolId } from "../types"
-import { uid } from "../uid"
+} from "@/editor/tool/helpers"
+import type { ToolId } from "@/editor/types"
+import { uid } from "@/editor/uid"
 
 export function SelectionStudioPanel() {
   const activeDoc = useEditorSelector((editor) => editor.activeDoc)

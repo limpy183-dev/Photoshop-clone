@@ -1,26 +1,26 @@
 import { expect, test } from "@playwright/test"
 
-import { richFixtureDocument } from "./photoshop-fixtures"
+import { richFixtureDocument } from "@/tests/photoshop-fixtures"
 import {
   buildShortcutOverrideUpdate,
   shortcutConflictMap,
   type Shortcut,
-} from "../components/photoshop/shortcuts"
+} from "@/editor/shortcuts"
 import {
   rankCommandPaletteItems,
   recordCommandPaletteUsage,
   type CommandUsageMap,
-} from "../components/photoshop/command-ranking"
+} from "@/editor/command-ranking"
 import {
   mergeWorkspaceLibraries,
   normalizeWorkspaceLibrary,
-} from "../components/photoshop/workspace-layouts"
+} from "@/editor/workspace-layouts"
 import {
   normalizeGradientPresets,
   normalizePatternEntries,
   normalizeSwatchEntries,
-} from "../components/photoshop/asset-libraries"
-import { createExportCompatibilityManifest } from "../components/photoshop/document-io"
+} from "@/editor/asset-libraries"
+import { createExportCompatibilityManifest } from "@/editor/document/io"
 
 const shortcutFixtures: Shortcut[] = [
   { id: "alpha", keys: "Ctrl+K", action: "Open Alpha", category: "File" },

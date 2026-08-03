@@ -5,9 +5,9 @@ import { CheckCircle2, ClipboardList, Layers, Play, WandSparkles } from "lucide-
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { useEditorSelector } from "./editor-context"
-import { dispatchPhotoshopCustomEvent, dispatchPhotoshopEvent } from "./events"
-import { selectionToMaskCanvas } from "./tool-helpers"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { dispatchPhotoshopCustomEvent, dispatchPhotoshopEvent } from "@/editor/events"
+import { selectionToMaskCanvas } from "@/editor/tool/helpers"
 import {
   WORKFLOW_PACKS,
   findWorkflowPack,
@@ -15,7 +15,7 @@ import {
   type WorkflowPackAction,
   type WorkflowPackId,
   type WorkflowPackStep,
-} from "./workflow-presets"
+} from "@/editor/workflow-presets"
 
 export function WorkflowPackDialog({
   workflowId,

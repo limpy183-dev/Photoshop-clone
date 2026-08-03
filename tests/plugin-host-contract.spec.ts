@@ -9,7 +9,7 @@ import {
   type HostContext,
   type HostRequest,
   type PluginStorageAdapter,
-} from "../components/photoshop/plugin-host-api"
+} from "@/editor/plugin-host-api"
 import {
   PLUGIN_LIFECYCLE_EVENT,
   defaultSmokeTests,
@@ -18,9 +18,9 @@ import {
   runPluginTestSuite,
   summariseTestValue,
   type PluginTestInput,
-} from "../components/photoshop/plugin-lifecycle"
-import type { PluginDescriptor } from "../components/photoshop/types"
-import { installFixtureDom, richFixtureDocument } from "./photoshop-fixtures"
+} from "@/editor/plugin-lifecycle"
+import type { PluginDescriptor } from "@/editor/types"
+import { installFixtureDom, richFixtureDocument } from "@/tests/photoshop-fixtures"
 
 function request(method: HostRequest["method"], args?: Record<string, unknown>): HostRequest {
   return {

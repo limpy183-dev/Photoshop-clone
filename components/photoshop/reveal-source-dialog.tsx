@@ -11,13 +11,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { useEditorSelector } from "./editor-context"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
 import {
   bestEffortPathString,
   revealSourceInBrowser,
   sourceInfoForDocument,
   type RevealSourceResult,
-} from "./source-location"
+} from "@/editor/source-location"
 
 function formatTimestamp(value: number | undefined) {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return ""

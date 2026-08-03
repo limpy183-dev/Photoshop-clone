@@ -1,10 +1,10 @@
 import * as React from "react"
 import { ArrowDown, ArrowUp, Copy, Eye, Trash2 } from "lucide-react"
 
-import { renderDocumentComposite } from "../../document-io"
-import { buildDocumentForFrame, renderTimelineFrameWithTransition } from "../../timeline-engine"
-import type { FrameEasing, PsDocument, TimelineFrame } from "../../types"
-import { EASINGS, ToolButton } from "./timeline-shared"
+import { renderDocumentComposite } from "@/editor/document/io"
+import { buildDocumentForFrame, renderTimelineFrameWithTransition } from "@/editor/timeline-engine"
+import type { FrameEasing, PsDocument, TimelineFrame } from "@/editor/types"
+import { EASINGS, ToolButton } from "@/components/photoshop/panels/timeline/timeline-shared"
 
 export function FrameRow({
   doc,

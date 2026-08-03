@@ -12,8 +12,8 @@ import {
   renamePresetItem,
   reorderPresetItem,
   type UnifiedPresetItem,
-} from "../components/photoshop/preset-manager"
-import { DEFAULT_SHAPE_PRESETS, normalizeShapePresets } from "../components/photoshop/shape-preset-library"
+} from "@/editor/preset-manager"
+import { DEFAULT_SHAPE_PRESETS, normalizeShapePresets } from "@/editor/shape-preset-library"
 
 function preset(
   family: UnifiedPresetItem["family"],

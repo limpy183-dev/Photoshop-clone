@@ -3,9 +3,9 @@ import { expect, test } from "@playwright/test"
 import {
   drawBlurGalleryOverlayCanvas,
   drawLightingEffectsOverlayCanvas,
-} from "../components/photoshop/canvas-filter-overlays"
-import { BLUR_GALLERY_CONTROL_STATE_KEY } from "../components/photoshop/blur-gallery-controls"
-import { LIGHTING_EFFECTS_CONTROL_STATE_KEY } from "../components/photoshop/lighting-effects-controls"
+} from "@/editor/canvas/filter-overlays"
+import { BLUR_GALLERY_CONTROL_STATE_KEY } from "@/editor/blur-gallery-controls"
+import { LIGHTING_EFFECTS_CONTROL_STATE_KEY } from "@/editor/lighting-effects-controls"
 
 function recordingOverlayCanvas(width = 200, height = 100) {
   const calls: string[] = []

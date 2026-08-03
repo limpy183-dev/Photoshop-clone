@@ -23,11 +23,11 @@
     "max": 6
   },
   "coordinationFiles": {
-    "components/photoshop/canvas-view.tsx": {
+    "components/photoshop/canvas/view.tsx": {
       "maxImports": 49,
       "maxFanIn": 3
     },
-    "components/photoshop/editor-context.tsx": {
+    "components/photoshop/editor/context.tsx": {
       "maxImports": 28,
       "maxFanIn": 100
     },

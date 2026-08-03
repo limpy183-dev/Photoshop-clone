@@ -10,7 +10,7 @@ import {
   makeDocumentLifecycle,
   withDocumentLifecyclePatch,
   type EditorDocumentLifecycleState,
-} from "../components/photoshop/editor-document-lifecycle"
+} from "@/editor/document-lifecycle"
 
 const docA = { id: "doc-a", name: "A.psprojson" }
 const docB = { id: "doc-b", name: "B.psprojson" }

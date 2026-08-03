@@ -6,9 +6,9 @@ import {
   getCapability,
   listCapabilities,
   summarizeCapabilities,
-} from "../components/photoshop/capabilities"
-import { capabilityForAdvancedFormat } from "../components/photoshop/advanced-subsystems"
-import { createDocumentReport } from "../components/photoshop/document-io"
+} from "@/editor/capabilities"
+import { capabilityForAdvancedFormat } from "@/editor/advanced/subsystems"
+import { createDocumentReport } from "@/editor/document/io"
 
 test("capability registry classifies required report tracks", () => {
   expect(CAPABILITY_STATUS_ORDER).toEqual(["complete", "usable", "approximation", "stub", "unsupported"])

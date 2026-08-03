@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
 
-import { createRafCoalescer } from "../components/photoshop/raf-coalescer"
+import { createRafCoalescer } from "@/editor/raf-coalescer"
 
 test("raf coalescer emits only the latest value once per frame", () => {
   const emitted: number[] = []

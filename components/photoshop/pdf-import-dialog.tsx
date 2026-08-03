@@ -14,8 +14,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
-import { decodePdfPages } from "./advanced-subsystems"
-import { makeDocument, useEditorSelector } from "./editor-context"
+import { decodePdfPages } from "@/editor/advanced/subsystems"
+import { makeDocument, useEditorSelector } from "@/components/photoshop/editor/context"
 
 type ImportMode = "page-per-document" | "pages-as-layers"
 

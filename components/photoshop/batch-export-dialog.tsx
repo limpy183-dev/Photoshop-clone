@@ -24,15 +24,15 @@ import {
   rasterMime,
   type BrowserRasterEncoderDiagnostic,
   type CompatibilityManifestEntry,
-} from "./document-io"
-import { makeCanvas, useEditorSelector } from "./editor-context"
-import { dispatchPhotoshopEvent } from "./events"
-import { canvasSizeError } from "./canvas-limits"
-import type { BrowserRasterExportFormat } from "./document-io"
-import type { Layer, PsDocument, Slice, TimelineFrame } from "./types"
-import { runBatchExportItems, type BatchExportFailure, type BatchExportProgressEvent } from "./batch-export-engine"
-import { createStoredZipBlob, type StoredZipEntry } from "./zip-packaging"
-import { batchAlternativesForLimitation, type ExportAlternative } from "./export-alternatives"
+} from "@/editor/document/io"
+import { makeCanvas, useEditorSelector } from "@/components/photoshop/editor/context"
+import { dispatchPhotoshopEvent } from "@/editor/events"
+import { canvasSizeError } from "@/editor/canvas/limits"
+import type { BrowserRasterExportFormat } from "@/editor/document/io"
+import type { Layer, PsDocument, Slice, TimelineFrame } from "@/editor/types"
+import { runBatchExportItems, type BatchExportFailure, type BatchExportProgressEvent } from "@/editor/batch-export-engine"
+import { createStoredZipBlob, type StoredZipEntry } from "@/editor/zip-packaging"
+import { batchAlternativesForLimitation, type ExportAlternative } from "@/editor/export/alternatives"
 
 type BatchScope = "document" | "visible-layers" | "selected-layers" | "timeline" | "slices" | "sprite-layers" | "sprite-slices" | "sprite-timeline"
 type RasterFormat = BrowserRasterExportFormat

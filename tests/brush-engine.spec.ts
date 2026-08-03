@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
 
-import type { BrushSettings } from "../components/photoshop/types"
+import type { BrushSettings } from "@/editor/types"
 import {
   normalizeBrushPointerSample,
   planBrushStroke,
@@ -10,8 +10,8 @@ import {
   resolveColorReplacementPixel,
   resolveErodibleTipSimulation,
   resolveMixerReservoirStep,
-} from "../components/photoshop/brush-engine"
-import { buildRetouchingFeedbackModel } from "../components/photoshop/retouch-feedback"
+} from "@/editor/brush-engine"
+import { buildRetouchingFeedbackModel } from "@/editor/retouch-feedback"
 
 const baseBrush: BrushSettings = {
   size: 40,

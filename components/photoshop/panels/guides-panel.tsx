@@ -2,9 +2,9 @@
 
 import * as React from "react"
 import { Eye, EyeOff, Grid3X3, Lock, Plus, Trash2, Unlock } from "lucide-react"
-import { useEditorSelector } from "../editor-context"
-import type { Guide } from "../types"
-import { uid } from "../uid"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import type { Guide } from "@/editor/types"
+import { uid } from "@/editor/uid"
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, Math.round(value)))

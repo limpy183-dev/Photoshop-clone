@@ -3,10 +3,10 @@
 import * as React from "react"
 import { toast } from "sonner"
 import { Copy, Download, Eye, EyeOff, Lock, Plus, Trash2, Unlock } from "lucide-react"
-import { useEditorSelector, makeCanvas } from "../editor-context"
-import { downloadBlob, rasterMime, renderDocumentComposite } from "../document-io"
-import type { Slice } from "../types"
-import { uid } from "../uid"
+import { useEditorSelector, makeCanvas } from "@/components/photoshop/editor/context"
+import { downloadBlob, rasterMime, renderDocumentComposite } from "@/editor/document/io"
+import type { Slice } from "@/editor/types"
+import { uid } from "@/editor/uid"
 
 function safeName(name: string) {
   return name.replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "-").replace(/^-+|-+$/g, "") || "slice"

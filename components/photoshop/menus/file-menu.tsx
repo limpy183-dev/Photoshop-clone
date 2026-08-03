@@ -14,15 +14,15 @@ import {
   MenubarSubTrigger as DropdownMenuSubTrigger,
   MenubarTrigger as DropdownMenuTrigger,
 } from "@/components/ui/menubar"
-import { compositeLayer } from "../blend-modes"
-import { makeCanvas } from "../canvas-utils"
-import { dispatchPhotoshopEvent } from "../events"
-import type { Action } from "../editor-context"
-import type { PsDocument } from "../types"
-import type { AdvancedSubsystemTab, ColorWorkflowMode } from "../advanced-subsystems-dialog"
-import type { GapWorkflowKind } from "../gap-workflow-dialog"
-import type { RecentDocument } from "../recent-documents"
-import { WORKFLOW_PACKS, type WorkflowPackId } from "../workflow-presets"
+import { compositeLayer } from "@/editor/blend-modes"
+import { makeCanvas } from "@/editor/canvas/utils"
+import { dispatchPhotoshopEvent } from "@/editor/events"
+import type { Action } from "@/components/photoshop/editor/context"
+import type { PsDocument } from "@/editor/types"
+import type { AdvancedSubsystemTab, ColorWorkflowMode } from "@/components/photoshop/advanced/subsystems-dialog"
+import type { GapWorkflowKind } from "@/components/photoshop/gap-workflow-dialog"
+import type { RecentDocument } from "@/editor/recent-documents"
+import { WORKFLOW_PACKS, type WorkflowPackId } from "@/editor/workflow-presets"
 
 export {
   LINKED_SMART_OBJECT_POLL_MS,
@@ -34,7 +34,7 @@ export {
   type ReadableFileHandle,
   type SaveMode,
   type SavePickerWindow,
-} from "./menu-workflows"
+} from "@/editor/menus/menu-workflows"
 
 type SetValue<T> = React.Dispatch<React.SetStateAction<T>>
 

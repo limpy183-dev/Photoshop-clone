@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test"
 import {
   compositeFilterImageData,
   getFilter,
-} from "../components/photoshop/filters"
+} from "@/editor/filters"
 
 class TestImageData {
   data: Uint8ClampedArray

@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test"
 
-import * as actionsPanel from "../components/photoshop/panels/actions-panel"
-import { parsePreferencesSet } from "../components/photoshop/preferences-engine"
+import * as actionsPanel from "@/components/photoshop/panels/actions-panel"
+import { parsePreferencesSet } from "@/editor/preferences-engine"
 
 const parseActionImportPayload = (actionsPanel as {
   parseActionImportPayload?: (value: unknown) => unknown[]

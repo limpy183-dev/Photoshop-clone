@@ -3,16 +3,16 @@
 import * as React from "react"
 import { BookOpen, ChevronRight, Keyboard, Lightbulb, Layers, MousePointer2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { useEditorSelector } from "../editor-context"
-import { dispatchPhotoshopCustomEvent, dispatchPhotoshopEvent } from "../events"
-import { computeContextualHelp, type HelpTip } from "../contextual-help"
-import { FILTERS } from "../filters"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { dispatchPhotoshopCustomEvent, dispatchPhotoshopEvent } from "@/editor/events"
+import { computeContextualHelp, type HelpTip } from "@/editor/contextual-help"
+import { FILTERS } from "@/editor/filters"
 import {
   buildLearningIndex,
   runLearningIndexItem,
-} from "../learning-index"
-import { LEARNING_PANEL_SOURCES } from "../learning-panel-sources"
-import { WORKFLOW_PACKS } from "../workflow-presets"
+} from "@/editor/learning-index"
+import { LEARNING_PANEL_SOURCES } from "@/editor/learning-panel-sources"
+import { WORKFLOW_PACKS } from "@/editor/workflow-presets"
 
 interface LearnGuide {
   id: string

@@ -27,9 +27,9 @@ import {
   reverseTextPath,
   resolveFontSubstitutions,
   updateTextPathPoint,
-} from "../components/photoshop/typography-engine"
-import type { Layer, ShapeProps, TextProps } from "../components/photoshop/types"
-import { installFixtureDom } from "./photoshop-fixtures"
+} from "@/editor/typography-engine"
+import type { Layer, ShapeProps, TextProps } from "@/editor/types"
+import { installFixtureDom } from "@/tests/photoshop-fixtures"
 
 function baseText(patch: Partial<TextProps> = {}): TextProps {
   return {

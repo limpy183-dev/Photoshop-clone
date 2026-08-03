@@ -14,10 +14,10 @@ import {
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { cn } from "@/lib/utils"
-import { makeCanvas, makeDocument, useEditorSelector } from "./editor-context"
-import { loadRasterCanvasFromFile, renderDocumentComposite } from "./document-io"
-import { photomergeImageStack } from "./photo-workflow-engine"
-import { contentAwareFill } from "./tool-helpers"
+import { makeCanvas, makeDocument, useEditorSelector } from "@/components/photoshop/editor/context"
+import { loadRasterCanvasFromFile, renderDocumentComposite } from "@/editor/document/io"
+import { photomergeImageStack } from "@/editor/photo-workflow-engine"
+import { contentAwareFill } from "@/editor/tool/helpers"
 import {
   applyPhotomergeBoundaryWarp,
   buildPhotomergeEngineOptions,
@@ -28,9 +28,9 @@ import {
   type PhotomergeLensModel,
   type PhotomergePreviewSource,
   type PhotomergeWorkspaceSettings,
-} from "./photomerge-workspace"
-import type { Layer } from "./types"
-import type { PanoramaAlignmentModel, PanoramaProjection } from "./photo-workflow-engine"
+} from "@/editor/photomerge-workspace"
+import type { Layer } from "@/editor/types"
+import type { PanoramaAlignmentModel, PanoramaProjection } from "@/editor/photo-workflow-engine"
 
 interface PhotomergeSource extends PhotomergePreviewSource {
   file: File | null

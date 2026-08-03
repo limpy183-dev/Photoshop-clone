@@ -2,9 +2,9 @@
 
 import * as React from "react"
 import { Brush, GripVertical, ImageDown, Layers, MousePointer2, SlidersHorizontal, Sparkles, Type } from "lucide-react"
-import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
-import { useActiveDocument, useActiveLayer, useEditorSelector } from "./editor-context"
-import { dispatchPhotoshopEvent } from "./events"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "@/editor/client-storage"
+import { useActiveDocument, useActiveLayer, useEditorSelector } from "@/components/photoshop/editor/context"
+import { dispatchPhotoshopEvent } from "@/editor/events"
 
 const DEFAULT_POSITION = { x: 28, y: 36 }
 

@@ -19,9 +19,9 @@ import {
   extractMetadataFromFile,
   inspectDicomMetadata,
   inspectAdvancedFormatFile,
-} from "../components/photoshop/advanced-subsystems"
-import { serializePsd } from "../components/photoshop/document-io"
-import { getCapability } from "../components/photoshop/capabilities"
+} from "@/editor/advanced/subsystems"
+import { serializePsd } from "@/editor/document/io"
+import { getCapability } from "@/editor/capabilities"
 import {
   decodeAdvancedRasterBuffer,
   decodeAdvancedRasterBufferAsync,
@@ -52,9 +52,9 @@ import {
   inspectExrHeader,
   planPsbLargeDocumentOpen,
   xmpPacketFromRasterMetadata,
-} from "../components/photoshop/raster-codecs"
-import type { HighBitImage } from "../components/photoshop/color-pipeline"
-import { installFixtureDom } from "./photoshop-fixtures"
+} from "@/editor/raster/codecs"
+import type { HighBitImage } from "@/editor/color/pipeline"
+import { installFixtureDom } from "@/tests/photoshop-fixtures"
 
 type AdvancedFormatCapabilityWithExport = ReturnType<typeof capabilityForAdvancedFormat> & { exportPath?: string }
 

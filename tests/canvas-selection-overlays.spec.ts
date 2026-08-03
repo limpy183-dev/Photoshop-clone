@@ -7,8 +7,8 @@ import {
   resolveTextEditLayer,
   selectionOverlayStyle,
   textEditOverlayStyle,
-} from "../components/photoshop/canvas-selection-overlays"
-import type { Layer, PsDocument } from "../components/photoshop/types"
+} from "@/components/photoshop/canvas/selection-overlays"
+import type { Layer, PsDocument } from "@/editor/types"
 
 function textLayer(overrides: Partial<Layer> = {}): Layer {
   return {

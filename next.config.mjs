@@ -20,7 +20,7 @@ import { createContentSecurityPolicy } from "./lib/security-policy.mjs"
 //                                       attributes; required.
 //   - img-src 'self' data: blob:   — canvas.toDataURL/blob exports and PSD
 //                                       thumbnails.
-//   - worker-src 'self' blob:      — components/photoshop/filter-worker.ts
+//   - worker-src 'self' blob:      — editor/filters/worker.ts
 //                                       creates the filter Web Worker from a
 //                                       Blob URL.
 //   - connect-src                  — same-origin XHR/fetch + Vercel Analytics
@@ -57,7 +57,7 @@ const securityHeaders = [
   // third-party embeds/assets unless they ship compatible CORP headers.
 ]
 
-const emptyNodeFs = fileURLToPath(new URL("./components/photoshop/empty-node-fs.ts", import.meta.url))
+const emptyNodeFs = fileURLToPath(new URL("./editor/empty-node-fs.ts", import.meta.url))
 const outputFileTracingRoot = fileURLToPath(new URL("./", import.meta.url))
 const isGithubPages = process.env.GITHUB_PAGES === "true"
 const githubPagesBasePath = "/Photoshop-clone"
@@ -165,7 +165,7 @@ const nextConfig = {
     // hijack module resolution, breaking `@import "tailwindcss"` and others.
     root: outputFileTracingRoot,
     resolveAlias: {
-      fs: "./components/photoshop/empty-node-fs.ts",
+      fs: "./editor/empty-node-fs.ts",
     },
   },
   webpack(config, { isServer }) {

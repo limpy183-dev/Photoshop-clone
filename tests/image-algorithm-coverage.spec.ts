@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
 
-import { getNativeComposite, needsPixelBlend, compositeLayer } from "../components/photoshop/blend-modes"
+import { getNativeComposite, needsPixelBlend, compositeLayer } from "@/editor/blend-modes"
 import {
   buildAdaptivePalette,
   convertToBitmap,
@@ -11,19 +11,19 @@ import {
   createSCurveDuotoneCurve,
   DUOTONE_PRESETS,
   WEB_SAFE_PALETTE,
-} from "../components/photoshop/color-mode-engines"
-import { flattenTransparencyCanvas, layerHasPartialAlpha } from "../components/photoshop/flatten-transparency"
+} from "@/editor/color/mode-engines"
+import { flattenTransparencyCanvas, layerHasPartialAlpha } from "@/editor/flatten-transparency"
 import {
   DIRECT_HIGH_BIT_ADJUSTMENTS,
   HIGH_BIT_BLUR_FILTERS,
   HIGH_BIT_SHARPEN_FILTERS,
-} from "../components/photoshop/high-bit-filter-sets"
-import { DEFAULT_COLOR_MANAGEMENT } from "../components/photoshop/menus/color-management-defaults"
-import { floodFillMask } from "../components/photoshop/tool-helpers/flood-fill"
-import { perspectiveUnwarp } from "../components/photoshop/tool-helpers/perspective-liquify"
-import { resolveBezierBooleanFallback } from "../components/photoshop/vector-bezier-boolean"
-import type { Layer, PathProps } from "../components/photoshop/types"
-import { fixtureCanvas, installFixtureDom } from "./photoshop-fixtures"
+} from "@/editor/high-bit-filter-sets"
+import { DEFAULT_COLOR_MANAGEMENT } from "@/editor/menus/color-management-defaults"
+import { floodFillMask } from "@/editor/tool/helpers/flood-fill"
+import { perspectiveUnwarp } from "@/editor/tool/helpers/perspective-liquify"
+import { resolveBezierBooleanFallback } from "@/editor/vector-bezier-boolean"
+import type { Layer, PathProps } from "@/editor/types"
+import { fixtureCanvas, installFixtureDom } from "@/tests/photoshop-fixtures"
 
 function imageData(width: number, height: number, pixels: number[]) {
   installFixtureDom()

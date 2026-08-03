@@ -4,7 +4,7 @@ import {
   drawArtboardPreview,
   drawFramePlaceholder,
   drawSlicePreview,
-} from "../components/photoshop/canvas-preview-drawing"
+} from "@/editor/canvas/preview-drawing"
 
 function recordingContext(width = 20, height = 16) {
   const calls: string[] = []

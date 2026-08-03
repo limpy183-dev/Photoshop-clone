@@ -5,7 +5,7 @@ import {
   compositeHighBitEditingSurface,
   createHighBitEditingSurface,
   paintHighBitEditingSurface,
-} from "../components/photoshop/high-bit-document"
+} from "@/editor/high-bit-document"
 
 class TestImageData {
   data: Uint8ClampedArray

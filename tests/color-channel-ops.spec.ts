@@ -14,8 +14,8 @@ import {
   simulateSpotChannelPreview,
   splitImageDataChannels,
   softProofImageDataApprox,
-} from "../components/photoshop/color-channel-ops"
-import type { ColorManagementSettings } from "../components/photoshop/types"
+} from "@/editor/color/channel-ops"
+import type { ColorManagementSettings } from "@/editor/types"
 
 class TestImageData {
   data: Uint8ClampedArray

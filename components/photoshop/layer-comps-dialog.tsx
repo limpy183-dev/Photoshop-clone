@@ -12,10 +12,10 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Copy, Play, Plus, RefreshCw, Save, Trash2 } from "lucide-react"
-import { useEditorSelector } from "./editor-context"
-import type { LayerComp } from "./types"
-import { captureLayerCompState, createLayerCompFromDocument, summarizeLayerComp } from "./layer-workflows"
-import { uid } from "./uid"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import type { LayerComp } from "@/editor/types"
+import { captureLayerCompState, createLayerCompFromDocument, summarizeLayerComp } from "@/editor/layer-workflows"
+import { uid } from "@/editor/uid"
 
 function uniqueCompName(comps: LayerComp[]) {
   let index = comps.length + 1

@@ -1,6 +1,6 @@
 import * as React from "react"
 
-import type { FrameEasing, OnionSkinSettings } from "../../types"
+import type { FrameEasing, OnionSkinSettings } from "@/editor/types"
 
 export const EASINGS: FrameEasing[] = ["hold", "linear", "ease-in", "ease-out", "ease-in-out"]
 export const TINTS: NonNullable<OnionSkinSettings["tint"]>[] = ["none", "red-cyan", "red-blue", "green-red", "mono"]

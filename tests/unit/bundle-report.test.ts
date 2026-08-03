@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
-import { assertBundleReportHasNoViolations } from "../../scripts/bundle-report-policy"
+import { assertBundleReportHasNoViolations } from "@/scripts/bundle-report-policy"
 import {
   selectInitialRouteResources,
   summarizeRouteResources,
-} from "../../scripts/measure-route-bundles.mjs"
+} from "@/scripts/measure-route-bundles.mjs"
 
 describe("bundle report policy", () => {
   it("excludes client-loaded dynamic chunks after the route entry cutoff", () => {
@@ -83,14 +83,14 @@ describe("bundle report policy", () => {
   it("keeps optional diagnostics out of the persistent status bar graph", () => {
     const source = readFileSync("components/photoshop/status-bar.tsx", "utf8")
     for (const optionalModule of [
-      "./color-pipeline",
-      "./document-io",
-      "./filter-preview",
-      "./large-document",
-      "./memory-budget",
-      "./offscreen-canvas",
-      "./preferences-engine",
-      "./tile-only-export-planning",
+      "@/editor/color/pipeline",
+      "@/editor/document/io",
+      "@/editor/filters/preview",
+      "@/editor/large-document",
+      "@/editor/memory-budget",
+      "@/editor/offscreen-canvas",
+      "@/editor/preferences-engine",
+      "@/editor/tile-only-export-planning",
     ]) {
       expect(source, optionalModule).not.toContain(`from "${optionalModule}"`)
     }
@@ -98,13 +98,13 @@ describe("bundle report policy", () => {
 
   it("loads project codecs only when autosave or recovery needs them", () => {
     const source = readFileSync("components/photoshop/autosave-recovery.tsx", "utf8")
-    expect(source).not.toContain('from "./document-io"')
-    expect(source).toContain('import("./document-project-io")')
+    expect(source).not.toContain('from "@/editor/document/io"')
+    expect(source).toContain('import("@/editor/document/project-io")')
   })
 
   it("keeps filter kernels out of the default layers panel", () => {
     const source = readFileSync("components/photoshop/panels/layers-panel.tsx", "utf8")
-    expect(source).not.toContain('from "../filters"')
-    expect(source).toContain('from "../filters-meta"')
+    expect(source).not.toContain('from "@/editor/filters"')
+    expect(source).toContain('from "@/editor/filters-meta"')
   })
 })

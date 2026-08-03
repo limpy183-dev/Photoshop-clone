@@ -4,7 +4,7 @@ import {
   applyOcioViewTransformToHighBitImage,
   createOcioViewPipeline,
   planHalfFloatGpuPipeline,
-} from "../components/photoshop/webgl-compositor"
+} from "@/editor/webgl-compositor"
 
 test("half-float GPU planner requires renderable float textures and records OCIO stages", () => {
   const plan = planHalfFloatGpuPipeline({

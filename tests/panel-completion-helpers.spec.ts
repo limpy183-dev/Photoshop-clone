@@ -1,33 +1,33 @@
 import { expect, test } from "@playwright/test"
 
-import type { AssetLibraryItem, HistoryEntry, LayerComp, MacroAction, PsDocument } from "../components/photoshop/types"
+import type { AssetLibraryItem, HistoryEntry, LayerComp, MacroAction, PsDocument } from "@/editor/types"
 import {
   extractMentionNames,
   filterAnnotationNotes,
   moveAnnotationNote,
-} from "../components/photoshop/panels/annotations-panel"
+} from "@/components/photoshop/panels/annotations-panel"
 import {
   layerCompExportFilename,
   layerCompNeedsUpdate,
-} from "../components/photoshop/panels/layer-comps-panel"
+} from "@/components/photoshop/panels/layer-comps-panel"
 import {
   actionFolderGroups,
   buildInsertPathStep,
   playbackSpeedToDelayMs,
-} from "../components/photoshop/panels/actions-panel"
+} from "@/components/photoshop/panels/actions-panel"
 import {
   filterToolPresetAssets,
   reorderToolPresetAssets,
-} from "../components/photoshop/panels/tool-presets-panel"
+} from "@/components/photoshop/panels/tool-presets-panel"
 import {
   LOCAL_COLOR_BOOKS,
   mergeRecentSwatch,
-} from "../components/photoshop/panels/swatches-panel"
+} from "@/components/photoshop/panels/swatches-panel"
 import {
   createNoiseGradientPreset,
   insertGradientStopFromPointer,
   updateGradientStopFromDrag,
-} from "../components/photoshop/panels/gradients-panel"
+} from "@/components/photoshop/panels/gradients-panel"
 
 test("annotation helpers filter threads, extract @mentions, and clamp drag repositioning", () => {
   const notes = [

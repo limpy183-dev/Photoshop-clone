@@ -28,14 +28,22 @@ test("critical interaction repeat lane disables retries", () => {
 })
 
 test("persistent editor chrome shares one measured readiness contract", () => {
-  const app = source("components/photoshop/editor-app.tsx")
-  const shell = source("components/photoshop/editor-shell.tsx")
+  const app = source("components/photoshop/editor/app.tsx")
+  const shell = source("components/photoshop/editor/shell.tsx")
   const guard = source("tests/support/runtime-guard.ts")
 
   expect(app.match(/const EditorShell = dynamic/g)).toHaveLength(1)
-  for (const moduleName of ["menu-bar", "options-bar", "document-tabs", "tool-palette", "panel-dock", "status-bar", "canvas-view"]) {
+  for (const moduleName of [
+    "menu-bar",
+    "options-bar",
+    "document/tabs",
+    "tool/palette",
+    "panel-dock",
+    "status-bar",
+    "canvas/view",
+  ]) {
     expect(app).not.toContain(`import("@/components/photoshop/${moduleName}")`)
-    expect(shell).toContain(`from "./${moduleName}"`)
+    expect(shell).toContain(`from "@/components/photoshop/${moduleName}"`)
   }
   expect(guard).toContain("[data-canvas-stage]")
   expect(guard).toContain("getBoundingClientRect")

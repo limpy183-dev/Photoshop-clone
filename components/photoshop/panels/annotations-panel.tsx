@@ -1,11 +1,11 @@
 "use client"
 
 import * as React from "react"
-import { useEditorSelector } from "../editor-context"
-import { downloadBlob, downloadText } from "../document-io"
-import { appendThreadReply, createReviewReport, createReviewThread, describeAnnotationGeometry, normalizeAnnotationGeometry, setThreadResolved } from "../collaboration"
-import type { AnnotationGeometry, CountMarker, Note, PsDocument } from "../types"
-import { uid } from "../uid"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { downloadBlob, downloadText } from "@/editor/document/io"
+import { appendThreadReply, createReviewReport, createReviewThread, describeAnnotationGeometry, normalizeAnnotationGeometry, setThreadResolved } from "@/editor/collaboration"
+import type { AnnotationGeometry, CountMarker, Note, PsDocument } from "@/editor/types"
+import { uid } from "@/editor/uid"
 
 type AnnotationStatusFilter = "open" | "resolved" | "all"
 

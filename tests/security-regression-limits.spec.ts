@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test"
 
-import { POST as postFeedback } from "../app/api/feedback/route"
-import { POST as postSubscribe } from "../app/api/subscribe/route"
+import { POST as postFeedback } from "@/app/api/feedback/route"
+import { POST as postSubscribe } from "@/app/api/subscribe/route"
 import {
   MAX_CANVAS_DIMENSION,
   MAX_CANVAS_PIXELS,
@@ -11,7 +11,7 @@ import {
   assertCanvasSize,
   assertFileSize,
   clampCanvasSize,
-} from "../components/photoshop/canvas-limits"
+} from "@/editor/canvas/limits"
 import {
   clearClientStorageByPrivacy,
   getClientStorageRegistry,
@@ -21,11 +21,11 @@ import {
   writeClientStorageJson,
   writeClientStorageString,
   type ClientStorageKey,
-} from "../components/photoshop/client-storage"
-import { canvasFromDataUrl, deserializeProject } from "../components/photoshop/document-io"
-import { filterPersistedSettingsForHydration } from "../components/photoshop/editor-context"
-import { readRecentDocuments } from "../components/photoshop/recent-documents"
-import { installFixtureDom } from "./photoshop-fixtures"
+} from "@/editor/client-storage"
+import { canvasFromDataUrl, deserializeProject } from "@/editor/document/io"
+import { filterPersistedSettingsForHydration } from "@/components/photoshop/editor/context"
+import { readRecentDocuments } from "@/editor/recent-documents"
+import { installFixtureDom } from "@/tests/photoshop-fixtures"
 
 function jsonRequest(payload: unknown): Request {
   return new Request("http://127.0.0.1/test", {

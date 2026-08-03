@@ -10,8 +10,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
-import { useEditorSelector } from "./editor-context"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "@/editor/client-storage"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
 import {
   CAMERA_RAW_LENS_PROFILES,
   applyCameraRawImageData,
@@ -27,7 +27,7 @@ import {
   type CameraRawPreset,
   type CameraRawSettings,
   type CameraRawSnapshot,
-} from "./camera-raw-engine"
+} from "@/editor/camera-raw-engine"
 
 const DEFAULTS: CameraRawSettings = DEFAULT_CAMERA_RAW_SETTINGS
 type BasicCameraRawKey = keyof Pick<CameraRawSettings, "temperature" | "tint" | "exposure" | "contrast" | "highlights" | "shadows" | "whites" | "blacks" | "clarity" | "dehaze" | "vibrance" | "saturation">

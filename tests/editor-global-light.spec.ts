@@ -5,8 +5,8 @@ import {
   normalizeGlobalLight,
   offsetFromGlobalLight,
   type EditorGlobalLight,
-} from "../components/photoshop/editor-global-light"
-import type { LayerStyle } from "../components/photoshop/types"
+} from "@/editor/global-light"
+import type { LayerStyle } from "@/editor/types"
 
 test("normalizes global light angle and altitude with current fallbacks", () => {
   expect(normalizeGlobalLight({ angle: 220, altitude: -10 })).toEqual({ angle: 180, altitude: 0 })

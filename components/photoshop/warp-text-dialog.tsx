@@ -17,9 +17,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { useEditorSelector } from "./editor-context"
-import { rasterizeText } from "./tool-helpers"
-import type { WarpStyle } from "./types"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { rasterizeText } from "@/editor/tool/helpers"
+import type { WarpStyle } from "@/editor/types"
 
 const STYLES: { id: WarpStyle; label: string }[] = [
   { id: "none", label: "None" },

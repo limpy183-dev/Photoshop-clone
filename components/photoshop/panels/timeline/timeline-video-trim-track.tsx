@@ -1,7 +1,7 @@
 import * as React from "react"
 
-import type { VideoClipTrackState } from "../../three-d-video-engine"
-import { TextBtn } from "./timeline-shared"
+import type { VideoClipTrackState } from "@/editor/three-d-video-engine"
+import { TextBtn } from "@/components/photoshop/panels/timeline/timeline-shared"
 
 export function VideoTrimTrack({
   state,

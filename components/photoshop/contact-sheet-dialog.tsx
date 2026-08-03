@@ -18,8 +18,8 @@ import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
-import { assertFileSize, canvasSizeError, MAX_RASTER_FILE_BYTES } from "./canvas-limits"
-import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
+import { assertFileSize, canvasSizeError, MAX_RASTER_FILE_BYTES } from "@/editor/canvas/limits"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "@/editor/client-storage"
 import {
   CONTACT_SHEET_PAGE_PRESETS,
   CONTACT_SHEET_TEMPLATES,
@@ -34,9 +34,9 @@ import {
   type ContactSheetImageFormat,
   type ContactSheetLayout,
   type ContactSheetRenderable,
-} from "./contact-sheet"
-import { downloadBlob } from "./document-io"
-import { makeDocument, useEditorSelector } from "./editor-context"
+} from "@/editor/contact-sheet"
+import { downloadBlob } from "@/editor/document/io"
+import { makeDocument, useEditorSelector } from "@/components/photoshop/editor/context"
 
 type LayoutMode = "contact-sheet" | "picture-package"
 type SortMode = "name" | "original"

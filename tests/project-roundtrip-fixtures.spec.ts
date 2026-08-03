@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test"
 
-import { deserializeProject, serializeProject } from "../components/photoshop/document-io"
-import { exportSmartObjectContents, replaceSmartObjectContents, smartObjectStatus } from "../components/photoshop/smart-objects"
-import { fixtureCanvas, richFixtureDocument } from "./photoshop-fixtures"
+import { deserializeProject, serializeProject } from "@/editor/document/io"
+import { exportSmartObjectContents, replaceSmartObjectContents, smartObjectStatus } from "@/editor/smart-objects"
+import { fixtureCanvas, richFixtureDocument } from "@/tests/photoshop-fixtures"
 
 test("project round trip preserves rich app-only fixture metadata", async () => {
   const doc = richFixtureDocument()

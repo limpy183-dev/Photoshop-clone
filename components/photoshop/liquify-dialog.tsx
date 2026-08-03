@@ -10,15 +10,15 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
-import { useEditorSelector } from "./editor-context"
-import { makeCanvas } from "./tool-helpers"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { makeCanvas } from "@/editor/tool/helpers"
 import {
   createLiquifyMesh,
   moveLiquifyMeshPointByIndex,
   nearestLiquifyMeshPoint,
   warpImageDataWithLiquifyMesh,
   type LiquifyMesh,
-} from "./liquify-engine"
+} from "@/editor/liquify-engine"
 
 type LiquifyMode = "push" | "reconstruct" | "pucker" | "bloat" | "twirl" | "twirl-left" | "face-eyes" | "face-smile" | "face-jaw"
 

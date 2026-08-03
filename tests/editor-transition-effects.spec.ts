@@ -4,9 +4,9 @@ import {
   runEditorTransitionEffects,
   transitionEditorState,
   type EditorTransitionEffect,
-} from "../components/photoshop/editor-context"
-import type { HistoryEntry, PsDocument } from "../components/photoshop/types"
-import { fixtureCanvas, installFixtureDom } from "./photoshop-fixtures"
+} from "@/components/photoshop/editor/context"
+import type { HistoryEntry, PsDocument } from "@/editor/types"
+import { fixtureCanvas, installFixtureDom } from "@/tests/photoshop-fixtures"
 
 function entry(id: string): HistoryEntry {
   return {

@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { emitRuntimeEvent } from "@/components/photoshop/runtime-telemetry"
+import { emitRuntimeEvent } from "@/editor/runtime-telemetry"
 
 export default function RouteError({
   error,

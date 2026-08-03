@@ -6,9 +6,9 @@ import {
   buildLayerSvg,
   canCopyVectorClipboard,
   writeClipboardText,
-} from "../components/photoshop/vector-clipboard-formatters"
-import type { Layer } from "../components/photoshop/types"
-import { fixtureCanvas, installFixtureDom } from "./photoshop-fixtures"
+} from "@/editor/vector-clipboard-formatters"
+import type { Layer } from "@/editor/types"
+import { fixtureCanvas, installFixtureDom } from "@/tests/photoshop-fixtures"
 
 function shapeLayer(overrides: Partial<Layer> = {}): Layer {
   return {

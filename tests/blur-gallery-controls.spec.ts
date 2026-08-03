@@ -14,7 +14,7 @@ import {
   parseFieldBlurPins,
   parsePathBlurPoints,
   updateBlurGalleryInteraction,
-} from "../components/photoshop/blur-gallery-controls"
+} from "@/editor/blur-gallery-controls"
 
 test("field blur interactions add pins, drag pins, and adjust per-pin blur amount", () => {
   const first = beginBlurGalleryInteraction("field-blur", { blur: 18 }, { x: 20, y: 30 }, 100, 100)

@@ -4,10 +4,10 @@ import * as React from "react"
 import { Check, Eye, Plus, RotateCcw, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { useEditorSelector } from "../editor-context"
-import { buildRetouchingFeedbackModel } from "../retouch-feedback"
-import type { CloneSourcePreset } from "../types"
-import { uid } from "../uid"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { buildRetouchingFeedbackModel } from "@/editor/retouch-feedback"
+import type { CloneSourcePreset } from "@/editor/types"
+import { uid } from "@/editor/uid"
 
 export function CloneSourcePanel() {
   const activeDoc = useEditorSelector((editor) => editor.activeDoc)

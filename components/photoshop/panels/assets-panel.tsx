@@ -2,26 +2,26 @@
 
 import * as React from "react"
 import { toast } from "sonner"
-import { useActiveDocument, useActiveLayer, useEditorCommands, useEditorStateSelector } from "../editor-context"
-import { dispatchPhotoshopEvent } from "../events"
-import { downloadBlob, downloadText } from "../document-io"
+import { useActiveDocument, useActiveLayer, useEditorCommands, useEditorStateSelector } from "@/components/photoshop/editor/context"
+import { dispatchPhotoshopEvent } from "@/editor/events"
+import { downloadBlob, downloadText } from "@/editor/document/io"
 import { Archive, Brush, CircleDot, Download, FolderOpen, Palette, Plus, Sparkles, Trash2, Upload } from "lucide-react"
-import type { AssetLibraryItem, BrushSettings, GradientSettings, ImageAssetGeneratorSettings, LayerStyle } from "../types"
+import type { AssetLibraryItem, BrushSettings, GradientSettings, ImageAssetGeneratorSettings, LayerStyle } from "@/editor/types"
 import {
   collectAssetTags,
   createAssetLibraryBundle,
   extractAssetLibraryArray,
   filterAssetLibrary,
   normalizeAssetTags,
-} from "../asset-library-bundles"
-import { normalizeCustomShapeLibrary, shapeAssetToPreset, shapePresetToAsset } from "../custom-shape-library"
+} from "@/editor/asset-library-bundles"
+import { normalizeCustomShapeLibrary, shapeAssetToPreset, shapePresetToAsset } from "@/editor/custom-shape-library"
 import {
   collectImageAssetGeneratorPlan,
   createImageAssetGeneratorReport,
   exportImageAssetsToZip,
   imageAssetGeneratorSettings,
   safeImageAssetArchiveName,
-} from "../image-assets-generator"
+} from "@/editor/image-assets-generator"
 
 type AssetKind = AssetLibraryItem["kind"] | "all"
 

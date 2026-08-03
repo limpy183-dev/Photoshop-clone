@@ -8,20 +8,20 @@ import {
   encodeTiffImageDataAsync,
   injectAvifXmpMetadata,
   injectWebpXmpMetadata,
-} from "../components/photoshop/raster-codecs"
-import { buildRasterExportMetadata, createExportCompatibilityManifest, createExportLimitationReport, diagnoseBrowserRasterEncoderSupport, showSaveProjectPicker, type ExportFormat } from "../components/photoshop/document-io"
-import { alternativesForLimitation } from "../components/photoshop/export-alternatives"
-import { createEmbeddedFontFromBuffer } from "../components/photoshop/typography-engine"
-import { createStoredZipBlob, encodeStoredZip } from "../components/photoshop/zip-packaging"
-import { runBatchExportItems } from "../components/photoshop/batch-export-engine"
+} from "@/editor/raster/codecs"
+import { buildRasterExportMetadata, createExportCompatibilityManifest, createExportLimitationReport, diagnoseBrowserRasterEncoderSupport, showSaveProjectPicker, type ExportFormat } from "@/editor/document/io"
+import { alternativesForLimitation } from "@/editor/export/alternatives"
+import { createEmbeddedFontFromBuffer } from "@/editor/typography-engine"
+import { createStoredZipBlob, encodeStoredZip } from "@/editor/zip-packaging"
+import { runBatchExportItems } from "@/editor/batch-export-engine"
 import {
   deleteExportPresetAsset,
   duplicateExportPresetAsset,
   parseExportPresetLibrary,
   serializeExportPresetLibrary,
   upsertExportPresetAsset,
-} from "../components/photoshop/export-presets"
-import { installFixtureDom, richFixtureDocument } from "./photoshop-fixtures"
+} from "@/editor/export/presets"
+import { installFixtureDom, richFixtureDocument } from "@/tests/photoshop-fixtures"
 
 function ascii(value: string) {
   return new Uint8Array(Array.from(value, (ch) => ch.charCodeAt(0)))
@@ -329,7 +329,7 @@ test("every problematic export limitation has at least one one-click alternative
 })
 
 test("advanced subsystem video export uses revoking Blob downloads", () => {
-  const source = readFileSync("components/photoshop/advanced-subsystems-dialog.tsx", "utf8")
+  const source = readFileSync("components/photoshop/advanced/subsystems-dialog.tsx", "utf8")
 
   expect(source).not.toContain("downloadDataUrl(URL.createObjectURL(")
   expect(source).toContain("downloadBlob(blob, `${activeDoc.name}-${preset.id}.${ext}`)")

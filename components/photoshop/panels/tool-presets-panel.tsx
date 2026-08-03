@@ -4,7 +4,7 @@ import * as React from "react"
 import { Check, Copy, Download, Plus, Search, Trash2, Upload } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { useEditorSelector } from "../editor-context"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
 import type {
   AssetLibraryItem,
   BrushSettings,
@@ -12,10 +12,10 @@ import type {
   EraserSettings,
   SelectionOptions,
   ToolId,
-} from "../types"
-import { uid } from "../uid"
-import { downloadText } from "../document-io"
-import { mergeToolPresetAssets, normalizeToolPresetAssets, serializeToolPresetAssets } from "../tool-preset-library"
+} from "@/editor/types"
+import { uid } from "@/editor/uid"
+import { downloadText } from "@/editor/document/io"
+import { mergeToolPresetAssets, normalizeToolPresetAssets, serializeToolPresetAssets } from "@/editor/tool/preset-library"
 import { toast } from "sonner"
 
 type ToolPresetPayload = {

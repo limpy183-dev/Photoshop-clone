@@ -11,8 +11,8 @@ import {
   MenubarSubTrigger as DropdownMenuSubTrigger,
   MenubarTrigger as DropdownMenuTrigger,
 } from "@/components/ui/menubar"
-import { getFilterName } from "../filters-meta"
-import type { Layer } from "../types"
+import { getFilterName } from "@/editor/filters-meta"
+import type { Layer } from "@/editor/types"
 
 interface FilterMenuProps {
   menuClass: string

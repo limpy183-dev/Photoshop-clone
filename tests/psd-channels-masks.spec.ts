@@ -15,8 +15,8 @@ import {
   psdLayerMaskToApp,
   psdVectorMaskOnLayerToApp,
   validateClippingGroup,
-} from "../components/photoshop/psd-channels-masks"
-import type { AlphaChannel, Layer, PathProps, PsDocument } from "../components/photoshop/types"
+} from "@/editor/psd/channels-masks"
+import type { AlphaChannel, Layer, PathProps, PsDocument } from "@/editor/types"
 import type { Psd, Layer as PsdLayer } from "ag-psd"
 
 /* -------------------------------------------------------------------------- */

@@ -36,7 +36,7 @@ This is a browser-based Photoshop-style image editor built with Next.js 16, Reac
 
 ### State Management
 
-All editor state lives in `components/photoshop/editor-context.tsx` — a single `EditorProvider` using a reducer pattern. Every state mutation dispatches a typed action (e.g., `set-brush`, `add-layer`, `apply-filter`). This keeps keyboard shortcuts, menu commands, and the command palette all routing through the same dispatch path.
+All editor state lives in `components/photoshop/editor/context.tsx` — a single `EditorProvider` using a reducer pattern. Every state mutation dispatches a typed action (e.g., `set-brush`, `add-layer`, `apply-filter`). This keeps keyboard shortcuts, menu commands, and the command palette all routing through the same dispatch path.
 
 ### Cross-Component Communication
 
@@ -49,7 +49,7 @@ The right-click context menu (`ContextMenuLayer`) uses this pattern to avoid tri
 
 ### Canvas & Rendering
 
-`components/photoshop/canvas-view.tsx` coordinates rendering and pointer input. Layer composition can use the WebGL compositor with a Canvas 2D fallback. Expensive filters run in a Web Worker with optional tiling (`filter-worker.ts`) — large documents are split into tiles to avoid blocking the main thread. Filter output is verified with golden-image Playwright tests.
+`components/photoshop/canvas/view.tsx` coordinates rendering and pointer input. Layer composition can use the WebGL compositor with a Canvas 2D fallback. Expensive filters run in a Web Worker with optional tiling (`filter-worker.ts`) — large documents are split into tiles to avoid blocking the main thread. Filter output is verified with golden-image Playwright tests.
 
 ### History / Undo
 
@@ -75,15 +75,15 @@ Trace is captured on first retry. Base URL is `http://127.0.0.1:3000`.
 
 | File | Purpose |
 |------|---------|
-| `components/photoshop/editor-context.tsx` | Central state machine |
-| `components/photoshop/types.ts` | All shared types (ToolId, BlendMode, LayerKind, …) |
-| `components/photoshop/canvas-view.tsx` | Canvas render + pointer routing |
-| `components/photoshop/webgl-compositor.ts` | WebGL composition with Canvas fallback |
-| `components/photoshop/editor-history-storage.ts` | Lossless, cancellable history blob storage |
+| `components/photoshop/editor/context.tsx` | Central state machine |
+| `editor/types.ts` | All shared types (ToolId, BlendMode, LayerKind, …) |
+| `components/photoshop/canvas/view.tsx` | Canvas render + pointer routing |
+| `editor/webgl-compositor.ts` | WebGL composition with Canvas fallback |
+| `editor/history-storage.ts` | Lossless, cancellable history blob storage |
 | `components/photoshop/panel-registry.tsx` | Panel definitions + workspace presets |
-| `components/photoshop/filters.ts` | Filter registry (60+ filters) |
-| `components/photoshop/filter-worker.ts` | Async + tiled filter execution |
-| `components/photoshop/document-io.ts` | PSD + raster file I/O |
-| `components/photoshop/brush-engine.ts` | Brush rendering, pressure, dynamics |
+| `editor/filters.ts` | Filter registry (60+ filters) |
+| `editor/filters/worker.ts` | Async + tiled filter execution |
+| `editor/document/io.ts` | PSD + raster file I/O |
+| `editor/brush-engine.ts` | Brush rendering, pressure, dynamics |
 | `playwright.config.ts` | Test configuration |
 | `scripts/measure-route-bundles.mjs` | Production startup measurement by route |

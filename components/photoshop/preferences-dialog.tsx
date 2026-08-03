@@ -14,9 +14,9 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
-import { CLIENT_STORAGE_KEYS, removeClientStorageItem } from "./client-storage"
-import { downloadText } from "./document-io"
-import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
+import { CLIENT_STORAGE_KEYS, removeClientStorageItem } from "@/editor/client-storage"
+import { downloadText } from "@/editor/document/io"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "@/editor/events"
 import {
   DEFAULT_CALIBRATION_CSS_PIXELS,
   DEFAULT_CALIBRATION_LINE_MM,
@@ -47,7 +47,7 @@ import {
   resetPreferencesSet,
   savePreferencesToStorage,
   summarizePerformancePolicy,
-} from "./preferences-engine"
+} from "@/editor/preferences-engine"
 import {
   MAX_TECH_PREVIEW_IMPORT_BYTES,
   exportTechPreviewFlags,
@@ -55,9 +55,9 @@ import {
   useTechPreviewFlags,
   type TechPreviewFlagState,
   type TechPreviewRiskLevel,
-} from "./tech-previews"
-import { detectOffscreenCanvasCapabilities, diagnoseOffscreenCanvasTransfer } from "./offscreen-canvas"
-import { requestPrintSizeView } from "./zoom-events"
+} from "@/editor/tech-previews"
+import { detectOffscreenCanvasCapabilities, diagnoseOffscreenCanvasTransfer } from "@/editor/offscreen-canvas"
+import { requestPrintSizeView } from "@/editor/zoom-events"
 
 type PreferenceTab =
   | "general"

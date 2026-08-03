@@ -1,10 +1,10 @@
 "use client"
 
 import * as React from "react"
-import { CLIENT_STORAGE_KEYS, readClientStorageString } from "./client-storage"
-import { useEditorSelector } from "./editor-context"
-import { useMounted } from "./use-mounted"
-import { requestCanvasZoom } from "./zoom-events"
+import { CLIENT_STORAGE_KEYS, readClientStorageString } from "@/editor/client-storage"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { useMounted } from "@/editor/use-mounted"
+import { requestCanvasZoom } from "@/editor/zoom-events"
 import { Slider } from "@/components/ui/slider"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -36,9 +36,9 @@ import type {
   PathHandleMode,
   QuickMaskPaintMode,
   TextAntiAliasMode,
-} from "./types"
-import { WORKSPACE_PRESET_OPTIONS, type WorkspacePresetId } from "./panel-registry"
-import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
+} from "@/editor/types"
+import { WORKSPACE_PRESET_OPTIONS, type WorkspacePresetId } from "@/components/photoshop/panel-registry"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "@/editor/events"
 import {
   Divider,
   labelClass,
@@ -51,7 +51,7 @@ import {
   ToolBadge,
   PercentInput,
   ScrubLabel,
-} from "./options-bar-shared"
+} from "@/components/photoshop/options-bar-shared"
 
 export function OptionsBar() {
   const { tool, brush, dispatch, gradient, foreground, background, eraser, cloneSource, activeDoc } = useEditorSelector((editor) => editor)

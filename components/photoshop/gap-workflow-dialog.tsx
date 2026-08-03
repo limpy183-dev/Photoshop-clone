@@ -11,9 +11,9 @@ import {
   splitImageDataChannels,
   type ApplyImageTargetChannel,
   type PixelChannel,
-} from "./color-channel-ops"
-import { makeCanvas, makeDocument, useEditorSelector } from "./editor-context"
-import { downloadText, loadRasterCanvasFromFile, renderDocumentComposite } from "./document-io"
+} from "@/editor/color/channel-ops"
+import { makeCanvas, makeDocument, useEditorSelector } from "@/components/photoshop/editor/context"
+import { downloadText, loadRasterCanvasFromFile, renderDocumentComposite } from "@/editor/document/io"
 import {
   focusStackImageData,
   mergeHdrSceneLinearImageStack,
@@ -22,12 +22,12 @@ import {
   type HdrExposureWeighting,
   type PanoramaAlignmentModel,
   type PanoramaProjection,
-} from "./photo-workflow-engine"
-import type { HighBitImage } from "./color-pipeline"
-import type { AlphaChannel, BlendMode, Layer } from "./types"
-import { selectionFromMask, selectionToMaskCanvas } from "./tool-helpers"
-import { uid } from "./uid"
-import { dispatchPhotoshopEvent } from "./events"
+} from "@/editor/photo-workflow-engine"
+import type { HighBitImage } from "@/editor/color/pipeline"
+import type { AlphaChannel, BlendMode, Layer } from "@/editor/types"
+import { selectionFromMask, selectionToMaskCanvas } from "@/editor/tool/helpers"
+import { uid } from "@/editor/uid"
+import { dispatchPhotoshopEvent } from "@/editor/events"
 
 export type GapWorkflowKind =
   | "apply-image"

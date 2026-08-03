@@ -11,8 +11,8 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
-import { useEditorSelector } from "./editor-context"
-import { fitImageDimensions } from "./automation-commands"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { fitImageDimensions } from "@/editor/automation-commands"
 
 export function FitImageDialog({
   open,

@@ -16,10 +16,10 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { useEditorSelector, makeCanvas } from "../editor-context"
-import { uid } from "../uid"
-import type { Layer } from "../types"
-import { createSmartObjectSource } from "../smart-objects"
+import { useEditorSelector, makeCanvas } from "@/components/photoshop/editor/context"
+import { uid } from "@/editor/uid"
+import type { Layer } from "@/editor/types"
+import { createSmartObjectSource } from "@/editor/smart-objects"
 import {
   blobToCanvas,
   deleteLibraryAsset,
@@ -32,7 +32,7 @@ import {
   putLibraryAsset,
   subscribeLibraryChange,
   type LibraryAssetRecord,
-} from "../libraries-store"
+} from "@/editor/libraries-store"
 
 type PlaceMode = "smart-object" | "pixel"
 

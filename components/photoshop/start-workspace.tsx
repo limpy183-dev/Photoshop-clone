@@ -18,18 +18,18 @@ import {
   PinOff,
   Sparkles,
 } from "lucide-react"
-import { buildLearningIndex, type LearningIndexItem } from "./learning-index"
+import { buildLearningIndex, type LearningIndexItem } from "@/editor/learning-index"
 import { withBasePath } from "@/lib/base-path"
-import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
-import { addPhotoshopEventListener } from "./events"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "@/editor/client-storage"
+import { addPhotoshopEventListener } from "@/editor/events"
 import {
   estimateDocumentMemoryMb,
   NEW_DOCUMENT_PRESET_GROUPS,
   NEW_DOCUMENT_PRESETS,
   type NewDocumentPreset,
-} from "./new-document-presets"
-import { readRecentDocuments, type RecentDocument } from "./recent-documents"
-import { STARTUP_IMAGE_IMPORT_PARAM, writeStartupImageImport } from "./startup-file-handoff"
+} from "@/editor/new-document-presets"
+import { readRecentDocuments, type RecentDocument } from "@/editor/recent-documents"
+import { STARTUP_IMAGE_IMPORT_PARAM, writeStartupImageImport } from "@/editor/startup-file-handoff"
 
 const FEATURED_PRESET_NAMES = new Set([
   "Default Canvas",

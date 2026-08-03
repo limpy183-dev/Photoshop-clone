@@ -7,7 +7,7 @@ import {
   safeJsonObject,
   SAFE_JSON_DEFAULT_LIMITS,
   type ProjectSanitizationDiagnostics,
-} from "../components/photoshop/project-json-sanitizer"
+} from "@/editor/project-json-sanitizer"
 
 test("project JSON sanitizer strips unsafe object keys and unsupported values", () => {
   const cleaned = safeJsonObject<Record<string, unknown>>({

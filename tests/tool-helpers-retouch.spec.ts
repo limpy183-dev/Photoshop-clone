@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
 
-import { spongeStamp } from "../components/photoshop/tool-helpers"
+import { spongeStamp } from "@/editor/tool/helpers"
 
 class TestImageData {
   data: Uint8ClampedArray

@@ -17,24 +17,24 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { useEditorSelector } from "../editor-context"
-import { downloadText } from "../document-io"
-import { addPhotoshopEventListener } from "../events"
-import { uid } from "../uid"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { downloadText } from "@/editor/document/io"
+import { addPhotoshopEventListener } from "@/editor/events"
+import { uid } from "@/editor/uid"
 import {
   exportCustomShapeLibrary,
   mergeCustomShapeLibraries,
   normalizeCustomShapeLibrary,
   shapeAssetToPreset,
   shapePresetToAsset,
-} from "../custom-shape-library"
+} from "@/editor/custom-shape-library"
 import {
   DEFAULT_SHAPE_PRESETS,
   readShapePresets,
   writeShapePresets,
   type ShapePresetEntry,
-} from "../shape-preset-library"
-import type { AssetLibraryItem, CustomShapeId, ShapeProps } from "../types"
+} from "@/editor/shape-preset-library"
+import type { AssetLibraryItem, CustomShapeId, ShapeProps } from "@/editor/types"
 
 type Tab = "custom" | "bundled"
 

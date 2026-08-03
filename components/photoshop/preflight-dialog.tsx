@@ -11,12 +11,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { downloadText } from "./document-io"
-import { dispatchPhotoshopEvent } from "./events"
-import { useActiveDocument, useEditorCommands, makeCanvas } from "./editor-context"
-import { capabilityWarningsForDocument } from "./capabilities"
-import { supportedIccProfileNames } from "./color-pipeline"
-import { diagnoseDocumentFonts } from "./typography-engine"
+import { downloadText } from "@/editor/document/io"
+import { dispatchPhotoshopEvent } from "@/editor/events"
+import { useActiveDocument, useEditorCommands, makeCanvas } from "@/components/photoshop/editor/context"
+import { capabilityWarningsForDocument } from "@/editor/capabilities"
+import { supportedIccProfileNames } from "@/editor/color/pipeline"
+import { diagnoseDocumentFonts } from "@/editor/typography-engine"
 import {
   analyzePreflightDocument,
   getPreflightFixes as getStructuredPreflightFixes,
@@ -24,8 +24,8 @@ import {
   type PreflightCategory,
   type PreflightFinding,
   type PreflightStatus,
-} from "./preflight-engine"
-import type { ColorManagementSettings, Layer, PrintSettings, PsDocument, Slice } from "./types"
+} from "@/editor/preflight-engine"
+import type { ColorManagementSettings, Layer, PrintSettings, PsDocument, Slice } from "@/editor/types"
 
 const STATUS_CLASS: Record<PreflightStatus, string> = {
   pass: "text-emerald-300",

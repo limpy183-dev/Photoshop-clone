@@ -8,22 +8,22 @@ import {
   createReviewThread,
   normalizeAnnotationGeometry,
   setThreadResolved,
-} from "../components/photoshop/collaboration"
+} from "@/editor/collaboration"
 import {
   collectAssetTags,
   createAssetLibraryBundle,
   filterAssetLibrary,
-} from "../components/photoshop/asset-library-bundles"
-import { filterLocalLibraryAssets, parseLibraryTagInput, type LibraryAssetRecord } from "../components/photoshop/libraries-store"
-import { searchLearningIndex, buildLearningIndex } from "../components/photoshop/learning-index"
-import { LEARNING_PANEL_SOURCES, learningPanelSourceIds } from "../components/photoshop/learning-panel-sources"
-import { deserializeProject, serializeProject } from "../components/photoshop/document-io"
-import { normalizeImportedAssetLibrary } from "../components/photoshop/panels/assets-panel"
-import { __glyphsPanelInternals } from "../components/photoshop/panels/glyphs-panel"
-import { __learnPanelInternals } from "../components/photoshop/panels/learn-panel"
-import { __notesPanelInternals } from "../components/photoshop/panels/notes-panel"
-import type { Note } from "../components/photoshop/types"
-import { richFixtureDocument } from "./photoshop-fixtures"
+} from "@/editor/asset-library-bundles"
+import { filterLocalLibraryAssets, parseLibraryTagInput, type LibraryAssetRecord } from "@/editor/libraries-store"
+import { searchLearningIndex, buildLearningIndex } from "@/editor/learning-index"
+import { LEARNING_PANEL_SOURCES, learningPanelSourceIds } from "@/editor/learning-panel-sources"
+import { deserializeProject, serializeProject } from "@/editor/document/io"
+import { normalizeImportedAssetLibrary } from "@/components/photoshop/panels/assets-panel"
+import { __glyphsPanelInternals } from "@/components/photoshop/panels/glyphs-panel"
+import { __learnPanelInternals } from "@/components/photoshop/panels/learn-panel"
+import { __notesPanelInternals } from "@/components/photoshop/panels/notes-panel"
+import type { Note } from "@/editor/types"
+import { richFixtureDocument } from "@/tests/photoshop-fixtures"
 
 test("project round trip preserves threaded review comments and annotation geometry", async () => {
   const doc = richFixtureDocument()

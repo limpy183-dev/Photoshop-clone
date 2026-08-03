@@ -9,14 +9,14 @@ import {
   formatReplaceColorSamples as facadeFormatReplaceColorSamples,
   getFilter as facadeGetFilter,
   parseReplaceColorSamples as facadeParseReplaceColorSamples,
-} from "../components/photoshop/filters"
+} from "@/editor/filters"
 import {
   FILTERS as registryFilters,
   getFilter as registryGetFilter,
-} from "../components/photoshop/filters/registry"
+} from "@/editor/filters/registry"
 import {
   compositeFilterImageData as moduleComposite,
-} from "../components/photoshop/filters/composite"
+} from "@/editor/filters/composite"
 import {
   boxBlur,
   brightnessContrast,
@@ -29,7 +29,7 @@ import {
   sharpen,
   solarize,
   unsharpMask,
-} from "../components/photoshop/filters/basic-algorithms"
+} from "@/editor/filters/basic-algorithms"
 import {
   clamp01,
   clamp8,
@@ -40,12 +40,12 @@ import {
   parseBool,
   parseNumber,
   rgbToHsl,
-} from "../components/photoshop/filters/pixel-helpers"
+} from "@/editor/filters/pixel-helpers"
 import {
   monotoneCurveLut,
   parseCurvePoints,
   pseudoDither,
-} from "../components/photoshop/filters/curve-helpers"
+} from "@/editor/filters/curve-helpers"
 import {
   AUTO_DEFAULTS as moduleAutoDefaults,
   HDR_TONING_PRESETS as moduleHdrToningPresets,
@@ -59,7 +59,7 @@ import {
   posterize,
   selectiveColor,
   shadowsHighlights,
-} from "../components/photoshop/filters/adjustment-algorithms"
+} from "@/editor/filters/adjustment-algorithms"
 import {
   blackWhiteAdvanced,
   colorBalanceAdvanced,
@@ -68,7 +68,7 @@ import {
   gradientMapAdvanced,
   matchColorAdvanced,
   vibranceAdvanced,
-} from "../components/photoshop/filters/advanced-adjustment-algorithms"
+} from "@/editor/filters/advanced-adjustment-algorithms"
 import {
   adaptiveWideAngle,
   bilinearSample,
@@ -77,13 +77,13 @@ import {
   distortWave,
   parseAdaptiveConstraints,
   vanishingPoint,
-} from "../components/photoshop/filters/distortion-algorithms"
+} from "@/editor/filters/distortion-algorithms"
 import {
   renderClouds,
   renderFibers,
   renderLensFlare,
   skyReplacement,
-} from "../components/photoshop/filters/render-algorithms"
+} from "@/editor/filters/render-algorithms"
 
 class TestImageData {
   data: Uint8ClampedArray

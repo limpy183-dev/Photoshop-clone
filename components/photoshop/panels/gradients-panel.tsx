@@ -3,12 +3,12 @@
 import * as React from "react"
 import { Copy, Download, Plus, RotateCcw, Upload, X } from "lucide-react"
 import { toast } from "sonner"
-import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "../client-storage"
-import { downloadText } from "../document-io"
-import { useEditorCommands, useEditorStateSelector } from "../editor-context"
-import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "../events"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "@/editor/client-storage"
+import { downloadText } from "@/editor/document/io"
+import { useEditorCommands, useEditorStateSelector } from "@/components/photoshop/editor/context"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "@/editor/events"
 import { Input } from "@/components/ui/input"
-import { gradientStopsToEditorStops, mergeById, normalizeGradientPresets } from "../asset-libraries"
+import { gradientStopsToEditorStops, mergeById, normalizeGradientPresets } from "@/editor/asset-libraries"
 
 interface GradientStopPreset {
   pos: number

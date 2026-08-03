@@ -2,9 +2,9 @@
 
 import * as React from "react"
 import { toast } from "sonner"
-import { downloadBlob } from "./document-io"
-import { useEditorSelector } from "./editor-context"
-import { addPhotoshopEventListener } from "./events"
+import { downloadBlob } from "@/editor/document/io"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { addPhotoshopEventListener } from "@/editor/events"
 import {
   collectImageAssetGeneratorPlan,
   createImageAssetGeneratorReport,
@@ -15,9 +15,9 @@ import {
   writeImageAssetsToDirectory,
   type FileSystemDirectoryHandleLike,
   type ImageAssetGeneratorTrigger,
-} from "./image-assets-generator"
-import type { PsDocument } from "./types"
-import { openRegisteredIndexedDB, STORAGE_RESOURCES } from "./storage-registry"
+} from "@/editor/image-assets-generator"
+import type { PsDocument } from "@/editor/types"
+import { openRegisteredIndexedDB, STORAGE_RESOURCES } from "@/editor/storage-registry"
 
 type TimerId = number
 

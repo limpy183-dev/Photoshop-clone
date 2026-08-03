@@ -2,11 +2,11 @@
 
 import * as React from "react"
 import { Camera, Download, RotateCcw, RotateCw, Search, Trash2 } from "lucide-react"
-import { useActiveDocument } from "../editor-context"
-import { useHistoryCommands, useHistoryState } from "../editor-history-hooks"
-import { downloadText } from "../document-io"
+import { useActiveDocument } from "@/components/photoshop/editor/context"
+import { useHistoryCommands, useHistoryState } from "@/editor/history-hooks"
+import { downloadText } from "@/editor/document/io"
 import { cn } from "@/lib/utils"
-import type { HistoryEntry } from "../types"
+import type { HistoryEntry } from "@/editor/types"
 
 export function HistoryPanel() {
   const activeDoc = useActiveDocument()

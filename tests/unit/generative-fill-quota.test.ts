@@ -3,7 +3,7 @@ import {
   generativeFillConcurrencyKey,
   generativeFillDailyKey,
   generativeFillMinuteKey,
-} from "../../lib/generative-fill-quota"
+} from "@/lib/generative-fill-quota"
 
 describe("generative fill quota identity", () => {
   it("uses only the authenticated subject for paid quota buckets", () => {

@@ -6,7 +6,7 @@ import {
   findTransparentFillRegion,
   removePhotomergeVignette,
   type PhotomergeWorkspaceSettings,
-} from "../components/photoshop/photomerge-workspace"
+} from "@/editor/photomerge-workspace"
 
 class TestImageData {
   data: Uint8ClampedArray

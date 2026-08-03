@@ -2,11 +2,11 @@ import { expect, test } from "@playwright/test"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 
-import { getFilter } from "../components/photoshop/filters"
+import { getFilter } from "@/editor/filters"
 import {
   isFilterWorkerSupported,
   planExpensiveFilterTiling,
-} from "../components/photoshop/filter-worker"
+} from "@/editor/filters/worker"
 
 class TestImageData {
   data: Uint8ClampedArray

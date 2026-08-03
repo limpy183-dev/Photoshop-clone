@@ -19,9 +19,9 @@ import {
   roundTripDescriptor,
   type DescriptorHost,
   type RecordableEdit,
-} from "../components/photoshop/action-manager-descriptors"
-import type { Layer, PluginActionDescriptor } from "../components/photoshop/types"
-import { fixtureCanvas, richFixtureDocument } from "./photoshop-fixtures"
+} from "@/editor/action-manager-descriptors"
+import type { Layer, PluginActionDescriptor } from "@/editor/types"
+import { fixtureCanvas, richFixtureDocument } from "@/tests/photoshop-fixtures"
 
 test.afterEach(() => {
   Reflect.deleteProperty(globalThis, "document")

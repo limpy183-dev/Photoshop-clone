@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test"
 
-import { buildPrintPreviewReport } from "../components/photoshop/advanced-subsystems"
-import { analyzePreflightDocument } from "../components/photoshop/preflight-engine"
-import { fixtureCanvas, installFixtureDom, richFixtureDocument } from "./photoshop-fixtures"
+import { buildPrintPreviewReport } from "@/editor/advanced/subsystems"
+import { analyzePreflightDocument } from "@/editor/preflight-engine"
+import { fixtureCanvas, installFixtureDom, richFixtureDocument } from "@/tests/photoshop-fixtures"
 
 function semiTransparentCanvas(width = 8, height = 8) {
   installFixtureDom()

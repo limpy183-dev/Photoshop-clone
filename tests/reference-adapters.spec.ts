@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { expect, test } from "@playwright/test"
 
 test("reference marketing adapter persists and deduplicates records", async () => {
-  const { createMarketingRecordStoreServer } = await import("../docs/reference-adapters/marketing-record-store.mjs")
+  const { createMarketingRecordStoreServer } = await import("@/docs/reference-adapters/marketing-record-store.mjs")
   const directory = mkdtempSync(join(tmpdir(), "marketing-adapter-test-"))
   const server = createMarketingRecordStoreServer({ directory, token: "test-token" })
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
@@ -30,8 +30,8 @@ test("reference marketing adapter persists and deduplicates records", async () =
 })
 
 test("reference adapters refuse unauthenticated startup and requests", async () => {
-  const { createMarketingRecordStoreServer } = await import("../docs/reference-adapters/marketing-record-store.mjs")
-  const { createRateLimitServer } = await import("../docs/reference-adapters/rate-limit-service.mjs")
+  const { createMarketingRecordStoreServer } = await import("@/docs/reference-adapters/marketing-record-store.mjs")
+  const { createRateLimitServer } = await import("@/docs/reference-adapters/rate-limit-service.mjs")
   const directory = mkdtempSync(join(tmpdir(), "adapter-auth-test-"))
   try {
     expect(() => createMarketingRecordStoreServer({ directory, token: undefined })).toThrow(/TOKEN is required/)
@@ -54,7 +54,7 @@ test("reference adapters refuse unauthenticated startup and requests", async () 
 })
 
 test("reference rate-limit adapter persists atomic window decisions", async () => {
-  const { createRateLimitServer } = await import("../docs/reference-adapters/rate-limit-service.mjs")
+  const { createRateLimitServer } = await import("@/docs/reference-adapters/rate-limit-service.mjs")
   const directory = mkdtempSync(join(tmpdir(), "rate-adapter-test-"))
   const server = createRateLimitServer({ directory, token: "test-token" })
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
@@ -79,7 +79,7 @@ test("reference rate-limit adapter persists atomic window decisions", async () =
 })
 
 test("reference rate-limit adapter supports bounded concurrency leases", async () => {
-  const { createRateLimitServer } = await import("../docs/reference-adapters/rate-limit-service.mjs")
+  const { createRateLimitServer } = await import("@/docs/reference-adapters/rate-limit-service.mjs")
   const directory = mkdtempSync(join(tmpdir(), "rate-lease-adapter-test-"))
   const server = createRateLimitServer({ directory, token: "test-token" })
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))

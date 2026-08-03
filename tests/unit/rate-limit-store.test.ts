@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { acquireServerConcurrencySlot, checkServerRateLimit } from "../../lib/rate-limit-store"
+import { acquireServerConcurrencySlot, checkServerRateLimit } from "@/lib/rate-limit-store"
 
 const originalEnvironment = { ...process.env }
 

@@ -15,10 +15,10 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson, type ClientStorageKey } from "../client-storage"
-import { downloadText } from "../document-io"
-import { useEditor } from "../editor-context"
-import { dispatchPhotoshopEvent } from "../events"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson, type ClientStorageKey } from "@/editor/client-storage"
+import { downloadText } from "@/editor/document/io"
+import { useEditor } from "@/components/photoshop/editor/context"
+import { dispatchPhotoshopEvent } from "@/editor/events"
 import type {
   AssetLibraryItem,
   BrushPreset,
@@ -32,7 +32,7 @@ import type {
   PsDocument,
   SelectionOptions,
   ToolId,
-} from "../types"
+} from "@/editor/types"
 import {
   collectPresetFamilies,
   collectPresetSets,
@@ -50,16 +50,16 @@ import {
   type PresetImportConflictPolicy,
   type UnifiedPresetFamily,
   type UnifiedPresetItem,
-} from "../preset-manager"
+} from "@/editor/preset-manager"
 import {
   readShapePresets,
   writeShapePresets,
   type ShapePresetEntry,
-} from "../shape-preset-library"
+} from "@/editor/shape-preset-library"
 import {
   loadSwatches as loadStoredSwatches,
   saveSwatches as saveStoredSwatches,
-} from "../swatches-store"
+} from "@/editor/swatches-store"
 
 type ManagerSwatchEntry = {
   id?: string

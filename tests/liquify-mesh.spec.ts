@@ -4,7 +4,7 @@ import {
   createLiquifyMesh,
   moveLiquifyMeshPoint,
   warpImageDataWithLiquifyMesh,
-} from "../components/photoshop/liquify-engine"
+} from "@/editor/liquify-engine"
 
 class TestImageData {
   data: Uint8ClampedArray

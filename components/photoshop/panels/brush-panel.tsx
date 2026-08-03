@@ -3,7 +3,7 @@
 import * as React from "react"
 import { toast } from "sonner"
 import { Copy, Search, Trash2 } from "lucide-react"
-import { useEditorCommands, useEditorStateSelector } from "../editor-context"
+import { useEditorCommands, useEditorStateSelector } from "@/components/photoshop/editor/context"
 import { Slider } from "@/components/ui/slider"
 import {
   Select,
@@ -13,7 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
-import type { BrushPreset, BrushSettings, SymmetryAxis } from "../types"
+import type { BrushPreset, BrushSettings, SymmetryAxis } from "@/editor/types"
 
 function Section({
   title,
@@ -197,10 +197,10 @@ export function BrushPanel() {
   const [presetSort, setPresetSort] = React.useState<"folder" | "name" | "size">("folder")
 
   const set = (patch: Record<string, unknown>) =>
-    dispatch({ type: "set-brush", brush: patch as Partial<import("../types").BrushSettings> })
+    dispatch({ type: "set-brush", brush: patch as Partial<import("@/editor/types").BrushSettings> })
 
   const setSym = (patch: Record<string, unknown>) =>
-    dispatch({ type: "set-symmetry", symmetry: patch as Partial<import("../types").SymmetrySettings> })
+    dispatch({ type: "set-symmetry", symmetry: patch as Partial<import("@/editor/types").SymmetrySettings> })
 
   const setTexture = (patch: Partial<NonNullable<BrushSettings["texture"]>>) =>
     set({

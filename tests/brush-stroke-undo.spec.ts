@@ -4,7 +4,7 @@ import {
   assertRuntimeHealthy,
   installRuntimeGuard,
   waitForEditorReady,
-} from "./support/runtime-guard"
+} from "@/tests/support/runtime-guard"
 
 const commandShortcut = process.platform === "darwin" ? "Meta+K" : "Control+K"
 const commandSearchPlaceholder = "Search tools, filters, panels, and commands"

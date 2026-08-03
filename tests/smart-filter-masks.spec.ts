@@ -1,16 +1,16 @@
 import { expect, test } from "@playwright/test"
 
-import { reducer } from "../components/photoshop/editor-context"
+import { reducer } from "@/components/photoshop/editor/context"
 import {
   normalizeSmartFilterMaskDensity,
   normalizeSmartFilterMaskFeather,
   resolveSmartFilterMaskAmount,
-} from "../components/photoshop/smart-filter-masks"
+} from "@/editor/smart-filter-masks"
 import {
   createSmartFilterStackPreset,
   hydrateSmartFilterStackPresetEntries,
-} from "../components/photoshop/smart-filter-presets"
-import { richFixtureDocument } from "./photoshop-fixtures"
+} from "@/editor/smart-filter-presets"
+import { richFixtureDocument } from "@/tests/photoshop-fixtures"
 
 type FixtureState = ReturnType<typeof stateWithFixtureDoc>
 

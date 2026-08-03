@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
 
-import { reducer } from "../components/photoshop/editor-context"
+import { reducer } from "@/components/photoshop/editor/context"
 import {
   createLinkedSmartObjectSyncDaemon,
   exportSmartObjectContents,
@@ -8,8 +8,8 @@ import {
   relinkSmartObjectToFile,
   smartObjectStatus,
   syncLinkedSmartObjectSource,
-} from "../components/photoshop/smart-objects"
-import { fixtureCanvas, richFixtureDocument } from "./photoshop-fixtures"
+} from "@/editor/smart-objects"
+import { fixtureCanvas, richFixtureDocument } from "@/tests/photoshop-fixtures"
 
 type FixtureState = ReturnType<typeof stateWithFixtureDoc>
 

@@ -7,7 +7,7 @@ import {
   normalizeLightingEffectsParams,
   parseLightingEffectsLights,
   updateLightingEffectsInteraction,
-} from "../components/photoshop/lighting-effects-controls"
+} from "@/editor/lighting-effects-controls"
 
 test("lighting effects normalizes editable spot lights from filter params", () => {
   const params = normalizeLightingEffectsParams({ style: "spot", intensity: 120 })

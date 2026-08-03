@@ -5,8 +5,8 @@ import {
   alphaBoundsForLayer,
   smartGuideLinesForBounds,
   smartSnapLayerDelta,
-} from "../components/photoshop/canvas-smart-guides"
-import type { Guide, Layer, PsDocument } from "../components/photoshop/types"
+} from "@/components/photoshop/canvas/smart-guides"
+import type { Guide, Layer, PsDocument } from "@/editor/types"
 
 function alphaCanvas(
   width: number,

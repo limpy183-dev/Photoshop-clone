@@ -1,6 +1,6 @@
-import { packagePngSequenceZip, type AnimatedExportFrame } from "../../animation-encoding"
-import { renderAudioMixToWavBlob, type FinalVideoExportPlan } from "../../three-d-video-engine"
-import type { AudioTrack, PsDocument } from "../../types"
+import { packagePngSequenceZip, type AnimatedExportFrame } from "@/editor/animation-encoding"
+import { renderAudioMixToWavBlob, type FinalVideoExportPlan } from "@/editor/three-d-video-engine"
+import type { AudioTrack, PsDocument } from "@/editor/types"
 
 export async function buildTimelineVideoPackage(
   doc: PsDocument,

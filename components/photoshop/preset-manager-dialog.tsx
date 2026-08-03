@@ -39,8 +39,8 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { downloadText } from "./document-io"
-import { useActiveDocument, useActiveLayer, useEditorCommands, useEditorStateSelector, type Action } from "./editor-context"
+import { downloadText } from "@/editor/document/io"
+import { useActiveDocument, useActiveLayer, useEditorCommands, useEditorStateSelector, type Action } from "@/components/photoshop/editor/context"
 import type {
   AssetLibraryItem,
   BrushPreset,
@@ -54,7 +54,7 @@ import type {
   PsDocument,
   SelectionOptions,
   ToolId,
-} from "./types"
+} from "@/editor/types"
 import {
   collectPresetSets,
   createPresetBundle,
@@ -70,7 +70,7 @@ import {
   type PresetImportConflictPolicy,
   type UnifiedPresetFamily,
   type UnifiedPresetItem,
-} from "./preset-manager"
+} from "@/editor/preset-manager"
 import {
   isAssetKind,
   loadManagedGradients,
@@ -85,8 +85,8 @@ import {
   type ManagerGradientEntry,
   type ManagerPatternEntry,
   type ManagerSwatchEntry,
-} from "./preset-stores"
-import type { ShapePresetEntry } from "./shape-preset-library"
+} from "@/editor/preset-stores"
+import type { ShapePresetEntry } from "@/editor/shape-preset-library"
 
 const MAX_UNIFIED_IMPORT_BYTES = 2 * 1024 * 1024
 const HEX_OR_RGBA = /^(#[0-9a-f]{3,8}|rgba?\([^()]{1,80}\))$/i

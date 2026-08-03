@@ -12,8 +12,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Link2, Link2Off } from "lucide-react"
-import { useEditorSelector } from "./editor-context"
-import { MAX_CANVAS_DIMENSION, canvasSizeError } from "./canvas-limits"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { MAX_CANVAS_DIMENSION, canvasSizeError } from "@/editor/canvas/limits"
 
 export function ImageSizeDialog({
   open,

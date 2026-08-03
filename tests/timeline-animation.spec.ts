@@ -8,7 +8,7 @@ import {
   makeFramesFromVideoCanvases,
   renderOnionSkinOverlay,
   splitTimelineFrameAtPlayhead,
-} from "../components/photoshop/timeline-engine"
+} from "@/editor/timeline-engine"
 import {
   collectAnimationFramesAtFps,
   encodeAnimatedGif,
@@ -16,11 +16,11 @@ import {
   encodeAnimatedWebP,
   encodeApngFromFrames,
   packagePngSequenceZip,
-} from "../components/photoshop/animation-encoding"
-import { createExportLimitationReport } from "../components/photoshop/document-io"
-import type { AnimatedExportFrame } from "../components/photoshop/animation-encoding"
-import type { Layer, PsDocument, TimelineFrame } from "../components/photoshop/types"
-import { fixtureCanvas, installFixtureDom } from "./photoshop-fixtures"
+} from "@/editor/animation-encoding"
+import { createExportLimitationReport } from "@/editor/document/io"
+import type { AnimatedExportFrame } from "@/editor/animation-encoding"
+import type { Layer, PsDocument, TimelineFrame } from "@/editor/types"
+import { fixtureCanvas, installFixtureDom } from "@/tests/photoshop-fixtures"
 
 function textFromBytes(bytes: Uint8Array) {
   return Array.from(bytes, (byte) => String.fromCharCode(byte)).join("")

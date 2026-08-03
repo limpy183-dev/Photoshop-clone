@@ -21,11 +21,11 @@ import {
   promoteCameraRawSnapshotToPreset,
   renameCameraRawSnapshot,
   serializeCameraRawSidecar,
-} from "../components/photoshop/camera-raw-engine"
-import { buildSelectAndMaskPreviewModel } from "../components/photoshop/photo-workflow-engine"
-import type { HighBitImage } from "../components/photoshop/color-pipeline"
-import { getFilter } from "../components/photoshop/filters"
-import { applyFilterTiled } from "../components/photoshop/filter-worker"
+} from "@/editor/camera-raw-engine"
+import { buildSelectAndMaskPreviewModel } from "@/editor/photo-workflow-engine"
+import type { HighBitImage } from "@/editor/color/pipeline"
+import { getFilter } from "@/editor/filters"
+import { applyFilterTiled } from "@/editor/filters/worker"
 
 class TestImageData {
   data: Uint8ClampedArray

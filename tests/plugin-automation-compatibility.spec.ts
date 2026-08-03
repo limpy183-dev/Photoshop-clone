@@ -3,21 +3,21 @@ import { expect, test } from "@playwright/test"
 import {
   playAction,
   type ActionEnvelope,
-} from "../components/photoshop/action-conditionals"
+} from "@/editor/action-conditionals"
 import {
   buildVariableDataSetExportPayload,
   parseVariableDataSetImportPayload,
   serializeDatasetRowsCsv,
-} from "../components/photoshop/variables-engine"
+} from "@/editor/variables-engine"
 import {
   buildDropletBundle,
   dropletBundleToAutomationAsset,
   parseDropletBundle,
   serializeDropletBundle,
-} from "../components/photoshop/droplets-bundle"
-import { createAutomationWorkflow } from "../components/photoshop/automation-engine"
-import type { Droplet } from "../components/photoshop/automation-store"
-import type { HistoryEntry, MacroAction, PsDocument, VariableDataSet } from "../components/photoshop/types"
+} from "@/editor/droplets-bundle"
+import { createAutomationWorkflow } from "@/editor/automation-engine"
+import type { Droplet } from "@/editor/automation-store"
+import type { HistoryEntry, MacroAction, PsDocument, VariableDataSet } from "@/editor/types"
 
 function historyEntry(id: string): HistoryEntry {
   return {

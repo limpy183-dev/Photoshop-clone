@@ -11,24 +11,24 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { lazyDialog } from "../lazy-dialog"
-import type { AdvancedSubsystemTab, ColorWorkflowMode } from "../advanced-subsystems-dialog"
-import type { ColorModeDialogTarget } from "../color-mode-dialog"
-import type { GapWorkflowKind } from "../gap-workflow-dialog"
-import type { LargeDocumentOpenPlan } from "../large-document"
-import type { SelectionOperation } from "../management-dialogs"
-import type { PurgeTarget } from "../purge-commands"
-import type { RecentDocument } from "../recent-documents"
-import type { WorkflowPackId } from "../workflow-presets"
-import { preloadCanvasSizeDialog, preloadExportAsDialog, preloadImageSizeDialog } from "../dialog-preload"
-import { FeatureErrorBoundary } from "../feature-error-boundary"
+import { lazyDialog } from "@/components/photoshop/lazy-dialog"
+import type { AdvancedSubsystemTab, ColorWorkflowMode } from "@/components/photoshop/advanced/subsystems-dialog"
+import type { ColorModeDialogTarget } from "@/components/photoshop/color/mode-dialog"
+import type { GapWorkflowKind } from "@/components/photoshop/gap-workflow-dialog"
+import type { LargeDocumentOpenPlan } from "@/editor/large-document"
+import type { SelectionOperation } from "@/components/photoshop/management-dialogs"
+import type { PurgeTarget } from "@/editor/purge-commands"
+import type { RecentDocument } from "@/editor/recent-documents"
+import type { WorkflowPackId } from "@/editor/workflow-presets"
+import { preloadCanvasSizeDialog, preloadExportAsDialog, preloadImageSizeDialog } from "@/editor/dialog-preload"
+import { FeatureErrorBoundary } from "@/components/photoshop/feature-error-boundary"
 
 // All dialogs below are lazy-mounted: the JS chunk is fetched only the first
 // time the user opens the dialog, and the component returns null until then.
 // This keeps dialog source out of the workspace's eager bundle and out of the
 // React tree on idle re-renders.
 const FilterDialog = lazyDialog<{ filterId: string | null; onClose: () => void }>(
-  () => import("../filter-dialog").then((m) => ({ default: m.FilterDialog })),
+  () => import("@/components/photoshop/filters/dialog").then((m) => ({ default: m.FilterDialog })),
   (p) => p.filterId != null,
 )
 const ImageSizeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
@@ -38,37 +38,37 @@ const CanvasSizeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolea
   preloadCanvasSizeDialog,
 )
 const StrokeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../stroke-dialog").then((m) => ({ default: m.StrokeDialog })),
+  () => import("@/components/photoshop/stroke-dialog").then((m) => ({ default: m.StrokeDialog })),
 )
 const FlattenTransparencyDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../flatten-transparency-dialog").then((m) => ({ default: m.FlattenTransparencyDialog })),
+  () => import("@/components/photoshop/flatten-transparency-dialog").then((m) => ({ default: m.FlattenTransparencyDialog })),
 )
 const ColorRangeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../color-range-dialog").then((m) => ({ default: m.ColorRangeDialog })),
+  () => import("@/components/photoshop/color/range-dialog").then((m) => ({ default: m.ColorRangeDialog })),
 )
 const RefineEdgeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../refine-edge-dialog").then((m) => ({ default: m.RefineEdgeDialog })),
+  () => import("@/components/photoshop/refine-edge-dialog").then((m) => ({ default: m.RefineEdgeDialog })),
 )
 const LiquifyDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../liquify-dialog").then((m) => ({ default: m.LiquifyDialog })),
+  () => import("@/components/photoshop/liquify-dialog").then((m) => ({ default: m.LiquifyDialog })),
 )
 const PuppetWarpDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../puppet-warp-dialog").then((m) => ({ default: m.PuppetWarpDialog })),
+  () => import("@/components/photoshop/puppet-warp-dialog").then((m) => ({ default: m.PuppetWarpDialog })),
 )
 const LayerStyleDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../layer-style-dialog").then((m) => ({ default: m.LayerStyleDialog })),
+  () => import("@/components/photoshop/layer-style-dialog").then((m) => ({ default: m.LayerStyleDialog })),
 )
 const WarpTextDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../warp-text-dialog").then((m) => ({ default: m.WarpTextDialog })),
+  () => import("@/components/photoshop/warp-text-dialog").then((m) => ({ default: m.WarpTextDialog })),
 )
 const LayerCompsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../layer-comps-dialog").then((m) => ({ default: m.LayerCompsDialog })),
+  () => import("@/components/photoshop/layer-comps-dialog").then((m) => ({ default: m.LayerCompsDialog })),
 )
 const ColorLabelsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../color-labels-dialog").then((m) => ({ default: m.ColorLabelsDialog })),
+  () => import("@/components/photoshop/color/labels-dialog").then((m) => ({ default: m.ColorLabelsDialog })),
 )
 const FitImageDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../fit-image-dialog").then((m) => ({ default: m.FitImageDialog })),
+  () => import("@/components/photoshop/fit-image-dialog").then((m) => ({ default: m.FitImageDialog })),
 )
 const ExportAsDialog = lazyDialog<{
   open: boolean
@@ -86,52 +86,52 @@ const BatchExportDialog = lazyDialog<{
   onOpenChange: (open: boolean) => void
   initial?: unknown
 }>(
-  () => import("../batch-export-dialog").then((m) => ({ default: m.BatchExportDialog as unknown as React.ComponentType<{
+  () => import("@/components/photoshop/batch-export-dialog").then((m) => ({ default: m.BatchExportDialog as unknown as React.ComponentType<{
     open: boolean
     onOpenChange: (open: boolean) => void
     initial?: unknown
   }> })),
 )
 const BatchProcessingDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../processing-dialogs").then((m) => ({ default: m.BatchProcessingDialog })),
+  () => import("@/components/photoshop/processing-dialogs").then((m) => ({ default: m.BatchProcessingDialog })),
 )
 const ImageProcessorDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void; initial?: unknown }>(
-  () => import("../processing-dialogs").then((m) => ({ default: m.ImageProcessorDialog as unknown as React.ComponentType<{
+  () => import("@/components/photoshop/processing-dialogs").then((m) => ({ default: m.ImageProcessorDialog as unknown as React.ComponentType<{
     open: boolean
     onOpenChange: (open: boolean) => void
     initial?: unknown
   }> })),
 )
 const CropAndStraightenDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../processing-dialogs").then((m) => ({ default: m.CropAndStraightenDialog })),
+  () => import("@/components/photoshop/processing-dialogs").then((m) => ({ default: m.CropAndStraightenDialog })),
 )
 const PdfImportDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../pdf-import-dialog").then((m) => ({ default: m.PdfImportDialog })),
+  () => import("@/components/photoshop/pdf-import-dialog").then((m) => ({ default: m.PdfImportDialog })),
 )
 const DocumentReportDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../document-report-dialog").then((m) => ({ default: m.DocumentReportDialog })),
+  () => import("@/components/photoshop/document/report-dialog").then((m) => ({ default: m.DocumentReportDialog })),
 )
 const PreflightDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../preflight-dialog").then((m) => ({ default: m.PreflightDialog })),
+  () => import("@/components/photoshop/preflight-dialog").then((m) => ({ default: m.PreflightDialog })),
 )
 const FilterGalleryDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../filter-gallery").then((m) => ({ default: m.FilterGalleryDialog })),
+  () => import("@/components/photoshop/filters/gallery").then((m) => ({ default: m.FilterGalleryDialog })),
 )
 const CameraRawDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../camera-raw-dialog").then((m) => ({ default: m.CameraRawDialog })),
+  () => import("@/components/photoshop/camera-raw-dialog").then((m) => ({ default: m.CameraRawDialog })),
 )
 const SelectAndMaskDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../select-and-mask").then((m) => ({ default: m.SelectAndMaskDialog })),
+  () => import("@/components/photoshop/select-and-mask").then((m) => ({ default: m.SelectAndMaskDialog })),
 )
 const FileInfoDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../file-info-dialog").then((m) => ({ default: m.FileInfoDialog })),
+  () => import("@/components/photoshop/file-info-dialog").then((m) => ({ default: m.FileInfoDialog })),
 )
 const RevealSourceDialog = lazyDialog<{
   open: boolean
   onOpenChange: (open: boolean) => void
   docId?: string | null
 }>(
-  () => import("../reveal-source-dialog").then((m) => ({ default: m.RevealSourceDialog })),
+  () => import("@/components/photoshop/reveal-source-dialog").then((m) => ({ default: m.RevealSourceDialog })),
 )
 const AdvancedSubsystemsDialog = lazyDialog<{
   open: boolean
@@ -139,7 +139,7 @@ const AdvancedSubsystemsDialog = lazyDialog<{
   initialTab?: AdvancedSubsystemTab
   initialColorWorkflow?: ColorWorkflowMode
 }>(
-  () => import("../advanced-subsystems-dialog").then((m) => ({ default: m.AdvancedSubsystemsDialog as unknown as React.ComponentType<{
+  () => import("@/components/photoshop/advanced/subsystems-dialog").then((m) => ({ default: m.AdvancedSubsystemsDialog as unknown as React.ComponentType<{
     open: boolean
     onOpenChange: (open: boolean) => void
     initialTab?: AdvancedSubsystemTab
@@ -150,13 +150,13 @@ const AlgorithmicOperationsDialog = lazyDialog<{
   open: boolean
   onOpenChange: (open: boolean) => void
 }>(
-  () => import("../algorithmic-operations-dialog").then((m) => ({ default: m.AlgorithmicOperationsDialog })),
+  () => import("@/components/photoshop/algorithmic-operations-dialog").then((m) => ({ default: m.AlgorithmicOperationsDialog })),
 )
 const GapWorkflowDialog = lazyDialog<{
   workflow: GapWorkflowKind | null
   onOpenChange: (open: boolean) => void
 }>(
-  () => import("../gap-workflow-dialog").then((m) => ({ default: m.GapWorkflowDialog as unknown as React.ComponentType<{
+  () => import("@/components/photoshop/gap-workflow-dialog").then((m) => ({ default: m.GapWorkflowDialog as unknown as React.ComponentType<{
     workflow: GapWorkflowKind | null
     onOpenChange: (open: boolean) => void
   }> })),
@@ -166,7 +166,7 @@ const WorkflowPackDialog = lazyDialog<{
   workflowId: WorkflowPackId | null
   onOpenChange: (open: boolean) => void
 }>(
-  () => import("../workflow-pack-dialog").then((m) => ({ default: m.WorkflowPackDialog as unknown as React.ComponentType<{
+  () => import("@/components/photoshop/workflow-pack-dialog").then((m) => ({ default: m.WorkflowPackDialog as unknown as React.ComponentType<{
     workflowId: WorkflowPackId | null
     onOpenChange: (open: boolean) => void
   }> })),
@@ -176,26 +176,26 @@ const ColorModeDialog = lazyDialog<{
   target: ColorModeDialogTarget | null
   onOpenChange: (open: boolean) => void
 }>(
-  () => import("../color-mode-dialog").then((m) => ({ default: m.ColorModeDialog as unknown as React.ComponentType<{
+  () => import("@/components/photoshop/color/mode-dialog").then((m) => ({ default: m.ColorModeDialog as unknown as React.ComponentType<{
     target: ColorModeDialogTarget | null
     onOpenChange: (open: boolean) => void
   }> })),
   (p) => p.target != null,
 )
 const PreferencesDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../preferences-dialog").then((m) => ({ default: m.PreferencesDialog })),
+  () => import("@/components/photoshop/preferences-dialog").then((m) => ({ default: m.PreferencesDialog })),
 )
 const KeyboardShortcutsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../keyboard-shortcuts-dialog").then((m) => ({ default: m.KeyboardShortcutsDialog })),
+  () => import("@/components/photoshop/keyboard-shortcuts-dialog").then((m) => ({ default: m.KeyboardShortcutsDialog })),
 )
 const MenuCustomizationDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../menu-customization-dialog").then((m) => ({ default: m.MenuCustomizationDialog })),
+  () => import("@/components/photoshop/menu-customization-dialog").then((m) => ({ default: m.MenuCustomizationDialog })),
 )
 const PresetManagerDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../preset-manager-dialog").then((m) => ({ default: m.PresetManagerDialog })),
+  () => import("@/components/photoshop/preset-manager-dialog").then((m) => ({ default: m.PresetManagerDialog })),
 )
 const AboutDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../about-dialog").then((m) => ({ default: m.AboutDialog })),
+  () => import("@/components/photoshop/about-dialog").then((m) => ({ default: m.AboutDialog })),
 )
 const RecentDocumentsDialog = lazyDialog<{
   open: boolean
@@ -205,7 +205,7 @@ const RecentDocumentsDialog = lazyDialog<{
   onRemoveRecent: (id: string) => void
   onClearRecents: () => void
 }>(
-  () => import("../management-dialogs").then((m) => ({ default: m.RecentDocumentsDialog as unknown as React.ComponentType<{
+  () => import("@/components/photoshop/management-dialogs").then((m) => ({ default: m.RecentDocumentsDialog as unknown as React.ComponentType<{
     open: boolean
     onOpenChange: (open: boolean) => void
     recents: RecentDocument[]
@@ -219,17 +219,17 @@ const SelectionOperationDialog = lazyDialog<{
   open: boolean
   onOpenChange: (open: boolean) => void
 }>(
-  () => import("../management-dialogs").then((m) => ({ default: m.SelectionOperationDialog as unknown as React.ComponentType<{
+  () => import("@/components/photoshop/management-dialogs").then((m) => ({ default: m.SelectionOperationDialog as unknown as React.ComponentType<{
     operation: SelectionOperation | null
     open: boolean
     onOpenChange: (open: boolean) => void
   }> })),
 )
 const SaveSelectionDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../management-dialogs").then((m) => ({ default: m.SaveSelectionDialog })),
+  () => import("@/components/photoshop/management-dialogs").then((m) => ({ default: m.SaveSelectionDialog })),
 )
 const LoadSelectionDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../management-dialogs").then((m) => ({ default: m.LoadSelectionDialog })),
+  () => import("@/components/photoshop/management-dialogs").then((m) => ({ default: m.LoadSelectionDialog })),
 )
 const WorkspaceManagerDialog = lazyDialog<{
   open: boolean
@@ -237,7 +237,7 @@ const WorkspaceManagerDialog = lazyDialog<{
   savedWorkspaces: { name: string; savedAt?: number }[]
   onRefresh: () => void
 }>(
-  () => import("../management-dialogs").then((m) => ({ default: m.WorkspaceManagerDialog as unknown as React.ComponentType<{
+  () => import("@/components/photoshop/management-dialogs").then((m) => ({ default: m.WorkspaceManagerDialog as unknown as React.ComponentType<{
     open: boolean
     onOpenChange: (open: boolean) => void
     savedWorkspaces: { name: string; savedAt?: number }[]
@@ -245,10 +245,10 @@ const WorkspaceManagerDialog = lazyDialog<{
   }> })),
 )
 const ContactSheetDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../contact-sheet-dialog").then((m) => ({ default: m.ContactSheetDialog })),
+  () => import("@/components/photoshop/contact-sheet-dialog").then((m) => ({ default: m.ContactSheetDialog })),
 )
 const PhotomergeDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../photomerge-dialog").then((m) => ({ default: m.PhotomergeDialog })),
+  () => import("@/components/photoshop/photomerge-dialog").then((m) => ({ default: m.PhotomergeDialog })),
 )
 const LargeDocumentRecoveryDialog = lazyDialog<{
   open: boolean
@@ -259,34 +259,34 @@ const LargeDocumentRecoveryDialog = lazyDialog<{
   onOpenTileOnly: () => void
   onInspect: () => void
 }>(
-  () => import("../large-document-recovery-dialog").then((m) => ({ default: m.LargeDocumentRecoveryDialog })),
+  () => import("@/components/photoshop/large-document-recovery-dialog").then((m) => ({ default: m.LargeDocumentRecoveryDialog })),
 )
 const GridSettingsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../workspace-dialogs").then((m) => ({ default: m.GridSettingsDialog })),
+  () => import("@/components/photoshop/workspace-dialogs").then((m) => ({ default: m.GridSettingsDialog })),
 )
 const GuideLayoutDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../workspace-dialogs").then((m) => ({ default: m.GuideLayoutDialog })),
+  () => import("@/components/photoshop/workspace-dialogs").then((m) => ({ default: m.GuideLayoutDialog })),
 )
 const NewGuideDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../workspace-dialogs").then((m) => ({ default: m.NewGuideDialog })),
+  () => import("@/components/photoshop/workspace-dialogs").then((m) => ({ default: m.NewGuideDialog })),
 )
 // Task 27 - Adjustment workflows. Each of these adjustments has UI that does
 // not fit the generic FilterDialog renderer, so they ship as purpose-built
 // dialogs lazily mounted only when their menu entry is used.
 const ShadowsHighlightsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../adjustment-dialogs").then((m) => ({ default: m.ShadowsHighlightsDialog })),
+  () => import("@/components/photoshop/adjustment-dialogs").then((m) => ({ default: m.ShadowsHighlightsDialog })),
 )
 const HdrToningDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../adjustment-dialogs").then((m) => ({ default: m.HdrToningDialog })),
+  () => import("@/components/photoshop/adjustment-dialogs").then((m) => ({ default: m.HdrToningDialog })),
 )
 const MatchColorDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../adjustment-dialogs").then((m) => ({ default: m.MatchColorDialog })),
+  () => import("@/components/photoshop/adjustment-dialogs").then((m) => ({ default: m.MatchColorDialog })),
 )
 const ReplaceColorDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../adjustment-dialogs").then((m) => ({ default: m.ReplaceColorDialog })),
+  () => import("@/components/photoshop/adjustment-dialogs").then((m) => ({ default: m.ReplaceColorDialog })),
 )
 const EqualizePromptDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("../adjustment-dialogs").then((m) => ({ default: m.EqualizePromptDialog })),
+  () => import("@/components/photoshop/adjustment-dialogs").then((m) => ({ default: m.EqualizePromptDialog })),
 )
 
 export type AutoAlgorithmId =
@@ -301,7 +301,7 @@ const AutoOptionsDialog = lazyDialog<{
   initialAlgorithm?: AutoAlgorithmId
   label?: string
 }>(
-  () => import("../adjustment-dialogs").then((m) => ({ default: m.AutoOptionsDialog })),
+  () => import("@/components/photoshop/adjustment-dialogs").then((m) => ({ default: m.AutoOptionsDialog })),
 )
 
 interface MenuDialogsProps {

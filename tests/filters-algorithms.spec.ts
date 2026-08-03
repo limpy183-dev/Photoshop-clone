@@ -4,12 +4,12 @@ import { runInNewContext } from "node:vm"
 import {
   analyzeContentAwareScale,
   buildEdgeAwareQuickSelectionMaskData,
-} from "../components/photoshop/algorithmic-operations"
+} from "@/editor/algorithmic-operations"
 import {
   FILTERS,
   compositeFilterImageData,
   getFilter,
-} from "../components/photoshop/filters"
+} from "@/editor/filters"
 import {
   applyFilterBatch,
   applyFilterAsync,
@@ -18,12 +18,12 @@ import {
   getFilterWorkerSupport,
   isFilterWorkerSupported,
   type FilterBatchOperation,
-} from "../components/photoshop/filter-worker"
-import { workerSource } from "../components/photoshop/filter-worker-source"
+} from "@/editor/filters/worker"
+import { workerSource } from "@/editor/filters/worker-source"
 import {
   sampleImageDataBilinear,
-} from "../components/photoshop/warp-transform"
-import { magneticLassoSnap, magneticLassoTrace } from "../components/photoshop/tool-helpers"
+} from "@/editor/warp-transform"
+import { magneticLassoSnap, magneticLassoTrace } from "@/editor/tool/helpers"
 
 class TestImageData {
   data: Uint8ClampedArray

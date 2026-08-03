@@ -13,8 +13,8 @@ import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { Label } from "@/components/ui/label"
 import { Trash2 } from "lucide-react"
-import type { GradientStop, MultiGradient } from "./types"
-import { hexToRgba } from "./color-utils"
+import type { GradientStop, MultiGradient } from "@/editor/types"
+import { hexToRgba } from "@/editor/color/utils"
 
 interface GradientEditorProps {
   open: boolean

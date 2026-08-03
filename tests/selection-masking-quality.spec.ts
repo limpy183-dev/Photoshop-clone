@@ -5,7 +5,7 @@ import {
   decontaminateImageDataWithMask,
   refineSelectionMaskData,
   selectionDiagnosticsOverlayData,
-} from "../components/photoshop/algorithmic-operations"
+} from "@/editor/algorithmic-operations"
 
 class TestImageData {
   data: Uint8ClampedArray

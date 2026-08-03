@@ -7,28 +7,28 @@ import {
   isAdjustmentNoop,
   isAdjustmentType,
   nextAdjustmentLayerName,
-} from "../components/photoshop/adjustment-layers"
+} from "@/editor/adjustment-layers"
 import {
   cleanImportText,
   normalizeCredentialImportPayload,
   normalizeDropletImportPayload,
-} from "../components/photoshop/advanced-subsystems-import-normalizers"
-import { parseDslSource, runDsl, validateDsl, type DslHostApi } from "../components/photoshop/command-dsl"
-import { computeContextualHelp, contextualHelpForTool, listToolsWithHelp } from "../components/photoshop/contextual-help"
-import { FILTERS } from "../components/photoshop/filters"
+} from "@/editor/advanced/subsystems-import-normalizers"
+import { parseDslSource, runDsl, validateDsl, type DslHostApi } from "@/editor/command-dsl"
+import { computeContextualHelp, contextualHelpForTool, listToolsWithHelp } from "@/editor/contextual-help"
+import { FILTERS } from "@/editor/filters"
 import {
   assertValidScratchKey,
   isValidScratchKey,
   planScratchStorage,
-} from "../components/photoshop/opfs-scratch"
+} from "@/editor/opfs-scratch"
 import {
   mergeToolPresetAssets,
   normalizeToolPresetAssets,
   serializeToolPresetAssets,
-} from "../components/photoshop/tool-preset-library"
-import { hexToRgb, hexToRgba, rgbToHex } from "../components/photoshop/color-utils"
-import type { AssetLibraryItem, Layer, PsDocument } from "../components/photoshop/types"
-import { fixtureCanvas } from "./photoshop-fixtures"
+} from "@/editor/tool/preset-library"
+import { hexToRgb, hexToRgba, rgbToHex } from "@/editor/color/utils"
+import type { AssetLibraryItem, Layer, PsDocument } from "@/editor/types"
+import { fixtureCanvas } from "@/tests/photoshop-fixtures"
 
 test("shared color helpers normalize hex, rgba alpha, and channel bounds", () => {
   expect(hexToRgb("#abc")).toEqual({ r: 170, g: 187, b: 204 })

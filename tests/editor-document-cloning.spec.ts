@@ -5,9 +5,9 @@ import {
   cloneCanvas,
   cloneLayerIntoDocument,
   duplicateDocumentDeep,
-} from "../components/photoshop/editor-document-cloning"
-import type { AlphaChannel, Layer, PsDocument } from "../components/photoshop/types"
-import { fixtureMask, installFixtureDom } from "./photoshop-fixtures"
+} from "@/editor/document-cloning"
+import type { AlphaChannel, Layer, PsDocument } from "@/editor/types"
+import { fixtureMask, installFixtureDom } from "@/tests/photoshop-fixtures"
 
 function rgbaCanvas(width: number, height: number, pixels: number[]) {
   installFixtureDom()

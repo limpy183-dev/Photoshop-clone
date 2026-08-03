@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { GET as getReadiness } from "../../app/api/health/route"
-import { GET as getLiveness } from "../../app/api/health/live/route"
-import { getAdapterHealth } from "../../lib/adapter-health"
+import { GET as getReadiness } from "@/app/api/health/route"
+import { GET as getLiveness } from "@/app/api/health/live/route"
+import { getAdapterHealth } from "@/lib/adapter-health"
 
 describe("health routes", () => {
   afterEach(() => {

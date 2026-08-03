@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test"
 
 async function loadProcessUtils() {
-  return await import("../scripts/server-process-utils.mjs") as {
+  return await import("@/scripts/server-process-utils.mjs") as {
     exitCodeForTerminatedChild: (code: number | null, signal: string | null) => number
     terminateProcessTree: (
       child: { pid?: number; kill: (signal: string) => boolean },

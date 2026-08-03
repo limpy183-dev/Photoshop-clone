@@ -11,9 +11,9 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { useEditorSelector } from "./editor-context"
-import { dispatchPhotoshopEvent } from "./events"
-import { layerHasPartialAlpha } from "./flatten-transparency"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { dispatchPhotoshopEvent } from "@/editor/events"
+import { layerHasPartialAlpha } from "@/editor/flatten-transparency"
 
 type Scope = "document" | "selected" | "visible"
 

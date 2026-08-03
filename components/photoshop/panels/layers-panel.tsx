@@ -1,9 +1,9 @@
 "use client"
 
 import * as React from "react"
-import { useEditorSelector, useRenderSubscription } from "../editor-context"
-import { makeCanvas } from "../editor-context"
-import { FILTER_META } from "../filters-meta"
+import { useEditorSelector, useRenderSubscription } from "@/components/photoshop/editor/context"
+import { makeCanvas } from "@/components/photoshop/editor/context"
+import { FILTER_META } from "@/editor/filters-meta"
 import {
   Eye,
   EyeOff,
@@ -62,13 +62,13 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
-import type { AdjustmentType, BlendMode, Layer, LayerKind, PsDocument } from "../types"
-import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop } from "../adjustment-layers"
-import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "../events"
-import type { MergedRenderChange } from "../render-bus"
-import { createLayerMetadata, layerMatchesQuery } from "../layer-workflows"
-import { copyLayerCss, copyLayerSvg } from "../vector-clipboard"
-import { uid } from "../uid"
+import type { AdjustmentType, BlendMode, Layer, LayerKind, PsDocument } from "@/editor/types"
+import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop } from "@/editor/adjustment-layers"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "@/editor/events"
+import type { MergedRenderChange } from "@/editor/render-bus"
+import { createLayerMetadata, layerMatchesQuery } from "@/editor/layer-workflows"
+import { copyLayerCss, copyLayerSvg } from "@/editor/vector-clipboard"
+import { uid } from "@/editor/uid"
 
 const BLENDS: BlendMode[] = [
   "normal",

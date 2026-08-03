@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { emitRuntimeEvent } from "./runtime-telemetry"
+import { emitRuntimeEvent } from "@/editor/runtime-telemetry"
 
 interface FeatureErrorBoundaryProps {
   children: React.ReactNode

@@ -6,13 +6,13 @@ import {
   planBrushStrokeBenchmark,
   planLargeCanvasBenchmark,
   planMergeWorkflowTiling,
-} from "../components/photoshop/performance-engine"
+} from "@/editor/performance-engine"
 import {
   applyFilterAsync,
   applyFilterBatch,
   planExpensiveFilterTiling,
   planWorkerFallback,
-} from "../components/photoshop/filter-worker"
+} from "@/editor/filters/worker"
 
 class TestImageData {
   data: Uint8ClampedArray

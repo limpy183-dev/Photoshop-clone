@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test"
-import { createEditorStore } from "../components/photoshop/editor-store"
-import { selectToolSettings } from "../components/photoshop/editor-selectors"
-import type { EditorState } from "../components/photoshop/editor-context"
+import { createEditorStore } from "@/editor/store"
+import { selectToolSettings } from "@/editor/selectors"
+import type { EditorState } from "@/components/photoshop/editor/context"
 
 test("editor store publishes canonical snapshots synchronously", () => {
   const store = createEditorStore({ count: 0 })

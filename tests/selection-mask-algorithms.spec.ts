@@ -11,7 +11,7 @@ import {
   smoothMaskData,
   traceMagneticLassoEdgePathData,
   transformSelectionMaskData,
-} from "../components/photoshop/selection-algorithms"
+} from "@/editor/selection-algorithms"
 
 function mask(width: number, height: number, selected: Array<[number, number]>) {
   const data = new Uint8ClampedArray(width * height)

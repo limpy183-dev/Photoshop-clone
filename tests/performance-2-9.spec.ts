@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test"
 import {
   TiledBackingStore,
   createLayerTileAddress,
-} from "../components/photoshop/tiled-backing-store"
+} from "@/editor/tiled-backing-store"
 import {
   layerTileAddressForLayer,
   materializeLayerContentCanvas,
@@ -12,24 +12,24 @@ import {
   renderLayerTileForBackingStore,
   renderThreeDLayerTilePreview,
   renderTileCanvas,
-} from "../components/photoshop/layer-tile-renderer"
-import { planDocumentTileRecomposition } from "../components/photoshop/document-tile-recomposition"
+} from "@/editor/layer-tile-renderer"
+import { planDocumentTileRecomposition } from "@/editor/document/tile-recomposition"
 import {
   createProgressiveTileRefiner,
-} from "../components/photoshop/progressive-renderer"
+} from "@/editor/progressive-renderer"
 import {
   downsampleImageData,
-} from "../components/photoshop/progressive-preview"
+} from "@/editor/progressive-preview"
 import {
   adaptiveDirtyRedrawThreshold,
   planLayerDirtyRects,
-} from "../components/photoshop/dirty-rect"
+} from "@/editor/dirty-rect"
 import {
   MemoryBudgetTracker,
   createHeapMemoryMonitor,
   formatMemoryUsage,
   planRuntimeMemoryPressure,
-} from "../components/photoshop/memory-budget"
+} from "@/editor/memory-budget"
 import {
   compactIncrementalAutosaveChain,
   compressAutosaveDelta,
@@ -37,29 +37,29 @@ import {
   scheduleIncrementalAutosaveCompaction,
   type IncrementalAutosaveBase,
   type IncrementalAutosaveDelta,
-} from "../components/photoshop/autosave-incremental"
+} from "@/editor/autosave-incremental"
 import {
   diagnoseOffscreenCanvasTransfer,
-} from "../components/photoshop/offscreen-canvas"
+} from "@/editor/offscreen-canvas"
 import {
   acquirePooledCanvas,
   cleanupIdleCanvases,
   getCanvasPoolStats,
   releasePooledCanvas,
   resetCanvasPoolForTests,
-} from "../components/photoshop/canvas-utils"
+} from "@/editor/canvas/utils"
 import {
   getWebGLLayerCapability,
   isWebGLBlendModeCompatible,
   planGpuFilterChain,
   planWebGLLayerStack,
   planWebGLCompositor,
-} from "../components/photoshop/webgl-compositor"
+} from "@/editor/webgl-compositor"
 import {
   createRafScheduler,
-} from "../components/photoshop/raf-coalescer"
-import type { BlendMode, Layer, PsDocument } from "../components/photoshop/types"
-import { fixtureCanvas, fixtureMask, installFixtureDom } from "./photoshop-fixtures"
+} from "@/editor/raf-coalescer"
+import type { BlendMode, Layer, PsDocument } from "@/editor/types"
+import { fixtureCanvas, fixtureMask, installFixtureDom } from "@/tests/photoshop-fixtures"
 
 class TestImageData {
   data: Uint8ClampedArray

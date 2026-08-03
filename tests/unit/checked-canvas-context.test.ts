@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { requireCanvas2DContext } from "../../components/photoshop/checked-canvas-context"
+import { requireCanvas2DContext } from "@/editor/checked-canvas-context"
 
 describe("checked canvas context", () => {
   it("returns a supported 2D context", () => {

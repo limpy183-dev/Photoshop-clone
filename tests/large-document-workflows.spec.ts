@@ -8,10 +8,10 @@ import {
   describeLargeDocumentRecovery,
   diagnoseBrowserLargeDocumentLimits,
   planLargeDocumentOpen,
-} from "../components/photoshop/large-document"
-import { createDocumentReport } from "../components/photoshop/document-io"
-import { analyzePreflightDocument } from "../components/photoshop/preflight-engine"
-import { installFixtureDom, fixtureCanvas } from "./photoshop-fixtures"
+} from "@/editor/large-document"
+import { createDocumentReport } from "@/editor/document/io"
+import { analyzePreflightDocument } from "@/editor/preflight-engine"
+import { installFixtureDom, fixtureCanvas } from "@/tests/photoshop-fixtures"
 
 test("large document planner gives full, reduced, tile-only, and inspection choices", () => {
   const plan = planLargeDocumentOpen({

@@ -7,9 +7,9 @@ import {
   inspectImportFileDimensions,
   loadImageFromFile,
   loadRasterCanvasFromFile,
-} from "../components/photoshop/document-io"
-import { MAX_CANVAS_DIMENSION, MAX_CANVAS_PIXELS } from "../components/photoshop/canvas-limits"
-import { installFixtureDom } from "./photoshop-fixtures"
+} from "@/editor/document/io"
+import { MAX_CANVAS_DIMENSION, MAX_CANVAS_PIXELS } from "@/editor/canvas/limits"
+import { installFixtureDom } from "@/tests/photoshop-fixtures"
 
 function ascii(value: string) {
   return Array.from(value, (ch) => ch.charCodeAt(0))

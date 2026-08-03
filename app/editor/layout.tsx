@@ -1,5 +1,5 @@
 import type { Metadata } from "next"
-import { EditorBodyLock } from "@/components/photoshop/editor-body-lock"
+import { EditorBodyLock } from "@/components/photoshop/editor/body-lock"
 
 export const metadata: Metadata = {
   title: "Photoshop Web — Editor",

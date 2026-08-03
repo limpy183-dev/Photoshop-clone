@@ -13,10 +13,10 @@ import {
   MenubarSubTrigger as DropdownMenuSubTrigger,
   MenubarTrigger as DropdownMenuTrigger,
 } from "@/components/ui/menubar"
-import { dispatchPhotoshopEvent } from "../events"
-import { makeCanvas, type Action } from "../editor-context"
-import type { ChangedLayerIds } from "../editor-history-geometry"
-import type { Layer, PsDocument } from "../types"
+import { dispatchPhotoshopEvent } from "@/editor/events"
+import { makeCanvas, type Action } from "@/components/photoshop/editor/context"
+import type { ChangedLayerIds } from "@/editor/history-geometry"
+import type { Layer, PsDocument } from "@/editor/types"
 
 export type SelectMenuProps = {
   menuClass: string

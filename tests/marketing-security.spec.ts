@@ -4,14 +4,14 @@ import path from "node:path"
 
 import { expect, test } from "@playwright/test"
 
-import { appendRecord, getClientIp } from "../lib/marketing-store"
-import { resolveClientIdentity } from "../lib/client-identity"
-import { acquireConcurrencySlot, checkServerRateLimit } from "../lib/rate-limit-store"
-import { generativeFillConcurrencyKey } from "../lib/generative-fill-quota"
-import { createServerCapability, verifyServerCapability } from "../lib/server-capabilities"
-import { POST as postFeedback } from "../app/api/feedback/route"
-import { POST as postGenerativeFill } from "../app/api/photoshop/generative-fill/route"
-import { POST as postSubscribe } from "../app/api/subscribe/route"
+import { appendRecord, getClientIp } from "@/lib/marketing-store"
+import { resolveClientIdentity } from "@/lib/client-identity"
+import { acquireConcurrencySlot, checkServerRateLimit } from "@/lib/rate-limit-store"
+import { generativeFillConcurrencyKey } from "@/lib/generative-fill-quota"
+import { createServerCapability, verifyServerCapability } from "@/lib/server-capabilities"
+import { POST as postFeedback } from "@/app/api/feedback/route"
+import { POST as postGenerativeFill } from "@/app/api/photoshop/generative-fill/route"
+import { POST as postSubscribe } from "@/app/api/subscribe/route"
 
 type AppendOptions = {
   dedupeById?: boolean
@@ -141,7 +141,7 @@ test("appendRecord rejects writes after the configured record quota", async () =
 })
 
 test("API JSON body reader rejects oversized content-length before consuming the body", async () => {
-  const marketingStore = await import("../lib/marketing-store")
+  const marketingStore = await import("@/lib/marketing-store")
   const readJsonWithLimit = (marketingStore as Record<string, unknown>).readJsonWithLimit as
     | ((request: Request, maxBytes: number) => Promise<unknown>)
     | undefined
@@ -165,7 +165,7 @@ test("API JSON body reader rejects oversized content-length before consuming the
 })
 
 test("API rate limiter blocks repeated requests in a fixed window", async () => {
-  const marketingStore = await import("../lib/marketing-store")
+  const marketingStore = await import("@/lib/marketing-store")
   const checkRateLimit = (marketingStore as Record<string, unknown>).checkRateLimit as
     | ((
       key: string,
@@ -197,7 +197,7 @@ test("API rate limiter blocks repeated requests in a fixed window", async () => 
 })
 
 test("local rate limiter bounds attacker-controlled bucket growth", async () => {
-  const { checkRateLimit } = await import("../lib/marketing-store")
+  const { checkRateLimit } = await import("@/lib/marketing-store")
   const options = { limit: 2, maxBuckets: 2, now: 50_000, windowMs: 10_000 }
 
   expect(checkRateLimit(`bounded-a-${Date.now()}`, options)).toMatchObject({ allowed: true })
@@ -647,7 +647,7 @@ test("client IP fallback uses request fingerprint instead of a shared unknown bu
 })
 
 test("rate-limit buckets are isolated per fingerprint so two distinct clients each get a fresh window", async () => {
-  const marketingStore = await import("../lib/marketing-store")
+  const marketingStore = await import("@/lib/marketing-store")
   const checkRateLimit = marketingStore.checkRateLimit as (
     key: string,
     options: { limit: number; now: number; windowMs: number },

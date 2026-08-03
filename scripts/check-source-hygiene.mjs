@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { join, relative, resolve } from "node:path"
 
 const root = process.cwd()
-const scanRoots = ["app", "components", "hooks", "lib", "scripts", "tests"]
+const scanRoots = ["app", "components", "editor", "hooks", "lib", "scripts", "tests"]
 const extensions = new Set([".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"])
 const mojibakePattern = /[\u00c2\u00c3\ufffd]|\u00e2(?:[\u0080-\u00bf]|.)?/gu
 

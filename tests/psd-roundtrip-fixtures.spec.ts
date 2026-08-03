@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test"
 
-import { createDocumentReport, serializePsd } from "../components/photoshop/document-io"
-import type { Layer, PsDocument } from "../components/photoshop/types"
-import { fixtureCanvas, fixtureMask, richFixtureDocument } from "./photoshop-fixtures"
+import { createDocumentReport, serializePsd } from "@/editor/document/io"
+import type { Layer, PsDocument } from "@/editor/types"
+import { fixtureCanvas, fixtureMask, richFixtureDocument } from "@/tests/photoshop-fixtures"
 
 test("PSD report classifies rich app-only fixture metadata without overclaiming", () => {
   const doc = richFixtureDocument()

@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { AlertTriangle, Download, Search, RotateCcw, Upload, X } from "lucide-react"
 import { toast } from "sonner"
-import { downloadText } from "./document-io"
+import { downloadText } from "@/editor/document/io"
 import {
   DEFAULT_SHORTCUTS,
   buildShortcutOverrideUpdate,
@@ -23,7 +23,7 @@ import {
   saveCustomShortcuts,
   shortcutConflictMap,
   validShortcutOverrides,
-} from "./shortcuts"
+} from "@/editor/shortcuts"
 
 export function KeyboardShortcutsDialog({
   open,

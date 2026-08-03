@@ -9,12 +9,12 @@ import {
   embedPsdAppPreservationInXmp,
   extractPsdAppPreservationFromXmp,
   restorePsdNativeSourceSnapshot,
-} from "../components/photoshop/psd-compatibility"
-import { createEmbeddedFontFromBuffer } from "../components/photoshop/typography-engine"
-import { createLargeDocumentInspectionDocument, planLargeDocumentOpen } from "../components/photoshop/large-document"
-import type { Layer, PsDocument } from "../components/photoshop/types"
+} from "@/editor/psd/compatibility"
+import { createEmbeddedFontFromBuffer } from "@/editor/typography-engine"
+import { createLargeDocumentInspectionDocument, planLargeDocumentOpen } from "@/editor/large-document"
+import type { Layer, PsDocument } from "@/editor/types"
 import type { Psd } from "ag-psd"
-import { fixtureCanvas, fixtureMask, installFixtureDom, richFixtureDocument } from "./photoshop-fixtures"
+import { fixtureCanvas, fixtureMask, installFixtureDom, richFixtureDocument } from "@/tests/photoshop-fixtures"
 
 test("PSD app-preservation payload restores app-only layer data without marker names", async () => {
   installFixtureDom()

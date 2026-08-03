@@ -1,6 +1,6 @@
-import { IDENTITY_TRANSFORM } from "../../timeline-engine"
-import type { FrameLayerTransform, PsDocument, TimelineFrame } from "../../types"
-import { TextBtn } from "./timeline-shared"
+import { IDENTITY_TRANSFORM } from "@/editor/timeline-engine"
+import type { FrameLayerTransform, PsDocument, TimelineFrame } from "@/editor/types"
+import { TextBtn } from "@/components/photoshop/panels/timeline/timeline-shared"
 
 export function TransformPanel({
   doc,

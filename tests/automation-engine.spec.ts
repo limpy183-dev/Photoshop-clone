@@ -5,7 +5,7 @@ import {
   parseAutomationWorkflowImportPayload,
   parseSafeDslCommands,
   renderTemplateName,
-} from "../components/photoshop/automation-engine"
+} from "@/editor/automation-engine"
 
 test("safe DSL accepts command calls with JSON arguments and rejects arbitrary JavaScript", () => {
   const commands = parseSafeDslCommands('report("ready")\nsetForeground("#ff3366")\nsetLayerOpacity("active", 0.42)')

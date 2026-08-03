@@ -14,9 +14,9 @@ import {
   stripVideoCacheFromEntry,
   stripVideoCacheFromHistory,
   stripVideoCacheFromSnapshots,
-} from "../components/photoshop/editor-history-storage"
-import type { HistoryEntry, HistorySnapshot, Layer, PsDocument, TimelineFrame, VideoLayerProps } from "../components/photoshop/types"
-import { fixtureCanvas, installFixtureDom } from "./photoshop-fixtures"
+} from "@/editor/history-storage"
+import type { HistoryEntry, HistorySnapshot, Layer, PsDocument, TimelineFrame, VideoLayerProps } from "@/editor/types"
+import { fixtureCanvas, installFixtureDom } from "@/tests/photoshop-fixtures"
 
 function layerSnapshot(id: string, canvas = fixtureCanvas(4, 3)): HistoryEntry["layers"][number] {
   return {

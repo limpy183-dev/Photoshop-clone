@@ -1,16 +1,16 @@
 "use client"
 
 import * as React from "react"
-import { useEditorSelector, useRenderSubscription, makeCanvas } from "../editor-context"
+import { useEditorSelector, useRenderSubscription, makeCanvas } from "@/components/photoshop/editor/context"
 import { PenTool, Trash2, MousePointer2, CircleDot, Route } from "lucide-react"
 import {
   pathToSelectionMask,
   selectionFromMask,
   selectionToPath,
-} from "../tool-helpers"
-import { appendPathToCanvas, applyShapeBooleanOperation, shapeToEditablePath } from "../vector-path-operations"
-import { strokePathWithBrushDynamics } from "../vector-stroke-dynamics"
-import type { Layer, PathProps } from "../types"
+} from "@/editor/tool/helpers"
+import { appendPathToCanvas, applyShapeBooleanOperation, shapeToEditablePath } from "@/editor/vector-path-operations"
+import { strokePathWithBrushDynamics } from "@/editor/vector-stroke-dynamics"
+import type { Layer, PathProps } from "@/editor/types"
 
 export function PathsPanel() {
   const activeDoc = useEditorSelector((editor) => editor.activeDoc)

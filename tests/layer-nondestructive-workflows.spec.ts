@@ -1,12 +1,12 @@
 import { expect, test } from "@playwright/test"
 
-import { reducer } from "../components/photoshop/editor-context"
+import { reducer } from "@/components/photoshop/editor/context"
 import {
   createCompatibilityManifest,
   createDocumentReport,
   deserializeProject,
   serializeProject,
-} from "../components/photoshop/document-io"
+} from "@/editor/document/io"
 import {
   captureLayerCompState,
   createLayerMetadata,
@@ -20,9 +20,9 @@ import {
   normalizeAdvancedBlending,
   reorderSmartFilterStack,
   setBlendIfRangeHandle,
-} from "../components/photoshop/layer-workflows"
-import type { Layer, SmartFilter } from "../components/photoshop/types"
-import { fixtureCanvas, fixtureMask, installFixtureDom, richFixtureDocument } from "./photoshop-fixtures"
+} from "@/editor/layer-workflows"
+import type { Layer, SmartFilter } from "@/editor/types"
+import { fixtureCanvas, fixtureMask, installFixtureDom, richFixtureDocument } from "@/tests/photoshop-fixtures"
 
 type FixtureState = ReturnType<typeof stateWithFixtureDoc>
 

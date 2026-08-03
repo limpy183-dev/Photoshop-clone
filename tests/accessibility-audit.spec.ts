@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test"
 
-import { createAccessibilityAuditReport, formatAccessibilityAuditReport } from "../components/photoshop/accessibility-audit"
-import { PANEL_DEFINITIONS } from "../components/photoshop/panel-registry"
-import { DEFAULT_SHORTCUTS } from "../components/photoshop/shortcuts"
+import { createAccessibilityAuditReport, formatAccessibilityAuditReport } from "@/editor/accessibility-audit"
+import { PANEL_DEFINITIONS } from "@/components/photoshop/panel-registry"
+import { DEFAULT_SHORTCUTS } from "@/editor/shortcuts"
 
 test("accessibility audit reports keyboard focus touch and panel metadata", () => {
   const report = createAccessibilityAuditReport({

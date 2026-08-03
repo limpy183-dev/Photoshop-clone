@@ -12,13 +12,13 @@ import {
   MenubarSubTrigger as DropdownMenuSubTrigger,
   MenubarTrigger as DropdownMenuTrigger,
 } from "@/components/ui/menubar"
-import type { AdvancedSubsystemTab, ColorWorkflowMode } from "../advanced-subsystems-dialog"
-import type { Action } from "../editor-context"
-import { dispatchPhotoshopEvent } from "../events"
-import type { GapWorkflowKind } from "../gap-workflow-dialog"
-import type { ColorManagementSettings, PsDocument } from "../types"
-import { supportedIccProfileNames } from "../color-pipeline"
-import { requestCanvasZoom, requestPrintSizeView } from "../zoom-events"
+import type { AdvancedSubsystemTab, ColorWorkflowMode } from "@/components/photoshop/advanced/subsystems-dialog"
+import type { Action } from "@/components/photoshop/editor/context"
+import { dispatchPhotoshopEvent } from "@/editor/events"
+import type { GapWorkflowKind } from "@/components/photoshop/gap-workflow-dialog"
+import type { ColorManagementSettings, PsDocument } from "@/editor/types"
+import { supportedIccProfileNames } from "@/editor/color/pipeline"
+import { requestCanvasZoom, requestPrintSizeView } from "@/editor/zoom-events"
 
 export type ViewMenuProps = {
   menuClass: string

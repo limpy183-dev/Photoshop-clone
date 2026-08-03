@@ -1,9 +1,9 @@
 import { expect, test } from "@playwright/test"
 
-import { documentCommandAvailability, layerCommandAvailability } from "../components/photoshop/command-services"
-import { createDocumentRenderGraph } from "../components/photoshop/render-graph"
-import { selectActiveDocument, selectActiveLayer, selectSelectedLayers, selectVisibleLayers } from "../components/photoshop/editor-selectors"
-import type { Layer, PsDocument } from "../components/photoshop/types"
+import { documentCommandAvailability, layerCommandAvailability } from "@/editor/command-services"
+import { createDocumentRenderGraph } from "@/editor/render-graph"
+import { selectActiveDocument, selectActiveLayer, selectSelectedLayers, selectVisibleLayers } from "@/editor/selectors"
+import type { Layer, PsDocument } from "@/editor/types"
 
 function layer(id: string, patch: Partial<Layer> = {}): Layer {
   return {

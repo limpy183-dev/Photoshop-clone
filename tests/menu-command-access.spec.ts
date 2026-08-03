@@ -5,10 +5,10 @@ test("menu keeps heavy command engines behind dynamic command services", () => {
   const source = readFileSync("components/photoshop/menu-bar.tsx", "utf8")
 
   for (const eagerImport of [
-    'from "./document-io"',
-    'from "./tool-helpers"',
-    'from "./typography-engine"',
-    'from "./advanced-subsystems"',
+    'from "@/editor/document/io"',
+    'from "@/editor/tool/helpers"',
+    'from "@/editor/typography-engine"',
+    'from "@/editor/advanced/subsystems"',
   ]) {
     expect(source).not.toContain(eagerImport)
   }

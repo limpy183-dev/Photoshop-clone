@@ -1,10 +1,10 @@
 "use client"
 
 import * as React from "react"
-import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "../client-storage"
-import { useEditorSelector } from "../editor-context"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "@/editor/client-storage"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
 import { BookOpen, Plus, Trash2, Download, Upload, RotateCcw, X } from "lucide-react"
-import { downloadText } from "../document-io"
+import { downloadText } from "@/editor/document/io"
 import { toast } from "sonner"
 import { Input } from "@/components/ui/input"
 import {
@@ -17,7 +17,7 @@ import {
   normalizeSwatches,
   saveSwatches,
   type SwatchEntry,
-} from "../swatches-store"
+} from "@/editor/swatches-store"
 
 const MAX_RECENT_SWATCHES = 12
 

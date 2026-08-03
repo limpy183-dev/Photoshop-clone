@@ -8,11 +8,11 @@ import {
   paramsWithDefaults,
   readSmartFilterMask,
   renderLayerSourceForCompositor,
-} from "../components/photoshop/canvas-compositor"
-import { invalidateMaskAlphaCache } from "../components/photoshop/canvas-compositor-cache"
-import { getFilter, type FilterDef } from "../components/photoshop/filters"
-import type { Layer } from "../components/photoshop/types"
-import { fixtureCanvas, fixtureMask, installFixtureDom } from "./photoshop-fixtures"
+} from "@/editor/canvas/compositor"
+import { invalidateMaskAlphaCache } from "@/editor/canvas/compositor-cache"
+import { getFilter, type FilterDef } from "@/editor/filters"
+import type { Layer } from "@/editor/types"
+import { fixtureCanvas, fixtureMask, installFixtureDom } from "@/tests/photoshop-fixtures"
 
 function fixtureLayer(canvas: HTMLCanvasElement, overrides: Partial<Layer> = {}): Layer {
   return {

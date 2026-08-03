@@ -6,8 +6,8 @@ import {
   decodeAudioBufferFromDataUrl,
   drawWaveformPeaks,
   type WaveformPeaks,
-} from "../../three-d-video-engine"
-import type { AudioTrack } from "../../types"
+} from "@/editor/three-d-video-engine"
+import type { AudioTrack } from "@/editor/types"
 
 /* ---------------------- Audio mixer + waveform widget --------------------- */
 

@@ -3,10 +3,10 @@ import path from "node:path"
 
 import { expect, test } from "@playwright/test"
 
-import { planAutosaveDocuments, shouldMirrorAutosaveToLocalStorage } from "../components/photoshop/autosave-planner"
-import { BLUR_GALLERY_CONTROL_STATE_KEY, formatFieldBlurPins } from "../components/photoshop/blur-gallery-controls"
-import { planFilterPreviewExecution } from "../components/photoshop/filter-preview"
-import { createRenderBus, mergeRenderChanges } from "../components/photoshop/render-bus"
+import { planAutosaveDocuments, shouldMirrorAutosaveToLocalStorage } from "@/editor/autosave-planner"
+import { BLUR_GALLERY_CONTROL_STATE_KEY, formatFieldBlurPins } from "@/editor/blur-gallery-controls"
+import { planFilterPreviewExecution } from "@/editor/filters/preview"
+import { createRenderBus, mergeRenderChanges } from "@/editor/render-bus"
 
 test("render bus merges layer-specific invalidations into one animation frame", () => {
   const emitted: unknown[] = []
@@ -114,7 +114,7 @@ test("autosave planner skips unchanged documents and avoids large localStorage m
 })
 
 test("PSD codec is dynamically imported instead of bundled into the editor shell", () => {
-  const source = fs.readFileSync(path.join(process.cwd(), "components/photoshop/document-io-shared.ts"), "utf8")
+  const source = fs.readFileSync(path.join(process.cwd(), "editor/document/io-shared.ts"), "utf8")
 
   expect(source).not.toContain('import { readPsd, writePsd } from "ag-psd"')
   expect(source).toContain('import("ag-psd")')

@@ -8,7 +8,7 @@ import {
   serializePersistedEditorSettings,
   type PersistedEditorDefaults,
   type PersistedEditorState,
-} from "../components/photoshop/editor-persisted-settings"
+} from "@/editor/persisted-settings"
 
 const defaults: PersistedEditorDefaults = {
   brush: {

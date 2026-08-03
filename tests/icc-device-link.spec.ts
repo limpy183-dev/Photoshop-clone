@@ -5,7 +5,7 @@ import {
   isExecutableDeviceLinkProfile,
   parseIccProfile,
   transformRgbColor,
-} from "../components/photoshop/icc-transform"
+} from "@/editor/icc-transform"
 
 class TestImageData {
   data: Uint8ClampedArray

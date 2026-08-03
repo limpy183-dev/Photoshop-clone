@@ -13,7 +13,7 @@ import {
   transformedBounds,
   type TransformDragState,
   type TransformReferencePoint,
-} from "../components/photoshop/canvas-transform-geometry"
+} from "@/editor/canvas/transform-geometry"
 
 function transformState(overrides: Partial<TransformDragState> = {}): TransformDragState {
   return {

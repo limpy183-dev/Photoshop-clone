@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test"
 
-import { reducer } from "../components/photoshop/editor-context"
-import type { Layer, PsDocument } from "../components/photoshop/types"
-import { installFixtureDom } from "./photoshop-fixtures"
+import { reducer } from "@/components/photoshop/editor/context"
+import type { Layer, PsDocument } from "@/editor/types"
+import { installFixtureDom } from "@/tests/photoshop-fixtures"
 
 function rgbaCanvas(width: number, height: number, pixels: number[]) {
   installFixtureDom()

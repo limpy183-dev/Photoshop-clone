@@ -17,10 +17,10 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { useEditorSelector } from "../editor-context"
-import { downloadText } from "../document-io"
-import { uid } from "../uid"
-import type { LayerStyle, PsDocument } from "../types"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { downloadText } from "@/editor/document/io"
+import { uid } from "@/editor/uid"
+import type { LayerStyle, PsDocument } from "@/editor/types"
 
 type StylePreset = NonNullable<PsDocument["stylePresets"]>[number] & {
   group?: string

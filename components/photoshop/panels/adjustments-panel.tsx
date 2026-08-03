@@ -1,8 +1,8 @@
 "use client"
 
 import * as React from "react"
-import { useActiveDocument, useActiveLayer, useEditorCommands, makeCanvas } from "../editor-context"
-import { FILTERS, type FilterDef, type FilterParam } from "../filters"
+import { useActiveDocument, useActiveLayer, useEditorCommands, makeCanvas } from "@/components/photoshop/editor/context"
+import { FILTERS, type FilterDef, type FilterParam } from "@/editor/filters"
 import { Slider } from "@/components/ui/slider"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -16,14 +16,14 @@ import {
   SlidersHorizontal,
   Sparkles,
 } from "lucide-react"
-import type { AdjustmentProps, AdjustmentType, Layer, PsDocument } from "../types"
+import type { AdjustmentProps, AdjustmentType, Layer, PsDocument } from "@/editor/types"
 import {
   adjustmentParamsWithDefaults,
   createAdjustmentLayer as createAdjustmentLayerModel,
   defaultAdjustmentParams,
   invertAdjustmentMask,
   isAdjustmentNoop,
-} from "../adjustment-layers"
+} from "@/editor/adjustment-layers"
 
 const ADJUSTMENTS: AdjustmentType[] = [
   "brightness-contrast",

@@ -4,25 +4,25 @@ import * as React from "react"
 import { Compass, Filter, Lightbulb, MousePointer2, Search, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { useEditorSelector } from "../editor-context"
-import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "../events"
-import { FILTERS } from "../filters"
-import { contextualHelpForTool } from "../contextual-help"
-import { TOOL_TOOLTIP_CONTENT } from "../tool-tooltip-content"
-import { GENERIC_TOOLTIP_CONTENT } from "../tool-tooltip-content"
-import type { ToolId } from "../types"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "@/editor/events"
+import { FILTERS } from "@/editor/filters"
+import { contextualHelpForTool } from "@/editor/contextual-help"
+import { TOOL_TOOLTIP_CONTENT } from "@/editor/tool/tooltip-content"
+import { GENERIC_TOOLTIP_CONTENT } from "@/editor/tool/tooltip-content"
+import type { ToolId } from "@/editor/types"
 import {
   buildLearningIndex,
   runLearningIndexItem,
   searchLearningIndex,
   type LearningIndexItem,
-} from "../learning-index"
-import { LEARNING_PANEL_SOURCES } from "../learning-panel-sources"
+} from "@/editor/learning-index"
+import { LEARNING_PANEL_SOURCES } from "@/editor/learning-panel-sources"
 import {
   readRegisteredSessionString,
   STORAGE_RESOURCES,
   writeRegisteredSessionString,
-} from "../storage-registry"
+} from "@/editor/storage-registry"
 
 
 const TYPE_FILTERS = ["all", "command", "tool", "panel", "filter", "workflow", "doc"] as const

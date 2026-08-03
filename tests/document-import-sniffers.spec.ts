@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test"
 import {
   readPsdHeaderDimensions,
   sniffRasterDimensions,
-} from "../components/photoshop/document-import-sniffers"
+} from "@/editor/document/import-sniffers"
 
 function ascii(value: string) {
   return Array.from(value, (ch) => ch.charCodeAt(0))

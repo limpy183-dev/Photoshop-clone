@@ -1,9 +1,9 @@
 "use client"
 
 import * as React from "react"
-import { useEditorSelector } from "../editor-context"
-import { hexToRgb } from "../color-utils"
-import { dispatchPhotoshopEvent } from "../events"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { hexToRgb } from "@/editor/color/utils"
+import { dispatchPhotoshopEvent } from "@/editor/events"
 function rgbToHex(r: number, g: number, b: number) {
   return (
     "#" +

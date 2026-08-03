@@ -2,10 +2,10 @@
 
 import { Scissors } from "lucide-react"
 
-import type { PsDocument, TimelineFrame } from "../../types"
-import { FrameRow } from "./timeline-frame-row"
-import { PanelEmpty, TextBtn } from "./timeline-shared"
-import { TimelineThumbnailStrip } from "./timeline-thumbnail-strip"
+import type { PsDocument, TimelineFrame } from "@/editor/types"
+import { FrameRow } from "@/components/photoshop/panels/timeline/timeline-frame-row"
+import { PanelEmpty, TextBtn } from "@/components/photoshop/panels/timeline/timeline-shared"
+import { TimelineThumbnailStrip } from "@/components/photoshop/panels/timeline/timeline-thumbnail-strip"
 
 interface TimelinePlayheadSectionProps {
   doc: PsDocument

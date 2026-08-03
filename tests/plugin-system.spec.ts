@@ -23,8 +23,8 @@ import {
   safePluginJson,
   validatePluginPanelRequest,
   type PluginPanelRequest,
-} from "../components/photoshop/plugin-system"
-import type { PluginDescriptor } from "../components/photoshop/types"
+} from "@/editor/plugin-system"
+import type { PluginDescriptor } from "@/editor/types"
 
 test("plugin contract exposes a stable manifest schema and explicit host API", () => {
   const schema = getPluginManifestSchema()

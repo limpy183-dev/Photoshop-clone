@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
 
-import { getCapability, listCapabilities } from "../components/photoshop/capabilities"
+import { getCapability, listCapabilities } from "@/editor/capabilities"
 import {
   DEFAULT_PREFERENCES,
   PREFERENCE_IMPORT_SECTIONS,
@@ -22,10 +22,10 @@ import {
   serializePreferences,
   summarizeTechnologyPreviewFlags,
   summarizePerformancePolicy,
-} from "../components/photoshop/preferences-engine"
-import { buildRulerTickMarks } from "../components/photoshop/ruler-calibration"
-import { paintCanvasCursorOverlay, resolveCanvasCursorState } from "../components/photoshop/cursor-overlay"
-import { defaultTechPreviewFlags, getTechPreviewFlagDefinition } from "../components/photoshop/tech-previews"
+} from "@/editor/preferences-engine"
+import { buildRulerTickMarks } from "@/editor/ruler-calibration"
+import { paintCanvasCursorOverlay, resolveCanvasCursorState } from "@/editor/cursor-overlay"
+import { defaultTechPreviewFlags, getTechPreviewFlagDefinition } from "@/editor/tech-previews"
 
 test("normalizes legacy preference sets into the full schema", () => {
   const prefs = normalizePreferences({

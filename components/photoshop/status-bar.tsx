@@ -2,8 +2,8 @@
 
 import * as React from "react"
 import { X } from "lucide-react"
-import { useActiveDocument, useEditorStateSelector } from "./editor-context"
-import { requestCanvasZoom } from "./zoom-events"
+import { useActiveDocument, useEditorStateSelector } from "@/components/photoshop/editor/context"
+import { requestCanvasZoom } from "@/editor/zoom-events"
 
 export function StatusBar({ onHide }: { onHide?: () => void }) {
   const activeDoc = useActiveDocument()

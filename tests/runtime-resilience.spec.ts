@@ -5,8 +5,8 @@ import {
   emitRuntimeEvent,
   getRuntimeEvents,
   sanitizeRuntimeMetadata,
-} from "../components/photoshop/runtime-telemetry"
-import { buildDiagnosticsExport } from "../components/photoshop/diagnostics-export"
+} from "@/editor/runtime-telemetry"
+import { buildDiagnosticsExport } from "@/editor/diagnostics-export"
 
 test("runtime telemetry accepts structured diagnostics and rejects user content", () => {
   expect(sanitizeRuntimeMetadata({
@@ -44,7 +44,7 @@ test("diagnostics export contains sanitized runtime events", () => {
 test("route and editor error boundaries are present", () => {
   expect(existsSync("app/error.tsx")).toBe(true)
   expect(existsSync("app/global-error.tsx")).toBe(true)
-  expect(existsSync("components/photoshop/editor-error-boundary.tsx")).toBe(true)
+  expect(existsSync("components/photoshop/editor/error-boundary.tsx")).toBe(true)
   expect(existsSync("components/photoshop/feature-error-boundary.tsx")).toBe(true)
 })
 

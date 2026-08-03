@@ -1,10 +1,10 @@
 "use client"
 
 import * as React from "react"
-import { useActiveDocument, useRenderSubscription } from "../editor-context"
-import { compositeLayer } from "../blend-modes"
-import { getFilter } from "../filters"
-import { applyLayerStyle } from "../layer-styles"
+import { useActiveDocument, useRenderSubscription } from "@/components/photoshop/editor/context"
+import { compositeLayer } from "@/editor/blend-modes"
+import { getFilter } from "@/editor/filters"
+import { applyLayerStyle } from "@/editor/layer-styles"
 import { Slider } from "@/components/ui/slider"
 import {
   compareHighBitPixelToPreview,
@@ -16,11 +16,11 @@ import {
   type HighBitImage,
   type HighBitPixelReadout,
   type HighBitPreviewComparison,
-} from "../color-pipeline"
-import type { BlendMode, Layer, PsDocument } from "../types"
-import { requestCanvasZoom } from "../zoom-events"
-import { addPhotoshopEventListener, dispatchPhotoshopEvent, type PhotoshopEventMap } from "../events"
-import { smartFilterMaskAmountAt, smartFilterMaskToImageData } from "../smart-filter-masks"
+} from "@/editor/color/pipeline"
+import type { BlendMode, Layer, PsDocument } from "@/editor/types"
+import { requestCanvasZoom } from "@/editor/zoom-events"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent, type PhotoshopEventMap } from "@/editor/events"
+import { smartFilterMaskAmountAt, smartFilterMaskToImageData } from "@/editor/smart-filter-masks"
 
 function makePanelCanvas(w: number, h: number) {
   const c = document.createElement("canvas")

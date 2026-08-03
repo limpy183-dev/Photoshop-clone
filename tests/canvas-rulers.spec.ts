@@ -6,7 +6,7 @@ import {
   rulerGuideFromPointer,
   rulerGuidePreviewStyle,
   rulerTickPositionStyle,
-} from "../components/photoshop/canvas-rulers"
+} from "@/components/photoshop/canvas/rulers"
 
 test("ruler components remain exported from the focused module", () => {
   expect(Rulers).toBeTruthy()

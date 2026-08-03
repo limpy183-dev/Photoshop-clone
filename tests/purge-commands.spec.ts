@@ -6,13 +6,13 @@ import { expect, test } from "@playwright/test"
 import {
   COMMAND_REGISTRY,
   commandsForSideEffect,
-} from "../components/photoshop/command-registry"
+} from "@/editor/command-registry"
 import {
   PURGE_COMMANDS,
   formatPurgeStatus,
   planPurgeTargets,
   estimateCanvasBytes,
-} from "../components/photoshop/purge-commands"
+} from "@/editor/purge-commands"
 
 test("purge command metadata exposes the Photoshop purge targets", () => {
   expect(PURGE_COMMANDS.map((command) => command.target)).toEqual([
@@ -72,11 +72,11 @@ test("Edit menu and command palette wire purge commands to notifications", () =>
 })
 
 test("purge implementation integrates histories, tile caches, preview caches, and video cache", () => {
-  const contextSource = fs.readFileSync(path.join(process.cwd(), "components/photoshop/editor-context.tsx"), "utf8")
-  const reducerSource = fs.readFileSync(path.join(process.cwd(), "components/photoshop/editor-reducer-late.ts"), "utf8")
-  const historyStorageSource = fs.readFileSync(path.join(process.cwd(), "components/photoshop/editor-history-storage.ts"), "utf8")
-  const psbTileSource = fs.readFileSync(path.join(process.cwd(), "components/photoshop/psb-tile-view.ts"), "utf8")
-  const tiledStoreSource = fs.readFileSync(path.join(process.cwd(), "components/photoshop/tiled-backing-store.ts"), "utf8")
+  const contextSource = fs.readFileSync(path.join(process.cwd(), "components/photoshop/editor/context.tsx"), "utf8")
+  const reducerSource = fs.readFileSync(path.join(process.cwd(), "editor/reducer-late.ts"), "utf8")
+  const historyStorageSource = fs.readFileSync(path.join(process.cwd(), "editor/history-storage.ts"), "utf8")
+  const psbTileSource = fs.readFileSync(path.join(process.cwd(), "editor/psb-tile-view.ts"), "utf8")
+  const tiledStoreSource = fs.readFileSync(path.join(process.cwd(), "editor/tiled-backing-store.ts"), "utf8")
 
   expect(reducerSource).toContain('case "purge-undo"')
   expect(reducerSource).toContain('case "purge-histories"')

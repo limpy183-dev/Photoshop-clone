@@ -1,4 +1,4 @@
-import type { Layer, PsDocument } from "../components/photoshop/types"
+import type { Layer, PsDocument } from "@/editor/types"
 
 class FixtureCanvas {
   width = 1

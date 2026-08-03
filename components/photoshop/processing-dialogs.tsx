@@ -15,16 +15,16 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { makeCanvas, makeDocument, useEditorSelector } from "./editor-context"
-import { canvasToGifDataUrl, downloadBlob, downloadDataUrl, loadRasterCanvasFromFile, rasterMime, renderDocumentComposite } from "./document-io"
-import type { BrowserRasterExportFormat } from "./document-io"
+import { makeCanvas, makeDocument, useEditorSelector } from "@/components/photoshop/editor/context"
+import { canvasToGifDataUrl, downloadBlob, downloadDataUrl, loadRasterCanvasFromFile, rasterMime, renderDocumentComposite } from "@/editor/document/io"
+import type { BrowserRasterExportFormat } from "@/editor/document/io"
 import {
   encodeJpegImageData,
   encodePngImageData,
   injectAvifXmpMetadata,
   injectWebpXmpMetadata,
   type RasterExportMetadata,
-} from "./raster-codecs"
+} from "@/editor/raster/codecs"
 
 type WatermarkPosition = "top-left" | "top-center" | "top-right" | "middle-left" | "center" | "middle-right" | "bottom-left" | "bottom-center" | "bottom-right"
 
@@ -141,8 +141,8 @@ import {
   type AutomationOperation,
   type AutomationWorkflow,
   type CommandMacro,
-} from "./automation-engine"
-import type { ImageProcessorWorkflowPreset } from "./workflow-presets"
+} from "@/editor/automation-engine"
+import type { ImageProcessorWorkflowPreset } from "@/editor/workflow-presets"
 
 type RasterFormat = BrowserRasterExportFormat
 type BatchOperation = AutomationOperation
@@ -739,7 +739,7 @@ export function CropAndStraightenDialog({
     if (!files.length) return
     setBusy(true)
     try {
-      const { cropAndStraightenPhotos } = await import("./automation-commands")
+      const { cropAndStraightenPhotos } = await import("@/editor/automation-commands")
       let totalCrops = 0
       for (const file of files) {
         try {

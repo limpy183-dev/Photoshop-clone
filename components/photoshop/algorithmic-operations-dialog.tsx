@@ -6,9 +6,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
-import { useEditorSelector, makeCanvas } from "./editor-context"
-import { downloadText, loadRasterCanvasFromFile } from "./document-io"
-import { buildContentAwareFillPlan, contentAwareFill, focusAreaMask, rasterizeText, selectionFromMask, selectionToMaskCanvas } from "./tool-helpers"
+import { useEditorSelector, makeCanvas } from "@/components/photoshop/editor/context"
+import { downloadText, loadRasterCanvasFromFile } from "@/editor/document/io"
+import { buildContentAwareFillPlan, contentAwareFill, focusAreaMask, rasterizeText, selectionFromMask, selectionToMaskCanvas } from "@/editor/tool/helpers"
 import {
   autoAlignLayers,
   booleanMasks,
@@ -33,13 +33,13 @@ import {
   softProof,
   transformSelectionMask,
   type ColorStop,
-} from "./algorithmic-operations"
-import { autoBlendImageStack } from "./photo-workflow-engine"
-import { applyPromptInpaintImageData, buildGenerativeFillPlan } from "./generative-fill-engine"
-import { findReplaceTextLayers } from "./typography-engine"
-import type { AssetLibraryItem, CountMarker, Layer, PathProps, PrintSettings, TextProps } from "./types"
-import { uid } from "./uid"
-import { dispatchPhotoshopEvent } from "./events"
+} from "@/editor/algorithmic-operations"
+import { autoBlendImageStack } from "@/editor/photo-workflow-engine"
+import { applyPromptInpaintImageData, buildGenerativeFillPlan } from "@/editor/generative-fill-engine"
+import { findReplaceTextLayers } from "@/editor/typography-engine"
+import type { AssetLibraryItem, CountMarker, Layer, PathProps, PrintSettings, TextProps } from "@/editor/types"
+import { uid } from "@/editor/uid"
+import { dispatchPhotoshopEvent } from "@/editor/events"
 
 type TabId =
   | "paths"

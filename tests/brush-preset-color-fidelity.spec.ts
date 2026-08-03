@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test"
 
-import { reducer } from "../components/photoshop/editor-context"
-import type { BrushPreset, BrushSettings } from "../components/photoshop/types"
+import { reducer } from "@/components/photoshop/editor/context"
+import type { BrushPreset, BrushSettings } from "@/editor/types"
 
 const texturedBrush: BrushSettings = {
   size: 36,

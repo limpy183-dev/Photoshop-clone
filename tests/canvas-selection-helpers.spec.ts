@@ -7,10 +7,10 @@ import {
   clipToSelection,
   createRemoveMask,
   selectBackgroundMaskFromImage,
-} from "../components/photoshop/canvas-selection-helpers"
-import { invalidateMaskAlphaCache } from "../components/photoshop/canvas-compositor-cache"
-import type { Layer, PsDocument, Selection } from "../components/photoshop/types"
-import { fixtureCanvas, installFixtureDom } from "./photoshop-fixtures"
+} from "@/editor/canvas/selection-helpers"
+import { invalidateMaskAlphaCache } from "@/editor/canvas/compositor-cache"
+import type { Layer, PsDocument, Selection } from "@/editor/types"
+import { fixtureCanvas, installFixtureDom } from "@/tests/photoshop-fixtures"
 
 function documentWithSelection(selection: Selection): PsDocument {
   return {

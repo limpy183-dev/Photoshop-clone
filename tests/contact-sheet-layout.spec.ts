@@ -9,7 +9,7 @@ import {
   encodeStoredZip,
   exportMimeForContactSheet,
   formatContactSheetLabel,
-} from "../components/photoshop/contact-sheet"
+} from "@/editor/contact-sheet"
 
 const sampleImages = [
   { name: "alpha.jpg", width: 800, height: 400 },

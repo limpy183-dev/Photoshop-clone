@@ -3,15 +3,15 @@
 import dynamic from "next/dynamic"
 
 const BackgroundFX = dynamic(
-  () => import("./background-fx").then((mod) => mod.BackgroundFX),
+  () => import("@/components/marketing/background-fx").then((mod) => mod.BackgroundFX),
   { ssr: false },
 )
 const BrushHeroAnimation = dynamic(
-  () => import("./brush-hero-animation").then((mod) => mod.BrushHeroAnimation),
+  () => import("@/components/marketing/brush-hero-animation").then((mod) => mod.BrushHeroAnimation),
   { ssr: false },
 )
 const Cursor = dynamic(
-  () => import("./cursor").then((mod) => mod.Cursor),
+  () => import("@/components/marketing/cursor").then((mod) => mod.Cursor),
   { ssr: false },
 )
 

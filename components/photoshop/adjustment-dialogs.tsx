@@ -28,13 +28,13 @@ import {
 import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { Checkbox } from "@/components/ui/checkbox"
-import { useEditor, makeCanvas } from "./editor-context"
-import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
-import { compositeLayer } from "./blend-modes"
-import { FILTERS, HDR_TONING_PRESETS, AUTO_DEFAULTS, applyAutoAdjustment, type AutoAlgorithm, type AutoOptions } from "./filters"
+import { useEditor, makeCanvas } from "@/components/photoshop/editor/context"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "@/editor/client-storage"
+import { compositeLayer } from "@/editor/blend-modes"
+import { FILTERS, HDR_TONING_PRESETS, AUTO_DEFAULTS, applyAutoAdjustment, type AutoAlgorithm, type AutoOptions } from "@/editor/filters"
 import { toast } from "sonner"
 import { Minus, Plus, RotateCcw, Save, XIcon } from "lucide-react"
-import type { Layer, PsDocument } from "./types"
+import type { Layer, PsDocument } from "@/editor/types"
 
 /* ------------------------------------------------------------------ */
 /* shared helpers                                                     */
@@ -1054,4 +1054,4 @@ function ColorTargetRow({
 
 /* Re-exports of context types used by the dialogs (kept here to avoid a
  * second public surface — these are only imported by menu-bar.tsx). */
-export type { AutoAlgorithm } from "./filters"
+export type { AutoAlgorithm } from "@/editor/filters"

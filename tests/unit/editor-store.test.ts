@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from "vitest"
 import { readFileSync } from "node:fs"
 
-import { selectToolSettings } from "../../components/photoshop/editor-selectors"
+import { selectToolSettings } from "@/editor/selectors"
 import {
   createEditorStore,
   createVersionedSelectionCache,
   selectWithVersionedCache,
-} from "../../components/photoshop/editor-store"
-import { HIGH_FREQUENCY_ACTION_TYPES } from "../../components/photoshop/editor-reducer-model"
-import type { EditorState } from "../../components/photoshop/editor-context"
+} from "@/editor/store"
+import { HIGH_FREQUENCY_ACTION_TYPES } from "@/editor/reducer-model"
+import type { EditorState } from "@/components/photoshop/editor/context"
 
 describe("canonical editor store", () => {
   it("publishes transitions synchronously and ignores identical snapshots", () => {
@@ -79,7 +79,7 @@ describe("canonical editor store", () => {
   })
 
   it("does not mirror a computed editor context through a second store", () => {
-    const source = readFileSync("components/photoshop/editor-context.tsx", "utf8")
+    const source = readFileSync("components/photoshop/editor/context.tsx", "utf8")
     expect(source).not.toContain("createEditorSelectorStore")
     expect(source).not.toContain("EditorSelectorContext.Provider")
     expect(source).not.toMatch(/useLayoutEffect\(\(\) => \{\s*selectorStoreRef/)

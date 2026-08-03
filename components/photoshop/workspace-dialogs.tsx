@@ -15,10 +15,10 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
 import { LayoutGrid, Plus } from "lucide-react"
-import { useEditorSelector } from "./editor-context"
-import type { Guide } from "./types"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import type { Guide } from "@/editor/types"
 import { cn } from "@/lib/utils"
-import { uid } from "./uid"
+import { uid } from "@/editor/uid"
 
 function pxFromUnit(value: number, unit: string, docSize: number) {
   if (unit === "%") return (value / 100) * docSize

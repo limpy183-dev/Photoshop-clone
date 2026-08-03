@@ -4,8 +4,8 @@ import {
   buildIndexedColorTable,
   convertImageDataToDocumentMode,
   resolveBitmapScreenCellSize,
-} from "../components/photoshop/color-mode-conversion"
-import type { DocumentModeSettings } from "../components/photoshop/types"
+} from "@/editor/color/mode-conversion"
+import type { DocumentModeSettings } from "@/editor/types"
 
 class TestImageData {
   data: Uint8ClampedArray

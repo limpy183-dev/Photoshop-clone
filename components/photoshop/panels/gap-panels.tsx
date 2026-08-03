@@ -1,13 +1,13 @@
 "use client"
 
 import * as React from "react"
-import { useEditorSelector } from "../editor-context"
-import { downloadBlob, downloadText } from "../document-io"
-import type { Note } from "../types"
-import { uid } from "../uid"
-import { appendThreadReply, createReviewPacketEntries, createReviewReport, createReviewThread, setThreadResolved } from "../collaboration"
-import { createStoredZipBlob } from "../zip-packaging"
-import { TimelinePanel } from "./timeline-panel"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { downloadBlob, downloadText } from "@/editor/document/io"
+import type { Note } from "@/editor/types"
+import { uid } from "@/editor/uid"
+import { appendThreadReply, createReviewPacketEntries, createReviewReport, createReviewThread, setThreadResolved } from "@/editor/collaboration"
+import { createStoredZipBlob } from "@/editor/zip-packaging"
+import { TimelinePanel } from "@/components/photoshop/panels/timeline-panel"
 
 /**
  * `gap-panels.tsx` used to host every panel that lacked a dedicated module.

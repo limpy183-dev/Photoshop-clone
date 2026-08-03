@@ -3,10 +3,10 @@
 import * as React from "react"
 import { Search, Type, Trash2 } from "lucide-react"
 import { Input } from "@/components/ui/input"
-import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "../client-storage"
-import { useEditorSelector } from "../editor-context"
-import { rasterizeText } from "../tool-helpers"
-import type { TextProps } from "../types"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "@/editor/client-storage"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { rasterizeText } from "@/editor/tool/helpers"
+import type { TextProps } from "@/editor/types"
 
 interface UnicodeBlock {
   id: string

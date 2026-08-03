@@ -3,27 +3,27 @@
 import * as React from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { FILTERS } from "./filters"
-import { makeCanvas, useEditor } from "./editor-context"
-import { selectionToMaskCanvas } from "./tool-helpers"
-import type { ToolId } from "./types"
+import { FILTERS } from "@/editor/filters"
+import { makeCanvas, useEditor } from "@/components/photoshop/editor/context"
+import { selectionToMaskCanvas } from "@/editor/tool/helpers"
+import type { ToolId } from "@/editor/types"
 import { toast } from "sonner"
-import { PANEL_DEFINITIONS } from "./panel-registry"
-import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop, isAdjustmentType } from "./adjustment-layers"
-import { dispatchPhotoshopEvent } from "./events"
-import { canPluginUsePermission } from "./plugin-system"
-import type { PluginCommandDescriptor, PluginDescriptor, PluginPermission } from "./types"
-import { PURGE_COMMANDS, formatPurgeStatus, type PurgeTarget } from "./purge-commands"
+import { PANEL_DEFINITIONS } from "@/components/photoshop/panel-registry"
+import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop, isAdjustmentType } from "@/editor/adjustment-layers"
+import { dispatchPhotoshopEvent } from "@/editor/events"
+import { canPluginUsePermission } from "@/editor/plugin-system"
+import type { PluginCommandDescriptor, PluginDescriptor, PluginPermission } from "@/editor/types"
+import { PURGE_COMMANDS, formatPurgeStatus, type PurgeTarget } from "@/editor/purge-commands"
 import {
   loadCommandPaletteUsage,
   rankCommandPaletteItems,
   recordCommandPaletteUsage,
   saveCommandPaletteUsage,
   type CommandUsageMap,
-} from "./command-ranking"
-import { WORKFLOW_PACKS } from "./workflow-presets"
-import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "./client-storage"
-import { preloadDialogForCommand } from "./dialog-preload"
+} from "@/editor/command-ranking"
+import { WORKFLOW_PACKS } from "@/editor/workflow-presets"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "@/editor/client-storage"
+import { preloadDialogForCommand } from "@/editor/dialog-preload"
 
 interface CommandPaletteProps {
   open: boolean

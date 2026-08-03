@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { FeatureErrorBoundary } from "./feature-error-boundary"
+import { FeatureErrorBoundary } from "@/components/photoshop/feature-error-boundary"
 import {
   ChevronLeft,
   ChevronRight,
@@ -18,7 +18,7 @@ import {
   Search,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { ResizeHandle } from "./resize-handle"
+import { ResizeHandle } from "@/components/photoshop/resize-handle"
 import {
   PANEL_CATEGORIES,
   PANEL_DEFINITIONS,
@@ -31,9 +31,9 @@ import {
   type PhotoshopPanelDefinition,
   type WorkspacePanelPreset,
   type WorkspacePresetId,
-} from "./panel-registry"
-import { CLIENT_STORAGE_KEYS, readClientStorageJson, readClientStorageString, writeClientStorageJson, writeClientStorageString } from "./client-storage"
-import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
+} from "@/components/photoshop/panel-registry"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, readClientStorageString, writeClientStorageJson, writeClientStorageString } from "@/editor/client-storage"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "@/editor/events"
 
 const TOP_MIN_HEIGHT = 78
 const BOTTOM_MIN_HEIGHT = 78

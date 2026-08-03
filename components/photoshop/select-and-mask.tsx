@@ -13,18 +13,18 @@ import { Button } from "@/components/ui/button"
 import { Slider } from "@/components/ui/slider"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
-import { makeDocument, useEditor } from "./editor-context"
-import { decontaminateImageDataWithMask, edgeAwareQuickSelectionMask, refineSelectionMaskData } from "./algorithmic-operations"
-import { extractMarchingAntsPaths, refineEdgeBrushMask } from "./tool-helpers"
+import { makeDocument, useEditor } from "@/components/photoshop/editor/context"
+import { decontaminateImageDataWithMask, edgeAwareQuickSelectionMask, refineSelectionMaskData } from "@/editor/algorithmic-operations"
+import { extractMarchingAntsPaths, refineEdgeBrushMask } from "@/editor/tool/helpers"
 import {
   SELECT_AND_MASK_OUTPUT_TARGETS,
   SELECT_AND_MASK_VIEW_MODES,
   buildSelectAndMaskPreviewModel,
   type SelectAndMaskOutputTarget,
   type SelectAndMaskViewMode,
-} from "./photo-workflow-engine"
+} from "@/editor/photo-workflow-engine"
 import { Paintbrush, Hand, ZoomIn, Lasso, Scissors, CircleDot } from "lucide-react"
-import type { Layer } from "./types"
+import type { Layer } from "@/editor/types"
 
 type ViewMode = SelectAndMaskViewMode
 type OutputTo = SelectAndMaskOutputTarget

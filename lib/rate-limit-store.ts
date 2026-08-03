@@ -1,6 +1,6 @@
-import { checkRateLimit, type RateLimitOptions } from "./marketing-store"
-import { readBoundedJsonResponse } from "./bounded-json"
-import { isAuthenticatedServiceConfigured } from "./remote-service"
+import { checkRateLimit, type RateLimitOptions } from "@/lib/marketing-store"
+import { readBoundedJsonResponse } from "@/lib/bounded-json"
+import { isAuthenticatedServiceConfigured } from "@/lib/remote-service"
 
 export interface RateLimitDecision {
   allowed: boolean

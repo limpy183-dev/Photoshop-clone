@@ -5,17 +5,17 @@ import {
   runRegisteredAtomicTransaction,
   STORAGE_RESOURCES,
   writeWithRegisteredQuotaRecovery,
-} from "../components/photoshop/storage-registry"
+} from "@/editor/storage-registry"
 import {
   migrateRecentDocumentsPayload,
   planAutosavesForQuotaRetry,
   rankAutosavesForQuotaRetry,
-} from "../components/photoshop/recent-documents"
+} from "@/editor/recent-documents"
 import {
   _resetScratchStateForTests,
   readScratchBlob,
   writeScratchBlob,
-} from "../components/photoshop/opfs-scratch"
+} from "@/editor/opfs-scratch"
 
 test("every browser storage resource declares governance metadata", () => {
   const resources = getStorageResourceRegistry()

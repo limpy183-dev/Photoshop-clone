@@ -4,7 +4,7 @@ export interface AdapterHealth {
   reason: "configured" | "development-fallback" | "unconfigured"
 }
 
-import { isAuthenticatedServiceConfigured } from "./remote-service"
+import { isAuthenticatedServiceConfigured } from "@/lib/remote-service"
 
 function configured(name: AdapterHealth["name"], value: string | undefined, localFallback: boolean): AdapterHealth {
   if (value?.trim()) return { name, configured: true, reason: "configured" }

@@ -16,12 +16,12 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "../client-storage"
-import { useEditorSelector } from "../editor-context"
-import { dispatchPhotoshopEvent } from "../events"
-import { downloadText } from "../document-io"
-import { uid } from "../uid"
-import type { AssetLibraryItem } from "../types"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "@/editor/client-storage"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { dispatchPhotoshopEvent } from "@/editor/events"
+import { downloadText } from "@/editor/document/io"
+import { uid } from "@/editor/uid"
+import type { AssetLibraryItem } from "@/editor/types"
 
 type RulerUnit = "px" | "in" | "cm" | "mm" | "pt" | "pc"
 

@@ -4,10 +4,10 @@ import {
   createCompatibilityManifest,
   createDocumentReport,
   createExportLimitationReport,
-} from "../components/photoshop/document-io"
-import { describeDocumentColorHonesty } from "../components/photoshop/color-pipeline"
-import { applyFilterAsync, applyFilterTiled, getFilterWorkerSupport, isFilterWorkerSupported } from "../components/photoshop/filter-worker"
-import { richFixtureDocument } from "./photoshop-fixtures"
+} from "@/editor/document/io"
+import { describeDocumentColorHonesty } from "@/editor/color/pipeline"
+import { applyFilterAsync, applyFilterTiled, getFilterWorkerSupport, isFilterWorkerSupported } from "@/editor/filters/worker"
+import { richFixtureDocument } from "@/tests/photoshop-fixtures"
 import type { Page } from "@playwright/test"
 
 async function openEditor(page: Page, url = "/editor") {

@@ -12,9 +12,9 @@ import {
   Square,
   X,
 } from "lucide-react"
-import { useActiveDocument, useActiveLayer, useEditorCommands } from "../editor-context"
-import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "../events"
-import { downloadBlob, downloadDataUrl, downloadText } from "../document-io"
+import { useActiveDocument, useActiveLayer, useEditorCommands } from "@/components/photoshop/editor/context"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "@/editor/events"
+import { downloadBlob, downloadDataUrl, downloadText } from "@/editor/document/io"
 import {
   DEFAULT_TIMELINE_SETTINGS,
   IDENTITY_TRANSFORM,
@@ -35,7 +35,7 @@ import {
   transitionProgressAtFrameTime,
   timelineDurationMs,
   timelineFrameIndexAtTime,
-} from "../timeline-engine"
+} from "@/editor/timeline-engine"
 import {
   bytesToDataUrl,
   collectAnimationFramesAtFps,
@@ -45,7 +45,7 @@ import {
   exportTimelineFrameAsPngBlob,
   packagePngSequenceZip,
   resolveTimelineSettings,
-} from "../animation-encoding"
+} from "@/editor/animation-encoding"
 import {
   audibleAudioTracks,
   buildFinalVideoExportPlan,
@@ -60,7 +60,7 @@ import {
   trimVideoClipToFrame,
   type FinalVideoExportPlan,
   updateVideoTransitionDuration,
-} from "../three-d-video-engine"
+} from "@/editor/three-d-video-engine"
 import type {
   AudioTrack,
   FrameEasing,
@@ -70,25 +70,25 @@ import type {
   TimelineFrame,
   TimelineSettings,
   VideoLayerProps,
-} from "../types"
-import { uid } from "../uid"
-import { AudioMixerSection } from "./timeline/timeline-audio-mixer"
+} from "@/editor/types"
+import { uid } from "@/editor/uid"
+import { AudioMixerSection } from "@/components/photoshop/panels/timeline/timeline-audio-mixer"
 import {
   blobToDataUrl,
   buildTimelineVideoPackage,
   dataUrlToArrayBuffer,
   delay,
   safeFilePart,
-} from "./timeline/timeline-export-utils"
-import { PanelEmpty, TextBtn, TINTS, ToolButton } from "./timeline/timeline-shared"
+} from "@/components/photoshop/panels/timeline/timeline-export-utils"
+import { PanelEmpty, TextBtn, TINTS, ToolButton } from "@/components/photoshop/panels/timeline/timeline-shared"
 import {
   TimelineBulkEditBar,
   TimelineFrameList,
   TimelinePlayheadSection,
-} from "./timeline/timeline-panel-sections"
-import { TransformPanel } from "./timeline/timeline-transform-panel"
-import { TweenDialog } from "./timeline/timeline-tween-dialog"
-import { VideoTrimTrack } from "./timeline/timeline-video-trim-track"
+} from "@/components/photoshop/panels/timeline/timeline-panel-sections"
+import { TransformPanel } from "@/components/photoshop/panels/timeline/timeline-transform-panel"
+import { TweenDialog } from "@/components/photoshop/panels/timeline/timeline-tween-dialog"
+import { VideoTrimTrack } from "@/components/photoshop/panels/timeline/timeline-video-trim-track"
 
 type AnimationFormat = "gif" | "apng" | "animated-webp"
 type VideoThumbnail = { index: number; timeMs: number; label: string; dataUrl: string }

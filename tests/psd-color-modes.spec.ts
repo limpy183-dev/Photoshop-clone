@@ -14,11 +14,11 @@ import {
   psdColorModeData,
   psdColorModeToApp,
   serializeHighBitDepthChannelData,
-} from "../components/photoshop/psd-color-modes"
-import { serializePsd } from "../components/photoshop/document-io"
-import { canWriteNativeLayeredPsd } from "../components/photoshop/psd-native-writer"
-import type { PsDocument } from "../components/photoshop/types"
-import { installFixtureDom } from "./photoshop-fixtures"
+} from "@/editor/psd/color-modes"
+import { serializePsd } from "@/editor/document/io"
+import { canWriteNativeLayeredPsd } from "@/editor/psd/native-writer"
+import type { PsDocument } from "@/editor/types"
+import { installFixtureDom } from "@/tests/photoshop-fixtures"
 
 const NOOP_CANVAS: PsDocument["layers"][number]["canvas"] = {
   width: 0,

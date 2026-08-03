@@ -20,11 +20,11 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
-import { CLIENT_STORAGE_KEYS, readClientStorageJson } from "./client-storage"
-import { makeCanvas, makeDocument, useEditorSelector } from "./editor-context"
-import { canvasSizeError, clampCanvasSize } from "./canvas-limits"
-import { createHighBitImageFromImageData, type HighBitImage } from "./color-pipeline"
-import type { DocumentModeSettings, Layer, PsDocument } from "./types"
+import { CLIENT_STORAGE_KEYS, readClientStorageJson } from "@/editor/client-storage"
+import { makeCanvas, makeDocument, useEditorSelector } from "@/components/photoshop/editor/context"
+import { canvasSizeError, clampCanvasSize } from "@/editor/canvas/limits"
+import { createHighBitImageFromImageData, type HighBitImage } from "@/editor/color/pipeline"
+import type { DocumentModeSettings, Layer, PsDocument } from "@/editor/types"
 import {
   estimateDocumentMemoryMb,
   modeSettings,
@@ -33,7 +33,7 @@ import {
   pixelsToUnit,
   unitToPixels,
   type NewDocumentUnit,
-} from "./new-document-presets"
+} from "@/editor/new-document-presets"
 
 type BackgroundChoice = "white" | "black" | "transparent" | "foreground" | "background" | "custom"
 type DocumentWithHighBitSource = PsDocument & { __highBitImageData?: HighBitImage }

@@ -10,8 +10,8 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
-import { useEditorSelector } from "./editor-context"
-import { featherMask, selectionFromMask, selectionToMaskCanvas, smoothSelectionMask } from "./tool-helpers"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { featherMask, selectionFromMask, selectionToMaskCanvas, smoothSelectionMask } from "@/editor/tool/helpers"
 
 export function RefineEdgeDialog({
   open,

@@ -7,10 +7,10 @@ import {
   exportImageAssetsToZip,
   parseImageAssetLayerName,
   shouldRunImageAssetGenerator,
-} from "../components/photoshop/image-assets-generator"
-import type { Layer, PsDocument } from "../components/photoshop/types"
-import { createStoredZipBlob } from "../components/photoshop/zip-packaging"
-import { fixtureCanvas, installFixtureDom, richFixtureDocument } from "./photoshop-fixtures"
+} from "@/editor/image-assets-generator"
+import type { Layer, PsDocument } from "@/editor/types"
+import { createStoredZipBlob } from "@/editor/zip-packaging"
+import { fixtureCanvas, installFixtureDom, richFixtureDocument } from "@/tests/photoshop-fixtures"
 
 function generatorDoc(layers: Layer[]): PsDocument {
   return {

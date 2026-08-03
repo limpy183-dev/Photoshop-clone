@@ -15,15 +15,15 @@ import {
   MenubarSubTrigger as DropdownMenuSubTrigger,
   MenubarTrigger as DropdownMenuTrigger,
 } from "@/components/ui/menubar"
-import { useEditorSelector, makeDocument, makeCanvas, type DocumentLifecycleState, type FileSystemFileHandleLike } from "./editor-context"
-import { FILTER_META } from "./filters-meta"
-import type { AdvancedSubsystemTab, ColorWorkflowMode } from "./advanced-subsystems-dialog"
-import type { GapWorkflowKind } from "./gap-workflow-dialog"
-import type { SelectionOperation } from "./management-dialogs"
-import type { WorkflowPackId } from "./workflow-presets"
-import { WORKFLOW_PACKS } from "./workflow-presets"
-import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "./events"
-import { DEFAULT_COLOR_MANAGEMENT } from "./menus/color-management-defaults"
+import { useEditorSelector, makeDocument, makeCanvas, type DocumentLifecycleState, type FileSystemFileHandleLike } from "@/components/photoshop/editor/context"
+import { FILTER_META } from "@/editor/filters-meta"
+import type { AdvancedSubsystemTab, ColorWorkflowMode } from "@/components/photoshop/advanced/subsystems-dialog"
+import type { GapWorkflowKind } from "@/components/photoshop/gap-workflow-dialog"
+import type { SelectionOperation } from "@/components/photoshop/management-dialogs"
+import type { WorkflowPackId } from "@/editor/workflow-presets"
+import { WORKFLOW_PACKS } from "@/editor/workflow-presets"
+import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "@/editor/events"
+import { DEFAULT_COLOR_MANAGEMENT } from "@/editor/menus/color-management-defaults"
 import {
   applyAutoColorToCanvas,
   applyAutoContrastToCanvas,
@@ -34,11 +34,11 @@ import {
   flipDocumentLayers,
   rotateDocumentLayers,
   safeExportName,
-} from "./menus/image-operations"
-import { MenuDialogs, type AutoAlgorithmId } from "./menus/menu-dialogs"
-import { loadAdvancedCommands } from "./menus/advanced-command-service"
-import { loadDocumentCommands } from "./menus/document-command-service"
-import { FilterMenu } from "./menus/filter-menu"
+} from "@/editor/menus/image-operations"
+import { MenuDialogs, type AutoAlgorithmId } from "@/components/photoshop/menus/menu-dialogs"
+import { loadAdvancedCommands } from "@/editor/menus/advanced-command-service"
+import { loadDocumentCommands } from "@/editor/menus/document-command-service"
+import { FilterMenu } from "@/components/photoshop/menus/filter-menu"
 import {
   FileMenu,
   LINKED_SMART_OBJECT_POLL_MS,
@@ -50,42 +50,42 @@ import {
   type ReadableFileHandle,
   type SaveMode,
   type SavePickerWindow,
-} from "./menus/file-menu"
-import { loadImageCommands } from "./menus/image-command-service"
-import { MediaWorkspaceMenus } from "./menus/media-workspace-menus"
-import { SelectMenu } from "./menus/select-menu"
-import { loadTypeCommands } from "./menus/type-command-service"
-import { ViewMenu } from "./menus/view-menu"
-import { readWorkspaceLibrary } from "./workspace-layouts"
+} from "@/components/photoshop/menus/file-menu"
+import { loadImageCommands } from "@/editor/menus/image-command-service"
+import { MediaWorkspaceMenus } from "@/components/photoshop/menus/media-workspace-menus"
+import { SelectMenu } from "@/components/photoshop/menus/select-menu"
+import { loadTypeCommands } from "@/editor/menus/type-command-service"
+import { ViewMenu } from "@/components/photoshop/menus/view-menu"
+import { readWorkspaceLibrary } from "@/editor/workspace-layouts"
 
 import {
   PANEL_CATEGORIES,
   PANEL_DEFINITIONS,
   WORKSPACE_PRESET_OPTIONS,
   type WorkspacePresetId,
-} from "./panel-registry"
+} from "@/components/photoshop/panel-registry"
 import {
   createLargeDocumentInspectionDocument,
   describeLargeDocumentRecovery,
   planLargeDocumentOpen,
   type LargeDocumentOpenPlan,
-} from "./large-document"
+} from "@/editor/large-document"
 import {
   readRecentDocuments,
   rememberRecentDocument,
   removeRecentDocument,
   type RecentDocument,
-} from "./recent-documents"
-import { MAX_PROJECT_FILE_BYTES, assertFileSize } from "./canvas-limits"
-import type { AdjustmentType, ColorManagementSettings, DocumentModeSettings, Layer, PluginCommandDescriptor, PluginDescriptor, TextAntiAliasMode } from "./types"
-import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop } from "./adjustment-layers"
-import { createSmartObjectSource, relinkSmartObjectToFile, syncLinkedSmartObjectSource } from "./smart-objects"
-import { PURGE_COMMANDS, formatPurgeStatus, type PurgeTarget } from "./purge-commands"
+} from "@/editor/recent-documents"
+import { MAX_PROJECT_FILE_BYTES, assertFileSize } from "@/editor/canvas/limits"
+import type { AdjustmentType, ColorManagementSettings, DocumentModeSettings, Layer, PluginCommandDescriptor, PluginDescriptor, TextAntiAliasMode } from "@/editor/types"
+import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop } from "@/editor/adjustment-layers"
+import { createSmartObjectSource, relinkSmartObjectToFile, syncLinkedSmartObjectSource } from "@/editor/smart-objects"
+import { PURGE_COMMANDS, formatPurgeStatus, type PurgeTarget } from "@/editor/purge-commands"
 import {
   revealSourceInBrowser,
   sourceInfoForSmartObject,
   type SourceFileHandleLike,
-} from "./source-location"
+} from "@/editor/source-location"
 
 const menuClass = MENU_TRIGGER_CLASS
 
@@ -176,7 +176,7 @@ export function MenuBar({
   const [algorithmOpen, setAlgorithmOpen] = React.useState(false)
   const [gapWorkflow, setGapWorkflow] = React.useState<GapWorkflowKind | null>(null)
   const [workflowPack, setWorkflowPack] = React.useState<WorkflowPackId | null>(null)
-  const [colorModeTarget, setColorModeTarget] = React.useState<import("./color-mode-dialog").ColorModeDialogTarget | null>(null)
+  const [colorModeTarget, setColorModeTarget] = React.useState<import("@/components/photoshop/color/mode-dialog").ColorModeDialogTarget | null>(null)
   const [preferencesOpen, setPreferencesOpen] = React.useState(false)
   const [shortcutsOpen, setShortcutsOpen] = React.useState(false)
   const [menuCustomizationOpen, setMenuCustomizationOpen] = React.useState(false)
@@ -324,7 +324,7 @@ export function MenuBar({
       const mode = (detail as { mode?: ColorWorkflowMode } | undefined)?.mode
       advancedHandler("color", mode ?? "assign")
     }
-    const colorModeHandler = (detail: import("./color-mode-dialog").ColorModeDialogTarget | undefined) => {
+    const colorModeHandler = (detail: import("@/components/photoshop/color/mode-dialog").ColorModeDialogTarget | undefined) => {
       if (detail) setColorModeTarget(detail)
     }
     const formatsHandler = () => advancedHandler("formats")
@@ -371,7 +371,7 @@ export function MenuBar({
       addPhotoshopEventListener("ps-open-plugin-manager", pluginsHandler),
       addPhotoshopEventListener("ps-open-cloud-libraries", librariesHandler),
       addPhotoshopEventListener("ps-open-color-management-workflow", colorWorkflowHandler),
-      addPhotoshopEventListener("ps-open-color-mode", (detail) => colorModeHandler(detail as import("./color-mode-dialog").ColorModeDialogTarget | undefined)),
+      addPhotoshopEventListener("ps-open-color-mode", (detail) => colorModeHandler(detail as import("@/components/photoshop/color/mode-dialog").ColorModeDialogTarget | undefined)),
       addPhotoshopEventListener("ps-open-format-metadata", formatsHandler),
       addPhotoshopEventListener("ps-open-variables", variablesHandler),
       addPhotoshopEventListener("ps-open-photomerge", photomergeHandler),
@@ -817,7 +817,7 @@ export function MenuBar({
 
   const openRasterCanvasAsDocument = React.useCallback((
     file: File,
-    raster: Awaited<ReturnType<typeof import("./document-io").loadRasterCanvasFromFile>>,
+    raster: Awaited<ReturnType<typeof import("@/editor/document/io").loadRasterCanvasFromFile>>,
     picked?: { handle?: ReadableFileHandle },
   ) => {
     const doc = makeDocument(file.name, raster.canvas.width, raster.canvas.height)
@@ -1100,7 +1100,7 @@ export function MenuBar({
   /** Apply a "no-param" filter immediately to all unlocked selected layers. */
   const applyInstant = async (filterId: string) => {
     if (!activeDoc) return
-    const { FILTERS } = await import("./filters")
+    const { FILTERS } = await import("@/editor/filters")
     const f = FILTERS[filterId]
     if (!f) return
     let count = 0

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { recordOperationalMetric } from "../../lib/operational-metrics"
+import { recordOperationalMetric } from "@/lib/operational-metrics"
 
 describe("operational metrics", () => {
   it("keeps only bounded operational dimensions", () => {

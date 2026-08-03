@@ -1,8 +1,8 @@
 import { createReadStream, promises as fs } from "node:fs"
 import { createHash } from "node:crypto"
 import path from "node:path"
-import { readBoundedJsonResponse } from "./bounded-json"
-import { isAuthenticatedServiceConfigured } from "./remote-service"
+import { readBoundedJsonResponse } from "@/lib/bounded-json"
+import { isAuthenticatedServiceConfigured } from "@/lib/remote-service"
 
 /**
  * Lightweight JSON-Lines-ish store used by the marketing API routes.

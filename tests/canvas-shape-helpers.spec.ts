@@ -9,8 +9,8 @@ import {
   shapeHandles,
   shapePropsForTool,
   shapeRect,
-} from "../components/photoshop/canvas-shape-helpers"
-import type { ShapeProps } from "../components/photoshop/types"
+} from "@/editor/canvas/shape-helpers"
+import type { ShapeProps } from "@/editor/types"
 
 test.beforeEach(() => {
   Object.defineProperty(globalThis, "window", {

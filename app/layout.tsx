@@ -5,7 +5,7 @@ import {
   marketingFontVariables,
   marketingFontVariableClasses,
 } from '@/components/marketing/fonts'
-import './globals.css'
+import '@/app/globals.css'
 
 export const metadata: Metadata = {
   title: 'Photoshop Web — A Real Image Editor In A Tab',

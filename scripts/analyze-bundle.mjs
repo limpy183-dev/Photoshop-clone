@@ -149,6 +149,7 @@ function readChunkSourceMapOwnership(chunks) {
         const normalized = normalizeSourcemapSource(source)
         if (
           normalized.startsWith("components/") ||
+          normalized.startsWith("editor/") ||
           normalized.startsWith("app/") ||
           normalized.startsWith("lib/") ||
           normalized.startsWith("node_modules/")
@@ -190,6 +191,7 @@ function collectWebpackStatsModules(modules, out) {
       const normalized = normalizeWebpackStatsModuleName(rawName)
       if (
         normalized.startsWith("components/") ||
+        normalized.startsWith("editor/") ||
         normalized.startsWith("app/") ||
         normalized.startsWith("lib/") ||
         normalized.startsWith("node_modules/")
@@ -270,6 +272,7 @@ function hasAppOwnedModule(owner) {
   return samples.some((module) =>
     module.startsWith("app/") ||
     module.startsWith("components/") ||
+    module.startsWith("editor/") ||
     module.startsWith("lib/"),
   )
 }
@@ -396,6 +399,7 @@ const appOwnedStartupChunkReasons = appOwnedStartupChunks
       .filter((module) =>
         module.startsWith("app/") ||
         module.startsWith("components/") ||
+        module.startsWith("editor/") ||
         module.startsWith("lib/"),
       )
       .slice(0, 16),

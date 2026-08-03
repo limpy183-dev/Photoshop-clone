@@ -20,11 +20,11 @@ import {
   psdSlicesToApp,
   psdSmartObjectToAppLayer,
   RESOURCES_METADATA_CAPABILITY,
-} from "../components/photoshop/psd-resources-metadata"
+} from "@/editor/psd/resources-metadata"
 import {
   appSmartFiltersToNativePsd,
   psdNativeSmartFiltersToApp,
-} from "../components/photoshop/psd-effects-adjustments"
+} from "@/editor/psd/effects-adjustments"
 import type {
   DocumentMetadata,
   Guide,
@@ -35,8 +35,8 @@ import type {
   PsDocument,
   Slice,
   SmartFilter,
-} from "../components/photoshop/types"
-import { fixtureCanvas } from "./photoshop-fixtures"
+} from "@/editor/types"
+import { fixtureCanvas } from "@/tests/photoshop-fixtures"
 
 test("RESOURCES_METADATA_CAPABILITY is a non-empty marker", () => {
   expect(typeof RESOURCES_METADATA_CAPABILITY).toBe("string")

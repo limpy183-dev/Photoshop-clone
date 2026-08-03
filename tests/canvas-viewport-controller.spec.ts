@@ -4,7 +4,7 @@ import {
   composeStageTransform,
   imageRenderingForZoom,
   wheelViewportChange,
-} from "../components/photoshop/canvas-viewport-controller"
+} from "@/editor/canvas/viewport-controller"
 
 test("composeStageTransform keeps stable translate and rotation and omits identity scale", () => {
   expect(composeStageTransform({ x: 12, y: -5 }, 90)).toBe("translate(12px, -5px) rotate(90deg)")

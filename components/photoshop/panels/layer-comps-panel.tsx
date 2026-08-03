@@ -5,12 +5,12 @@ import { AlertTriangle, Copy, Download, FileText, Play, Plus, RefreshCw, Trash2 
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { useEditorSelector } from "../editor-context"
-import type { Layer, LayerComp, PsDocument } from "../types"
-import { captureLayerCompState, createLayerCompFromDocument, summarizeLayerComp } from "../layer-workflows"
-import { uid } from "../uid"
-import { downloadBlob, renderDocumentComposite, rasterMime } from "../document-io"
-import { buildPresentationPdf } from "../pdf-presentation"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import type { Layer, LayerComp, PsDocument } from "@/editor/types"
+import { captureLayerCompState, createLayerCompFromDocument, summarizeLayerComp } from "@/editor/layer-workflows"
+import { uid } from "@/editor/uid"
+import { downloadBlob, renderDocumentComposite, rasterMime } from "@/editor/document/io"
+import { buildPresentationPdf } from "@/editor/pdf-presentation"
 
 type RasterFormat = "png" | "jpeg" | "webp"
 

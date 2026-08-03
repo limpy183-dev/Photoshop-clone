@@ -3,12 +3,12 @@
 import * as React from "react"
 import { Copy, Droplet, Eye, Layers, Plus, Trash2, Wand2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { makeCanvas, useEditorSelector } from "../editor-context"
-import { renderDocumentComposite } from "../document-io"
-import type { AlphaChannel, PsDocument, Selection } from "../types"
+import { makeCanvas, useEditorSelector } from "@/components/photoshop/editor/context"
+import { renderDocumentComposite } from "@/editor/document/io"
+import type { AlphaChannel, PsDocument, Selection } from "@/editor/types"
 import { cn } from "@/lib/utils"
-import { uid } from "../uid"
-import { parseAlphaChannelMetadata, simulateSpotChannelPreview } from "../color-channel-ops"
+import { uid } from "@/editor/uid"
+import { parseAlphaChannelMetadata, simulateSpotChannelPreview } from "@/editor/color/channel-ops"
 
 type PreviewChannel = "rgb" | "red" | "green" | "blue" | string
 type LoadMode = "replace" | "add" | "subtract" | "intersect"

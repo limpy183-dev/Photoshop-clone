@@ -1,9 +1,9 @@
 "use client"
 
 import * as React from "react"
-import { useActiveDocument, useActiveLayer, useEditorCommands } from "../editor-context"
-import { rasterizeText } from "../tool-helpers"
-import type { TextAntiAliasMode } from "../types"
+import { useActiveDocument, useActiveLayer, useEditorCommands } from "@/components/photoshop/editor/context"
+import { rasterizeText } from "@/editor/tool/helpers"
+import type { TextAntiAliasMode } from "@/editor/types"
 import {
   applyVariableFontNamedInstance,
   buildVariableFontAxisControlModel,
@@ -14,7 +14,7 @@ import {
   listOpenTypeFeatureToggles,
   type OpenTypeFeatureSupport,
   type VariableFontInspection,
-} from "../typography-engine"
+} from "@/editor/typography-engine"
 import { Slider } from "@/components/ui/slider"
 import { Checkbox } from "@/components/ui/checkbox"
 import {

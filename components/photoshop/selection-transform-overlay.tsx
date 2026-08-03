@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import type { Guide, Layer } from "./types"
+import type { Guide, Layer } from "@/editor/types"
 
 export type SelectionTransformInterpolation = "nearest" | "bilinear" | "bicubic"
 

@@ -16,12 +16,12 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { CLIENT_STORAGE_KEYS, readClientStorageString, writeClientStorageString } from "../client-storage"
-import { useEditorSelector } from "../editor-context"
-import { dispatchPhotoshopEvent } from "../events"
-import { uid } from "../uid"
-import { appendThreadReply } from "../collaboration"
-import type { Note } from "../types"
+import { CLIENT_STORAGE_KEYS, readClientStorageString, writeClientStorageString } from "@/editor/client-storage"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { dispatchPhotoshopEvent } from "@/editor/events"
+import { uid } from "@/editor/uid"
+import { appendThreadReply } from "@/editor/collaboration"
+import type { Note } from "@/editor/types"
 
 const DEFAULT_AUTHOR = "You"
 

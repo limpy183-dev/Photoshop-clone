@@ -1,12 +1,12 @@
 "use client"
 
 import * as React from "react"
-import { useActiveDocument, useActiveLayer, useEditorCommands, makeCanvas } from "../editor-context"
-import { downloadText } from "../document-io"
-import { FILTERS } from "../filters"
+import { useActiveDocument, useActiveLayer, useEditorCommands, makeCanvas } from "@/components/photoshop/editor/context"
+import { downloadText } from "@/editor/document/io"
+import { FILTERS } from "@/editor/filters"
 import { Textarea } from "@/components/ui/textarea"
 import { Code2, Download, Play, RotateCcw, Save, ShieldCheck, Trash2, Upload } from "lucide-react"
-import type { AdjustmentType, Layer, ToolId } from "../types"
+import type { AdjustmentType, Layer, ToolId } from "@/editor/types"
 import {
   cleanBrushPatch,
   cleanHexColor,
@@ -14,8 +14,8 @@ import {
   parseSafeDslCommands,
   saveCommandMacros,
   type CommandMacro,
-} from "../automation-engine"
-import { uid } from "../uid"
+} from "@/editor/automation-engine"
+import { uid } from "@/editor/uid"
 
 const STARTER_SCRIPT = `report("Ready")
 reportDocument()

@@ -33,7 +33,7 @@ import {
   StickyNote,
   Type,
 } from "lucide-react"
-import { lazyPanel } from "./lazy-dialog"
+import { lazyPanel } from "@/components/photoshop/lazy-dialog"
 
 // All panels are lazy-mounted. The right dock typically displays only a
 // handful at a time (4-8 in the default workspace), but the registry has
@@ -42,124 +42,124 @@ import { lazyPanel } from "./lazy-dialog"
 // to lazy means each panel's code is fetched only when it actually
 // becomes visible in the dock or is referenced by the command palette.
 const ActionsPanel = lazyPanel(
-  () => import("./panels/actions-panel").then((m) => ({ default: m.ActionsPanel })),
+  () => import("@/components/photoshop/panels/actions-panel").then((m) => ({ default: m.ActionsPanel })),
 )
 const AdjustmentsPanel = lazyPanel(
-  () => import("./panels/adjustments-panel").then((m) => ({ default: m.AdjustmentsPanel })),
+  () => import("@/components/photoshop/panels/adjustments-panel").then((m) => ({ default: m.AdjustmentsPanel })),
 )
 const AnnotationsPanel = lazyPanel(
-  () => import("./panels/annotations-panel").then((m) => ({ default: m.AnnotationsPanel })),
+  () => import("@/components/photoshop/panels/annotations-panel").then((m) => ({ default: m.AnnotationsPanel })),
 )
 const AssetsPanel = lazyPanel(
-  () => import("./panels/assets-panel").then((m) => ({ default: m.AssetsPanel })),
+  () => import("@/components/photoshop/panels/assets-panel").then((m) => ({ default: m.AssetsPanel })),
 )
 const BrushPanel = lazyPanel(
-  () => import("./panels/brush-panel").then((m) => ({ default: m.BrushPanel })),
+  () => import("@/components/photoshop/panels/brush-panel").then((m) => ({ default: m.BrushPanel })),
 )
 const BrowserDiagnosticsPanel = lazyPanel(
-  () => import("./panels/browser-diagnostics-panel").then((m) => ({ default: m.BrowserDiagnosticsPanel })),
+  () => import("@/components/photoshop/panels/browser-diagnostics-panel").then((m) => ({ default: m.BrowserDiagnosticsPanel })),
 )
 const AccessibilityAuditPanel = lazyPanel(
-  () => import("./panels/accessibility-audit-panel").then((m) => ({ default: m.AccessibilityAuditPanel })),
+  () => import("@/components/photoshop/panels/accessibility-audit-panel").then((m) => ({ default: m.AccessibilityAuditPanel })),
 )
 const ChannelsPanel = lazyPanel(
-  () => import("./panels/channels-panel").then((m) => ({ default: m.ChannelsPanel })),
+  () => import("@/components/photoshop/panels/channels-panel").then((m) => ({ default: m.ChannelsPanel })),
 )
 const CharacterPanel = lazyPanel(
-  () => import("./panels/character-paragraph-panels").then((m) => ({ default: m.CharacterPanel })),
+  () => import("@/components/photoshop/panels/character-paragraph-panels").then((m) => ({ default: m.CharacterPanel })),
 )
 const ParagraphPanel = lazyPanel(
-  () => import("./panels/character-paragraph-panels").then((m) => ({ default: m.ParagraphPanel })),
+  () => import("@/components/photoshop/panels/character-paragraph-panels").then((m) => ({ default: m.ParagraphPanel })),
 )
 const CloneSourcePanel = lazyPanel(
-  () => import("./panels/clone-source-panel").then((m) => ({ default: m.CloneSourcePanel })),
+  () => import("@/components/photoshop/panels/clone-source-panel").then((m) => ({ default: m.CloneSourcePanel })),
 )
 const ColorPanel = lazyPanel(
-  () => import("./panels/color-panel").then((m) => ({ default: m.ColorPanel })),
+  () => import("@/components/photoshop/panels/color-panel").then((m) => ({ default: m.ColorPanel })),
 )
 const AnimationPanel = lazyPanel(
-  () => import("./panels/gap-panels").then((m) => ({ default: m.AnimationPanel })),
+  () => import("@/components/photoshop/panels/gap-panels").then((m) => ({ default: m.AnimationPanel })),
 )
 const CommentsPanel = lazyPanel(
-  () => import("./panels/gap-panels").then((m) => ({ default: m.CommentsPanel })),
+  () => import("@/components/photoshop/panels/gap-panels").then((m) => ({ default: m.CommentsPanel })),
 )
 const DiscoverPanel = lazyPanel(
-  () => import("./panels/discover-panel").then((m) => ({ default: m.DiscoverPanel })),
+  () => import("@/components/photoshop/panels/discover-panel").then((m) => ({ default: m.DiscoverPanel })),
 )
 const GlyphsPanel = lazyPanel(
-  () => import("./panels/glyphs-panel").then((m) => ({ default: m.GlyphsPanel })),
+  () => import("@/components/photoshop/panels/glyphs-panel").then((m) => ({ default: m.GlyphsPanel })),
 )
 const LearnPanel = lazyPanel(
-  () => import("./panels/learn-panel").then((m) => ({ default: m.LearnPanel })),
+  () => import("@/components/photoshop/panels/learn-panel").then((m) => ({ default: m.LearnPanel })),
 )
 const LibrariesPanel = lazyPanel(
-  () => import("./panels/libraries-panel").then((m) => ({ default: m.LibrariesPanel })),
+  () => import("@/components/photoshop/panels/libraries-panel").then((m) => ({ default: m.LibrariesPanel })),
 )
 const MeasurementLogPanel = lazyPanel(
-  () => import("./panels/measurement-log-panel").then((m) => ({ default: m.MeasurementLogPanel })),
+  () => import("@/components/photoshop/panels/measurement-log-panel").then((m) => ({ default: m.MeasurementLogPanel })),
 )
 const NotesPanel = lazyPanel(
-  () => import("./panels/notes-panel").then((m) => ({ default: m.NotesPanel })),
+  () => import("@/components/photoshop/panels/notes-panel").then((m) => ({ default: m.NotesPanel })),
 )
 const ShapesPanel = lazyPanel(
-  () => import("./panels/shapes-panel").then((m) => ({ default: m.ShapesPanel })),
+  () => import("@/components/photoshop/panels/shapes-panel").then((m) => ({ default: m.ShapesPanel })),
 )
 const StylesPanel = lazyPanel(
-  () => import("./panels/styles-panel").then((m) => ({ default: m.StylesPanel })),
+  () => import("@/components/photoshop/panels/styles-panel").then((m) => ({ default: m.StylesPanel })),
 )
 const GradientsPanel = lazyPanel(
-  () => import("./panels/gradients-panel").then((m) => ({ default: m.GradientsPanel })),
+  () => import("@/components/photoshop/panels/gradients-panel").then((m) => ({ default: m.GradientsPanel })),
 )
 const GuidesPanel = lazyPanel(
-  () => import("./panels/guides-panel").then((m) => ({ default: m.GuidesPanel })),
+  () => import("@/components/photoshop/panels/guides-panel").then((m) => ({ default: m.GuidesPanel })),
 )
 const HistoryPanel = lazyPanel(
-  () => import("./panels/history-panel").then((m) => ({ default: m.HistoryPanel })),
+  () => import("@/components/photoshop/panels/history-panel").then((m) => ({ default: m.HistoryPanel })),
 )
 const HistogramPanel = lazyPanel(
-  () => import("./panels/inspection-panels").then((m) => ({ default: m.HistogramPanel })),
+  () => import("@/components/photoshop/panels/inspection-panels").then((m) => ({ default: m.HistogramPanel })),
 )
 const InfoPanel = lazyPanel(
-  () => import("./panels/inspection-panels").then((m) => ({ default: m.InfoPanel })),
+  () => import("@/components/photoshop/panels/inspection-panels").then((m) => ({ default: m.InfoPanel })),
 )
 const NavigatorPanel = lazyPanel(
-  () => import("./panels/inspection-panels").then((m) => ({ default: m.NavigatorPanel })),
+  () => import("@/components/photoshop/panels/inspection-panels").then((m) => ({ default: m.NavigatorPanel })),
 )
 const LayerCompsPanel = lazyPanel(
-  () => import("./panels/layer-comps-panel").then((m) => ({ default: m.LayerCompsPanel })),
+  () => import("@/components/photoshop/panels/layer-comps-panel").then((m) => ({ default: m.LayerCompsPanel })),
 )
 const LayersPanel = lazyPanel(
-  () => import("./panels/layers-panel").then((m) => ({ default: m.LayersPanel })),
+  () => import("@/components/photoshop/panels/layers-panel").then((m) => ({ default: m.LayersPanel })),
 )
 const PathsPanel = lazyPanel(
-  () => import("./panels/paths-panel").then((m) => ({ default: m.PathsPanel })),
+  () => import("@/components/photoshop/panels/paths-panel").then((m) => ({ default: m.PathsPanel })),
 )
 const PatternsPanel = lazyPanel(
-  () => import("./panels/patterns-panel").then((m) => ({ default: m.PatternsPanel })),
+  () => import("@/components/photoshop/panels/patterns-panel").then((m) => ({ default: m.PatternsPanel })),
 )
 const PresetManagerPanel = lazyPanel(
-  () => import("./panels/preset-manager-panel").then((m) => ({ default: m.PresetManagerPanel })),
+  () => import("@/components/photoshop/panels/preset-manager-panel").then((m) => ({ default: m.PresetManagerPanel })),
 )
 const PropertiesPanel = lazyPanel(
-  () => import("./panels/properties-panel").then((m) => ({ default: m.PropertiesPanel })),
+  () => import("@/components/photoshop/panels/properties-panel").then((m) => ({ default: m.PropertiesPanel })),
 )
 const ScriptingPanel = lazyPanel(
-  () => import("./panels/scripting-panel").then((m) => ({ default: m.ScriptingPanel })),
+  () => import("@/components/photoshop/panels/scripting-panel").then((m) => ({ default: m.ScriptingPanel })),
 )
 const SelectionStudioPanel = lazyPanel(
-  () => import("./panels/selection-studio-panel").then((m) => ({ default: m.SelectionStudioPanel })),
+  () => import("@/components/photoshop/panels/selection-studio-panel").then((m) => ({ default: m.SelectionStudioPanel })),
 )
 const SlicesPanel = lazyPanel(
-  () => import("./panels/slices-panel").then((m) => ({ default: m.SlicesPanel })),
+  () => import("@/components/photoshop/panels/slices-panel").then((m) => ({ default: m.SlicesPanel })),
 )
 const SwatchesPanel = lazyPanel(
-  () => import("./panels/swatches-panel").then((m) => ({ default: m.SwatchesPanel })),
+  () => import("@/components/photoshop/panels/swatches-panel").then((m) => ({ default: m.SwatchesPanel })),
 )
 const TimelinePanel = lazyPanel(
-  () => import("./panels/timeline-panel").then((m) => ({ default: m.TimelinePanel })),
+  () => import("@/components/photoshop/panels/timeline-panel").then((m) => ({ default: m.TimelinePanel })),
 )
 const ToolPresetsPanel = lazyPanel(
-  () => import("./panels/tool-presets-panel").then((m) => ({ default: m.ToolPresetsPanel })),
+  () => import("@/components/photoshop/panels/tool-presets-panel").then((m) => ({ default: m.ToolPresetsPanel })),
 )
 
 export type PanelStack = "upper" | "lower"

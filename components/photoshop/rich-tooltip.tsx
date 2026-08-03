@@ -17,8 +17,8 @@ import * as React from "react"
 import * as TooltipPrimitive from "@radix-ui/react-tooltip"
 import { BookOpen } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { dispatchPhotoshopEvent } from "./events"
-import type { ToolPreviewKind } from "./tool-tooltip-content"
+import { dispatchPhotoshopEvent } from "@/editor/events"
+import type { ToolPreviewKind } from "@/editor/tool/tooltip-content"
 
 export const DEFAULT_RICH_TOOLTIP_DELAY_MS = 600
 

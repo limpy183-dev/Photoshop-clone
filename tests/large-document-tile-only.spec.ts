@@ -4,7 +4,7 @@ import {
   createTileOnlyCapabilityDashboard,
   describeTileOnlyExportDecision,
   planTileOnlyExport,
-} from "../components/photoshop/tile-only-export-planning"
+} from "@/editor/tile-only-export-planning"
 import {
   composeDocumentTile,
   planTileOnlyDefaultCompositor,
@@ -14,18 +14,18 @@ import {
   planTileOnlySelection,
   renderTileOnlyViewportComposite,
   supportsTileOnlyLayer,
-} from "../components/photoshop/tile-only-pipeline"
-import { exportRasterTileSequenceBlob } from "../components/photoshop/document-io"
+} from "@/editor/tile-only-pipeline"
+import { exportRasterTileSequenceBlob } from "@/editor/document/io"
 import {
   commitPsbTileEditDocument,
   forgetPsbTileViewStore,
   openPsbTileEditDocument,
   registerPsbTileViewStore,
   writePsbTileViewCanvas,
-} from "../components/photoshop/psb-tile-view"
-import { TiledBackingStore } from "../components/photoshop/tiled-backing-store"
-import type { Layer, PsDocument } from "../components/photoshop/types"
-import { installFixtureDom, fixtureCanvas } from "./photoshop-fixtures"
+} from "@/editor/psb-tile-view"
+import { TiledBackingStore } from "@/editor/tiled-backing-store"
+import type { Layer, PsDocument } from "@/editor/types"
+import { installFixtureDom, fixtureCanvas } from "@/tests/photoshop-fixtures"
 
 function canvasPayload(canvas: HTMLCanvasElement) {
   const fixtureFill = (canvas as HTMLCanvasElement & { fill?: unknown }).fill

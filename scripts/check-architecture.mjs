@@ -55,8 +55,13 @@ function lineCount(text) {
 }
 
 function resolveLocalImport(fromFile, specifier, knownFiles) {
-  if (!specifier.startsWith(".")) return null
-  const base = resolve(dirname(fromFile), specifier)
+  // The codebase imports through the "@/" alias (tsconfig paths: @/* -> ./*).
+  // Relative specifiers are still resolved so the check keeps working on any
+  // file that has not been converted yet.
+  let base
+  if (specifier.startsWith("@/")) base = resolve(root, specifier.slice(2))
+  else if (specifier.startsWith(".")) base = resolve(dirname(fromFile), specifier)
+  else return null
   const candidates = [
     base,
     `${base}.ts`,
@@ -130,9 +135,12 @@ function stronglyConnectedComponents(graph) {
 }
 
 const allFiles = walk(root)
+// The editor spans two roots: editor/ holds the engine (.ts), components/photoshop/
+// holds the React layer (.tsx). Both must be in the graph or the cycle check goes blind.
+const isEditorSource = (rel) => rel.startsWith("components/photoshop/") || rel.startsWith("editor/")
 const photoshopSource = allFiles.filter((file) => {
   const rel = relativePath(file)
-  return rel.startsWith("components/photoshop/") && sourceExtensions.has(extname(file))
+  return isEditorSource(rel) && sourceExtensions.has(extname(file))
 })
 const knownPhotoshopSource = new Set(photoshopSource.map((file) => resolve(file)))
 const graph = new Map()
@@ -165,8 +173,8 @@ const topLargestFilesTotalLines = topLargestFiles.reduce((sum, entry) => sum + e
 
 const searchedForEvents = allFiles.filter((file) => {
   const rel = relativePath(file)
-  if (rel === "components/photoshop/events.ts") return false
-  if (rel.startsWith("components/") || rel.startsWith("app/") || rel.startsWith("tests/")) {
+  if (rel === "editor/events.ts") return false
+  if (rel.startsWith("components/") || rel.startsWith("editor/") || rel.startsWith("app/") || rel.startsWith("tests/")) {
     return sourceExtensions.has(extname(file))
   }
   return false
@@ -189,8 +197,8 @@ for (const file of searchedForEvents) {
 }
 
 const directClientStorageAllowedFiles = new Set([
-  "components/photoshop/client-storage.ts",
-  "components/photoshop/storage-registry.ts",
+  "editor/client-storage.ts",
+  "editor/storage-registry.ts",
   "components/photoshop/panels/browser-diagnostics-panel.tsx",
 ])
 const directClientStorageRegex =
@@ -220,7 +228,7 @@ const hookDependencySuppressions = sourceHygieneFiles
 const useEditorImports = photoshopSource
   .filter((file) => {
     const text = readText(file)
-    return /from\s+["'][.\/]+editor-context["']/.test(text) && /\buseEditor\b/.test(text)
+    return /from\s+["'](?:@\/components\/photoshop|[.\/]+)\/?editor\/context["']/.test(text) && /\buseEditor\b/.test(text)
   })
   .map(relativePath)
   .sort()

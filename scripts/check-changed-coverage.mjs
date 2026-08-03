@@ -14,7 +14,7 @@ if (!existsSync(coveragePath)) {
 
 const baseRef = process.env.COVERAGE_BASE_REF?.trim()
 const comparison = baseRef ? `${baseRef}...HEAD` : "HEAD"
-const diff = execFileSync("git", ["diff", "--unified=0", comparison, "--", "components/**/*.ts", "components/**/*.tsx"], {
+const diff = execFileSync("git", ["diff", "--unified=0", comparison, "--", "components/**/*.ts", "components/**/*.tsx", "editor/**/*.ts", "editor/**/*.tsx"], {
   cwd: root,
   encoding: "utf8",
 })

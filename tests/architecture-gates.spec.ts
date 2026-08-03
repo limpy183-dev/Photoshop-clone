@@ -59,10 +59,10 @@ test("architecture gate reports no import cycles or budget regressions", () => {
   expect(report.budgets.hookDependencySuppressions.max).toBeLessThanOrEqual(6)
   expect(report.directClientStorage.map((entry) => entry.file)).not.toEqual(
     expect.arrayContaining([
-      "components/photoshop/editor-persisted-settings.ts",
-      "components/photoshop/filter-gallery.tsx",
-      "components/photoshop/preferences-engine.ts",
-      "components/photoshop/tech-previews.ts",
+      "editor/persisted-settings.ts",
+      "components/photoshop/filters/gallery.tsx",
+      "editor/preferences-engine.ts",
+      "editor/tech-previews.ts",
     ]),
   )
   expect(report.coordinationFiles).toHaveLength(3)
@@ -109,8 +109,8 @@ test("doctor script reports npm and Playwright checks as structured diagnostics"
 
 test("editor selector helper hooks avoid broad editor context reads", () => {
   const sources = [
-    readFileSync("components/photoshop/editor-context.tsx", "utf8"),
-    readFileSync("components/photoshop/editor-history-hooks.ts", "utf8"),
+    readFileSync("components/photoshop/editor/context.tsx", "utf8"),
+    readFileSync("editor/history-hooks.ts", "utf8"),
   ]
 
   for (const hook of ["useActiveDocument", "useActiveLayer", "useToolState", "useDocumentLifecycle", "useHistoryState", "useHistoryCommands"]) {
@@ -138,7 +138,7 @@ test("workflow shell dialogs consume focused selector hooks instead of broad edi
     "components/photoshop/new-document-dialog.tsx",
     "components/photoshop/photomerge-dialog.tsx",
     "components/photoshop/processing-dialogs.tsx",
-    "components/photoshop/color-picker-dialog.tsx",
+    "components/photoshop/color/picker-dialog.tsx",
   ]
 
   for (const file of focusedSelectorConsumers) {
@@ -191,9 +191,9 @@ test("bundle analyzer includes manifest and sourcemap attribution hooks", () => 
 
 test("startup rendering modules do not import the broad advanced subsystem bundle", () => {
   for (const file of [
-    "components/photoshop/canvas-view.tsx",
-    "components/photoshop/document-rendering.ts",
-    "components/photoshop/three-d-video-engine.ts",
+    "components/photoshop/canvas/view.tsx",
+    "editor/document/rendering.ts",
+    "editor/three-d-video-engine.ts",
   ]) {
     const source = readFileSync(file, "utf8")
     expect(source, file).not.toMatch(/from\s+["']\.\/advanced-subsystems["']/)
@@ -202,9 +202,9 @@ test("startup rendering modules do not import the broad advanced subsystem bundl
 
 test("runtime document diagnostics do not import the full capability catalog", () => {
   for (const file of [
-    "components/photoshop/browser-diagnostics.ts",
-    "components/photoshop/document-compatibility.ts",
-    "components/photoshop/preflight-engine.ts",
+    "editor/browser-diagnostics.ts",
+    "editor/document/compatibility.ts",
+    "editor/preflight-engine.ts",
   ]) {
     const source = readFileSync(file, "utf8")
     expect(source, file).toContain("capability-warnings")

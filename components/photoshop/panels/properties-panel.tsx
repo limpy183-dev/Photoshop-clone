@@ -1,15 +1,15 @@
 "use client"
 
 import * as React from "react"
-import { useEditorSelector, makeCanvas, useRenderSubscription } from "../editor-context"
-import { dispatchPhotoshopEvent } from "../events"
-import type { MergedRenderChange } from "../render-bus"
-import { FILTERS, type FilterParam } from "../filters"
+import { useEditorSelector, makeCanvas, useRenderSubscription } from "@/components/photoshop/editor/context"
+import { dispatchPhotoshopEvent } from "@/editor/events"
+import type { MergedRenderChange } from "@/editor/render-bus"
+import { FILTERS, type FilterParam } from "@/editor/filters"
 import { Slider } from "@/components/ui/slider"
 import { Type as TypeIcon, Square, Pen, Image, Layers as LayersIcon, Paintbrush, Eraser, Move, Scissors, Wand2, Eye, EyeOff, Link2, Link2Off } from "lucide-react"
-import type { Layer, BlendMode, PsDocument, ToolId } from "../types"
-import type { ActiveSmartFilterMaskTarget } from "../editor-reducer"
-import { renderThreeDScene } from "../advanced-subsystems"
+import type { Layer, BlendMode, PsDocument, ToolId } from "@/editor/types"
+import type { ActiveSmartFilterMaskTarget } from "@/editor/reducer"
+import { renderThreeDScene } from "@/editor/advanced/subsystems"
 import {
   applyTextInsideShape,
   buildFontSubstitutionComparison,
@@ -32,8 +32,8 @@ import {
   resolveFontSubstitutions,
   updateTextPathPoint,
   type VariableFontInspection,
-} from "../typography-engine"
-import { createDefaultShapeAppearance, shapeToEditablePath } from "../vector-path-operations"
+} from "@/editor/typography-engine"
+import { createDefaultShapeAppearance, shapeToEditablePath } from "@/editor/vector-path-operations"
 
 const BLEND_MODES: BlendMode[] = [
   "normal","dissolve","darken","multiply","color-burn","linear-burn","darker-color",
@@ -194,7 +194,7 @@ function LayerSection({
 }: {
   layer: Layer
   doc: PsDocument
-  dispatch: (a: import("../editor-context").Action) => void
+  dispatch: (a: import("@/components/photoshop/editor/context").Action) => void
   commit: (label: string, changedLayerIds?: string[]) => void
   requestRender: () => void
   activeSmartFilterMaskTarget: ActiveSmartFilterMaskTarget | null
@@ -282,7 +282,7 @@ function LayerSection({
         <select
           value={layer.blendMode}
           onChange={(e) => {
-            dispatch({ type: "set-layer-blend", id: layer.id, blendMode: e.target.value as import("../types").BlendMode })
+            dispatch({ type: "set-layer-blend", id: layer.id, blendMode: e.target.value as import("@/editor/types").BlendMode })
             commitLayerChange("Layer Blend Mode")
           }}
           className="bg-[var(--ps-panel-2)] border border-[var(--ps-divider)] rounded-sm px-1 h-5 text-[10px] w-full"
@@ -500,7 +500,7 @@ function LayerSection({
                         value={filter.blendMode ?? "normal"}
                         onChange={(e) =>
                           setSmartFilters(
-                            layer.smartFilters!.map((sf) => sf.id === filter.id ? { ...sf, blendMode: e.target.value as import("../types").BlendMode as BlendMode } : sf),
+                            layer.smartFilters!.map((sf) => sf.id === filter.id ? { ...sf, blendMode: e.target.value as import("@/editor/types").BlendMode as BlendMode } : sf),
                             "Smart Filter Blend Mode",
                           )
                         }
@@ -786,15 +786,15 @@ function NumberField({
 function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, requestRender, commit, foreground, background, doc }: {
   tool: ToolId
   layer: Layer | null
-  brush: import("../types").BrushSettings
-  eraser: import("../types").EraserSettings
-  cloneSource: import("../types").CloneSourceSettings
-  dispatch: (a: import("../editor-context").Action) => void
+  brush: import("@/editor/types").BrushSettings
+  eraser: import("@/editor/types").EraserSettings
+  cloneSource: import("@/editor/types").CloneSourceSettings
+  dispatch: (a: import("@/components/photoshop/editor/context").Action) => void
   requestRender: () => void
   commit: (label: string, changedLayerIds?: string[]) => void
   foreground: string
   background: string
-  doc: import("../types").PsDocument
+  doc: import("@/editor/types").PsDocument
 }) {
   const textFont = layer?.kind === "text" ? layer.text?.font : undefined
   const textEmbeddedFont = layer?.kind === "text" && layer.text
@@ -1756,7 +1756,7 @@ function ToolSection({ tool, layer, brush, eraser, cloneSource, dispatch, reques
             <Row label="Aligned">{cloneSource.aligned ? "Yes" : "No"}</Row>
             <Row label="Scale">{cloneSource.scale}%</Row>
             <Row label="Rotation">{cloneSource.rotation} deg</Row>
-            <Row label="Sources">{cloneSource.presets.length ? cloneSource.presets.map((preset: import("../types").CloneSourcePreset) => preset.name).join(", ") : "Alt-click to add"}</Row>
+            <Row label="Sources">{cloneSource.presets.length ? cloneSource.presets.map((preset: import("@/editor/types").CloneSourcePreset) => preset.name).join(", ") : "Alt-click to add"}</Row>
           </>
         )}
         <Row label="Color">

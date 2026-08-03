@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test"
 
-import { createSelectionHitTester } from "../components/photoshop/selection-hit-testing"
-import type { Selection } from "../components/photoshop/types"
+import { createSelectionHitTester } from "@/editor/selection-hit-testing"
+import type { Selection } from "@/editor/types"
 
 class CountingMaskCanvas {
   readonly width: number

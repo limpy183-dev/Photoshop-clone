@@ -26,7 +26,7 @@ import {
   setMenuItemVisible,
   type MenuCustomization,
   type MenuPreset,
-} from "./menu-customization"
+} from "@/editor/menu-customization"
 
 // The canonical set of top-level menus and their child item ids. This is the
 // list the dialog exposes for hide/show + reorder. Items added in the future

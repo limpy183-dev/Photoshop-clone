@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test"
 
-import { FILTER_META, getFilterMeta, getFilterName } from "../components/photoshop/filters-meta"
-import { FILTERS } from "../components/photoshop/filters"
+import { FILTER_META, getFilterMeta, getFilterName } from "@/editor/filters-meta"
+import { FILTERS } from "@/editor/filters"
 import {
   DEFAULT_MENU_CUSTOMIZATION,
   MENU_CUSTOMIZATION_STORAGE_KEY,
@@ -15,7 +15,7 @@ import {
   saveMenuCustomization,
   setMenuItemVisible,
   setMenuOrder,
-} from "../components/photoshop/menu-customization"
+} from "@/editor/menu-customization"
 import {
   NEW_DOCUMENT_PRESET_GROUPS,
   NEW_DOCUMENT_PRESETS,
@@ -24,7 +24,7 @@ import {
   modeSettings,
   pixelsToUnit,
   unitToPixels,
-} from "../components/photoshop/new-document-presets"
+} from "@/editor/new-document-presets"
 import {
   MAX_RECENT_COLORS,
   RECENT_COLORS_STORAGE_KEY,
@@ -34,7 +34,7 @@ import {
   normalizeRecentColors,
   pushRecentColor,
   saveRecentColors,
-} from "../components/photoshop/recent-colors"
+} from "@/editor/recent-colors"
 import {
   GRADIENT_STORAGE_KEY,
   PATTERN_STORAGE_KEY,
@@ -47,15 +47,15 @@ import {
   saveManagedGradients,
   saveManagedPatterns,
   scopedStorageKey,
-} from "../components/photoshop/preset-stores"
-import { addPhotoshopEventListener } from "../components/photoshop/events"
-import { createDocumentFromPreset } from "../components/photoshop/startup-documents"
+} from "@/editor/preset-stores"
+import { addPhotoshopEventListener } from "@/editor/events"
+import { createDocumentFromPreset } from "@/editor/startup-documents"
 import {
   GENERIC_TOOLTIP_CONTENT,
   TOOL_TOOLTIP_CONTENT,
   getToolTooltipEntry,
-} from "../components/photoshop/tool-tooltip-content"
-import { installFixtureDom } from "./photoshop-fixtures"
+} from "@/editor/tool/tooltip-content"
+import { installFixtureDom } from "@/tests/photoshop-fixtures"
 
 class MemoryStorage implements Storage {
   private values = new Map<string, string>()

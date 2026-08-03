@@ -12,11 +12,11 @@ import {
 } from "lucide-react"
 import { withBasePath } from "@/lib/base-path"
 
-import { DOCUMENTATION_SECTIONS, FIGURES } from "./documentation-content"
-import type { DocumentationFigure, DocumentationSection, FigureFit, ReferenceBlock } from "./documentation-content"
+import { DOCUMENTATION_SECTIONS, FIGURES } from "@/editor/documentation-content"
+import type { DocumentationFigure, DocumentationSection, FigureFit, ReferenceBlock } from "@/editor/documentation-content"
 
-export { DOCUMENTATION_SECTIONS, getDocumentationSection } from "./documentation-content"
-export type { DocumentationSection } from "./documentation-content"
+export { DOCUMENTATION_SECTIONS, getDocumentationSection } from "@/editor/documentation-content"
+export type { DocumentationSection } from "@/editor/documentation-content"
 
 export function DocumentationPage({ section }: { section: DocumentationSection }) {
   const activeIndex = DOCUMENTATION_SECTIONS.findIndex((item) => item.slug === section.slug)

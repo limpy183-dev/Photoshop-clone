@@ -1,7 +1,7 @@
 import * as React from "react"
 
-import type { FrameEasing } from "../../types"
-import { EASINGS, TextBtn } from "./timeline-shared"
+import type { FrameEasing } from "@/editor/types"
+import { EASINGS, TextBtn } from "@/components/photoshop/panels/timeline/timeline-shared"
 
 export function TweenDialog({
   totalFrames,

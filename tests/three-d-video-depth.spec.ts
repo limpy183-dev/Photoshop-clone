@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
 
-import { createPrimitiveThreeDScene, parseDaeToScene, parseObjToScene } from "../components/photoshop/advanced-subsystems"
+import { createPrimitiveThreeDScene, parseDaeToScene, parseObjToScene } from "@/editor/advanced/subsystems"
 import {
   VIDEO_EXPORT_PRESETS,
   analyzeThreeDPrintReadiness,
@@ -39,9 +39,9 @@ import {
   updateThreeDMaterial,
   upsertThreeDAnimationStack,
   waitForVideoMetadata,
-} from "../components/photoshop/three-d-video-engine"
-import type { AudioTrack, Layer, TimelineFrame, VideoLayerProps } from "../components/photoshop/types"
-import { installFixtureDom } from "./photoshop-fixtures"
+} from "@/editor/three-d-video-engine"
+import type { AudioTrack, Layer, TimelineFrame, VideoLayerProps } from "@/editor/types"
+import { installFixtureDom } from "@/tests/photoshop-fixtures"
 
 class TestImageData {
   data: Uint8ClampedArray

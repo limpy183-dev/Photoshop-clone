@@ -24,7 +24,7 @@ const RATE_LIMIT = { limit: 10, windowMs: 60_000 }
 const DAY_MS = 24 * 60 * 60 * 1000
 
 // Mirrors the body produced by createModelBackedGenerativeFillRequest in
-// components/photoshop/generative-fill-engine.ts. Only these fields are
+// editor/generative-fill-engine.ts. Only these fields are
 // forwarded upstream — never the raw request body.
 const dataImageSchema = z.string().startsWith("data:image/").max(24_000_000)
 

@@ -3,8 +3,8 @@
  * Capability reconciliation utility.
  *
  * Diffs human-readable capability strings written in
- * components/photoshop/advanced-subsystems.ts against the structured
- * capability records in components/photoshop/capabilities.ts and against
+ * editor/advanced/subsystems.ts against the structured
+ * capability records in editor/capabilities.ts and against
  * known encoder-availability invariants enforced by lower-level modules
  * (raster-codecs.ts, three-d-video-engine.ts plus its decomposed video
  * module, document-io.ts).
@@ -177,7 +177,7 @@ function buildRules(state) {
         severity: "error",
         ruleId: "native-claim-vs-capability-status",
         message: `advanced-subsystems entry "${entry.id}" claims ${entry.supportLabel} but capability "${weakest.id}" has status="${weakest.status}".`,
-        locations: ["components/photoshop/advanced-subsystems.ts", "components/photoshop/capabilities.ts"],
+        locations: ["editor/advanced/subsystems.ts", "editor/capabilities.ts"],
       })
     }
   }
@@ -192,14 +192,14 @@ function buildRules(state) {
       severity: "error",
       ruleId: "missing-color-browser-rgba",
       message: "capabilities.ts is missing the color.browser-rgba capability record that other modules reference.",
-      locations: ["components/photoshop/capabilities.ts"],
+      locations: ["editor/capabilities.ts"],
     })
   } else if (!/8-bit RGBA/.test(browserRgba.summary) && !/8-bit/.test(browserRgba.summary)) {
     rules.push({
       severity: "error",
       ruleId: "color-browser-rgba-text",
       message: `capability "color.browser-rgba" summary should mention the 8-bit canvas pixel pipeline; got: "${browserRgba.summary.slice(0, 80)}..."`,
-      locations: ["components/photoshop/capabilities.ts"],
+      locations: ["editor/capabilities.ts"],
     })
   }
   if (!highBit) {
@@ -207,7 +207,7 @@ function buildRules(state) {
       severity: "error",
       ruleId: "missing-color-high-bit-pipeline",
       message: "capabilities.ts is missing the color.high-bit-pipeline capability record.",
-      locations: ["components/photoshop/capabilities.ts"],
+      locations: ["editor/capabilities.ts"],
     })
   }
 
@@ -228,7 +228,7 @@ function buildRules(state) {
           severity: "warn",
           ruleId: "advanced-icc-no-capability-mention",
           message: `advanced-subsystems entry "${entry.id}" mentions ICC but color.icc-conversion summary does not.`,
-          locations: ["components/photoshop/capabilities.ts"],
+          locations: ["editor/capabilities.ts"],
         })
         break
       }
@@ -238,7 +238,7 @@ function buildRules(state) {
       severity: "error",
       ruleId: "missing-color-icc-conversion",
       message: "capabilities.ts is missing the color.icc-conversion capability record referenced by advanced format entries.",
-      locations: ["components/photoshop/capabilities.ts"],
+      locations: ["editor/capabilities.ts"],
     })
   }
 
@@ -271,7 +271,7 @@ function buildRules(state) {
           severity: "error",
           ruleId: "stale-browser-raster-icc-warning",
           message: "advanced-subsystems browser-raster text still says ICC profiles are not converted even though document-io/capabilities expose raster ICC conversion or embedding.",
-          locations: ["components/photoshop/advanced-subsystems.ts", "components/photoshop/document-io.ts", "components/photoshop/capabilities.ts"],
+          locations: ["editor/advanced/subsystems.ts", "editor/document/io.ts", "editor/capabilities.ts"],
         })
       }
       if (
@@ -283,7 +283,7 @@ function buildRules(state) {
           severity: "error",
           ruleId: "browser-raster-export-path-missing-icc",
           message: "advanced-subsystems browser-raster exportPath should mention ICC/profile handling because lower-level raster export and capabilities do.",
-          locations: ["components/photoshop/advanced-subsystems.ts", "components/photoshop/document-io.ts", "components/photoshop/capabilities.ts"],
+          locations: ["editor/advanced/subsystems.ts", "editor/document/io.ts", "editor/capabilities.ts"],
         })
       }
       if (
@@ -295,7 +295,7 @@ function buildRules(state) {
           severity: "error",
           ruleId: "browser-raster-export-path-missing-metadata",
           message: "advanced-subsystems browser-raster exportPath should mention metadata handling because lower-level raster export and capabilities do.",
-          locations: ["components/photoshop/advanced-subsystems.ts", "components/photoshop/document-io.ts", "components/photoshop/capabilities.ts"],
+          locations: ["editor/advanced/subsystems.ts", "editor/document/io.ts", "editor/capabilities.ts"],
         })
       }
     }
@@ -310,13 +310,13 @@ function buildRules(state) {
       severity: "error",
       ruleId: "missing-video-export-capability",
       message: "capabilities.ts is missing the video.export-presets-frame-animation record.",
-      locations: ["components/photoshop/capabilities.ts"],
+      locations: ["editor/capabilities.ts"],
     })
   } else {
     const claimsH264 = /H\.?264/i.test(videoCap.summary) || /MP4/i.test(videoCap.summary)
     const claimsWebm = /WebM/i.test(videoCap.summary)
     const claimsFallback = /fall back/i.test(videoCap.summary) || /ZIP frame/i.test(videoCap.summary) || /timeline-package/i.test(videoCap.summary)
-    const videoSourceLocations = state.videoSourcePaths ?? ["components/photoshop/three-d-video-engine.ts"]
+    const videoSourceLocations = state.videoSourcePaths ?? ["editor/three-d-video-engine.ts"]
     const engineSource = state.video
     const enginePresetsHasH264 = /codec=avc1|codec=h264|h\.264|"video\/mp4"/i.test(engineSource)
     const enginePresetsHasWebm = /"video\/webm"/i.test(engineSource)
@@ -326,7 +326,7 @@ function buildRules(state) {
         severity: "error",
         ruleId: "video-h264-claim-vs-engine",
         message: "capability video.export-presets-frame-animation claims H.264/MP4 support but VIDEO_EXPORT_PRESETS does not list any avc1/H.264/video/mp4 codec.",
-        locations: [...videoSourceLocations, "components/photoshop/capabilities.ts"],
+        locations: [...videoSourceLocations, "editor/capabilities.ts"],
       })
     }
     if (claimsWebm && !enginePresetsHasWebm) {
@@ -334,7 +334,7 @@ function buildRules(state) {
         severity: "error",
         ruleId: "video-webm-claim-vs-engine",
         message: "capability video.export-presets-frame-animation claims WebM support but VIDEO_EXPORT_PRESETS does not list video/webm.",
-        locations: [...videoSourceLocations, "components/photoshop/capabilities.ts"],
+        locations: [...videoSourceLocations, "editor/capabilities.ts"],
       })
     }
     if (claimsFallback && !enginePresetsHasFallback) {
@@ -342,7 +342,7 @@ function buildRules(state) {
         severity: "error",
         ruleId: "video-fallback-claim-vs-engine",
         message: "capability video.export-presets-frame-animation claims a ZIP/timeline-package fallback but three-d-video-engine.ts does not emit a timeline-package plan.",
-        locations: [...videoSourceLocations, "components/photoshop/capabilities.ts"],
+        locations: [...videoSourceLocations, "editor/capabilities.ts"],
       })
     }
   }
@@ -364,7 +364,7 @@ function buildRules(state) {
             severity: "error",
             ruleId: "browser-raster-format-missing",
             message: `capability export.browser-raster references ${fmt.toUpperCase()} but BrowserRasterExportFormat does not include "${fmt}".`,
-            locations: ["components/photoshop/document-io.ts", "components/photoshop/capabilities.ts"],
+            locations: ["editor/document/io.ts", "editor/capabilities.ts"],
           })
         }
       }
@@ -380,7 +380,7 @@ function buildRules(state) {
         severity: "error",
         ruleId: "invalid-status",
         message: `capability "${cap.id}" has unrecognized status="${cap.status}".`,
-        locations: ["components/photoshop/capabilities.ts"],
+        locations: ["editor/capabilities.ts"],
       })
     }
   }
@@ -393,7 +393,7 @@ function buildRules(state) {
         severity: "error",
         ruleId: "advanced-support-label-mismatch",
         message: `advanced-subsystems entry "${entry.id}" says supportLabel="Browser native" but support="${entry.support}".`,
-        locations: ["components/photoshop/advanced-subsystems.ts"],
+        locations: ["editor/advanced/subsystems.ts"],
       })
     }
     if (/Decoder-backed/i.test(entry.supportLabel) && entry.support === "unsupported") {
@@ -401,7 +401,7 @@ function buildRules(state) {
         severity: "error",
         ruleId: "advanced-support-label-mismatch",
         message: `advanced-subsystems entry "${entry.id}" says supportLabel includes "Decoder-backed" but support="unsupported".`,
-        locations: ["components/photoshop/advanced-subsystems.ts"],
+        locations: ["editor/advanced/subsystems.ts"],
       })
     }
   }
@@ -415,7 +415,7 @@ function buildRules(state) {
       severity: "error",
       ruleId: "heif-promoted-incorrectly",
       message: `advanced-subsystems entry "heif" is marked "native" but capability format.heif still notes ICC/certified handoff is approximated. Either downgrade or update capability summary.`,
-      locations: ["components/photoshop/advanced-subsystems.ts", "components/photoshop/capabilities.ts"],
+      locations: ["editor/advanced/subsystems.ts", "editor/capabilities.ts"],
     })
   }
   const j2k = advancedById.get("jpeg2000")
@@ -424,7 +424,7 @@ function buildRules(state) {
       severity: "error",
       ruleId: "jpeg2000-promoted-incorrectly",
       message: `advanced-subsystems entry "jpeg2000" is marked "native" but capability format.jpeg2000 still says production conformance is dedicated tooling.`,
-      locations: ["components/photoshop/advanced-subsystems.ts", "components/photoshop/capabilities.ts"],
+      locations: ["editor/advanced/subsystems.ts", "editor/capabilities.ts"],
     })
   }
 
@@ -439,7 +439,7 @@ function buildRules(state) {
         severity: "warn",
         ruleId: "psb-limitations-incomplete",
         message: "capability format.psd notes ag-psd's writer is RGB/8-bit only, but format.psb limitations do not mirror that statement.",
-        locations: ["components/photoshop/capabilities.ts"],
+        locations: ["editor/capabilities.ts"],
       })
     }
   }
@@ -448,14 +448,14 @@ function buildRules(state) {
 }
 
 function main() {
-  const capabilitiesSrc = load("components/photoshop/capabilities.ts")
-  const advancedSrc = load("components/photoshop/advanced-subsystems-format-capabilities.ts")
+  const capabilitiesSrc = load("editor/capabilities.ts")
+  const advancedSrc = load("editor/advanced/subsystems-format-capabilities.ts")
   const videoSourcePaths = [
-    "components/photoshop/three-d-video-engine.ts",
-    "components/photoshop/three-d-video/video.ts",
+    "editor/three-d-video-engine.ts",
+    "editor/three-d-video/video.ts",
   ]
   const videoSources = videoSourcePaths.map((path) => load(path))
-  const documentIoSrc = load("components/photoshop/document-io.ts")
+  const documentIoSrc = load("editor/document/io.ts")
 
   const state = {
     capabilities: parseCapabilityRecords(capabilitiesSrc.text),

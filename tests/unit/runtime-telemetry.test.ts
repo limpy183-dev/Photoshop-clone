@@ -5,9 +5,9 @@ import {
   emitRuntimeEvent,
   getRuntimeEvents,
   sanitizeRuntimeMetadata,
-} from "../../components/photoshop/runtime-telemetry"
-import { buildDiagnosticsExport } from "../../components/photoshop/diagnostics-export"
-import { getStorageResourceRegistry } from "../../components/photoshop/storage-registry"
+} from "@/editor/runtime-telemetry"
+import { buildDiagnosticsExport } from "@/editor/diagnostics-export"
+import { getStorageResourceRegistry } from "@/editor/storage-registry"
 
 describe("runtime diagnostics", () => {
   beforeEach(() => {

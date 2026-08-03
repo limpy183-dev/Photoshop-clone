@@ -1,7 +1,7 @@
 import * as React from "react"
 
-import { renderTimelineFrameComposite } from "../../timeline-engine"
-import type { PsDocument, TimelineFrame } from "../../types"
+import { renderTimelineFrameComposite } from "@/editor/timeline-engine"
+import type { PsDocument, TimelineFrame } from "@/editor/types"
 
 /* ---------------------- Timeline thumbnail strip -------------------------- */
 

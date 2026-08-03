@@ -10,9 +10,9 @@ import {
   offsetPath,
   pathFingerprint,
   smartFilterCacheKey,
-} from "../components/photoshop/canvas-compositor-cache"
-import { normalizeAdvancedBlending } from "../components/photoshop/layer-workflows"
-import type { Layer, PathProps } from "../components/photoshop/types"
+} from "@/editor/canvas/compositor-cache"
+import { normalizeAdvancedBlending } from "@/editor/layer-workflows"
+import type { Layer, PathProps } from "@/editor/types"
 
 test("canvas identities remain stable per object and unique across objects", () => {
   const first = {} as HTMLCanvasElement

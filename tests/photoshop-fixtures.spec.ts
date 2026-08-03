@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
 
-import { installFixtureDom } from "./photoshop-fixtures"
+import { installFixtureDom } from "@/tests/photoshop-fixtures"
 
 function restoreGlobal<T extends keyof typeof globalThis>(key: T, hadValue: boolean, value: (typeof globalThis)[T]) {
   if (hadValue) {

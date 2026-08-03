@@ -7,8 +7,8 @@ import {
   findWorkflowPack,
   imageProcessorPresetForWorkflowPack,
   workflowPackLearningItems,
-} from "../components/photoshop/workflow-presets"
-import { buildLearningIndex, searchLearningIndex } from "../components/photoshop/learning-index"
+} from "@/editor/workflow-presets"
+import { buildLearningIndex, searchLearningIndex } from "@/editor/learning-index"
 
 test("phase 2 workflow packs cover the roadmap workflows with actionable steps", () => {
   expect(WORKFLOW_PACKS.map((pack) => pack.id)).toEqual(PHASE_TWO_WORKFLOW_PACK_IDS)

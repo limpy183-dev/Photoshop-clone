@@ -1,15 +1,15 @@
 import { expect, test } from "@playwright/test"
 
-import { createHighBitImageFromImageData, readHighBitPixel } from "../components/photoshop/color-pipeline"
+import { createHighBitImageFromImageData, readHighBitPixel } from "@/editor/color/pipeline"
 import {
   getLayerHighBitImage,
   renderDocumentHighBitComposite,
   applyHighBitFilter,
   serializeHighBitImagePayload,
-} from "../components/photoshop/high-bit-document"
-import { createProjectSerializationManifest, deserializeProject, exportRasterBlob, serializeProject } from "../components/photoshop/document-io"
-import type { Layer, PsDocument } from "../components/photoshop/types"
-import { installFixtureDom } from "./photoshop-fixtures"
+} from "@/editor/high-bit-document"
+import { createProjectSerializationManifest, deserializeProject, exportRasterBlob, serializeProject } from "@/editor/document/io"
+import type { Layer, PsDocument } from "@/editor/types"
+import { installFixtureDom } from "@/tests/photoshop-fixtures"
 
 function imageData(width: number, height: number, pixels: number[]) {
   return new ImageData(new Uint8ClampedArray(pixels), width, height)

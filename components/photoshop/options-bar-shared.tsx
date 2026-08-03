@@ -38,7 +38,7 @@ import {
   RotateCw,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import type { CustomShapeId, GradientStop, ToolId } from "./types"
+import type { CustomShapeId, GradientStop, ToolId } from "@/editor/types"
 
 export const Divider = () => <div className="w-px h-5 bg-[var(--ps-divider)] mx-2" />
 
