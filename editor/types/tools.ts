@@ -1,4 +1,152 @@
+
+
 import type { CustomShapeId, GradientStop } from "@/editor/types/typography"
+export type ToolId =
+  | "move"
+  | "marquee-rect"
+  | "marquee-ellipse"
+  | "marquee-row"
+  | "marquee-col"
+  | "lasso"
+  | "lasso-polygon"
+  | "lasso-magnetic"
+  | "magic-wand"
+  | "quick-selection"
+  | "object-select"
+  | "refine-edge-brush"
+  | "crop"
+  | "perspective-crop"
+  | "slice"
+  | "slice-select"
+  | "frame"
+  | "eyedropper"
+  | "ruler"
+  | "note"
+  | "count"
+  | "color-sampler"
+  | "red-eye"
+  | "spot-healing"
+  | "healing-brush"
+  | "patch-tool"
+  | "content-aware-move"
+  | "brush"
+  | "pencil"
+  | "mixer-brush"
+  | "clone-stamp"
+  | "history-brush"
+  | "art-history-brush"
+  | "eraser"
+  | "gradient"
+  | "paint-bucket"
+  | "blur"
+  | "sharpen"
+  | "smudge"
+  | "dodge"
+  | "burn"
+  | "sponge"
+  | "pen"
+  | "freeform-pen"
+  | "curvature-pen"
+  | "add-anchor-point"
+  | "delete-anchor-point"
+  | "convert-point"
+  | "type"
+  | "type-vertical"
+  | "type-mask-horizontal"
+  | "type-mask-vertical"
+  | "path-select"
+  | "direct-select"
+  | "shape-rect"
+  | "shape-rounded-rect"
+  | "shape-ellipse"
+  | "shape-polygon"
+  | "shape-star"
+  | "shape-triangle"
+  | "shape-line"
+  | "custom-shape"
+  | "artboard"
+  | "hand"
+  | "rotate-view"
+  | "zoom"
+  | "transform"
+  | "select-subject"
+  | "remove-tool"
+  | "select-sky"
+  | "select-background"
+  | "color-replace"
+  | "pattern-stamp"
+  | "magic-eraser"
+  | "background-eraser"
+  | "material-eyedropper"
+  | "material-drop"
+
+export interface SelectionOptions {
+  mode: "new" | "add" | "subtract" | "intersect"
+  feather: number
+  antiAlias: boolean
+  tolerance: number
+  contiguous: boolean
+  sampleAllLayers?: boolean
+  /**
+   * Sample size used when the wand / quick-selection / object-select tools
+   * read a source pixel. Matches Photoshop's eyedropper sample-size pop-up.
+   */
+  sampleSize?: "point" | "3x3" | "5x5" | "11x11" | "31x31" | "51x51" | "101x101"
+  /** Auto-enhance edges when applying Quick Selection. */
+  autoEnhance?: boolean
+  quickGrowAmount?: number
+  magneticWidth?: number
+  magneticContrast?: number
+  magneticHysteresis?: number
+  magneticSmoothing?: number
+  magneticFrequency?: number
+  /** Modulate magnetic-lasso width by stylus pressure (Pen Pressure toggle). */
+  magneticPenPressure?: boolean
+}
+
+export interface TextOptions {
+  font: string
+  size: number
+  weight: "normal" | "bold"
+  italic: boolean
+  align: "left" | "center" | "right"
+}
+
+export interface ShapeOptions {
+  fill: string
+  stroke: string
+  strokeWidth: number
+  radius: number
+}
+
+export interface CropState {
+  active: boolean
+  bounds: { x: number; y: number; w: number; h: number } | null
+}
+
+export interface TransformState {
+  active: boolean
+  layerId: string
+  source: HTMLCanvasElement | null
+  bounds: { x: number; y: number; w: number; h: number }
+  tx: number
+  ty: number
+  rotation: number
+  scaleX: number
+  scaleY: number
+  skewX: number
+  skewY: number
+  referencePoint?: "tl" | "tc" | "tr" | "ml" | "mc" | "mr" | "bl" | "bc" | "br"
+  constrainProportions?: boolean
+  interpolation?: "nearest" | "bilinear" | "bicubic" | "bicubic-smoother" | "bicubic-sharper"
+  perspective?: {
+    tl: { x: number; y: number }
+    tr: { x: number; y: number }
+    br: { x: number; y: number }
+    bl: { x: number; y: number }
+  }
+}
+
 
 export interface BrushSettings {
   size: number
