@@ -3,62 +3,62 @@ import { existsSync, readFileSync, appendFileSync, writeFileSync } from "node:fs
 import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-const TEST_COMMAND_CONFIG = "--config=playwright.node.config.ts"
-const PRODUCTION_SOURCE = /^(?:app\/|components\/|hooks\/|lib\/|types\/|proxy\.ts$|next\.config\.mjs$)/
+const TEST_COMMAND_CONFIG = "--config=playwright/node.config.ts"
+const PRODUCTION_SOURCE = /^(?:app\/|components\/|editor\/|hooks\/|lib\/|types\/|proxy\.ts$|next\.config\.mjs$)/
 const MANIFEST_PATH = ".pr-test-invocations.json"
 
 const GROUPS = [
   {
     id: "format-import-export",
     match: [
-      /^components\/photoshop\/document-/,
-      /^components\/photoshop\/raster-codecs\.ts$/,
-      /^components\/photoshop\/raster-codec-/,
-      /^components\/photoshop\/raster-[^/]+-encoders\.ts$/,
-      /^components\/photoshop\/raster-metadata-/,
-      /^components\/photoshop\/psd-/,
-      /^components\/photoshop\/export-/,
+      /^(?:editor|components\/photoshop)\/document\//,
+      /^editor\/raster\/codecs\.ts$/,
+      /^editor\/raster\/codec-/,
+      /^editor\/raster\/[^/]+-encoders\.ts$/,
+      /^editor\/raster\/metadata-/,
+      /^editor\/psd\//,
+      /^(?:editor|components\/photoshop)\/export\//,
       /^components\/photoshop\/file-info-dialog\.tsx$/,
-      /^components\/photoshop\/zip-packaging\.ts$/,
+      /^editor\/zip-packaging\.ts$/,
     ],
     tests: [
-      "tests/document-import-sniffers.spec.ts",
-      "tests/document-io-preflight.spec.ts",
-      "tests/export-workflow-depth.spec.ts",
+      "tests/document/import-sniffers.spec.ts",
+      "tests/document/io-preflight.spec.ts",
+      "tests/export/workflow-depth.spec.ts",
       "tests/file-format-depth.spec.ts",
       "tests/import-hardening.spec.ts",
       "tests/io-color-filter-hardening.spec.ts",
-      "tests/psd-browser-compatibility.spec.ts",
-      "tests/psd-channels-masks.spec.ts",
-      "tests/psd-color-modes.spec.ts",
-      "tests/psd-effects-adjustments.spec.ts",
-      "tests/psd-resources-metadata.spec.ts",
-      "tests/psd-roundtrip-fixtures.spec.ts",
+      "tests/psd/browser-compatibility.spec.ts",
+      "tests/psd/channels-masks.spec.ts",
+      "tests/psd/color-modes.spec.ts",
+      "tests/psd/effects-adjustments.spec.ts",
+      "tests/psd/resources-metadata.spec.ts",
+      "tests/psd/roundtrip-fixtures.spec.ts",
       "tests/project-roundtrip-fixtures.spec.ts",
     ],
   },
   {
     id: "canvas-pixels-filters",
     match: [
-      /^components\/photoshop\/canvas-/,
-      /^components\/photoshop\/canvas-view\.tsx$/,
-      /^components\/photoshop\/brush-/,
-      /^components\/photoshop\/filter-worker/,
-      /^components\/photoshop\/filter-registry-worker/,
-      /^components\/photoshop\/selection-/,
-      /^components\/photoshop\/filters?(\.ts|\/)/,
+      /^(?:editor|components\/photoshop)\/canvas\//,
+      /^components\/photoshop\/canvas\/view\.tsx$/,
+      /^editor\/brush-/,
+      /^editor\/filters\/worker/,
+      /^editor\/filters\/registry-worker/,
+      /^(?:editor|components\/photoshop)\/selection-/,
+      /^(?:editor|components\/photoshop)\/filters(?:-meta)?(\.ts|\/)/,
     ],
     tests: [
-      "tests/canvas-brush-dynamics.spec.ts",
-      "tests/canvas-compositor.spec.ts",
-      "tests/canvas-filter-overlays.spec.ts",
-      "tests/canvas-interaction-performance.spec.ts",
-      "tests/canvas-preview-drawing.spec.ts",
-      "tests/canvas-selection-helpers.spec.ts",
-      "tests/canvas-selection-overlays.spec.ts",
-      "tests/canvas-tools.spec.ts",
-      "tests/canvas-transform-geometry.spec.ts",
-      "tests/canvas-view-runtime.spec.ts",
+      "tests/canvas/brush-dynamics.spec.ts",
+      "tests/canvas/compositor.spec.ts",
+      "tests/canvas/filter-overlays.spec.ts",
+      "tests/canvas/interaction-performance.spec.ts",
+      "tests/canvas/preview-drawing.spec.ts",
+      "tests/canvas/selection-helpers.spec.ts",
+      "tests/canvas/selection-overlays.spec.ts",
+      "tests/canvas/tools.spec.ts",
+      "tests/canvas/transform-geometry.spec.ts",
+      "tests/canvas/view-runtime.spec.ts",
       "tests/filters-algorithms.spec.ts",
       "tests/io-color-filter-hardening.spec.ts",
     ],
@@ -66,8 +66,8 @@ const GROUPS = [
   {
     id: "tile-only-large-documents",
     match: [
-      /^components\/photoshop\/tile-only-/,
-      /^components\/photoshop\/large-document-/,
+      /^editor\/tile-only-/,
+      /^(?:editor|components\/photoshop)\/large-document-/,
     ],
     tests: [
       "tests/large-document-tile-only.spec.ts",
@@ -76,21 +76,21 @@ const GROUPS = [
   {
     id: "editor-lifecycle-history",
     match: [
-      /^components\/photoshop\/editor-/,
-      /^components\/photoshop\/editor-context\.tsx$/,
-      /^components\/photoshop\/history-/,
+      /^editor\/(?:context-contract|context-projection|document-cloning|document-lifecycle|global-light|initial-state|layer-rasterize|persisted-settings|reducer|reducer-late|reducer-model|selectors|store)\.ts$/,
+      /^components\/photoshop\/editor\//,
+      /^editor\/history-/,
     ],
     tests: [
-      "tests/editor-document-cloning.spec.ts",
-      "tests/editor-document-lifecycle.spec.ts",
-      "tests/editor-history-storage.spec.ts",
-      "tests/editor-persisted-settings.spec.ts",
+      "tests/editor/document-cloning.spec.ts",
+      "tests/editor/document-lifecycle.spec.ts",
+      "tests/editor/history-storage.spec.ts",
+      "tests/editor/persisted-settings.spec.ts",
     ],
     browserMatch: [
-      /^components\/photoshop\/editor-history-storage\.ts$/,
+      /^editor\/history-storage\.ts$/,
     ],
     browserTests: [
-      "tests/editor-history-pixel-fidelity.spec.ts",
+      "tests/editor/history-pixel-fidelity.spec.ts",
     ],
   },
   {
@@ -98,8 +98,8 @@ const GROUPS = [
     match: [
       /^app\/api\//,
       /^lib\/marketing-store\.ts$/,
-      /^components\/photoshop\/plugin-/,
-      /^components\/photoshop\/advanced-subsystems-dialog\.tsx$/,
+      /^editor\/plugin-/,
+      /^components\/photoshop\/advanced\/subsystems-dialog\.tsx$/,
     ],
     tests: [
       "tests/plugin-host-contract.spec.ts",
@@ -113,8 +113,8 @@ const GROUPS = [
   {
     id: "project-sanitization",
     match: [
-      /^components\/photoshop\/project-/,
-      /^components\/photoshop\/import-/,
+      /^editor\/project-/,
+      /^editor\/import-/,
     ],
     tests: [
       "tests/project-json-sanitizer.spec.ts",
@@ -125,27 +125,27 @@ const GROUPS = [
   {
     id: "webgl-compositor",
     match: [
-      /^components\/photoshop\/webgl-/,
-      /^components\/photoshop\/blend-/,
-      /^components\/photoshop\/compositor-/,
+      /^editor\/webgl-/,
+      /^editor\/blend-/,
+      /^editor\/compositor-/,
     ],
     tests: [
-      "tests/canvas-compositor.spec.ts",
-      "tests/canvas-compositor-cache.spec.ts",
+      "tests/canvas/compositor.spec.ts",
+      "tests/canvas/compositor-cache.spec.ts",
       "tests/webgl-color-pipeline.spec.ts",
     ],
   },
   {
     id: "color-high-bit",
     match: [
-      /^components\/photoshop\/color-/,
-      /^components\/photoshop\/high-bit-/,
-      /^components\/photoshop\/document-mode-/,
+      /^(?:editor|components\/photoshop)\/color\//,
+      /^editor\/high-bit-/,
+      /^editor\/document\/mode-/,
     ],
     tests: [
-      "tests/color-channel-ops.spec.ts",
-      "tests/color-mode-conversion.spec.ts",
-      "tests/color-pipeline.spec.ts",
+      "tests/color/channel-ops.spec.ts",
+      "tests/color/mode-conversion.spec.ts",
+      "tests/color/pipeline.spec.ts",
       "tests/high-bit-document.spec.ts",
       "tests/high-bit-editing-surface.spec.ts",
     ],
@@ -153,10 +153,10 @@ const GROUPS = [
   {
     id: "performance-storage",
     match: [
-      /^components\/photoshop\/performance-/,
-      /^components\/photoshop\/client-storage\.ts$/,
-      /^components\/photoshop\/editor-persisted-settings\.ts$/,
-      /^components\/photoshop\/preferences-/,
+      /^editor\/performance-/,
+      /^editor\/client-storage\.ts$/,
+      /^editor\/persisted-settings\.ts$/,
+      /^(?:editor|components\/photoshop)\/preferences-/,
     ],
     tests: [
       "tests/performance-2-9.spec.ts",
@@ -168,16 +168,16 @@ const GROUPS = [
   {
     id: "capabilities-diagnostics",
     match: [
-      /^components\/photoshop\/capabilit(?:y|ies)-/,
-      /^components\/photoshop\/capabilities\.ts$/,
-      /^components\/photoshop\/browser-diagnostics\.ts$/,
-      /^components\/photoshop\/document-compatibility\.ts$/,
-      /^components\/photoshop\/preflight-engine\.ts$/,
+      /^editor\/capabilit(?:y|ies)-/,
+      /^editor\/capabilities\.ts$/,
+      /^editor\/browser-diagnostics\.ts$/,
+      /^editor\/document\/compatibility\.ts$/,
+      /^editor\/preflight-engine\.ts$/,
     ],
     tests: [
       "tests/capabilities.spec.ts",
       "tests/browser-diagnostics.spec.ts",
-      "tests/document-io-preflight.spec.ts",
+      "tests/document/io-preflight.spec.ts",
     ],
   },
   {
@@ -185,8 +185,8 @@ const GROUPS = [
     match: [
       /^components\/photoshop\/panels\//,
       /^components\/photoshop\/panel-/,
-      /^components\/photoshop\/timeline-/,
-      /^components\/photoshop\/three-d-/,
+      /^editor\/timeline-/,
+      /^editor\/three-d-/,
     ],
     tests: [
       "tests/panel-completion-helpers.spec.ts",
@@ -200,12 +200,12 @@ const GROUPS = [
   {
     id: "shared-types",
     match: [
-      /^components\/photoshop\/types\.ts$/,
+      /^editor\/types(\.ts|\/)/,
       /^types\//,
     ],
     tests: [
-      "tests/editor-document-lifecycle.spec.ts",
-      "tests/canvas-tools.spec.ts",
+      "tests/editor/document-lifecycle.spec.ts",
+      "tests/canvas/tools.spec.ts",
       "tests/project-roundtrip-fixtures.spec.ts",
       "tests/high-bit-document.spec.ts",
     ],

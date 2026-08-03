@@ -87,8 +87,8 @@ test("package metadata pins the local development runtime and verification scrip
   expect(pkg.scripts?.typecheck).toContain("scripts/typecheck.mjs")
   expect(pkg.scripts?.doctor).toBe("node scripts/doctor.mjs")
   expect(pkg.scripts?.["check:architecture"]).toBe("node scripts/check-architecture.mjs")
-  expect(pkg.scripts?.["test:smoke:ci"]).toContain("playwright.smoke.config.ts")
-  expect(pkg.scripts?.["test:static-export:smoke"]).toContain("playwright.static.config.ts")
+  expect(pkg.scripts?.["test:smoke:ci"]).toContain("playwright/smoke.config.ts")
+  expect(pkg.scripts?.["test:static-export:smoke"]).toContain("playwright/static.config.ts")
 })
 
 test("doctor script reports npm and Playwright checks as structured diagnostics", () => {

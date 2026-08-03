@@ -22,7 +22,7 @@ run commands through `npm.cmd`, for example `npm.cmd run verify`.
 
 Run a single Playwright test file:
 ```bash
-npx playwright test tests/canvas-interaction-performance.spec.ts
+npx playwright test tests/canvas/interaction-performance.spec.ts
 ```
 
 Run tests matching a tag:

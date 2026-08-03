@@ -19,7 +19,7 @@ test("path-aware selector exposes argument arrays for shell-free CI execution", 
   expect(invocations.length).toBeGreaterThan(0)
   expect(invocations[0].executable).toBe("npx")
   expect(invocations[0].args.slice(0, 2)).toEqual(["playwright", "test"])
-  expect(invocations[0].args).toContain("--config=playwright.node.config.ts")
+  expect(invocations[0].args).toContain("--config=playwright/node.config.ts")
   expect(JSON.stringify(invocations)).not.toContain("eval")
 })
 
@@ -29,7 +29,7 @@ test("path-aware selector maps document IO and decoder changes to import/export 
     "editor/document/io.ts",
     "editor/raster/codecs.ts",
   ])).toEqual([
-    "npx playwright test tests/document-import-sniffers.spec.ts tests/document-io-preflight.spec.ts tests/export-workflow-depth.spec.ts tests/file-format-depth.spec.ts tests/import-hardening.spec.ts tests/io-color-filter-hardening.spec.ts tests/psd-browser-compatibility.spec.ts tests/psd-channels-masks.spec.ts tests/psd-color-modes.spec.ts tests/psd-effects-adjustments.spec.ts tests/psd-resources-metadata.spec.ts tests/psd-roundtrip-fixtures.spec.ts tests/project-roundtrip-fixtures.spec.ts --config=playwright.node.config.ts",
+    "npx playwright test tests/document/import-sniffers.spec.ts tests/document/io-preflight.spec.ts tests/export/workflow-depth.spec.ts tests/file-format-depth.spec.ts tests/import-hardening.spec.ts tests/io-color-filter-hardening.spec.ts tests/psd/browser-compatibility.spec.ts tests/psd/channels-masks.spec.ts tests/psd/color-modes.spec.ts tests/psd/effects-adjustments.spec.ts tests/psd/resources-metadata.spec.ts tests/psd/roundtrip-fixtures.spec.ts tests/project-roundtrip-fixtures.spec.ts --config=playwright/node.config.ts",
   ])
 })
 
@@ -41,7 +41,7 @@ test("path-aware selector maps canvas, editor, and security changes to focused s
     "app/api/feedback/route.ts",
     "editor/plugin-system.ts",
   ])).toEqual([
-    expect.stringContaining("tests/canvas-compositor.spec.ts"),
+    expect.stringContaining("tests/canvas/compositor.spec.ts"),
     "npx playwright test tests/marketing-security.spec.ts",
   ])
   const commands = selectPrTestCommands([
@@ -50,7 +50,7 @@ test("path-aware selector maps canvas, editor, and security changes to focused s
     "app/api/feedback/route.ts",
     "editor/plugin-system.ts",
   ])
-  expect(commands[0]).toContain("--config=playwright.node.config.ts")
+  expect(commands[0]).toContain("--config=playwright/node.config.ts")
   expect(commands[0]).toContain("tests/security-regression-limits.spec.ts")
   expect(commands[1]).not.toContain("playwright.node.config.ts")
 })
@@ -62,17 +62,17 @@ test("path-aware selector runs browser history fidelity for history storage chan
   ])
 
   expect(commands).toEqual([
-    expect.stringContaining("tests/editor-history-storage.spec.ts"),
-    "npx playwright test tests/editor-history-pixel-fidelity.spec.ts",
+    expect.stringContaining("tests/editor/history-storage.spec.ts"),
+    "npx playwright test tests/editor/history-pixel-fidelity.spec.ts",
   ])
-  expect(commands[0]).toContain("--config=playwright.node.config.ts")
+  expect(commands[0]).toContain("--config=playwright/node.config.ts")
   expect(commands[1]).not.toContain("playwright.node.config.ts")
 })
 
 test("path-aware selector returns no commands for documentation-only changes", async () => {
   const { selectPrTestCommands } = await loadSelector()
   expect(selectPrTestCommands([
-    "docs/codebase-analysis-report-2026-06-23.md",
+    "docs/archive/codebase-analysis-report-2026-06-23.md",
     "README.md",
   ])).toEqual([])
 })
@@ -83,7 +83,7 @@ test("path-aware selector covers major production subsystems", async () => {
     "editor/project-json-sanitizer.ts",
     "editor/webgl-compositor.ts",
     "editor/color/pipeline.ts",
-    "components/photoshop/performance-storage.ts",
+    "editor/performance-storage.ts",
     "components/photoshop/panels/timeline-panel.tsx",
     "editor/types.ts",
   ])
@@ -104,7 +104,7 @@ test("path-aware selector falls back to broad browser tests for unmatched produc
   const { selectPrTestCommands } = await loadSelector()
 
   expect(selectPrTestCommands([
-    "components/photoshop/future-subsystem.ts",
+    "editor/future-subsystem.ts",
   ])).toEqual([
     "npx playwright test --grep-invert @visual",
   ])
@@ -160,7 +160,7 @@ test("path-aware selector maps capability extraction modules to diagnostics cove
   expect(commands).not.toEqual(["npx playwright test --grep-invert @visual"])
   expect(joined).toContain("tests/capabilities.spec.ts")
   expect(joined).toContain("tests/browser-diagnostics.spec.ts")
-  expect(joined).toContain("tests/document-io-preflight.spec.ts")
+  expect(joined).toContain("tests/document/io-preflight.spec.ts")
 })
 
 test("path-aware selector maps 3D scene format extraction to focused 3D coverage", async () => {

@@ -265,9 +265,9 @@ npx playwright test
 
 # Focused examples
 npx playwright test tests/adjustment-layer-workflow.spec.ts
-npx playwright test tests/canvas-interaction-performance.spec.ts
-npx playwright test tests/filter-fidelity-golden.spec.ts
-npx playwright test tests/psd-roundtrip-fixtures.spec.ts
+npx playwright test tests/canvas/interaction-performance.spec.ts
+npx playwright test tests/filters/fidelity-golden.spec.ts
+npx playwright test tests/psd/roundtrip-fixtures.spec.ts
 ```
 
 On Windows PowerShell installations where script execution blocks `npm.ps1`,
