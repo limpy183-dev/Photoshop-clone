@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test"
+import Module from "node:module"
 import { resolve } from "node:path"
 
 /**
@@ -18,6 +19,35 @@ import { resolve } from "node:path"
  */
 export const repoRoot = resolve(__dirname, "..")
 export const testDir = resolve(__dirname, "../tests")
+
+/**
+ * Teach Node's CJS resolver about the "@/" alias.
+ *
+ * Playwright rewrites tsconfig `paths` when it transpiles a file, but a module
+ * reached only through a runtime `import()` is loaded outside that pass, so its
+ * own static "@/" imports arrive at Node unmapped and throw
+ * "Cannot find module '@/editor/...'". Webpack has no such gap, so this only
+ * ever bites Node-side tests that call into a lazily-imported module -
+ * e.g. tests/file-format-depth.spec.ts reaching editor/raster/codecs-jpeg2000.ts
+ * through the `await import()` in editor/raster/codecs.ts.
+ *
+ * The alternative was exempting that module's 26-file transitive closure from
+ * the "@/"-only import rule, which would rot the moment anyone added an import.
+ *
+ * ponytail: patches Module._resolveFilename, the same lever tsconfig-paths
+ * uses. Replace with `module.registerHooks()` if the CJS internals move.
+ */
+const RESOLVER = Module as unknown as {
+  _resolveFilename?: (request: string, ...rest: unknown[]) => string
+  __psAliasPatched?: boolean
+}
+if (RESOLVER._resolveFilename && !RESOLVER.__psAliasPatched) {
+  const original = RESOLVER._resolveFilename
+  RESOLVER._resolveFilename = function (request: string, ...rest: unknown[]) {
+    return original.call(this, request.startsWith("@/") ? resolve(repoRoot, request.slice(2)) : request, ...rest)
+  }
+  RESOLVER.__psAliasPatched = true
+}
 
 export const desktop = devices["Desktop Chrome"]
 export const mobile = devices["Pixel 5"]

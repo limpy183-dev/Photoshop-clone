@@ -31,6 +31,18 @@ test("critical interaction repeat lane disables retries", () => {
   expect(config).toContain("brush-stroke-undo.spec.ts")
 })
 
+test("the @/ alias resolves inside modules reached through a runtime import()", async () => {
+  // Playwright maps tsconfig paths when it transpiles a file, but not for a
+  // module loaded only via `await import()`. editor/raster/codecs.ts lazily
+  // imports codecs-jpeg2000.ts, whose own "@/" imports then hit Node unmapped.
+  // playwright/base.ts patches the CJS resolver to close that gap; without it
+  // this throws "Cannot find module '@/editor/canvas/limits'".
+  const { encodeJpeg2000ImageData } = await import("@/editor/raster/codecs")
+  const error = await encodeJpeg2000ImageData(null as never, {}).then(() => null, (e: Error) => e)
+
+  expect(error?.message ?? "").not.toContain("Cannot find module")
+})
+
 test("every lane resolves its paths against the repo root, not playwright/", () => {
   // webServer.cwd defaults to the config's own directory, so a lane that shells
   // out to scripts/ without pinning the root would look inside playwright/.
