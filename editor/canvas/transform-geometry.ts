@@ -187,3 +187,77 @@ export function pointInTransformBox(p: { x: number; y: number }, t: TransformDra
   }
   return inside
 }
+
+/**
+ * Apply one pointer-move of a free-transform handle drag. Mutates `t` in place
+ * (and advances `drag.last` for the handles that work off a per-frame delta),
+ * matching how the canvas view holds transform state in a ref.
+ */
+export function applyTransformHandleDrag(
+  t: TransformDragState,
+  drag: { last?: { x: number; y: number } },
+  p: { x: number; y: number },
+  handle: TransformHandleId,
+  shift: boolean,
+  perspectiveDrag = false,
+) {
+  const cx = t.bounds.x + t.bounds.w / 2 + t.tx
+  const cy = t.bounds.y + t.bounds.h / 2 + t.ty
+  if (handle === "move") {
+    const dx = p.x - (drag.last?.x ?? p.x)
+    const dy = p.y - (drag.last?.y ?? p.y)
+    t.tx += dx
+    t.ty += dy
+    drag.last = p
+    return
+  }
+  if (perspectiveDrag && ["nw", "ne", "se", "sw"].includes(handle)) {
+    const last = drag.last ?? p
+    const dx = p.x - last.x
+    const dy = p.y - last.y
+    const key = handle === "nw" ? "tl" : handle === "ne" ? "tr" : handle === "se" ? "br" : "bl"
+    const current = t.perspective ?? {
+      tl: { x: 0, y: 0 },
+      tr: { x: 0, y: 0 },
+      br: { x: 0, y: 0 },
+      bl: { x: 0, y: 0 },
+    }
+    t.perspective = {
+      ...current,
+      [key]: {
+        x: current[key].x + dx,
+        y: current[key].y + dy,
+      },
+    }
+    drag.last = p
+    return
+  }
+  if (handle === "rotate") {
+    const last = drag.last ?? p
+    const a0 = Math.atan2(last.y - cy, last.x - cx)
+    const a1 = Math.atan2(p.y - cy, p.x - cx)
+    let deg = ((a1 - a0) * 180) / Math.PI + t.rotation
+    if (shift) deg = Math.round(deg / 15) * 15
+    t.rotation = deg
+    drag.last = p
+    return
+  }
+  // scale handles
+  const dx = (p.x - cx) / (t.bounds.w / 2 || 1)
+  const dy = (p.y - cy) / (t.bounds.h / 2 || 1)
+  let nx = t.scaleX
+  let ny = t.scaleY
+  if (handle.includes("e") || handle.includes("w")) nx = Math.abs(dx) || 0.01
+  if (handle.includes("n") || handle.includes("s")) ny = Math.abs(dy) || 0.01
+  if (handle === "e" || handle === "w") ny = t.scaleY
+  if (handle === "n" || handle === "s") nx = t.scaleX
+  if (shift) {
+    const r = Math.max(Math.abs(nx), Math.abs(ny))
+    nx = Math.sign(nx) * r
+    ny = Math.sign(ny) * r
+  }
+  if (handle.includes("w") && p.x > cx) nx *= -1
+  if (handle.includes("n") && p.y > cy) ny *= -1
+  t.scaleX = nx
+  t.scaleY = ny
+}

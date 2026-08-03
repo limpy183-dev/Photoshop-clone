@@ -3,7 +3,10 @@
 import * as React from "react"
 import { cn } from "@/lib/utils"
 import { extractMarchingAntsPaths } from "@/editor/tool/helpers"
+import type { TextEditState } from "@/editor/canvas/text-edit-controller"
 import type { Layer, PsDocument } from "@/editor/types"
+
+export type { TextEditState }
 
 export function MaskSelectionOverlay({
   mask,
@@ -108,13 +111,6 @@ export function SelectionOverlay({
 export function resolveTextEditLayer(doc: PsDocument, layerId: string): Layer | null {
   const layer = doc.layers.find((candidate: Layer) => candidate.id === layerId)
   return layer?.text ? layer : null
-}
-
-export type TextEditState = {
-  layerId: string
-  value: string
-  /** Layer was created by this placement gesture — cancelling discards it. */
-  isNew: boolean
 }
 
 /**

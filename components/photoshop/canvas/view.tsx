@@ -10,28 +10,21 @@ import { compositeLayer } from "@/editor/blend-modes"
 import { applyModeAndColorManagement } from "@/editor/document/color-management"
 import {
   addAnchorPointToPath,
-  appendPathToCanvas,
   convertAnchorPoint,
   deleteNearestAnchorPoint,
   deleteSelectedPathAnchors,
   duplicatePathSubpath,
   fitFreeformPath,
-  getRoundedRectCornerRadiusHandles,
   hitTestPathControls,
-  movePathAnchor,
-  movePathHandle,
-  moveSelectedPathAnchors,
   nearestAnchorPoint,
   selectAllPathAnchors,
   selectPathAnchorsInRect,
   selectPathSubpathAnchors,
   shapeToEditablePath,
-  updateRoundedRectCornerRadius,
   togglePathAnchorSelection,
   type PathAnchorRef,
-  type RoundedRectCorner,
 } from "@/editor/vector-path-operations"
-import { constrainPointTo45, constrainTo45Degrees, isTempDirectSelectModifier } from "@/editor/path-modifier-keys"
+import { constrainPointTo45, isTempDirectSelectModifier } from "@/editor/path-modifier-keys"
 import {
   normalizeBrushPointerSample,
   planArtHistoryStroke,
@@ -64,26 +57,8 @@ import {
 } from "@/editor/webgl-compositor"
 import { containsSelectionPoint, createSelectionHitTester, type SelectionHitTester } from "@/editor/selection-hit-testing"
 import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "@/editor/events"
-import {
-  applyBlurGalleryKeyboardCommand,
-  beginBlurGalleryInteraction,
-  finishBlurGalleryInteraction,
-  getBlurGalleryControlState,
-  isBlurGalleryFilterId,
-  normalizeBlurGalleryParams,
-  updateBlurGalleryInteraction,
-  type BlurGalleryDrag,
-  type BlurGalleryFilterId,
-  type BlurGalleryParams,
-} from "@/editor/blur-gallery-controls"
-import {
-  beginLightingEffectsInteraction,
-  finishLightingEffectsInteraction,
-  normalizeLightingEffectsParams,
-  updateLightingEffectsInteraction,
-  type LightingEffectsDrag,
-  type LightingEffectsParams,
-} from "@/editor/lighting-effects-controls"
+import { useFilterOverlayController } from "@/editor/canvas/filter-overlay-controller"
+import { useTextEditController } from "@/editor/canvas/text-edit-controller"
 import { normalizeAdvancedBlending } from "@/editor/layer-workflows"
 import { DEFAULT_PREFERENCES } from "@/editor/preferences-engine"
 import { paintCanvasCursorOverlay, resolveCanvasCursorState } from "@/editor/cursor-overlay"
@@ -95,7 +70,6 @@ import {
   getEyedropperSampleSize,
   getFrameRuntimeOptions,
   getMoveRuntimeOptions,
-  getPathRuntimeOptions,
   getShapeRuntimeOptions,
   layerAllowsDrawing,
   layerAllowsMoving,
@@ -104,13 +78,11 @@ import {
 } from "@/editor/canvas/view-runtime"
 import { useCanvasViewportController } from "@/editor/canvas/viewport-controller"
 import {
+  applyTransformHandleDrag,
   clampTransformSkew,
   finiteOr,
   pickTransformHandle,
   pointInTransformBox,
-  transformCorners,
-  transformHandles,
-  transformedBounds,
   type TransformDragState,
   type TransformHandleId,
   type TransformOptionsEvent,
@@ -120,15 +92,11 @@ import {
   cursorForTool,
   labelForTool,
   normalizeViewRotation,
-  resizePlainRect,
-  resizeShapeRect,
-  shapeHandles,
   shapePropsForTool,
-  shapeRect,
   type DirectShapeHandleId,
 } from "@/editor/canvas/shape-helpers"
 import { SmartGuidesOverlay, smartSnapLayerDelta } from "@/components/photoshop/canvas/smart-guides"
-import { MaskSelectionOverlay, SelectionOverlay, TextEditOverlay, type TextEditState } from "@/components/photoshop/canvas/selection-overlays"
+import { MaskSelectionOverlay, SelectionOverlay, TextEditOverlay } from "@/components/photoshop/canvas/selection-overlays"
 import { Rulers } from "@/components/photoshop/canvas/rulers"
 import {
   adjustmentParamsFingerprint,
@@ -150,7 +118,6 @@ import {
   alphaBounds,
   applySelectionMaskToCanvas,
   autoPickLayer,
-  clipToSelection,
   createRemoveMask,
   pickTextLayerAt,
   selectBackgroundMaskFromImage,
@@ -161,9 +128,31 @@ import {
   drawSlicePreview,
 } from "@/editor/canvas/preview-drawing"
 import {
-  drawBlurGalleryOverlayCanvas,
-  drawLightingEffectsOverlayCanvas,
-} from "@/editor/canvas/filter-overlays"
+  directSelectionTarget,
+  editablePathForDirectSelection,
+  isVectorEditableLayer,
+  pathForDirectEdit,
+  pickVectorLayer,
+  rerenderVectorLayer as rerenderVectorLayerGeometry,
+  replaceDirectEditPath,
+  updateDirectSelectionDrag as applyDirectSelectionDrag,
+  vectorLayerBounds,
+} from "@/editor/canvas/vector-editing"
+import {
+  TEXT_BOX_DRAG_THRESHOLD,
+  drawBrushPreview as drawBrushPreviewOverlay,
+  drawGradientPreview as drawGradientPreviewOverlay,
+  drawLassoPreview as drawLassoPreviewOverlay,
+  drawMarqueePreview as drawMarqueePreviewOverlay,
+  drawPatchPreview as drawPatchPreviewOverlay,
+  drawPathPreview as drawPathPreviewOverlay,
+  drawPathSelectionPreview as drawPathSelectionPreviewOverlay,
+  drawPerspectiveCropPreview as drawPerspectiveCropPreviewOverlay,
+  drawRulerPreview as drawRulerPreviewOverlay,
+  drawSliceSelectionPreview as drawSliceSelectionPreviewOverlay,
+  drawTextBoxPreview as drawTextBoxPreviewOverlay,
+  drawTransformHandles as drawTransformHandlesOverlay,
+} from "@/editor/canvas/overlay-previews"
 import {
   applyCanvasBrushColorDynamics,
   applyCanvasBrushShapeDynamics,
@@ -175,21 +164,10 @@ import {
   localPatchGradient,
 } from "@/editor/canvas/eraser-helpers"
 
-function textLayerPath(layer: Layer | null | undefined): PathProps | null {
-  const points = layer?.text?.textPath
-  if (!points?.length) return null
-  return {
-    points: points.map((point) => ({ x: point.x, y: point.y })),
-    closed: layer?.text?.textPathClosed === true,
-  }
-}
 import {
-  addGradientStops,
   alphaMaskFromCanvas,
-  applyDitherToCanvas,
   clamp01,
   cloneCanvasForTool,
-  getGradientStops,
   hashNoise,
   makeCurvaturePath,
   maskBounds,
@@ -198,7 +176,6 @@ import {
   requiredRgbaFromCss,
   rgbaToCss,
   sampleCanvasColor,
-  sampleGradient,
   sortCorners,
 } from "@/editor/canvas/view-helpers"
 import { cn } from "@/lib/utils"
@@ -237,7 +214,7 @@ import { ColorPickerHud, hexToHsv, hsvToHex, pickFromHud, type ColorPickerHudHsv
 import { MagneticLassoIndicator, GridOverlay, PixelGridOverlay, GuidesOverlay, RetouchFeedbackOverlay } from "@/components/photoshop/canvas/overlays"
 import { SelectionTransformOverlay } from "@/components/photoshop/selection-transform-overlay"
 import { applyThreeDMaterialDrop } from "@/editor/three-d-video-engine"
-import type { Layer, PathPoint, PathProps, PsDocument, Selection, TextProps } from "@/editor/types"
+import type { Layer, PathPoint, Selection } from "@/editor/types"
 
 type BrushInput = BrushDynamicsInput
 
@@ -271,12 +248,6 @@ const RETOUCH_FEEDBACK_TOOLS = new Set([
   "history-brush",
   "art-history-brush",
 ])
-
-/** Below this drag distance (document px) the type tool places point text. */
-const TEXT_BOX_DRAG_THRESHOLD = 8
-
-const DEFAULT_TEXT_FONT = "Geist, system-ui, sans-serif"
-const DEFAULT_TEXT_SIZE = 48
 
 interface StampOptions {
   includeBrushOpacity?: boolean
@@ -368,19 +339,6 @@ export function CanvasView() {
   const cursorRef = React.useRef<HTMLDivElement>(null)
   const cursorCanvasRef = React.useRef<HTMLCanvasElement>(null)
   const stageRef = React.useRef<HTMLDivElement>(null)
-  const [blurGalleryOverlay, setBlurGalleryOverlay] = React.useState<{
-    filterId: BlurGalleryFilterId
-    params: BlurGalleryParams
-    docId?: string
-  } | null>(null)
-  const blurGalleryDragRef = React.useRef<BlurGalleryDrag | null>(null)
-  const drawBlurGalleryOverlayRef = React.useRef<(state?: typeof blurGalleryOverlay) => void>(() => {})
-  const [lightingEffectsOverlay, setLightingEffectsOverlay] = React.useState<{
-    params: LightingEffectsParams
-    docId?: string
-  } | null>(null)
-  const lightingEffectsDragRef = React.useRef<LightingEffectsDrag | null>(null)
-  const drawLightingEffectsOverlayRef = React.useRef<(state?: typeof lightingEffectsOverlay) => void>(() => {})
 
   /* ---- canvas runtime preferences ---- */
   const [canvasPrefs, setCanvasPrefs] = React.useState<CanvasRuntimePreferences>(() => defaultCanvasRuntimePreferences())
@@ -424,6 +382,26 @@ export function CanvasView() {
     stageRef,
     onCommitZoom: commitViewportZoom,
   })
+
+  const {
+    handleBlurGalleryPointerDown,
+    handleBlurGalleryPointerMove,
+    handleBlurGalleryPointerUp,
+    handleBlurGalleryKeyDown,
+    handleLightingEffectsPointerDown,
+    handleLightingEffectsPointerMove,
+    handleLightingEffectsPointerUp,
+  } = useFilterOverlayController({ activeDoc, overlayRef, visualZoomRef })
+
+  const {
+    editingText,
+    setEditingText,
+    editingTextRef,
+    activeTextDefaults,
+    beginTextEdit,
+    commitTextEdit,
+    cancelTextEdit,
+  } = useTextEditController({ activeDoc, activeLayer, tool, foreground, dispatch, requestRender, commit })
 
   const cloneSourceRef = React.useRef<{ sourceX: number; sourceY: number; destX?: number; destY?: number; layerId: string } | null>(null)
   const eraserSampleRef = React.useRef<{ r: number; g: number; b: number; a: number } | null>(null)
@@ -2166,76 +2144,7 @@ export function CanvasView() {
   function drawGradientPreview(start: { x: number; y: number }, end: { x: number; y: number }) {
     const ov = overlayRef.current
     if (!ov || !activeDoc || !activeLayer) return
-    const ctx = ov.getContext("2d")!
-    ctx.clearRect(0, 0, ov.width, ov.height)
-    const stops = getGradientStops(gradient, foreground, background)
-    ctx.save()
-    if (activeDoc.selection.bounds) {
-      clipToSelection(ctx, activeDoc)
-    }
-    let g: CanvasGradient
-    const dx = end.x - start.x
-    const dy = end.y - start.y
-    const dist = Math.hypot(dx, dy) || 1
-    if (gradient.type === "linear") {
-      g = ctx.createLinearGradient(start.x, start.y, end.x, end.y)
-      addGradientStops(g, stops)
-      ctx.fillStyle = g
-      ctx.fillRect(0, 0, ov.width, ov.height)
-    } else if (gradient.type === "radial") {
-      g = ctx.createRadialGradient(start.x, start.y, 0, start.x, start.y, dist)
-      addGradientStops(g, stops)
-      ctx.fillStyle = g
-      ctx.fillRect(0, 0, ov.width, ov.height)
-    } else if (gradient.type === "reflected") {
-      g = ctx.createLinearGradient(start.x - dx, start.y - dy, end.x, end.y)
-      for (const s of stops) {
-        g.addColorStop(s.offset * 0.5, hexToRgba(s.color, s.opacity))
-        g.addColorStop(1 - s.offset * 0.5, hexToRgba(s.color, s.opacity))
-      }
-      ctx.fillStyle = g
-      ctx.fillRect(0, 0, ov.width, ov.height)
-    } else if (gradient.type === "angular") {
-      const cx = start.x
-      const cy = start.y
-      const baseAngle = Math.atan2(dy, dx)
-      const steps = gradient.cycle ? 180 : 96
-      for (let i = 0; i < steps; i++) {
-        const a0 = baseAngle + (i / steps) * Math.PI * 2
-        const a1 = baseAngle + ((i + 1.25) / steps) * Math.PI * 2
-        const c = sampleGradient(gradient, stops, i / steps)
-        ctx.fillStyle = `rgba(${c.r},${c.g},${c.b},${c.a / 255})`
-        ctx.beginPath()
-        ctx.moveTo(cx, cy)
-        ctx.arc(cx, cy, ov.width + ov.height, a0, a1)
-        ctx.closePath()
-        ctx.fill()
-      }
-    } else {
-      const img = ctx.getImageData(0, 0, ov.width, ov.height)
-      const angle = Math.atan2(dy, dx)
-      const cos = Math.cos(-angle)
-      const sin = Math.sin(-angle)
-      for (let py = 0; py < ov.height; py++) {
-        for (let px = 0; px < ov.width; px++) {
-          const rx = px - start.x
-          const ry = py - start.y
-          const ux = rx * cos - ry * sin
-          const uy = rx * sin + ry * cos
-          const t = (Math.abs(ux) + Math.abs(uy)) / Math.max(1, dist)
-          const c = sampleGradient(gradient, stops, t)
-          const i = (py * ov.width + px) * 4
-          img.data[i] = c.r
-          img.data[i + 1] = c.g
-          img.data[i + 2] = c.b
-          img.data[i + 3] = c.a
-        }
-      }
-      ctx.putImageData(img, 0, 0)
-    }
-    ctx.restore()
-    applySelectionMaskToCanvas(ov, activeDoc)
-    applyDitherToCanvas(ov, gradient.dither)
+    drawGradientPreviewOverlay(ov, activeDoc, gradient, foreground, background, start, end)
   }
 
   function commitGradient() {
@@ -2261,265 +2170,51 @@ export function CanvasView() {
   function drawMarqueePreview(start: { x: number; y: number }, end: { x: number; y: number }) {
     const ov = overlayRef.current
     if (!ov || !activeDoc) return
-    const ctx = ov.getContext("2d")!
-    ctx.clearRect(0, 0, ov.width, ov.height)
-    ctx.save()
-    ctx.strokeStyle = "#fff"
-    ctx.setLineDash([4, 4])
-    ctx.lineWidth = 1
-    const x = Math.min(start.x, end.x)
-    const y = Math.min(start.y, end.y)
-    const w = Math.abs(end.x - start.x)
-    const h = Math.abs(end.y - start.y)
-    if (tool === "marquee-ellipse") {
-      ctx.beginPath()
-      ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2)
-      ctx.stroke()
-    } else if (tool === "crop") {
-      ctx.fillStyle = "rgba(0,0,0,0.5)"
-      ctx.fillRect(0, 0, ov.width, y)
-      ctx.fillRect(0, y + h, ov.width, ov.height - (y + h))
-      ctx.fillRect(0, y, x, h)
-      ctx.fillRect(x + w, y, ov.width - (x + w), h)
-      ctx.strokeStyle = "#fff"
-      ctx.setLineDash([])
-      ctx.strokeRect(x + 0.5, y + 0.5, w, h)
-      // rule of thirds
-      ctx.beginPath()
-      for (let i = 1; i < 3; i++) {
-        ctx.moveTo(x + (w * i) / 3, y)
-        ctx.lineTo(x + (w * i) / 3, y + h)
-        ctx.moveTo(x, y + (h * i) / 3)
-        ctx.lineTo(x + w, y + (h * i) / 3)
-      }
-      ctx.stroke()
-    } else if (tool === "marquee-row") {
-      // Single row marquee: a 1px high line across the whole document.
-      ctx.strokeRect(0.5, Math.round(start.y) + 0.5, activeDoc.width - 1, 1)
-    } else if (tool === "marquee-col") {
-      // Single column marquee: a 1px wide line across the whole document.
-      ctx.strokeRect(Math.round(start.x) + 0.5, 0.5, 1, activeDoc.height - 1)
-    } else {
-      ctx.strokeRect(x + 0.5, y + 0.5, w, h)
-    }
-    ctx.restore()
+    drawMarqueePreviewOverlay(ov, activeDoc, tool, start, end)
   }
 
-  /**
-   * Dashed placement box for the type tool. A bare click shows a caret-height
-   * box at the insertion point; dragging shows the paragraph box being defined.
-   */
   function drawTextBoxPreview(start: { x: number; y: number }, end: { x: number; y: number }) {
     const ov = overlayRef.current
     if (!ov || !activeDoc) return
-    const ctx = ov.getContext("2d")!
-    ctx.clearRect(0, 0, ov.width, ov.height)
-    const x = Math.min(start.x, end.x)
-    const y = Math.min(start.y, end.y)
-    const w = Math.abs(end.x - start.x)
-    const h = Math.abs(end.y - start.y)
-    const size = activeTextDefaults().size
-    ctx.save()
-    ctx.lineWidth = Math.max(1, 1 / Math.max(0.1, visualZoomRef.current))
-    ctx.setLineDash([4, 3])
-    ctx.strokeStyle = "rgba(34,211,238,0.95)"
-    if (w < TEXT_BOX_DRAG_THRESHOLD && h < TEXT_BOX_DRAG_THRESHOLD) {
-      ctx.strokeRect(start.x + 0.5, start.y + 0.5, Math.max(2, size * 0.6), size * 1.2)
-    } else {
-      ctx.strokeRect(x + 0.5, y + 0.5, w, h)
-    }
-    ctx.restore()
+    drawTextBoxPreviewOverlay(ov, activeTextDefaults().size, visualZoomRef.current, start, end)
   }
 
   function drawRulerPreview(start: { x: number; y: number }, end: { x: number; y: number }) {
     const ov = overlayRef.current
     if (!ov || !activeDoc) return
-    const ctx = ov.getContext("2d")!
-    ctx.clearRect(0, 0, ov.width, ov.height)
-    const length = Math.hypot(end.x - start.x, end.y - start.y)
-    const angle = (Math.atan2(end.y - start.y, end.x - start.x) * 180) / Math.PI
-    ctx.save()
-    ctx.strokeStyle = "#06b6d4"
-    ctx.fillStyle = "#06b6d4"
-    ctx.lineWidth = 1.5
-    ctx.beginPath()
-    ctx.moveTo(start.x, start.y)
-    ctx.lineTo(end.x, end.y)
-    ctx.stroke()
-    ctx.beginPath()
-    ctx.arc(start.x, start.y, 4, 0, Math.PI * 2)
-    ctx.arc(end.x, end.y, 4, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.font = "11px sans-serif"
-    ctx.fillText(`${length.toFixed(1)} px, ${angle.toFixed(1)} deg`, end.x + 8, end.y - 8)
-    ctx.restore()
+    drawRulerPreviewOverlay(ov, start, end)
   }
 
   function drawBrushPreview(center: { x: number; y: number }, radius: number) {
     const ov = overlayRef.current
     if (!ov || !activeDoc) return
-    const ctx = ov.getContext("2d")!
-    ctx.clearRect(0, 0, ov.width, ov.height)
-    const feedback = buildRetouchingFeedbackModel({ tool, brush, cloneSource, cursor: center })
-    ctx.save()
-    ctx.strokeStyle = "#fff"
-    ctx.lineWidth = 1
-    ctx.setLineDash([4, 4])
-    ctx.beginPath()
-    ctx.arc(center.x, center.y, Math.max(2, radius), 0, Math.PI * 2)
-    ctx.stroke()
-    if (feedback.brushEdge.hardnessRadius > 1 && feedback.brushEdge.hardnessRadius < feedback.brushEdge.radius) {
-      ctx.setLineDash([])
-      ctx.strokeStyle = "rgba(255,255,255,0.45)"
-      ctx.beginPath()
-      ctx.arc(center.x, center.y, feedback.brushEdge.hardnessRadius, 0, Math.PI * 2)
-      ctx.stroke()
-    }
-    if (feedback.brushEdge.scatterRadius > feedback.brushEdge.radius) {
-      ctx.setLineDash([2, 6])
-      ctx.strokeStyle = "rgba(56,189,248,0.7)"
-      ctx.beginPath()
-      ctx.arc(center.x, center.y, feedback.brushEdge.scatterRadius, 0, Math.PI * 2)
-      ctx.stroke()
-    }
-    if (feedback.previewGhost.visible && feedback.previewGhost.sourcePoint) {
-      const source = feedback.previewGhost.sourcePoint
-      ctx.setLineDash([5, 4])
-      ctx.strokeStyle = `rgba(56,189,248,${feedback.previewGhost.opacity})`
-      ctx.beginPath()
-      ctx.moveTo(source.x, source.y)
-      ctx.lineTo(center.x, center.y)
-      ctx.stroke()
-      ctx.setLineDash([])
-      ctx.strokeStyle = "rgba(56,189,248,0.95)"
-      ctx.fillStyle = "rgba(56,189,248,0.16)"
-      ctx.beginPath()
-      ctx.arc(source.x, source.y, Math.max(3, feedback.brushEdge.radius * 0.35), 0, Math.PI * 2)
-      ctx.fill()
-      ctx.stroke()
-    }
-    ctx.restore()
+    drawBrushPreviewOverlay(ov, tool, brush, cloneSource, center, radius)
   }
 
   function drawLassoPreview(points: { x: number; y: number }[], hover?: { x: number; y: number }) {
     const ov = overlayRef.current
     if (!ov || !activeDoc) return
-    const ctx = ov.getContext("2d")!
-    ctx.clearRect(0, 0, ov.width, ov.height)
-    if (points.length < 1) return
-    if (tool === "lasso-magnetic") {
-      drawMagneticLassoPreview(ctx, points, hover)
-      return
-    }
-    ctx.save()
-    ctx.strokeStyle = "#fff"
-    ctx.setLineDash([4, 4])
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    ctx.moveTo(points[0].x, points[0].y)
-    for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y)
-    if (hover) ctx.lineTo(hover.x, hover.y)
-    ctx.stroke()
-    // dots on points
-    ctx.setLineDash([])
-    ctx.fillStyle = "#fff"
-    for (const p of points) {
-      ctx.fillRect(p.x - 2, p.y - 2, 4, 4)
-    }
-    ctx.restore()
+    drawLassoPreviewOverlay(ov, points, hover, tool === "lasso-magnetic" ? {
+      selectionOptions,
+      resolveTraceSource: () => {
+        const sourceCanvas = selectionOptions.sampleAllLayers ? compositeRef.current : activeLayer?.canvas
+        if (!sourceCanvas || typeof sourceCanvas.getContext !== "function") return null
+        return selectionTraceSourceForLayer(sourceCanvas)
+      },
+    } : null)
   }
-
 
   function drawPatchPreview(offset?: { x: number; y: number }) {
     const ov = overlayRef.current
     const patch = patchRef.current
     if (!ov || !activeDoc || !patch) return
-    const ctx = ov.getContext("2d")!
-    ctx.clearRect(0, 0, ov.width, ov.height)
-    ctx.save()
-    ctx.strokeStyle = "#06b6d4"
-    ctx.lineWidth = 1.5
-    ctx.setLineDash([5, 4])
-    ctx.drawImage(patch.mask, 0, 0)
-    ctx.globalCompositeOperation = "source-in"
-    ctx.fillStyle = "rgba(6,182,212,0.22)"
-    ctx.fillRect(0, 0, ov.width, ov.height)
-    ctx.globalCompositeOperation = "source-over"
-    ctx.strokeRect(patch.bounds.x + 0.5, patch.bounds.y + 0.5, patch.bounds.w, patch.bounds.h)
-    if (offset) {
-      ctx.setLineDash([3, 3])
-      ctx.strokeStyle = "#fff"
-      ctx.strokeRect(
-        patch.bounds.x + offset.x + 0.5,
-        patch.bounds.y + offset.y + 0.5,
-        patch.bounds.w,
-        patch.bounds.h,
-      )
-      ctx.setLineDash([])
-      ctx.strokeStyle = "#06b6d4"
-      ctx.beginPath()
-      ctx.moveTo(patch.bounds.x + patch.bounds.w / 2, patch.bounds.y + patch.bounds.h / 2)
-      ctx.lineTo(
-        patch.bounds.x + patch.bounds.w / 2 + offset.x,
-        patch.bounds.y + patch.bounds.h / 2 + offset.y,
-      )
-      ctx.stroke()
-    }
-    ctx.restore()
+    drawPatchPreviewOverlay(ov, patch, offset)
   }
-
 
   function drawPathPreview() {
     const ov = overlayRef.current
     if (!ov || !pathDraftRef.current) return
-    const ctx = ov.getContext("2d")!
-    ctx.clearRect(0, 0, ov.width, ov.height)
-    const draft = pathDraftRef.current
-    const points = draft.curvature ? makeCurvaturePath(draft.points, draft.closed) : draft.points
-    if (points.length < 1) return
-    ctx.save()
-    ctx.strokeStyle = "#06b6d4"
-    ctx.lineWidth = 1.5
-    ctx.beginPath()
-    ctx.moveTo(points[0].x, points[0].y)
-    for (let i = 1; i < points.length; i++) {
-      const prev = points[i - 1]
-      const cur = points[i]
-      const cp1 = prev.cp1 ?? prev
-      const cp2 = cur.cp2 ?? cur
-      ctx.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, cur.x, cur.y)
-    }
-    if (draft.closed && points.length > 2) {
-      const last = points[points.length - 1]
-      const first = points[0]
-      const cp1 = last.cp1 ?? last
-      const cp2 = first.cp2 ?? first
-      ctx.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, first.x, first.y)
-    }
-    ctx.stroke()
-    ctx.fillStyle = "#06b6d4"
-    for (const p of points) {
-      ctx.fillRect(p.x - 3, p.y - 3, 6, 6)
-      if (p.cp1) {
-        ctx.beginPath()
-        ctx.arc(p.cp1.x, p.cp1.y, 3, 0, Math.PI * 2)
-        ctx.fill()
-        ctx.beginPath()
-        ctx.moveTo(p.x, p.y)
-        ctx.lineTo(p.cp1.x, p.cp1.y)
-        ctx.stroke()
-      }
-      if (p.cp2) {
-        ctx.beginPath()
-        ctx.arc(p.cp2.x, p.cp2.y, 3, 0, Math.PI * 2)
-        ctx.fill()
-        ctx.beginPath()
-        ctx.moveTo(p.x, p.y)
-        ctx.lineTo(p.cp2.x, p.cp2.y)
-        ctx.stroke()
-      }
-    }
-    ctx.restore()
+    drawPathPreviewOverlay(ov, pathDraftRef.current)
   }
 
   /* ---- transform handles ---- */
@@ -2527,83 +2222,8 @@ export function CanvasView() {
   function drawTransformHandles() {
     const ov = overlayRef.current
     if (!ov || !activeDoc || !transformRef.current) return
-    const t = transformRef.current
-    const ctx = ov.getContext("2d")!
-    ctx.clearRect(0, 0, ov.width, ov.height)
-    const b = transformedBounds(t)
-    ctx.save()
-    ctx.strokeStyle = "#06b6d4"
-    ctx.setLineDash([6, 4])
-    ctx.lineWidth = 1.5
-    // bounding rect using transformed corners
-    const corners = transformCorners(t)
-    ctx.beginPath()
-    ctx.moveTo(corners[0].x, corners[0].y)
-    for (let i = 1; i < 4; i++) ctx.lineTo(corners[i].x, corners[i].y)
-    ctx.closePath()
-    ctx.stroke()
-    ctx.setLineDash([])
-    ctx.fillStyle = "#fff"
-    const handles = transformHandles(t)
-    for (const h of handles) {
-      ctx.fillRect(h.x - 4, h.y - 4, 8, 8)
-      ctx.strokeRect(h.x - 4, h.y - 4, 8, 8)
-    }
-    ctx.restore()
-    void b
+    drawTransformHandlesOverlay(ov, transformRef.current)
   }
-
-  React.useEffect(() => {
-    const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{
-        filterId?: string
-        params?: BlurGalleryParams
-        docId?: string
-      } | null>).detail
-      if (!detail?.filterId || !isBlurGalleryFilterId(detail.filterId) || !detail.params) {
-        blurGalleryDragRef.current = null
-        setBlurGalleryOverlay(null)
-        const ov = overlayRef.current
-        if (ov) ov.getContext("2d")?.clearRect(0, 0, ov.width, ov.height)
-        return
-      }
-      setBlurGalleryOverlay({
-        filterId: detail.filterId,
-        params: normalizeBlurGalleryParams(detail.filterId, detail.params),
-        docId: detail.docId,
-      })
-    }
-    return addPhotoshopEventListener("ps-blur-gallery-overlay-state", (_detail, event) => handler(event))
-  }, [])
-
-  React.useEffect(() => {
-    drawBlurGalleryOverlayRef.current(blurGalleryOverlay)
-  }, [blurGalleryOverlay, activeDoc?.id, activeDoc?.width, activeDoc?.height])
-
-  React.useEffect(() => {
-    const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{
-        params?: LightingEffectsParams
-        docId?: string
-      } | null>).detail
-      if (!detail?.params) {
-        lightingEffectsDragRef.current = null
-        setLightingEffectsOverlay(null)
-        const ov = overlayRef.current
-        if (ov && !blurGalleryOverlay) ov.getContext("2d")?.clearRect(0, 0, ov.width, ov.height)
-        return
-      }
-      setLightingEffectsOverlay({
-        params: normalizeLightingEffectsParams(detail.params),
-        docId: detail.docId,
-      })
-    }
-    return addPhotoshopEventListener("ps-lighting-effects-overlay-state", (_detail, event) => handler(event))
-  }, [blurGalleryOverlay])
-
-  React.useEffect(() => {
-    if (!blurGalleryOverlay) drawLightingEffectsOverlayRef.current(lightingEffectsOverlay)
-  }, [lightingEffectsOverlay, blurGalleryOverlay, activeDoc?.id, activeDoc?.width, activeDoc?.height])
 
   /**
    * Timeline transition overlay: during playback the timeline panel emits a
@@ -2635,223 +2255,6 @@ export function CanvasView() {
     }
     return addPhotoshopEventListener("ps-timeline-transition-overlay", (_detail, event) => handler(event))
   }, [activeDoc?.id])
-
-  const emitBlurGalleryParams = React.useCallback((filterId: BlurGalleryFilterId, params: BlurGalleryParams) => {
-    dispatchPhotoshopEvent("ps-blur-gallery-overlay-change", { filterId, params })
-  }, [])
-
-  const setBlurGalleryParams = React.useCallback((filterId: BlurGalleryFilterId, params: BlurGalleryParams) => {
-    const next = {
-      filterId,
-      params: normalizeBlurGalleryParams(filterId, params),
-      docId: activeDoc?.id,
-    }
-    setBlurGalleryOverlay(next)
-    emitBlurGalleryParams(filterId, next.params)
-  }, [activeDoc?.id, emitBlurGalleryParams])
-
-  const emitLightingEffectsParams = React.useCallback((params: LightingEffectsParams) => {
-    dispatchPhotoshopEvent("ps-lighting-effects-overlay-change", { params })
-  }, [])
-
-  const setLightingEffectsParams = React.useCallback((params: LightingEffectsParams) => {
-    const next = {
-      params: normalizeLightingEffectsParams(params),
-      docId: activeDoc?.id,
-    }
-    setLightingEffectsOverlay(next)
-    emitLightingEffectsParams(next.params)
-  }, [activeDoc?.id, emitLightingEffectsParams])
-
-  function handleBlurGalleryPointerDown(pt: { x: number; y: number }, event: React.PointerEvent<HTMLDivElement>) {
-    if (!activeDoc || !blurGalleryOverlay) return false
-    const result = beginBlurGalleryInteraction(
-      blurGalleryOverlay.filterId,
-      blurGalleryOverlay.params,
-      pt,
-      activeDoc.width,
-      activeDoc.height,
-      Math.max(8, 10 / Math.max(0.25, visualZoomRef.current)),
-      { multiSelect: event.shiftKey || event.metaKey || event.ctrlKey },
-    )
-    if (!result.drag) return false
-    blurGalleryDragRef.current = result.drag
-    setBlurGalleryParams(blurGalleryOverlay.filterId, result.params)
-    return true
-  }
-
-  function handleBlurGalleryPointerMove(pt: { x: number; y: number }) {
-    const drag = blurGalleryDragRef.current
-    if (!activeDoc || !blurGalleryOverlay || !drag) return false
-    const next = updateBlurGalleryInteraction(
-      blurGalleryOverlay.filterId,
-      blurGalleryOverlay.params,
-      drag,
-      pt,
-      activeDoc.width,
-      activeDoc.height,
-    )
-    setBlurGalleryParams(blurGalleryOverlay.filterId, next)
-    return true
-  }
-
-  function handleBlurGalleryPointerUp() {
-    if (!blurGalleryDragRef.current) return false
-    const overlay = blurGalleryOverlay
-    blurGalleryDragRef.current = null
-    if (overlay) {
-      setBlurGalleryParams(overlay.filterId, finishBlurGalleryInteraction(overlay.filterId, overlay.params))
-    } else {
-      drawBlurGalleryOverlay(overlay)
-    }
-    return true
-  }
-
-  function handleLightingEffectsPointerDown(pt: { x: number; y: number }, event: React.PointerEvent<HTMLDivElement>) {
-    if (!activeDoc || !lightingEffectsOverlay || lightingEffectsOverlay.docId !== activeDoc.id) return false
-    const result = beginLightingEffectsInteraction(
-      lightingEffectsOverlay.params,
-      pt,
-      activeDoc.width,
-      activeDoc.height,
-      Math.max(8, 10 / Math.max(0.25, visualZoomRef.current)),
-    )
-    if (!result.drag) return false
-    lightingEffectsDragRef.current = result.drag
-    setLightingEffectsParams(result.params)
-    event.preventDefault()
-    return true
-  }
-
-  function handleLightingEffectsPointerMove(pt: { x: number; y: number }) {
-    const drag = lightingEffectsDragRef.current
-    if (!activeDoc || !lightingEffectsOverlay || lightingEffectsOverlay.docId !== activeDoc.id || !drag) return false
-    const next = updateLightingEffectsInteraction(
-      lightingEffectsOverlay.params,
-      drag,
-      pt,
-      activeDoc.width,
-      activeDoc.height,
-    )
-    setLightingEffectsParams(next)
-    return true
-  }
-
-  function handleLightingEffectsPointerUp() {
-    if (!lightingEffectsDragRef.current) return false
-    const overlay = lightingEffectsOverlay
-    lightingEffectsDragRef.current = null
-    if (overlay) setLightingEffectsParams(finishLightingEffectsInteraction(overlay.params))
-    return true
-  }
-
-  const handleBlurGalleryKeyDown = React.useCallback((e: KeyboardEvent) => {
-    if (!activeDoc || !blurGalleryOverlay || blurGalleryOverlay.docId !== activeDoc.id) return false
-    const state = getBlurGalleryControlState(blurGalleryOverlay.params)
-    const hasSelection = state.selectedFieldPinIndexes.length > 0 || state.selectedPathPointIndexes.length > 0 || !!state.activeControl
-    const key = e.key
-    let nextParams: BlurGalleryParams | null = null
-
-    if (key === "Delete" || key === "Backspace") {
-      nextParams = applyBlurGalleryKeyboardCommand(blurGalleryOverlay.filterId, blurGalleryOverlay.params, { kind: "delete" })
-    } else if (((e.metaKey || e.ctrlKey) && key.toLowerCase() === "j") || (e.altKey && key.toLowerCase() === "j")) {
-      nextParams = applyBlurGalleryKeyboardCommand(blurGalleryOverlay.filterId, blurGalleryOverlay.params, { kind: "duplicate" })
-    } else if (key === "Escape" && hasSelection) {
-      nextParams = applyBlurGalleryKeyboardCommand(blurGalleryOverlay.filterId, blurGalleryOverlay.params, { kind: "clear-selection" })
-    } else if (key === "Tab") {
-      nextParams = applyBlurGalleryKeyboardCommand(blurGalleryOverlay.filterId, blurGalleryOverlay.params, {
-        kind: "select-next",
-        direction: e.shiftKey ? -1 : 1,
-      })
-    } else if (key === "ArrowLeft" || key === "ArrowRight" || key === "ArrowUp" || key === "ArrowDown") {
-      const stepPx = e.shiftKey ? 10 : e.altKey ? 0.25 : 1
-      const dxPx = key === "ArrowLeft" ? -stepPx : key === "ArrowRight" ? stepPx : 0
-      const dyPx = key === "ArrowUp" ? -stepPx : key === "ArrowDown" ? stepPx : 0
-      nextParams = applyBlurGalleryKeyboardCommand(blurGalleryOverlay.filterId, blurGalleryOverlay.params, {
-        kind: "nudge",
-        dx: (dxPx / Math.max(1, activeDoc.width)) * 100,
-        dy: (dyPx / Math.max(1, activeDoc.height)) * 100,
-      })
-    }
-
-    if (!nextParams) return false
-    e.preventDefault()
-    setBlurGalleryParams(blurGalleryOverlay.filterId, nextParams)
-    return true
-  }, [activeDoc, blurGalleryOverlay, setBlurGalleryParams])
-
-  function filterOverlayDocument() {
-    return activeDoc
-      ? { id: activeDoc.id, width: activeDoc.width, height: activeDoc.height }
-      : null
-  }
-
-  function drawBlurGalleryOverlay(state = blurGalleryOverlay) {
-    drawBlurGalleryOverlayCanvas(overlayRef.current, filterOverlayDocument(), visualZoomRef.current, state)
-  }
-
-  function drawLightingEffectsOverlay(state = lightingEffectsOverlay) {
-    drawLightingEffectsOverlayCanvas(overlayRef.current, filterOverlayDocument(), visualZoomRef.current, state)
-  }
-
-  drawBlurGalleryOverlayRef.current = drawBlurGalleryOverlay
-  drawLightingEffectsOverlayRef.current = drawLightingEffectsOverlay
-
-  function drawMagneticLassoPreview(
-    ctx: CanvasRenderingContext2D,
-    points: { x: number; y: number }[],
-    hover?: { x: number; y: number },
-  ) {
-    const anchors = hover ? [...points, hover] : points
-    let previewPoints = anchors
-    const sourceCanvas = selectionOptions.sampleAllLayers ? compositeRef.current : activeLayer?.canvas
-    if (anchors.length > 1 && sourceCanvas && typeof sourceCanvas.getContext === "function") {
-      const traced = magneticLassoTrace(selectionTraceSourceForLayer(sourceCanvas), anchors, {
-        searchWidth: Math.max(4, Math.min(64, selectionOptions.magneticWidth ?? 12)),
-        contrastThreshold: Math.max(0.01, Math.min(512, selectionOptions.magneticContrast ?? selectionOptions.tolerance ?? 24)),
-        hysteresisRatio: Math.max(0.1, Math.min(0.95, (selectionOptions.magneticHysteresis ?? 45) / 100)),
-        smoothing: Math.max(0, Math.min(1, (selectionOptions.magneticSmoothing ?? 35) / 100)),
-      })
-      if (traced.points.length > 1) previewPoints = traced.points
-    }
-
-    ctx.save()
-    ctx.lineWidth = 1
-    ctx.setLineDash([4, 4])
-    ctx.strokeStyle = "rgba(255,255,255,0.68)"
-    ctx.beginPath()
-    ctx.moveTo(points[0].x, points[0].y)
-    for (let i = 1; i < anchors.length; i++) ctx.lineTo(anchors[i].x, anchors[i].y)
-    ctx.stroke()
-
-    ctx.setLineDash([])
-    ctx.strokeStyle = "#22d3ee"
-    ctx.lineWidth = 1.5
-    ctx.beginPath()
-    ctx.moveTo(previewPoints[0].x, previewPoints[0].y)
-    for (let i = 1; i < previewPoints.length; i++) ctx.lineTo(previewPoints[i].x, previewPoints[i].y)
-    ctx.stroke()
-
-    const indicator = hover ?? points[points.length - 1]
-    const width = Math.max(4, Math.min(64, selectionOptions.magneticWidth ?? 12))
-    ctx.strokeStyle = "rgba(34,211,238,0.9)"
-    ctx.fillStyle = "rgba(34,211,238,0.12)"
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    ctx.arc(indicator.x, indicator.y, width, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.stroke()
-
-    ctx.fillStyle = "#ffffff"
-    for (const p of points) {
-      ctx.fillRect(p.x - 2, p.y - 2, 4, 4)
-    }
-    ctx.fillStyle = "#22d3ee"
-    ctx.beginPath()
-    ctx.arc(indicator.x, indicator.y, 2.5, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.restore()
-  }
 
   function replacementSettings() {
     return brush.colorReplacement ?? {
@@ -3060,6 +2463,28 @@ export function CanvasView() {
     setDirectAnchorSelectionState(selection)
   }, [])
 
+  /* ---- direct-selection anchor set (ref-backed so drags don't re-render) ---- */
+
+  function directSelectionAnchorsFor(layerId: string) {
+    return directAnchorSelectionRef.current?.layerId === layerId ? directAnchorSelectionRef.current.anchors : []
+  }
+
+  function isDirectAnchorSelected(layerId: string, anchor: PathAnchorRef) {
+    return directSelectionAnchorsFor(layerId).some((selected) =>
+      selected.subpathIndex === anchor.subpathIndex && selected.pointIndex === anchor.pointIndex,
+    )
+  }
+
+  function setSingleDirectAnchor(layerId: string, anchor: PathAnchorRef) {
+    setDirectAnchorSelection({ layerId, anchors: [anchor] })
+    return [anchor]
+  }
+
+  function toggleDirectAnchor(layerId: string, anchor: PathAnchorRef) {
+    const anchors = togglePathAnchorSelection(directSelectionAnchorsFor(layerId), anchor)
+    setDirectAnchorSelection(anchors.length ? { layerId, anchors } : null)
+    return anchors
+  }
 
   function clampDirtyRect(rect: DirtyRect): DirtyRect | null {
     if (!activeDoc) return null
@@ -3168,7 +2593,7 @@ export function CanvasView() {
     // A click on the canvas while the type editor is open commits that edit
     // (Photoshop behaviour) and is consumed, so it cannot start a second box.
     if (editingTextRef.current) {
-      commitTextEditRef.current()
+      commitTextEdit()
       return
     }
 
@@ -4945,7 +4370,7 @@ export function CanvasView() {
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
-  }, [activeLayer, requestRender, toggleQuickMask, activeDoc, blurGalleryOverlay, handleBlurGalleryKeyDown, tool, dispatch, commit, setDirectAnchorSelection])
+  }, [activeLayer, requestRender, toggleQuickMask, activeDoc, handleBlurGalleryKeyDown, tool, dispatch, commit, setDirectAnchorSelection])
 
   React.useEffect(() => {
     function moveOptionsHandler() {
@@ -4966,67 +4391,6 @@ export function CanvasView() {
     // Transform setup reads current refs and runtime options; adding beginTransform would resubscribe on every preview render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeLayer, tool, requestRender])
-
-  /* ---- text editing overlay (DOM) ---- */
-
-  const [editingText, setEditingText] = React.useState<TextEditState | null>(null)
-  const editingTextRef = React.useRef<TextEditState | null>(null)
-  editingTextRef.current = editingText
-  // The original content, kept so Escape can restore a layer that was cleared
-  // for editing without going through history.
-  const editingTextOriginalRef = React.useRef<string>("")
-
-  /** Text properties a newly placed type layer starts from. */
-  function activeTextDefaults(): TextProps {
-    const source = activeLayer?.kind === "text" ? activeLayer.text : null
-    return {
-      content: "",
-      font: source?.font ?? DEFAULT_TEXT_FONT,
-      size: source?.size ?? DEFAULT_TEXT_SIZE,
-      weight: source?.weight ?? "bold",
-      italic: source?.italic ?? false,
-      color: foreground,
-      align: source?.align ?? "left",
-      x: 0,
-      y: 0,
-    }
-  }
-
-  /**
-   * Enter the DOM text editor for a layer. The rasterized glyphs are cleared
-   * while editing so the textarea is the only rendering of the text — otherwise
-   * the caret sits on top of a stale raster and typing looks doubled.
-   */
-  function beginTextEdit(layer: Layer, isNew: boolean) {
-    if (layer.kind !== "text" || !layer.text) return
-    editingTextOriginalRef.current = layer.text.content
-    if (layer.text.content) {
-      dispatch({ type: "set-layer-text", id: layer.id, text: { ...layer.text, content: "" } })
-      requestRender()
-    }
-    setEditingText({ layerId: layer.id, value: editingTextOriginalRef.current, isNew })
-  }
-
-  React.useEffect(() => {
-    function handler(e: Event) {
-      const id = (e as CustomEvent<{ layerId?: string }>).detail?.layerId
-      if (!id) return
-      const layer = activeDocRef.current?.layers.find((l) => l.id === id)
-      if (!layer || layer.kind !== "text" || !layer.text) return
-      beginTextEditRef.current(layer, false)
-    }
-    return addPhotoshopEventListener("ps-edit-text", (_detail, event) => handler(event))
-    // Reads the live document/handler through refs so it never resubscribes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // Switching tools or documents mid-edit commits what has been typed rather
-  // than stranding an invisible (cleared) text layer.
-  React.useEffect(() => {
-    if (!editingTextRef.current) return
-    commitTextEditRef.current()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tool, activeDoc?.id])
 
   /* ---- color picker HUD (Alt+Shift+RightClick) ---- */
 
@@ -5231,54 +4595,6 @@ export function CanvasView() {
     return addPhotoshopEventListener("ps-navigator-pan", (_detail, event) => navigatorPanHandler(event))
   }, [activeDoc, applyStageTransform, panRef, visualZoomRef])
 
-  function commitTextEdit() {
-    const editing = editingTextRef.current
-    if (!editing || !activeDoc) return
-    editingTextRef.current = null
-    setEditingText(null)
-    const layer = activeDoc.layers.find((l) => l.id === editing.layerId)
-    if (!layer || layer.kind !== "text" || !layer.text) return
-    const value = editing.value
-    // An empty box that was never typed into leaves nothing behind.
-    if (!value && editing.isNew) {
-      dispatch({ type: "remove-layer", id: layer.id })
-      requestRender()
-      return
-    }
-    dispatch({ type: "set-layer-text", id: layer.id, text: { ...layer.text, content: value } })
-    requestRender()
-    if (value !== editingTextOriginalRef.current || editing.isNew) {
-      commit(editing.isNew ? (layer.text.vertical ? "Vertical Type" : "Type") : "Edit Text", [layer.id])
-    }
-  }
-
-  function cancelTextEdit() {
-    const editing = editingTextRef.current
-    if (!editing || !activeDoc) return
-    editingTextRef.current = null
-    setEditingText(null)
-    const layer = activeDoc.layers.find((l) => l.id === editing.layerId)
-    if (!layer || layer.kind !== "text" || !layer.text) return
-    if (editing.isNew) {
-      dispatch({ type: "remove-layer", id: layer.id })
-    } else {
-      // Restore the raster that beginTextEdit cleared.
-      dispatch({
-        type: "set-layer-text",
-        id: layer.id,
-        text: { ...layer.text, content: editingTextOriginalRef.current },
-      })
-    }
-    requestRender()
-  }
-
-  const beginTextEditRef = React.useRef(beginTextEdit)
-  const commitTextEditRef = React.useRef(commitTextEdit)
-  const activeDocRef = React.useRef(activeDoc)
-  beginTextEditRef.current = beginTextEdit
-  commitTextEditRef.current = commitTextEdit
-  activeDocRef.current = activeDoc
-
   /* ---- Crop logic ---- */
 
   function applyCrop(b: { x: number; y: number; w: number; h: number }) {
@@ -5305,56 +4621,7 @@ export function CanvasView() {
   function drawPerspectiveCropPreview(pts: { x: number; y: number }[]) {
     const ov = overlayRef.current
     if (!ov || !activeDoc) return
-    const ctx = ov.getContext("2d")!
-    ctx.clearRect(0, 0, ov.width, ov.height)
-
-    // Darken outside area
-    ctx.fillStyle = "rgba(0,0,0,0.5)"
-    ctx.fillRect(0, 0, ov.width, ov.height)
-
-    // Cut out the quad region
-    if (pts.length >= 3) {
-      ctx.save()
-      ctx.globalCompositeOperation = "destination-out"
-      ctx.beginPath()
-      ctx.moveTo(pts[0].x, pts[0].y)
-      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
-      ctx.closePath()
-      ctx.fill()
-      ctx.restore()
-    }
-
-    // Draw quad outline
-    ctx.strokeStyle = "#00ccff"
-    ctx.setLineDash([])
-    ctx.lineWidth = 1.5
-    if (pts.length >= 2) {
-      ctx.beginPath()
-      ctx.moveTo(pts[0].x, pts[0].y)
-      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
-      if (pts.length >= 4) ctx.closePath()
-      ctx.stroke()
-    }
-
-    // Draw corner dots with numbers
-    for (let i = 0; i < pts.length; i++) {
-      ctx.fillStyle = i < 4 ? "#00ccff" : "#ff0000"
-      ctx.beginPath()
-      ctx.arc(pts[i].x, pts[i].y, 5, 0, Math.PI * 2)
-      ctx.fill()
-      ctx.fillStyle = "#000"
-      ctx.font = "bold 9px sans-serif"
-      ctx.textAlign = "center"
-      ctx.textBaseline = "middle"
-      ctx.fillText(`${i + 1}`, pts[i].x, pts[i].y)
-    }
-
-    // Instruction text
-    ctx.fillStyle = "#fff"
-    ctx.font = "12px sans-serif"
-    ctx.textBaseline = "top"
-    ctx.textAlign = "left"
-    ctx.fillText(`Click corner ${pts.length + 1} of 4`, 10, 10)
+    drawPerspectiveCropPreviewOverlay(ov, pts)
   }
 
   function applyPerspectiveCrop(corners: { x: number; y: number }[]) {
@@ -5614,319 +4881,32 @@ export function CanvasView() {
     return true
   }
 
-  function isVectorEditableLayer(layer: Layer | null | undefined) {
-    return Boolean(layer && layer.kind !== "group" && (layer.path || textLayerPath(layer) || layer.shape || layer.frame || layer.artboard || layer.kind === "shape" || layer.kind === "frame" || layer.kind === "artboard"))
-  }
-
-  function pickVectorLayer(doc: PsDocument, pt: { x: number; y: number }) {
-    for (let i = doc.layers.length - 1; i >= 0; i--) {
-      const layer = doc.layers[i]
-      if (!layer.visible || !isVectorEditableLayer(layer)) continue
-      const bounds = vectorLayerBounds(layer)
-      if (!bounds) continue
-      const pad = 6
-      if (pt.x < bounds.x - pad || pt.x > bounds.x + bounds.w + pad || pt.y < bounds.y - pad || pt.y > bounds.y + bounds.h + pad) continue
-      const ctx = layer.canvas.getContext("2d")
-      if (!ctx) return layer
-      const x = Math.max(0, Math.min(layer.canvas.width - 1, Math.floor(pt.x)))
-      const y = Math.max(0, Math.min(layer.canvas.height - 1, Math.floor(pt.y)))
-      const alpha = ctx.getImageData(x, y, 1, 1).data[3]
-      if (alpha > 0 || layer.path || textLayerPath(layer) || layer.shape || layer.frame || layer.artboard) return layer
-    }
-    return null
-  }
-
-  function vectorLayerBounds(layer: Layer) {
-    if (layer.shape) return shapeRect(layer.shape)
-    if (layer.frame) return { x: layer.frame.x, y: layer.frame.y, w: layer.frame.w, h: layer.frame.h }
-    if (layer.artboard) return { x: layer.artboard.x, y: layer.artboard.y, w: layer.artboard.w, h: layer.artboard.h }
-    const editableTextPath = textLayerPath(layer)
-    const layerPath = layer.path ?? editableTextPath
-    if (layerPath?.points.length) {
-      let minX = Infinity
-      let minY = Infinity
-      let maxX = -Infinity
-      let maxY = -Infinity
-      for (const point of layerPath.points) {
-        minX = Math.min(minX, point.x, point.cp1?.x ?? point.x, point.cp2?.x ?? point.x)
-        minY = Math.min(minY, point.y, point.cp1?.y ?? point.y, point.cp2?.y ?? point.y)
-        maxX = Math.max(maxX, point.x, point.cp1?.x ?? point.x, point.cp2?.x ?? point.x)
-        maxY = Math.max(maxY, point.y, point.cp1?.y ?? point.y, point.cp2?.y ?? point.y)
-      }
-      return Number.isFinite(minX) ? { x: minX, y: minY, w: maxX - minX, h: maxY - minY } : null
-    }
-    return alphaBounds(layer.canvas)
-  }
-
-  function directSelectionTarget(layer: Layer, pt: { x: number; y: number }) {
-    const editablePath = editablePathForDirectSelection(layer)
-    if (editablePath?.points.length) {
-      const hit = hitTestPathControls(editablePath, pt, {
-        maxAnchorDistance: 12,
-        maxHandleDistance: 14,
-        maxSegmentDistance: 7,
-        segmentSamples: 32,
-      })
-      if (hit?.kind === "anchor") {
-        return { subpathIndex: hit.subpathIndex, pointIndex: hit.pointIndex, pathHandle: undefined, shapeHandle: undefined }
-      }
-      if (hit?.kind === "handle") {
-        return { subpathIndex: hit.subpathIndex, pointIndex: hit.pointIndex, pathHandle: hit.handle, shapeHandle: undefined }
-      }
-      if (hit?.kind === "segment") {
-        return { subpathIndex: hit.subpathIndex, segmentIndex: hit.segmentIndex, pointIndex: undefined, pathHandle: undefined, shapeHandle: undefined }
-      }
-    }
-    if (layer.shape?.type === "rect") {
-      for (const handle of getRoundedRectCornerRadiusHandles(layer.shape)) {
-        if (Math.hypot(handle.x - pt.x, handle.y - pt.y) <= 14) {
-          return { subpathIndex: undefined, pointIndex: undefined, pathHandle: undefined, shapeHandle: `radius-${handle.corner}` as DirectShapeHandleId }
-        }
-      }
-    }
-    const bounds = vectorLayerBounds(layer)
-    if (!bounds) return null
-    const handles = shapeHandles(bounds)
-    let best: { shapeHandle: DirectShapeHandleId; distance: number } | null = null
-    for (const handle of handles) {
-      const distance = Math.hypot(handle.x - pt.x, handle.y - pt.y)
-      if (distance <= 16 && (!best || distance < best.distance)) best = { shapeHandle: handle.id, distance }
-    }
-    return best
-      ? { subpathIndex: undefined, pointIndex: undefined, pathHandle: undefined, shapeHandle: best.shapeHandle }
-      : { subpathIndex: undefined, pointIndex: undefined, pathHandle: undefined, shapeHandle: "center" as const }
-  }
-
-  function directSelectionAnchorsFor(layerId: string) {
-    return directAnchorSelectionRef.current?.layerId === layerId ? directAnchorSelectionRef.current.anchors : []
-  }
-
-  function isDirectAnchorSelected(layerId: string, anchor: PathAnchorRef) {
-    return directSelectionAnchorsFor(layerId).some((selected) =>
-      selected.subpathIndex === anchor.subpathIndex && selected.pointIndex === anchor.pointIndex,
-    )
-  }
-
-  function setSingleDirectAnchor(layerId: string, anchor: PathAnchorRef) {
-    setDirectAnchorSelection({ layerId, anchors: [anchor] })
-    return [anchor]
-  }
-
-  function toggleDirectAnchor(layerId: string, anchor: PathAnchorRef) {
-    const anchors = togglePathAnchorSelection(directSelectionAnchorsFor(layerId), anchor)
-    setDirectAnchorSelection(anchors.length ? { layerId, anchors } : null)
-    return anchors
-  }
-
-  function editablePathForDirectSelection(layer: Layer): PathProps | null {
-    if (layer.path) return layer.path
-    if (layer.shape) return layer.shape.computedPath ?? shapeToEditablePath(layer.shape)
-    return textLayerPath(layer)
-  }
-
-  function pathForDirectEdit(path: PathProps, subpathIndex: number | undefined) {
-    if (subpathIndex === undefined || subpathIndex < 0) return path
-    return path.subpaths?.[subpathIndex] ?? path
-  }
-
-  function replaceDirectEditPath(path: PathProps, subpathIndex: number | undefined, edited: PathProps): PathProps {
-    if (subpathIndex === undefined || subpathIndex < 0) return edited
-    const subpaths = path.subpaths?.slice() ?? []
-    subpaths[subpathIndex] = edited
-    return { ...path, subpaths }
-  }
-
-  function constrainedDelta(dx: number, dy: number, constrain: boolean) {
-    if (!constrain) return { dx, dy }
-    return constrainTo45Degrees(dx, dy)
-  }
-
-  function updateDirectSelectionDrag(layer: Layer, pt: { x: number; y: number }, drag: typeof drawingRef.current, mirrorPathHandles = true, constrainMove = false) {
-    if (layer.path && drag.directSelectedAnchors?.length && drag.last && drag.directPointIndex === undefined && !drag.directPathHandle) {
-      layer.path = moveSelectedPathAnchors(layer.path, drag.directSelectedAnchors, constrainedDelta(pt.x - drag.last.x, pt.y - drag.last.y, constrainMove))
-      rerenderVectorLayer(layer)
-      return
-    }
-    if (layer.path && drag.directPointIndex !== undefined && drag.directPointIndex >= 0) {
-      const editablePath = pathForDirectEdit(layer.path, drag.directSubpathIndex)
-      if (drag.directPathHandle) {
-        const handleMode = mirrorPathHandles ? getPathRuntimeOptions().handleMode : "broken"
-        layer.path = replaceDirectEditPath(
-          layer.path,
-          drag.directSubpathIndex,
-          movePathHandle(editablePath, drag.directPointIndex, drag.directPathHandle, pt, { mode: handleMode }),
-        )
-        rerenderVectorLayer(layer)
-        return
-      }
-      if (drag.directSelectedAnchors?.length && drag.last) {
-        const delta = constrainedDelta(pt.x - drag.last.x, pt.y - drag.last.y, constrainMove)
-        layer.path = moveSelectedPathAnchors(layer.path, drag.directSelectedAnchors, delta)
-        rerenderVectorLayer(layer)
-        return
-      }
-      layer.path = replaceDirectEditPath(layer.path, drag.directSubpathIndex, movePathAnchor(editablePath, drag.directPointIndex, pt))
-      rerenderVectorLayer(layer)
-      return
-    }
-    if (layer.shape && drag.directSelectedAnchors?.length && drag.last && drag.directPointIndex === undefined && !drag.directPathHandle) {
-      const basePath = layer.shape.computedPath ?? shapeToEditablePath(layer.shape)
-      layer.shape = {
-        ...layer.shape,
-        computedPath: moveSelectedPathAnchors(basePath, drag.directSelectedAnchors, constrainedDelta(pt.x - drag.last.x, pt.y - drag.last.y, constrainMove)),
-      }
-      rerenderVectorLayer(layer)
-      return
-    }
-    if (layer.shape && drag.directPointIndex !== undefined && drag.directPointIndex >= 0) {
-      const basePath = layer.shape.computedPath ?? shapeToEditablePath(layer.shape)
-      const editablePath = pathForDirectEdit(basePath, drag.directSubpathIndex)
-      const nextPath = drag.directPathHandle
-        ? movePathHandle(editablePath, drag.directPointIndex, drag.directPathHandle, pt, {
-            mode: mirrorPathHandles ? getPathRuntimeOptions().handleMode : "broken",
-          })
-        : drag.directSelectedAnchors?.length && drag.last
-          ? moveSelectedPathAnchors(basePath, drag.directSelectedAnchors, constrainedDelta(pt.x - drag.last.x, pt.y - drag.last.y, constrainMove))
-          : movePathAnchor(editablePath, drag.directPointIndex, pt)
-      layer.shape = {
-        ...layer.shape,
-        computedPath: drag.directSelectedAnchors?.length && !drag.directPathHandle
-          ? nextPath
-          : replaceDirectEditPath(basePath, drag.directSubpathIndex, nextPath),
-      }
-      rerenderVectorLayer(layer)
-      return
-    }
-    if (layer.text?.textPath && drag.directPointIndex !== undefined && drag.directPointIndex >= 0) {
-      const points = layer.text.textPath.map((point, index) =>
-        index === drag.directPointIndex ? { x: pt.x, y: pt.y } : point,
-      )
-      layer.text = { ...layer.text, textPath: points }
-      rerenderVectorLayer(layer)
-      return
-    }
-    if (!drag.directShapeHandle || !drag.last) return
-    const dx = pt.x - drag.last.x
-    const dy = pt.y - drag.last.y
-    if (layer.shape) {
-      if (drag.directShapeHandle.startsWith("radius-") && layer.shape.type === "rect") {
-        layer.shape = updateRoundedRectCornerRadius(layer.shape, drag.directShapeHandle.slice("radius-".length) as RoundedRectCorner, pt)
-      } else {
-        layer.shape = resizeShapeRect(layer.shape, drag.directShapeHandle as Exclude<DirectShapeHandleId, `radius-${RoundedRectCorner}`>, pt, dx, dy)
-      }
-    } else if (layer.frame) {
-      if (drag.directShapeHandle.startsWith("radius-")) return
-      const next = resizePlainRect(layer.frame, drag.directShapeHandle as Exclude<DirectShapeHandleId, `radius-${RoundedRectCorner}`>, pt, dx, dy)
-      layer.frame = { ...layer.frame, ...next }
-    } else if (layer.artboard) {
-      if (drag.directShapeHandle.startsWith("radius-")) return
-      const next = resizePlainRect(layer.artboard, drag.directShapeHandle as Exclude<DirectShapeHandleId, `radius-${RoundedRectCorner}`>, pt, dx, dy)
-      layer.artboard = { ...layer.artboard, ...next }
-    }
-    rerenderVectorLayer(layer)
+  /** Stroke width the path preview renders at, derived from the brush size. */
+  function vectorStrokeWidth() {
+    return Math.max(1, brush.size / 4)
   }
 
   function rerenderVectorLayer(layer: Layer) {
-    const ctx = layer.canvas.getContext("2d")
-    if (!ctx) return
-    ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height)
-    if (layer.shape) rasterizeShape(layer.canvas, layer.shape)
-    else if (layer.text) rasterizeText(layer.canvas, layer.text)
-    else if (layer.frame) drawFramePlaceholder(ctx, layer.frame)
-    else if (layer.artboard) drawArtboardPreview(ctx, layer.artboard.x, layer.artboard.y, layer.artboard.w, layer.artboard.h, layer.artboard.background)
-    else if (layer.path) strokePath(ctx, layer.path, foreground, Math.max(1, brush.size / 4), layer.path.closed, hexToRgba(foreground, 0.3))
+    rerenderVectorLayerGeometry(layer, foreground, vectorStrokeWidth())
+  }
+
+  function updateDirectSelectionDrag(layer: Layer, pt: { x: number; y: number }, drag: typeof drawingRef.current, mirrorPathHandles = true, constrainMove = false) {
+    applyDirectSelectionDrag(layer, pt, drag, {
+      foreground,
+      strokeWidth: vectorStrokeWidth(),
+      mirrorPathHandles,
+      constrainMove,
+    })
   }
 
   function drawPathSelectionPreview(layer: Layer) {
     const ov = overlayRef.current
     if (!ov || !activeDoc) return
-    const ctx = ov.getContext("2d")!
-    ctx.clearRect(0, 0, ov.width, ov.height)
-    const bounds = vectorLayerBounds(layer)
-    if (bounds) {
-      ctx.save()
-      ctx.strokeStyle = "#38bdf8"
-      ctx.lineWidth = 1
-      ctx.setLineDash([4, 3])
-      ctx.strokeRect(bounds.x, bounds.y, bounds.w, bounds.h)
-      ctx.setLineDash([])
-      for (const handle of shapeHandles(bounds)) {
-        ctx.fillStyle = handle.id === "center" ? "#0f172a" : "#ffffff"
-        ctx.strokeStyle = "#38bdf8"
-        ctx.fillRect(handle.x - 3, handle.y - 3, 6, 6)
-        ctx.strokeRect(handle.x - 3, handle.y - 3, 6, 6)
-      }
-      if (layer.shape?.type === "rect") {
-        for (const handle of getRoundedRectCornerRadiusHandles(layer.shape)) {
-          ctx.beginPath()
-          ctx.fillStyle = "#0f172a"
-          ctx.strokeStyle = "#f59e0b"
-          ctx.arc(handle.x, handle.y, 4, 0, Math.PI * 2)
-          ctx.fill()
-          ctx.stroke()
-          const corner =
-            handle.corner === "tl" ? { x: layer.shape.x, y: layer.shape.y } :
-              handle.corner === "tr" ? { x: layer.shape.x + layer.shape.w, y: layer.shape.y } :
-                handle.corner === "br" ? { x: layer.shape.x + layer.shape.w, y: layer.shape.y + layer.shape.h } :
-                  { x: layer.shape.x, y: layer.shape.y + layer.shape.h }
-          ctx.beginPath()
-          ctx.moveTo(corner.x, corner.y)
-          ctx.lineTo(handle.x, handle.y)
-          ctx.stroke()
-        }
-      }
-      ctx.restore()
-    }
-    const editablePath = editablePathForDirectSelection(layer)
-    if (editablePath?.points.length) {
-      const pathParts = [{ path: editablePath, subpathIndex: -1 }, ...(editablePath.subpaths ?? []).map((path, subpathIndex) => ({ path, subpathIndex }))]
-      const selected = directSelectionAnchorsFor(layer.id)
-      const drawHandle = (point: { x: number; y: number }, size = 3) => {
-        ctx.fillRect(point.x - size, point.y - size, size * 2, size * 2)
-        ctx.strokeRect(point.x - size, point.y - size, size * 2, size * 2)
-      }
-      const drawControls = (path: PathProps) => {
-        for (const point of path.points) {
-          if (point.cp1) {
-            ctx.beginPath()
-            ctx.moveTo(point.x, point.y)
-            ctx.lineTo(point.cp1.x, point.cp1.y)
-            ctx.stroke()
-            drawHandle(point.cp1)
-          }
-          if (point.cp2) {
-            ctx.beginPath()
-            ctx.moveTo(point.x, point.y)
-            ctx.lineTo(point.cp2.x, point.cp2.y)
-            ctx.stroke()
-            drawHandle(point.cp2)
-          }
-        }
-      }
-      ctx.save()
-      ctx.strokeStyle = "#38bdf8"
-      ctx.fillStyle = "#ffffff"
-      ctx.lineWidth = 1
-      ctx.beginPath()
-      appendPathToCanvas(ctx, editablePath)
-      ctx.stroke()
-      ctx.strokeStyle = "#f59e0b"
-      ctx.fillStyle = "#ffffff"
-      for (const entry of pathParts) drawControls(entry.path)
-      ctx.strokeStyle = "#38bdf8"
-      for (const entry of pathParts) {
-        for (const [pointIndex, point] of entry.path.points.entries()) {
-          const isSelected = selected.some((anchor) => anchor.subpathIndex === entry.subpathIndex && anchor.pointIndex === pointIndex)
-          ctx.beginPath()
-          ctx.fillStyle = isSelected ? "#38bdf8" : "#ffffff"
-          ctx.strokeStyle = isSelected ? "#ffffff" : "#38bdf8"
-          ctx.arc(point.x, point.y, 4, 0, Math.PI * 2)
-          ctx.fill()
-          ctx.stroke()
-        }
-      }
-      ctx.restore()
-    }
+    drawPathSelectionPreviewOverlay(ov, layer, {
+      bounds: vectorLayerBounds(layer),
+      editablePath: editablePathForDirectSelection(layer),
+      selectedAnchors: directSelectionAnchorsFor(layer.id),
+    })
   }
 
   rerenderVectorLayerRef.current = rerenderVectorLayer
@@ -5935,20 +4915,7 @@ export function CanvasView() {
   function drawSliceSelectionPreview(slice: { x: number; y: number; w: number; h: number; name: string }) {
     const ov = overlayRef.current
     if (!ov) return
-    const ctx = ov.getContext("2d")!
-    ctx.clearRect(0, 0, ov.width, ov.height)
-    ctx.save()
-    ctx.strokeStyle = "#fb923c"
-    ctx.lineWidth = 2
-    ctx.setLineDash([5, 3])
-    ctx.strokeRect(slice.x, slice.y, slice.w, slice.h)
-    ctx.setLineDash([])
-    ctx.fillStyle = "rgba(15, 23, 42, 0.85)"
-    ctx.fillRect(slice.x, Math.max(0, slice.y - 20), Math.max(64, slice.name.length * 7 + 12), 18)
-    ctx.fillStyle = "#fed7aa"
-    ctx.font = "11px system-ui"
-    ctx.fillText(slice.name, slice.x + 6, Math.max(12, slice.y - 7))
-    ctx.restore()
+    drawSliceSelectionPreviewOverlay(ov, slice)
   }
 
   /* ---- Free Transform ---- */
@@ -6015,65 +4982,7 @@ export function CanvasView() {
   function handleTransformDrag(p: { x: number; y: number }, handle: TransformHandleId, shift: boolean, perspectiveDrag = false) {
     const t = transformRef.current
     if (!t) return
-    const cx = t.bounds.x + t.bounds.w / 2 + t.tx
-    const cy = t.bounds.y + t.bounds.h / 2 + t.ty
-    if (handle === "move") {
-      const dx = p.x - (drawingRef.current.last?.x ?? p.x)
-      const dy = p.y - (drawingRef.current.last?.y ?? p.y)
-      t.tx += dx
-      t.ty += dy
-      drawingRef.current.last = p
-      return
-    }
-    if (perspectiveDrag && ["nw", "ne", "se", "sw"].includes(handle)) {
-      const last = drawingRef.current.last ?? p
-      const dx = p.x - last.x
-      const dy = p.y - last.y
-      const key = handle === "nw" ? "tl" : handle === "ne" ? "tr" : handle === "se" ? "br" : "bl"
-      const current = t.perspective ?? {
-        tl: { x: 0, y: 0 },
-        tr: { x: 0, y: 0 },
-        br: { x: 0, y: 0 },
-        bl: { x: 0, y: 0 },
-      }
-      t.perspective = {
-        ...current,
-        [key]: {
-          x: current[key].x + dx,
-          y: current[key].y + dy,
-        },
-      }
-      drawingRef.current.last = p
-      return
-    }
-    if (handle === "rotate") {
-      const last = drawingRef.current.last ?? p
-      const a0 = Math.atan2(last.y - cy, last.x - cx)
-      const a1 = Math.atan2(p.y - cy, p.x - cx)
-      let deg = ((a1 - a0) * 180) / Math.PI + t.rotation
-      if (shift) deg = Math.round(deg / 15) * 15
-      t.rotation = deg
-      drawingRef.current.last = p
-      return
-    }
-    // scale handles
-    const dx = (p.x - cx) / (t.bounds.w / 2 || 1)
-    const dy = (p.y - cy) / (t.bounds.h / 2 || 1)
-    let nx = t.scaleX
-    let ny = t.scaleY
-    if (handle.includes("e") || handle.includes("w")) nx = Math.abs(dx) || 0.01
-    if (handle.includes("n") || handle.includes("s")) ny = Math.abs(dy) || 0.01
-    if (handle === "e" || handle === "w") ny = t.scaleY
-    if (handle === "n" || handle === "s") nx = t.scaleX
-    if (shift) {
-      const r = Math.max(Math.abs(nx), Math.abs(ny))
-      nx = Math.sign(nx) * r
-      ny = Math.sign(ny) * r
-    }
-    if (handle.includes("w") && p.x > cx) nx *= -1
-    if (handle.includes("n") && p.y > cy) ny *= -1
-    t.scaleX = nx
-    t.scaleY = ny
+    applyTransformHandleDrag(t, drawingRef.current, p, handle, shift, perspectiveDrag)
   }
 
   const onPointerEnter = () => {

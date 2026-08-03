@@ -71,6 +71,24 @@ The right-click context menu (`ContextMenuLayer`) uses this pattern to avoid tri
 
 `components/photoshop/canvas/view.tsx` coordinates rendering and pointer input. Layer composition can use the WebGL compositor with a Canvas 2D fallback. Expensive filters run in a Web Worker with optional tiling (`editor/filters/worker.ts`) — large documents are split into tiles to avoid blocking the main thread. Filter output is verified with golden-image Playwright tests.
 
+`view.tsx` is a coordinator, not a dumping ground: it owns document state, the
+composite loop, and pointer routing. Everything a tool gesture *does* lives in
+`editor/canvas/*` and is called from a thin wrapper here. When adding canvas
+behaviour, put it in one of these and call it:
+
+| Module | Holds |
+|--------|-------|
+| `overlay-previews.ts` | pure overlay-canvas draws (marquee, gradient ramp, path skeleton, transform handles) |
+| `vector-editing.ts` | vector hit-testing and direct-selection drags |
+| `filter-overlay-controller.ts` | Blur Gallery / Lighting Effects on-canvas widgets |
+| `text-edit-controller.ts` | the type tool's DOM editing session |
+| `transform-geometry.ts` | free-transform math, including handle drags |
+| `viewport-controller.ts` | pan / zoom / wheel |
+
+`view.tsx` has an import budget in `scripts/architecture-budgets.json` for
+exactly this reason — a new import there is a prompt to check whether the logic
+belongs in `editor/canvas/` instead.
+
 ### History / Undo
 
 Last 12 history entries are kept as raw snapshots; older canvas-bearing history fields are encoded losslessly as PNG blobs and restored on demand via `createImageBitmap`. Compression jobs are cancellable and verify entry liveness before publishing blobs.
@@ -107,6 +125,8 @@ Trace is captured on first retry. Base URL is `http://127.0.0.1:3000`.
 | `components/photoshop/editor/context.tsx` | Central state machine |
 | `editor/types.ts` | All shared types (ToolId, BlendMode, LayerKind, …) |
 | `components/photoshop/canvas/view.tsx` | Canvas render + pointer routing |
+| `editor/canvas/overlay-previews.ts` | Overlay-canvas tool previews |
+| `editor/canvas/vector-editing.ts` | Vector hit-test + direct-selection drags |
 | `editor/webgl-compositor.ts` | WebGL composition with Canvas fallback |
 | `editor/history-storage.ts` | Lossless, cancellable history blob storage |
 | `components/photoshop/panel-registry.tsx` | Panel definitions + workspace presets |

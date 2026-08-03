@@ -15,7 +15,7 @@
   },
   "topLargestFiles": {
     "count": 10,
-    "maxTotalLines": 23274
+    "maxTotalLines": 22184
   },
   "directClientStorage": {
     "max": 0
@@ -23,9 +23,10 @@
   "hookDependencySuppressions": {
     "max": 5
   },
+  "_coordinationFilesComment": "view.tsx maxImports went 49 -> 50 when it was split: five subsystems (overlay previews, vector editing, filter overlays, text editing, transform drag) moved to editor/canvas/*, trading one extra import for ~1100 fewer lines. Lower it again as more leaves.",
   "coordinationFiles": {
     "components/photoshop/canvas/view.tsx": {
-      "maxImports": 49,
+      "maxImports": 50,
       "maxFanIn": 3
     },
     "components/photoshop/editor/context.tsx": {
