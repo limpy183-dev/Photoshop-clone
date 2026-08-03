@@ -29,6 +29,43 @@ function makePanelCanvas(w: number, h: number) {
   return c
 }
 
+/**
+ * Redraw a readout panel from the render bus, at most once per `intervalMs`.
+ *
+ * These panels re-composite the whole document to draw themselves, and the
+ * render bus ticks once per painted frame — so subscribing directly puts a
+ * document composite on every frame of every brush stroke, for every tool.
+ * A readout that trails the canvas by a fraction of a second is fine; one that
+ * halves the frame rate is not.
+ */
+function useThrottledRenderSubscription(draw: () => void, intervalMs = 200) {
+  const drawRef = React.useRef(draw)
+  drawRef.current = draw
+  const lastRef = React.useRef(0)
+  const timerRef = React.useRef<number | null>(null)
+
+  const schedule = React.useCallback(() => {
+    const elapsed = performance.now() - lastRef.current
+    if (elapsed >= intervalMs) {
+      lastRef.current = performance.now()
+      drawRef.current()
+      return
+    }
+    if (timerRef.current !== null) return
+    timerRef.current = window.setTimeout(() => {
+      timerRef.current = null
+      lastRef.current = performance.now()
+      drawRef.current()
+    }, intervalMs - elapsed)
+  }, [intervalMs])
+
+  React.useEffect(() => () => {
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current)
+  }, [])
+
+  useRenderSubscription(schedule)
+}
+
 function drawLayerForPanel(ctx: CanvasRenderingContext2D, layer: Layer) {
   const content = applySmartFiltersForPanel(layer.canvas, layer.smartFilters)
   const renderLayer = content === layer.canvas ? layer : { ...layer, canvas: content }
@@ -45,12 +82,21 @@ function drawLayerForPanel(ctx: CanvasRenderingContext2D, layer: Layer) {
   compositeLayer(ctx, toDraw, layer.blendMode, layer.opacity, styleRendered ? 1 : layer.fillOpacity ?? 1)
 }
 
-function renderComposite(doc: PsDocument, scale = 1) {
-  const c = makePanelCanvas(doc.width * scale, doc.height * scale)
+/**
+ * Composite the document for a readout panel. Pass `rect` to rasterize only a
+ * sub-region in document space — the Info panel needs a single pixel under the
+ * cursor, and compositing the whole document to read it costs a full-resolution
+ * canvas plus a full getImageData on every render-bus tick.
+ */
+function renderComposite(doc: PsDocument, scale = 1, rect?: { x: number; y: number; w: number; h: number }) {
+  const c = rect
+    ? makePanelCanvas(rect.w, rect.h)
+    : makePanelCanvas(doc.width * scale, doc.height * scale)
   const ctx = c.getContext("2d")!
   ctx.fillStyle = doc.background
   ctx.fillRect(0, 0, c.width, c.height)
-  if (scale !== 1) ctx.scale(scale, scale)
+  if (rect) ctx.translate(-rect.x, -rect.y)
+  else if (scale !== 1) ctx.scale(scale, scale)
   for (const layer of doc.layers) {
     if (!layer.visible || layer.kind === "group" || typeof layer.canvas.getContext !== "function") continue
     let clipMask: HTMLCanvasElement | null = null
@@ -194,7 +240,7 @@ export function NavigatorPanel() {
   }, [activeDoc])
 
   React.useEffect(draw, [draw])
-  useRenderSubscription(draw)
+  useThrottledRenderSubscription(draw)
 
   if (!activeDoc) return null
 
@@ -472,7 +518,7 @@ export function HistogramPanel() {
   }, [activeDoc, channel, toneExposure, toneGamma])
 
   React.useEffect(draw, [draw])
-  useRenderSubscription(draw)
+  useThrottledRenderSubscription(draw)
 
   return (
     <div className="p-2 text-[11px] text-[var(--ps-text)] space-y-2">
@@ -553,6 +599,22 @@ export function InfoPanel() {
       setHighBitSourceLabel("-")
       return
     }
+    // 8-bit documents read their pixel straight from a 1x1 composite at the
+    // cursor (see the pointer handler below), so the full-resolution composite
+    // and its full getImageData are only built for the high-bit projection that
+    // actually needs every pixel.
+    // ponytail: high-bit docs still pay the full readback per rebuild; give
+    // createProjectedHighBitSource a windowed input if that ever matters.
+    if (activeDoc.bitDepth <= 8) {
+      compositeRef.current = null
+      previewImageDataRef.current = null
+      highBitSourceRef.current = null
+      setHighBitSourceLabel("-")
+      setHighBitReadout(null)
+      setHighBitComparison(null)
+      lastRebuildRef.current = performance.now()
+      return
+    }
     const composite = renderComposite(activeDoc, 1)
     const previewImageData = composite.getContext("2d")!.getImageData(0, 0, composite.width, composite.height)
     compositeRef.current = composite
@@ -594,21 +656,41 @@ export function InfoPanel() {
   }, [rebuildNow])
   useRenderSubscription(scheduleRebuild)
 
+  const docRef = React.useRef(activeDoc)
+  docRef.current = activeDoc
+
   React.useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<{ x: number; y: number; inside: boolean }>).detail
       if (!detail) return
       setMouse(detail)
-      const c = compositeRef.current
-      if (!c || !detail.inside) {
+      const doc = docRef.current
+      if (!doc || !detail.inside) {
         setHighBitReadout(null)
         setHighBitComparison(null)
         return
       }
       const x = Math.floor(detail.x)
       const y = Math.floor(detail.y)
+      if (x < 0 || y < 0 || x >= doc.width || y >= doc.height) {
+        setHighBitReadout(null)
+        setHighBitComparison(null)
+        return
+      }
       const previewImageData = previewImageDataRef.current
-      if (!previewImageData || x < 0 || y < 0 || x >= previewImageData.width || y >= previewImageData.height) {
+      if (!previewImageData) {
+        // 8-bit path: composite just the pixel under the cursor. This replaces a
+        // full-document composite + full getImageData that used to run on every
+        // render-bus tick, which stalled painting for every tool.
+        const pixel = renderComposite(doc, 1, { x, y, w: 1, h: 1 })
+          .getContext("2d")!
+          .getImageData(0, 0, 1, 1).data
+        setRgba([pixel[0], pixel[1], pixel[2], pixel[3]])
+        setHighBitReadout(null)
+        setHighBitComparison(null)
+        return
+      }
+      if (x >= previewImageData.width || y >= previewImageData.height) {
         setHighBitReadout(null)
         setHighBitComparison(null)
         return

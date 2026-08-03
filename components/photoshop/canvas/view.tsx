@@ -55,6 +55,7 @@ import {
   planTileOnlyDefaultCompositor,
   planTileOnlyInteractiveTool,
   renderTileOnlyViewportComposite,
+  supportsTileOnlyLayer,
 } from "@/editor/tile-only-pipeline"
 import {
   compositeDocumentWithWebGL,
@@ -532,7 +533,7 @@ export function CanvasView() {
     cv.style.height = "100%"
   }, [])
 
-  const compose = React.useCallback((force = false, change?: {
+  const drawComposite = React.useCallback((force = false, change?: {
     layerIds: "all" | string[]
     reasons: string[]
     dirtyByLayer?: Record<string, DirtyRect[]>
@@ -663,9 +664,17 @@ export function CanvasView() {
         dirtyByLayer: change.dirtyByLayer!,
         tileSize: 512,
       })
+      // Trust the planner's own verdict rather than demanding zero reasons.
+      // It already returns "full-frame" for the three things composeDocumentTile
+      // cannot express (effects, knockout, colour management); the reasons it
+      // still lets through — masks, adjustments, clipping, smart objects, text,
+      // vector — all have tile paths. Requiring reasons.length === 0 put every
+      // document carrying an adjustment layer back on the full-composite path
+      // for every painted frame. The remaining guard is that no visible layer
+      // is of a kind composeDocumentTile would silently skip.
       if (
         dirtyPlan.strategy === "tile-isolated" &&
-        dirtyPlan.reasons.length === 0 &&
+        activeDoc.layers.every((layer) => !layer.visible || layer.kind === "group" || supportsTileOnlyLayer(layer)) &&
         !isEmptyDirtyRect(dirtyPlan.compositeRect)
       ) {
         const rect = dirtyPlan.compositeRect
@@ -704,7 +713,7 @@ export function CanvasView() {
       progressiveFrameRef.current = requestAnimationFrame(() => {
         progressiveFrameRef.current = null
         progressiveFullPassRef.current = true
-        compose(true, change)
+        drawComposite(true, change)
         progressiveFullPassRef.current = false
       })
       return
@@ -885,39 +894,30 @@ export function CanvasView() {
     storeCompositeCache(cv, fp, force, !memoryPlan.actions.includes("disable-composite-cache"))
   }, [activeDoc, filterPreviews, resetCompositeCanvasPlacement, storeCompositeCache, viewZoom, visibleDocumentViewport])
 
-  React.useEffect(() => {
-    compose()
-    return subscribeRender((change) => compose(true, change))
-  }, [compose, subscribeRender])
+  /**
+   * Draw, then latch the readiness flag the E2E runtime guard waits on.
+   *
+   * This used to be a separate rAF loop that sampled the centre pixel with
+   * getImageData. That forces a GPU->CPU readback of the *on-screen* canvas,
+   * and after a few of those Chrome demotes it to a software backing store —
+   * which makes every later drawImage into it slow, for every tool. The loop
+   * also re-armed on each commit (compose changes identity with activeDoc) and
+   * never terminated at all when the centre pixel happened to be transparent,
+   * so it could read back once per frame indefinitely. compose() already knows
+   * it has drawn; no readback needed.
+   */
+  const compose = React.useCallback((force = false, change?: Parameters<typeof drawComposite>[1]) => {
+    drawComposite(force, change)
+    const stage = stageRef.current
+    if (stage && compositeRef.current && activeDoc) stage.dataset.editorReady = "true"
+  }, [activeDoc, drawComposite])
 
   React.useEffect(() => {
     const stage = stageRef.current
-    if (!stage) return
-    delete stage.dataset.editorReady
-    let cancelled = false
-    let frame = 0
-    const measure = () => {
-      if (cancelled) return
-      const canvas = compositeRef.current
-      const box = stage.getBoundingClientRect()
-      const context = canvas?.getContext("2d")
-      if (canvas && context && box.width > 0 && box.height > 0 && canvas.width > 0 && canvas.height > 0) {
-        const x = Math.min(canvas.width - 1, Math.floor(canvas.width / 2))
-        const y = Math.min(canvas.height - 1, Math.floor(canvas.height / 2))
-        if (context.getImageData(x, y, 1, 1).data[3] > 0) {
-          stage.dataset.editorReady = "true"
-          return
-        }
-      }
-      frame = requestAnimationFrame(measure)
-    }
-    frame = requestAnimationFrame(measure)
-    return () => {
-      cancelled = true
-      cancelAnimationFrame(frame)
-      delete stage.dataset.editorReady
-    }
-  }, [activeDoc?.id, compose])
+    if (stage) delete stage.dataset.editorReady
+    compose()
+    return subscribeRender((change) => compose(true, change))
+  }, [compose, subscribeRender])
 
   React.useEffect(() => {
     return () => {
