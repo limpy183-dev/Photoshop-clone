@@ -35,6 +35,11 @@ artifacts/dev-server-*.out.log
 artifacts/dev-server-*.err.log
 artifacts/webpack-stats.json
 
+# Local run output. artifacts/ keeps only the two bundle JSON files that
+# analyze-bundle.mjs diffs against; screenshots belong in CI artifacts, not history.
+artifacts/*.png
+output/
+
 # Local codex dev-process artifacts (PIDs, captured stdout/stderr)
 .codex-*.pid
 .codex-*.out
