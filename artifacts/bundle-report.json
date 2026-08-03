@@ -28,13 +28,13 @@
     }
   },
   "totals": {
-    "chunkCount": 161,
+    "chunkCount": 162,
     "initialFiles": 5,
-    "initialJsBytes": 542686
+    "initialJsBytes": 542708
   },
   "largest": [
     {
-      "file": ".next/static/chunks/raster-decoders.b7cc3c262528a538.js",
+      "file": ".next/static/chunks/raster-decoders.c4f298f9b0c48629.js",
       "bytes": 1414672
     },
     {
@@ -42,12 +42,12 @@
       "bytes": 779006
     },
     {
-      "file": ".next/static/chunks/9044.cb2e652279420ce2.js",
-      "bytes": 484566
+      "file": ".next/static/chunks/8721.eff27973c6e8b3de.js",
+      "bytes": 484568
     },
     {
-      "file": ".next/static/chunks/792.048541e53ee9b786.js",
-      "bytes": 453134
+      "file": ".next/static/chunks/9604.e3011e8a8a22e01e.js",
+      "bytes": 468100
     },
     {
       "file": ".next/static/chunks/8478.1157d0ca8f8cb00d.js",
@@ -70,24 +70,24 @@
       "bytes": 189700
     },
     {
-      "file": ".next/static/chunks/2217.14b29a75ea1fef83.js",
-      "bytes": 181443
+      "file": ".next/static/chunks/4501.7a5929084f10caa1.js",
+      "bytes": 181451
     },
     {
       "file": ".next/static/chunks/main-4ab15addd4deb4eb.js",
       "bytes": 132570
     },
     {
-      "file": ".next/static/chunks/4244.f732144f92c58a78.js",
-      "bytes": 131206
+      "file": ".next/static/chunks/3173.55488333efeee39d.js",
+      "bytes": 131207
     },
     {
-      "file": ".next/static/chunks/7443.d05ae66b49b6fad1.js",
-      "bytes": 130764
+      "file": ".next/static/chunks/5195.2af03ba2b36d370d.js",
+      "bytes": 130753
     },
     {
-      "file": ".next/static/chunks/1953.84f48a153b0b9a63.js",
-      "bytes": 118534
+      "file": ".next/static/chunks/7113.b8446bb6317d4f6d.js",
+      "bytes": 118533
     },
     {
       "file": ".next/static/chunks/polyfills-42372ed130431b0a.js",
@@ -102,21 +102,21 @@
       "bytes": 84285
     },
     {
-      "file": ".next/static/chunks/8534-7434d10968d92872.js",
-      "bytes": 74299
+      "file": ".next/static/chunks/6370-9b64d33f023e9590.js",
+      "bytes": 74303
     },
     {
       "file": ".next/static/chunks/486.db36d5a4ad6bf6bd.js",
       "bytes": 63788
     },
     {
-      "file": ".next/static/chunks/7696.5f2ef825012cf586.js",
-      "bytes": 62198
+      "file": ".next/static/chunks/7696.3f789345a8e06b3e.js",
+      "bytes": 62199
     }
   ],
   "decoderChunks": [
     {
-      "file": ".next/static/chunks/raster-decoders.b7cc3c262528a538.js",
+      "file": ".next/static/chunks/raster-decoders.c4f298f9b0c48629.js",
       "bytes": 1414672
     },
     {
@@ -126,7 +126,7 @@
   ],
   "chunkOwnership": [
     {
-      "file": ".next/static/chunks/raster-decoders.b7cc3c262528a538.js",
+      "file": ".next/static/chunks/raster-decoders.c4f298f9b0c48629.js",
       "bytes": 1414672,
       "classification": "decoder",
       "routes": [],
@@ -184,8 +184,8 @@
       ]
     },
     {
-      "file": ".next/static/chunks/9044.cb2e652279420ce2.js",
-      "bytes": 484566,
+      "file": ".next/static/chunks/8721.eff27973c6e8b3de.js",
+      "bytes": 484568,
       "classification": "shared-or-dynamic",
       "routes": [],
       "moduleSamples": [],
@@ -193,18 +193,18 @@
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
       "webpackStatsModuleSamples": [
-        "components/photoshop/action-conditionals.ts",
-        "components/photoshop/adjustment-layers.ts",
-        "components/photoshop/blend-modes.ts",
-        "components/photoshop/blur-gallery-controls.ts",
-        "components/photoshop/canvas-limits.ts",
-        "components/photoshop/canvas-utils.ts",
-        "components/photoshop/color-channel-ops.ts",
-        "components/photoshop/color-pipeline-conversions.ts",
-        "components/photoshop/color-pipeline.ts",
-        "components/photoshop/color-pipeline/high-bit-filters.ts",
-        "components/photoshop/color-pipeline/high-bit-image.ts",
-        "components/photoshop/color-pipeline/histograms.ts"
+        "components/photoshop/editor/app.tsx",
+        "components/photoshop/editor/close-dialog.tsx",
+        "components/photoshop/editor/context.tsx",
+        "components/photoshop/editor/error-boundary.tsx",
+        "components/photoshop/feature-error-boundary.tsx",
+        "components/ui/button.tsx",
+        "components/ui/dialog.tsx",
+        "editor/action-conditionals.ts",
+        "editor/adjustment-layers.ts",
+        "editor/blend-modes.ts",
+        "editor/blur-gallery-controls.ts",
+        "editor/canvas/limits.ts"
       ],
       "webpackStatsModuleSampleCount": 105,
       "webpackStatsPath": "artifacts/webpack-stats.json",
@@ -213,8 +213,8 @@
       ]
     },
     {
-      "file": ".next/static/chunks/792.048541e53ee9b786.js",
-      "bytes": 453134,
+      "file": ".next/static/chunks/9604.e3011e8a8a22e01e.js",
+      "bytes": 468100,
       "classification": "shared-or-dynamic",
       "routes": [],
       "moduleSamples": [],
@@ -222,18 +222,18 @@
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
       "webpackStatsModuleSamples": [
-        "components/photoshop/canvas-brush-dynamics.ts",
-        "components/photoshop/canvas-compositor-cache.ts",
-        "components/photoshop/canvas-compositor.ts",
-        "components/photoshop/canvas-eraser-helpers.ts",
-        "components/photoshop/canvas-filter-overlays.ts",
-        "components/photoshop/canvas-overlays.tsx",
-        "components/photoshop/canvas-preview-drawing.ts",
-        "components/photoshop/canvas-rulers.tsx",
-        "components/photoshop/canvas-selection-helpers.ts",
-        "components/photoshop/canvas-selection-overlays.tsx",
-        "components/photoshop/canvas-shape-helpers.ts",
-        "components/photoshop/canvas-smart-guides.tsx"
+        "components/photoshop/canvas/overlays.tsx",
+        "components/photoshop/canvas/rulers.tsx",
+        "components/photoshop/canvas/selection-overlays.tsx",
+        "components/photoshop/canvas/smart-guides.tsx",
+        "components/photoshop/canvas/view.tsx",
+        "components/photoshop/color/picker-hud.tsx",
+        "components/photoshop/document/tabs.tsx",
+        "components/photoshop/editor/shell.tsx",
+        "components/photoshop/menu-bar.tsx",
+        "components/photoshop/menus/file-menu.tsx",
+        "components/photoshop/menus/filter-menu.tsx",
+        "components/photoshop/menus/media-workspace-menus.tsx"
       ],
       "webpackStatsModuleSampleCount": 59,
       "webpackStatsPath": "artifacts/webpack-stats.json",
@@ -374,8 +374,8 @@
       ]
     },
     {
-      "file": ".next/static/chunks/2217.14b29a75ea1fef83.js",
-      "bytes": 181443,
+      "file": ".next/static/chunks/4501.7a5929084f10caa1.js",
+      "bytes": 181451,
       "classification": "shared-or-dynamic",
       "routes": [],
       "moduleSamples": [],
@@ -383,18 +383,18 @@
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
       "webpackStatsModuleSamples": [
-        "components/photoshop/document-compatibility.ts",
-        "components/photoshop/document-io-shared.ts",
-        "components/photoshop/document-project-io.ts",
-        "components/photoshop/document-raster-export.ts",
-        "components/photoshop/document-rendering.ts",
-        "components/photoshop/export-worker.ts",
-        "components/photoshop/project-json-sanitizer.ts",
-        "components/photoshop/psd-channels-masks.ts",
-        "components/photoshop/psd-color-modes.ts",
-        "components/photoshop/psd-compatibility.ts",
-        "components/photoshop/psd-effects-adjustments-adjustment-layers.ts",
-        "components/photoshop/psd-effects-adjustments-layer-styles.ts"
+        "editor/document/compatibility.ts",
+        "editor/document/io-shared.ts",
+        "editor/document/project-io.ts",
+        "editor/document/raster-export.ts",
+        "editor/document/rendering.ts",
+        "editor/export/worker.ts",
+        "editor/project-json-sanitizer.ts",
+        "editor/psd/channels-masks.ts",
+        "editor/psd/color-modes.ts",
+        "editor/psd/compatibility.ts",
+        "editor/psd/effects-adjustments-adjustment-layers.ts",
+        "editor/psd/effects-adjustments-layer-styles.ts"
       ],
       "webpackStatsModuleSampleCount": 17,
       "webpackStatsPath": "artifacts/webpack-stats.json",
@@ -432,8 +432,8 @@
       ]
     },
     {
-      "file": ".next/static/chunks/4244.f732144f92c58a78.js",
-      "bytes": 131206,
+      "file": ".next/static/chunks/3173.55488333efeee39d.js",
+      "bytes": 131207,
       "classification": "shared-or-dynamic",
       "routes": [],
       "moduleSamples": [],
@@ -441,18 +441,18 @@
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
       "webpackStatsModuleSamples": [
-        "components/photoshop/filter-worker-source.ts",
-        "components/photoshop/filter-worker.ts",
-        "components/photoshop/layer-tile-renderer.ts",
-        "components/photoshop/tile-only-pipeline.ts",
-        "components/photoshop/tiled-backing-store.ts",
-        "components/photoshop/webgl-compositor.ts",
-        "components/photoshop/webgl-compositor/adjustment-shaders.ts",
-        "components/photoshop/webgl-compositor/color-pipeline.ts",
-        "components/photoshop/webgl-compositor/depth.ts",
-        "components/photoshop/webgl-compositor/document-compositor.ts",
-        "components/photoshop/webgl-compositor/pass-execution.ts",
-        "components/photoshop/webgl-compositor/planning.ts"
+        "editor/filters/worker-source.ts",
+        "editor/filters/worker.ts",
+        "editor/layer-tile-renderer.ts",
+        "editor/tile-only-pipeline.ts",
+        "editor/tiled-backing-store.ts",
+        "editor/webgl-compositor.ts",
+        "editor/webgl-compositor/adjustment-shaders.ts",
+        "editor/webgl-compositor/color-pipeline.ts",
+        "editor/webgl-compositor/depth.ts",
+        "editor/webgl-compositor/document-compositor.ts",
+        "editor/webgl-compositor/pass-execution.ts",
+        "editor/webgl-compositor/planning.ts"
       ],
       "webpackStatsModuleSampleCount": 15,
       "webpackStatsPath": "artifacts/webpack-stats.json",
@@ -461,8 +461,8 @@
       ]
     },
     {
-      "file": ".next/static/chunks/7443.d05ae66b49b6fad1.js",
-      "bytes": 130764,
+      "file": ".next/static/chunks/5195.2af03ba2b36d370d.js",
+      "bytes": 130753,
       "classification": "shared-or-dynamic",
       "routes": [],
       "moduleSamples": [],
@@ -470,18 +470,18 @@
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
       "webpackStatsModuleSamples": [
-        "components/photoshop/filters/advanced-adjustment-algorithms.ts",
-        "components/photoshop/filters/apply-image-algorithms.ts",
-        "components/photoshop/filters/basic-algorithms.ts",
-        "components/photoshop/filters/blur-algorithms.ts",
-        "components/photoshop/filters/curve-helpers.ts",
-        "components/photoshop/filters/distort-helper-algorithms.ts",
-        "components/photoshop/filters/distortion-algorithms.ts",
-        "components/photoshop/filters/helpers-shared.ts",
-        "components/photoshop/filters/lens-lighting-algorithms.ts",
-        "components/photoshop/filters/noise-video-algorithms.ts",
-        "components/photoshop/filters/pixel-helpers.ts",
-        "components/photoshop/filters/pixelate-algorithms.ts"
+        "editor/filters/advanced-adjustment-algorithms.ts",
+        "editor/filters/apply-image-algorithms.ts",
+        "editor/filters/basic-algorithms.ts",
+        "editor/filters/blur-algorithms.ts",
+        "editor/filters/curve-helpers.ts",
+        "editor/filters/distort-helper-algorithms.ts",
+        "editor/filters/distortion-algorithms.ts",
+        "editor/filters/helpers-shared.ts",
+        "editor/filters/lens-lighting-algorithms.ts",
+        "editor/filters/noise-video-algorithms.ts",
+        "editor/filters/pixel-helpers.ts",
+        "editor/filters/pixelate-algorithms.ts"
       ],
       "webpackStatsModuleSampleCount": 26,
       "webpackStatsPath": "artifacts/webpack-stats.json",
@@ -490,8 +490,8 @@
       ]
     },
     {
-      "file": ".next/static/chunks/1953.84f48a153b0b9a63.js",
-      "bytes": 118534,
+      "file": ".next/static/chunks/7113.b8446bb6317d4f6d.js",
+      "bytes": 118533,
       "classification": "shared-or-dynamic",
       "routes": [],
       "moduleSamples": [],
@@ -499,15 +499,15 @@
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
       "webpackStatsModuleSamples": [
-        "components/photoshop/advanced-subsystems-dialog-controls.tsx",
-        "components/photoshop/advanced-subsystems-dialog-helpers.tsx",
-        "components/photoshop/advanced-subsystems-dialog-three-d.tsx",
-        "components/photoshop/advanced-subsystems-dialog.tsx",
-        "components/photoshop/advanced-subsystems-dialog.types.ts",
-        "components/photoshop/advanced-subsystems-import-normalizers.ts",
-        "components/photoshop/advanced-subsystems-plugin-workspace.tsx",
-        "components/photoshop/droplets-bundle.ts",
-        "components/photoshop/variables-engine.ts"
+        "components/photoshop/advanced/subsystems-dialog-controls.tsx",
+        "components/photoshop/advanced/subsystems-dialog-helpers.tsx",
+        "components/photoshop/advanced/subsystems-dialog-three-d.tsx",
+        "components/photoshop/advanced/subsystems-dialog.tsx",
+        "components/photoshop/advanced/subsystems-plugin-workspace.tsx",
+        "editor/advanced/subsystems-dialog.types.ts",
+        "editor/advanced/subsystems-import-normalizers.ts",
+        "editor/droplets-bundle.ts",
+        "editor/variables-engine.ts"
       ],
       "webpackStatsModuleSampleCount": 9,
       "webpackStatsPath": "artifacts/webpack-stats.json",
@@ -590,8 +590,8 @@
       ]
     },
     {
-      "file": ".next/static/chunks/8534-7434d10968d92872.js",
-      "bytes": 74299,
+      "file": ".next/static/chunks/6370-9b64d33f023e9590.js",
+      "bytes": 74303,
       "classification": "shared-or-dynamic",
       "routes": [
         "/_global-error/page",
@@ -609,17 +609,17 @@
       "sourcemapModuleSamples": [],
       "sourcemapModuleSampleCount": 0,
       "webpackStatsModuleSamples": [
-        "components/photoshop/client-storage.ts",
-        "components/photoshop/events.ts",
-        "components/photoshop/learning-index.ts",
-        "components/photoshop/new-document-presets.ts",
-        "components/photoshop/preferences-engine.ts",
-        "components/photoshop/recent-documents.ts",
-        "components/photoshop/runtime-telemetry.ts",
-        "components/photoshop/startup-file-handoff.ts",
-        "components/photoshop/storage-registry.ts",
-        "components/photoshop/tool-help.ts",
-        "components/photoshop/workflow-presets.ts"
+        "editor/client-storage.ts",
+        "editor/events.ts",
+        "editor/learning-index.ts",
+        "editor/new-document-presets.ts",
+        "editor/preferences-engine.ts",
+        "editor/recent-documents.ts",
+        "editor/runtime-telemetry.ts",
+        "editor/startup-file-handoff.ts",
+        "editor/storage-registry.ts",
+        "editor/tool/help.ts",
+        "editor/workflow-presets.ts"
       ],
       "webpackStatsModuleSampleCount": 11,
       "webpackStatsPath": "artifacts/webpack-stats.json",
@@ -658,8 +658,8 @@
       ]
     },
     {
-      "file": ".next/static/chunks/7696.5f2ef825012cf586.js",
-      "bytes": 62198,
+      "file": ".next/static/chunks/7696.3f789345a8e06b3e.js",
+      "bytes": 62199,
       "classification": "shared-or-dynamic",
       "routes": [],
       "moduleSamples": [],
@@ -689,13 +689,13 @@
   "appOwnedStartupChunks": [
     {
       "route": "/",
-      "file": ".next/static/chunks/8534-7434d10968d92872.js",
-      "decodedBodyBytes": 74299,
-      "encodedBodyBytes": 22272,
-      "transferBytes": 22572,
+      "file": ".next/static/chunks/6370-9b64d33f023e9590.js",
+      "decodedBodyBytes": 74303,
+      "encodedBodyBytes": 22565,
+      "transferBytes": 22865,
       "owner": {
-        "file": ".next/static/chunks/8534-7434d10968d92872.js",
-        "bytes": 74299,
+        "file": ".next/static/chunks/6370-9b64d33f023e9590.js",
+        "bytes": 74303,
         "classification": "shared-or-dynamic",
         "routes": [
           "/_global-error/page",
@@ -713,17 +713,17 @@
         "sourcemapModuleSamples": [],
         "sourcemapModuleSampleCount": 0,
         "webpackStatsModuleSamples": [
-          "components/photoshop/client-storage.ts",
-          "components/photoshop/events.ts",
-          "components/photoshop/learning-index.ts",
-          "components/photoshop/new-document-presets.ts",
-          "components/photoshop/preferences-engine.ts",
-          "components/photoshop/recent-documents.ts",
-          "components/photoshop/runtime-telemetry.ts",
-          "components/photoshop/startup-file-handoff.ts",
-          "components/photoshop/storage-registry.ts",
-          "components/photoshop/tool-help.ts",
-          "components/photoshop/workflow-presets.ts"
+          "editor/client-storage.ts",
+          "editor/events.ts",
+          "editor/learning-index.ts",
+          "editor/new-document-presets.ts",
+          "editor/preferences-engine.ts",
+          "editor/recent-documents.ts",
+          "editor/runtime-telemetry.ts",
+          "editor/startup-file-handoff.ts",
+          "editor/storage-registry.ts",
+          "editor/tool/help.ts",
+          "editor/workflow-presets.ts"
         ],
         "webpackStatsModuleSampleCount": 11,
         "webpackStatsPath": "artifacts/webpack-stats.json",
@@ -735,13 +735,13 @@
     },
     {
       "route": "/editor",
-      "file": ".next/static/chunks/7443.d05ae66b49b6fad1.js",
-      "decodedBodyBytes": 130764,
-      "encodedBodyBytes": 36350,
-      "transferBytes": 36650,
+      "file": ".next/static/chunks/5195.2af03ba2b36d370d.js",
+      "decodedBodyBytes": 130753,
+      "encodedBodyBytes": 35786,
+      "transferBytes": 36086,
       "owner": {
-        "file": ".next/static/chunks/7443.d05ae66b49b6fad1.js",
-        "bytes": 130764,
+        "file": ".next/static/chunks/5195.2af03ba2b36d370d.js",
+        "bytes": 130753,
         "classification": "shared-or-dynamic",
         "routes": [],
         "moduleSamples": [],
@@ -749,18 +749,18 @@
         "sourcemapModuleSamples": [],
         "sourcemapModuleSampleCount": 0,
         "webpackStatsModuleSamples": [
-          "components/photoshop/filters/advanced-adjustment-algorithms.ts",
-          "components/photoshop/filters/apply-image-algorithms.ts",
-          "components/photoshop/filters/basic-algorithms.ts",
-          "components/photoshop/filters/blur-algorithms.ts",
-          "components/photoshop/filters/curve-helpers.ts",
-          "components/photoshop/filters/distort-helper-algorithms.ts",
-          "components/photoshop/filters/distortion-algorithms.ts",
-          "components/photoshop/filters/helpers-shared.ts",
-          "components/photoshop/filters/lens-lighting-algorithms.ts",
-          "components/photoshop/filters/noise-video-algorithms.ts",
-          "components/photoshop/filters/pixel-helpers.ts",
-          "components/photoshop/filters/pixelate-algorithms.ts"
+          "editor/filters/advanced-adjustment-algorithms.ts",
+          "editor/filters/apply-image-algorithms.ts",
+          "editor/filters/basic-algorithms.ts",
+          "editor/filters/blur-algorithms.ts",
+          "editor/filters/curve-helpers.ts",
+          "editor/filters/distort-helper-algorithms.ts",
+          "editor/filters/distortion-algorithms.ts",
+          "editor/filters/helpers-shared.ts",
+          "editor/filters/lens-lighting-algorithms.ts",
+          "editor/filters/noise-video-algorithms.ts",
+          "editor/filters/pixel-helpers.ts",
+          "editor/filters/pixelate-algorithms.ts"
         ],
         "webpackStatsModuleSampleCount": 26,
         "webpackStatsPath": "artifacts/webpack-stats.json",
@@ -771,13 +771,13 @@
     },
     {
       "route": "/editor",
-      "file": ".next/static/chunks/8534-7434d10968d92872.js",
-      "decodedBodyBytes": 74299,
-      "encodedBodyBytes": 22272,
-      "transferBytes": 22572,
+      "file": ".next/static/chunks/6370-9b64d33f023e9590.js",
+      "decodedBodyBytes": 74303,
+      "encodedBodyBytes": 22565,
+      "transferBytes": 22865,
       "owner": {
-        "file": ".next/static/chunks/8534-7434d10968d92872.js",
-        "bytes": 74299,
+        "file": ".next/static/chunks/6370-9b64d33f023e9590.js",
+        "bytes": 74303,
         "classification": "shared-or-dynamic",
         "routes": [
           "/_global-error/page",
@@ -795,17 +795,17 @@
         "sourcemapModuleSamples": [],
         "sourcemapModuleSampleCount": 0,
         "webpackStatsModuleSamples": [
-          "components/photoshop/client-storage.ts",
-          "components/photoshop/events.ts",
-          "components/photoshop/learning-index.ts",
-          "components/photoshop/new-document-presets.ts",
-          "components/photoshop/preferences-engine.ts",
-          "components/photoshop/recent-documents.ts",
-          "components/photoshop/runtime-telemetry.ts",
-          "components/photoshop/startup-file-handoff.ts",
-          "components/photoshop/storage-registry.ts",
-          "components/photoshop/tool-help.ts",
-          "components/photoshop/workflow-presets.ts"
+          "editor/client-storage.ts",
+          "editor/events.ts",
+          "editor/learning-index.ts",
+          "editor/new-document-presets.ts",
+          "editor/preferences-engine.ts",
+          "editor/recent-documents.ts",
+          "editor/runtime-telemetry.ts",
+          "editor/startup-file-handoff.ts",
+          "editor/storage-registry.ts",
+          "editor/tool/help.ts",
+          "editor/workflow-presets.ts"
         ],
         "webpackStatsModuleSampleCount": 11,
         "webpackStatsPath": "artifacts/webpack-stats.json",
@@ -817,13 +817,13 @@
     },
     {
       "route": "/editor",
-      "file": ".next/static/chunks/9044.cb2e652279420ce2.js",
-      "decodedBodyBytes": 484566,
-      "encodedBodyBytes": 155079,
-      "transferBytes": 155379,
+      "file": ".next/static/chunks/8721.eff27973c6e8b3de.js",
+      "decodedBodyBytes": 484568,
+      "encodedBodyBytes": 154735,
+      "transferBytes": 155035,
       "owner": {
-        "file": ".next/static/chunks/9044.cb2e652279420ce2.js",
-        "bytes": 484566,
+        "file": ".next/static/chunks/8721.eff27973c6e8b3de.js",
+        "bytes": 484568,
         "classification": "shared-or-dynamic",
         "routes": [],
         "moduleSamples": [],
@@ -831,18 +831,18 @@
         "sourcemapModuleSamples": [],
         "sourcemapModuleSampleCount": 0,
         "webpackStatsModuleSamples": [
-          "components/photoshop/action-conditionals.ts",
-          "components/photoshop/adjustment-layers.ts",
-          "components/photoshop/blend-modes.ts",
-          "components/photoshop/blur-gallery-controls.ts",
-          "components/photoshop/canvas-limits.ts",
-          "components/photoshop/canvas-utils.ts",
-          "components/photoshop/color-channel-ops.ts",
-          "components/photoshop/color-pipeline-conversions.ts",
-          "components/photoshop/color-pipeline.ts",
-          "components/photoshop/color-pipeline/high-bit-filters.ts",
-          "components/photoshop/color-pipeline/high-bit-image.ts",
-          "components/photoshop/color-pipeline/histograms.ts"
+          "components/photoshop/editor/app.tsx",
+          "components/photoshop/editor/close-dialog.tsx",
+          "components/photoshop/editor/context.tsx",
+          "components/photoshop/editor/error-boundary.tsx",
+          "components/photoshop/feature-error-boundary.tsx",
+          "components/ui/button.tsx",
+          "components/ui/dialog.tsx",
+          "editor/action-conditionals.ts",
+          "editor/adjustment-layers.ts",
+          "editor/blend-modes.ts",
+          "editor/blur-gallery-controls.ts",
+          "editor/canvas/limits.ts"
         ],
         "webpackStatsModuleSampleCount": 105,
         "webpackStatsPath": "artifacts/webpack-stats.json",
@@ -905,22 +905,22 @@
   "appOwnedStartupChunkReasons": [
     {
       "route": "/editor",
-      "file": ".next/static/chunks/9044.cb2e652279420ce2.js",
-      "decodedBodyBytes": 484566,
+      "file": ".next/static/chunks/8721.eff27973c6e8b3de.js",
+      "decodedBodyBytes": 484568,
       "budget": 819200,
       "appOwnedModuleSamples": [
-        "components/photoshop/action-conditionals.ts",
-        "components/photoshop/adjustment-layers.ts",
-        "components/photoshop/blend-modes.ts",
-        "components/photoshop/blur-gallery-controls.ts",
-        "components/photoshop/canvas-limits.ts",
-        "components/photoshop/canvas-utils.ts",
-        "components/photoshop/color-channel-ops.ts",
-        "components/photoshop/color-pipeline-conversions.ts",
-        "components/photoshop/color-pipeline.ts",
-        "components/photoshop/color-pipeline/high-bit-filters.ts",
-        "components/photoshop/color-pipeline/high-bit-image.ts",
-        "components/photoshop/color-pipeline/histograms.ts"
+        "components/photoshop/editor/app.tsx",
+        "components/photoshop/editor/close-dialog.tsx",
+        "components/photoshop/editor/context.tsx",
+        "components/photoshop/editor/error-boundary.tsx",
+        "components/photoshop/feature-error-boundary.tsx",
+        "components/ui/button.tsx",
+        "components/ui/dialog.tsx",
+        "editor/action-conditionals.ts",
+        "editor/adjustment-layers.ts",
+        "editor/blend-modes.ts",
+        "editor/blur-gallery-controls.ts",
+        "editor/canvas/limits.ts"
       ],
       "ownershipSources": [
         "webpack-stats"
@@ -929,22 +929,22 @@
     },
     {
       "route": "/editor",
-      "file": ".next/static/chunks/7443.d05ae66b49b6fad1.js",
-      "decodedBodyBytes": 130764,
+      "file": ".next/static/chunks/5195.2af03ba2b36d370d.js",
+      "decodedBodyBytes": 130753,
       "budget": 819200,
       "appOwnedModuleSamples": [
-        "components/photoshop/filters/advanced-adjustment-algorithms.ts",
-        "components/photoshop/filters/apply-image-algorithms.ts",
-        "components/photoshop/filters/basic-algorithms.ts",
-        "components/photoshop/filters/blur-algorithms.ts",
-        "components/photoshop/filters/curve-helpers.ts",
-        "components/photoshop/filters/distort-helper-algorithms.ts",
-        "components/photoshop/filters/distortion-algorithms.ts",
-        "components/photoshop/filters/helpers-shared.ts",
-        "components/photoshop/filters/lens-lighting-algorithms.ts",
-        "components/photoshop/filters/noise-video-algorithms.ts",
-        "components/photoshop/filters/pixel-helpers.ts",
-        "components/photoshop/filters/pixelate-algorithms.ts"
+        "editor/filters/advanced-adjustment-algorithms.ts",
+        "editor/filters/apply-image-algorithms.ts",
+        "editor/filters/basic-algorithms.ts",
+        "editor/filters/blur-algorithms.ts",
+        "editor/filters/curve-helpers.ts",
+        "editor/filters/distort-helper-algorithms.ts",
+        "editor/filters/distortion-algorithms.ts",
+        "editor/filters/helpers-shared.ts",
+        "editor/filters/lens-lighting-algorithms.ts",
+        "editor/filters/noise-video-algorithms.ts",
+        "editor/filters/pixel-helpers.ts",
+        "editor/filters/pixelate-algorithms.ts"
       ],
       "ownershipSources": [
         "webpack-stats"
@@ -976,22 +976,22 @@
     },
     {
       "route": "/",
-      "file": ".next/static/chunks/8534-7434d10968d92872.js",
-      "decodedBodyBytes": 74299,
+      "file": ".next/static/chunks/6370-9b64d33f023e9590.js",
+      "decodedBodyBytes": 74303,
       "budget": 819200,
       "appOwnedModuleSamples": [
         "components/photoshop/start-workspace.tsx",
-        "components/photoshop/client-storage.ts",
-        "components/photoshop/events.ts",
-        "components/photoshop/learning-index.ts",
-        "components/photoshop/new-document-presets.ts",
-        "components/photoshop/preferences-engine.ts",
-        "components/photoshop/recent-documents.ts",
-        "components/photoshop/runtime-telemetry.ts",
-        "components/photoshop/startup-file-handoff.ts",
-        "components/photoshop/storage-registry.ts",
-        "components/photoshop/tool-help.ts",
-        "components/photoshop/workflow-presets.ts"
+        "editor/client-storage.ts",
+        "editor/events.ts",
+        "editor/learning-index.ts",
+        "editor/new-document-presets.ts",
+        "editor/preferences-engine.ts",
+        "editor/recent-documents.ts",
+        "editor/runtime-telemetry.ts",
+        "editor/startup-file-handoff.ts",
+        "editor/storage-registry.ts",
+        "editor/tool/help.ts",
+        "editor/workflow-presets.ts"
       ],
       "ownershipSources": [
         "client-reference-manifest",
@@ -1001,22 +1001,22 @@
     },
     {
       "route": "/editor",
-      "file": ".next/static/chunks/8534-7434d10968d92872.js",
-      "decodedBodyBytes": 74299,
+      "file": ".next/static/chunks/6370-9b64d33f023e9590.js",
+      "decodedBodyBytes": 74303,
       "budget": 819200,
       "appOwnedModuleSamples": [
         "components/photoshop/start-workspace.tsx",
-        "components/photoshop/client-storage.ts",
-        "components/photoshop/events.ts",
-        "components/photoshop/learning-index.ts",
-        "components/photoshop/new-document-presets.ts",
-        "components/photoshop/preferences-engine.ts",
-        "components/photoshop/recent-documents.ts",
-        "components/photoshop/runtime-telemetry.ts",
-        "components/photoshop/startup-file-handoff.ts",
-        "components/photoshop/storage-registry.ts",
-        "components/photoshop/tool-help.ts",
-        "components/photoshop/workflow-presets.ts"
+        "editor/client-storage.ts",
+        "editor/events.ts",
+        "editor/learning-index.ts",
+        "editor/new-document-presets.ts",
+        "editor/preferences-engine.ts",
+        "editor/recent-documents.ts",
+        "editor/runtime-telemetry.ts",
+        "editor/startup-file-handoff.ts",
+        "editor/storage-registry.ts",
+        "editor/tool/help.ts",
+        "editor/workflow-presets.ts"
       ],
       "ownershipSources": [
         "client-reference-manifest",
@@ -1027,71 +1027,32 @@
   ],
   "routeDeltas": {
     "/": {
-      "encodedBodyBytes": 3804,
-      "decodedBodyBytes": 10765,
-      "requestCount": 1
+      "encodedBodyBytes": 0,
+      "decodedBodyBytes": 0,
+      "requestCount": 0
     },
     "/editor": {
-      "encodedBodyBytes": -138588,
-      "decodedBodyBytes": -456049,
-      "requestCount": 2
+      "encodedBodyBytes": 0,
+      "decodedBodyBytes": 0,
+      "requestCount": 0
     },
     "/marketing": {
-      "encodedBodyBytes": 2263,
-      "decodedBodyBytes": 4262,
-      "requestCount": 1
+      "encodedBodyBytes": 0,
+      "decodedBodyBytes": 0,
+      "requestCount": 0
     },
     "/documentation": {
-      "encodedBodyBytes": 2553,
-      "decodedBodyBytes": 4991,
-      "requestCount": 1
+      "encodedBodyBytes": 0,
+      "decodedBodyBytes": 0,
+      "requestCount": 0
     }
   },
-  "newOwnerModules": [
-    "components/marketing/decorative-motion.tsx",
-    "components/marketing/editor-showcase.tsx",
-    "components/marketing/footer.tsx",
-    "components/marketing/hero.tsx",
-    "components/marketing/limitations.tsx",
-    "components/marketing/marquee.tsx",
-    "components/marketing/nav.tsx",
-    "components/marketing/newsletter-cta.tsx",
-    "components/marketing/tools-grid.tsx",
-    "components/marketing/workflow-split.tsx",
-    "components/photoshop/client-storage.ts",
-    "components/photoshop/color-pipeline-conversions.ts",
-    "components/photoshop/color-pipeline/high-bit-filters.ts",
-    "components/photoshop/color-pipeline/high-bit-image.ts",
-    "components/photoshop/color-pipeline/histograms.ts",
-    "components/photoshop/events.ts",
-    "components/photoshop/filters/advanced-adjustment-algorithms.ts",
-    "components/photoshop/filters/apply-image-algorithms.ts",
-    "components/photoshop/filters/basic-algorithms.ts",
-    "components/photoshop/filters/blur-algorithms.ts",
-    "components/photoshop/filters/curve-helpers.ts",
-    "components/photoshop/filters/distort-helper-algorithms.ts",
-    "components/photoshop/filters/distortion-algorithms.ts",
-    "components/photoshop/filters/helpers-shared.ts",
-    "components/photoshop/filters/lens-lighting-algorithms.ts",
-    "components/photoshop/filters/noise-video-algorithms.ts",
-    "components/photoshop/filters/pixel-helpers.ts",
-    "components/photoshop/filters/pixelate-algorithms.ts",
-    "components/photoshop/learning-index.ts",
-    "components/photoshop/new-document-presets.ts",
-    "components/photoshop/preferences-engine.ts",
-    "components/photoshop/recent-documents.ts",
-    "components/photoshop/runtime-telemetry.ts",
-    "components/photoshop/start-workspace.tsx",
-    "components/photoshop/startup-file-handoff.ts",
-    "components/photoshop/storage-registry.ts",
-    "components/photoshop/tool-help.ts",
-    "components/photoshop/workflow-presets.ts"
-  ],
+  "newOwnerModules": [],
   "routeMetrics": {
     "/": {
-      "encodedBodyBytes": 173424,
-      "decodedBodyBytes": 574886,
-      "transferBytes": 177024,
+      "encodedBodyBytes": 173732,
+      "decodedBodyBytes": 574914,
+      "transferBytes": 177332,
       "requestCount": 12,
       "largestStartupChunk": {
         "decodedBodyBytes": 222758,
@@ -1122,6 +1083,13 @@
           "transferSize": 63180
         },
         {
+          "decodedBodySize": 74303,
+          "encodedBodySize": 22565,
+          "initiatorType": "script",
+          "name": "http://bundle.local/_next/static/chunks/6370-9b64d33f023e9590.js",
+          "transferSize": 22865
+        },
+        {
           "decodedBodySize": 33591,
           "encodedBodySize": 9285,
           "initiatorType": "script",
@@ -1129,18 +1097,11 @@
           "transferSize": 9585
         },
         {
-          "decodedBodySize": 74299,
-          "encodedBodySize": 22272,
-          "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/8534-7434d10968d92872.js",
-          "transferSize": 22572
-        },
-        {
           "decodedBodySize": 1585,
-          "encodedBodySize": 895,
+          "encodedBodySize": 894,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/app/error-f24c7b47070ae9ce.js",
-          "transferSize": 1195
+          "name": "http://bundle.local/_next/static/chunks/app/error-ac1254448b381a3e.js",
+          "transferSize": 1194
         },
         {
           "decodedBodySize": 915,
@@ -1157,11 +1118,11 @@
           "transferSize": 2456
         },
         {
-          "decodedBodySize": 17526,
-          "encodedBodySize": 5049,
+          "decodedBodySize": 17528,
+          "encodedBodySize": 5051,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/app/page-37119dec9c790b15.js",
-          "transferSize": 5349
+          "name": "http://bundle.local/_next/static/chunks/app/page-a40cfc94dbc4d22e.js",
+          "transferSize": 5351
         },
         {
           "decodedBodySize": 484,
@@ -1171,11 +1132,11 @@
           "transferSize": 784
         },
         {
-          "decodedBodySize": 6980,
-          "encodedBodySize": 3890,
+          "decodedBodySize": 7002,
+          "encodedBodySize": 3904,
           "initiatorType": "link",
-          "name": "http://bundle.local/_next/static/chunks/webpack-840d23dbf3e066f9.js",
-          "transferSize": 4190
+          "name": "http://bundle.local/_next/static/chunks/webpack-f35d3c7a2a380d23.js",
+          "transferSize": 4204
         },
         {
           "decodedBodySize": 1914,
@@ -1193,15 +1154,15 @@
       }
     },
     "/editor": {
-      "encodedBodyBytes": 385871,
-      "decodedBodyBytes": 1253519,
-      "transferBytes": 390671,
+      "encodedBodyBytes": 385268,
+      "decodedBodyBytes": 1253534,
+      "transferBytes": 390068,
       "requestCount": 16,
       "largestStartupChunk": {
-        "decodedBodyBytes": 484566,
-        "encodedBodyBytes": 155079,
-        "transferBytes": 155379,
-        "url": "http://bundle.local/_next/static/chunks/9044.cb2e652279420ce2.js"
+        "decodedBodyBytes": 484568,
+        "encodedBodyBytes": 154735,
+        "transferBytes": 155035,
+        "url": "http://bundle.local/_next/static/chunks/8721.eff27973c6e8b3de.js"
       },
       "resources": [
         {
@@ -1233,6 +1194,20 @@
           "transferSize": 63180
         },
         {
+          "decodedBodySize": 130753,
+          "encodedBodySize": 35786,
+          "initiatorType": "script",
+          "name": "http://bundle.local/_next/static/chunks/5195.2af03ba2b36d370d.js",
+          "transferSize": 36086
+        },
+        {
+          "decodedBodySize": 74303,
+          "encodedBodySize": 22565,
+          "initiatorType": "script",
+          "name": "http://bundle.local/_next/static/chunks/6370-9b64d33f023e9590.js",
+          "transferSize": 22865
+        },
+        {
           "decodedBodySize": 33591,
           "encodedBodySize": 9285,
           "initiatorType": "script",
@@ -1240,46 +1215,32 @@
           "transferSize": 9585
         },
         {
-          "decodedBodySize": 130764,
-          "encodedBodySize": 36350,
+          "decodedBodySize": 484568,
+          "encodedBodySize": 154735,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/7443.d05ae66b49b6fad1.js",
-          "transferSize": 36650
-        },
-        {
-          "decodedBodySize": 74299,
-          "encodedBodySize": 22272,
-          "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/8534-7434d10968d92872.js",
-          "transferSize": 22572
-        },
-        {
-          "decodedBodySize": 484566,
-          "encodedBodySize": 155079,
-          "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/9044.cb2e652279420ce2.js",
-          "transferSize": 155379
+          "name": "http://bundle.local/_next/static/chunks/8721.eff27973c6e8b3de.js",
+          "transferSize": 155035
         },
         {
           "decodedBodySize": 540,
           "encodedBodySize": 540,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/app/editor/layout-2b0461034ced0471.js",
+          "name": "http://bundle.local/_next/static/chunks/app/editor/layout-ad07db40404796ae.js",
           "transferSize": 840
         },
         {
-          "decodedBodySize": 3680,
-          "encodedBodySize": 1396,
+          "decodedBodySize": 3678,
+          "encodedBodySize": 1395,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/app/editor/page-37aa13597e39908f.js",
-          "transferSize": 1696
+          "name": "http://bundle.local/_next/static/chunks/app/editor/page-345c04ee514f7b8f.js",
+          "transferSize": 1695
         },
         {
           "decodedBodySize": 1585,
-          "encodedBodySize": 895,
+          "encodedBodySize": 894,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/app/error-f24c7b47070ae9ce.js",
-          "transferSize": 1195
+          "name": "http://bundle.local/_next/static/chunks/app/error-ac1254448b381a3e.js",
+          "transferSize": 1194
         },
         {
           "decodedBodySize": 915,
@@ -1303,11 +1264,11 @@
           "transferSize": 784
         },
         {
-          "decodedBodySize": 6980,
-          "encodedBodySize": 3890,
+          "decodedBodySize": 7002,
+          "encodedBodySize": 3904,
           "initiatorType": "link",
-          "name": "http://bundle.local/_next/static/chunks/webpack-840d23dbf3e066f9.js",
-          "transferSize": 4190
+          "name": "http://bundle.local/_next/static/chunks/webpack-f35d3c7a2a380d23.js",
+          "transferSize": 4204
         },
         {
           "decodedBodySize": 1914,
@@ -1325,9 +1286,9 @@
       }
     },
     "/marketing": {
-      "encodedBodyBytes": 215493,
-      "decodedBodyBytes": 678058,
-      "transferBytes": 220293,
+      "encodedBodyBytes": 215506,
+      "decodedBodyBytes": 678080,
+      "transferBytes": 220306,
       "requestCount": 16,
       "largestStartupChunk": {
         "decodedBodyBytes": 222758,
@@ -1394,10 +1355,10 @@
         },
         {
           "decodedBodySize": 1585,
-          "encodedBodySize": 895,
+          "encodedBodySize": 894,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/app/error-f24c7b47070ae9ce.js",
-          "transferSize": 1195
+          "name": "http://bundle.local/_next/static/chunks/app/error-ac1254448b381a3e.js",
+          "transferSize": 1194
         },
         {
           "decodedBodySize": 915,
@@ -1435,11 +1396,11 @@
           "transferSize": 784
         },
         {
-          "decodedBodySize": 6980,
-          "encodedBodySize": 3890,
+          "decodedBodySize": 7002,
+          "encodedBodySize": 3904,
           "initiatorType": "link",
-          "name": "http://bundle.local/_next/static/chunks/webpack-840d23dbf3e066f9.js",
-          "transferSize": 4190
+          "name": "http://bundle.local/_next/static/chunks/webpack-f35d3c7a2a380d23.js",
+          "transferSize": 4204
         },
         {
           "decodedBodySize": 1914,
@@ -1457,9 +1418,9 @@
       }
     },
     "/documentation": {
-      "encodedBodyBytes": 146334,
-      "decodedBodyBytes": 483292,
-      "transferBytes": 149634,
+      "encodedBodyBytes": 146347,
+      "decodedBodyBytes": 483314,
+      "transferBytes": 149647,
       "requestCount": 11,
       "largestStartupChunk": {
         "decodedBodyBytes": 222758,
@@ -1505,10 +1466,10 @@
         },
         {
           "decodedBodySize": 1585,
-          "encodedBodySize": 895,
+          "encodedBodySize": 894,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/app/error-f24c7b47070ae9ce.js",
-          "transferSize": 1195
+          "name": "http://bundle.local/_next/static/chunks/app/error-ac1254448b381a3e.js",
+          "transferSize": 1194
         },
         {
           "decodedBodySize": 915,
@@ -1532,11 +1493,11 @@
           "transferSize": 784
         },
         {
-          "decodedBodySize": 6980,
-          "encodedBodySize": 3890,
+          "decodedBodySize": 7002,
+          "encodedBodySize": 3904,
           "initiatorType": "link",
-          "name": "http://bundle.local/_next/static/chunks/webpack-840d23dbf3e066f9.js",
-          "transferSize": 4190
+          "name": "http://bundle.local/_next/static/chunks/webpack-f35d3c7a2a380d23.js",
+          "transferSize": 4204
         },
         {
           "decodedBodySize": 1914,

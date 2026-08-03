@@ -1,4 +1,5 @@
 {
+  "_comment": "Ratchet, not permission. Every number here is what the repo measured after the editor/ split, so any regression fails the gate. Raising one is a deliberate, reviewable act; lower it whenever the measurement drops.",
   "rawPhotoshopEvents": {
     "max": 0
   },
@@ -6,21 +7,21 @@
     "max": 0
   },
   "oversizeFiles": {
-    "max": 15,
+    "max": 7,
     "maxLines": 1500
   },
   "useEditorImports": {
-    "max": 15
+    "max": 8
   },
   "topLargestFiles": {
     "count": 10,
-    "maxTotalLines": 29000
+    "maxTotalLines": 23250
   },
   "directClientStorage": {
     "max": 0
   },
   "hookDependencySuppressions": {
-    "max": 6
+    "max": 5
   },
   "coordinationFiles": {
     "components/photoshop/canvas/view.tsx": {
@@ -28,8 +29,8 @@
       "maxFanIn": 3
     },
     "components/photoshop/editor/context.tsx": {
-      "maxImports": 28,
-      "maxFanIn": 100
+      "maxImports": 24,
+      "maxFanIn": 96
     },
     "components/photoshop/menu-bar.tsx": {
       "maxImports": 32,

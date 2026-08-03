@@ -46,17 +46,17 @@ test("architecture gate reports no import cycles or budget regressions", () => {
   expect(report.budgets.rawPhotoshopListeners.count).toBeLessThanOrEqual(report.budgets.rawPhotoshopListeners.max)
   expect(report.budgets.rawPhotoshopListeners.max).toBe(0)
   expect(report.budgets.oversizeFiles.count).toBeLessThanOrEqual(report.budgets.oversizeFiles.max)
-  expect(report.budgets.oversizeFiles.max).toBeLessThanOrEqual(14)
+  expect(report.budgets.oversizeFiles.max).toBeLessThanOrEqual(7)
   expect(report.budgets.useEditorImports.count).toBeLessThanOrEqual(report.budgets.useEditorImports.max)
-  expect(report.budgets.useEditorImports.max).toBeLessThanOrEqual(15)
+  expect(report.budgets.useEditorImports.max).toBeLessThanOrEqual(8)
   expect(report.budgets.topLargestFiles.count).toBe(10)
   expect(report.budgets.topLargestFiles.totalLines).toBeLessThanOrEqual(report.budgets.topLargestFiles.maxTotalLines)
-  expect(report.budgets.topLargestFiles.maxTotalLines).toBeLessThanOrEqual(29000)
+  expect(report.budgets.topLargestFiles.maxTotalLines).toBeLessThanOrEqual(23250)
   expect(report.budgets.directClientStorage.count).toBeLessThanOrEqual(report.budgets.directClientStorage.max)
   expect(report.budgets.hookDependencySuppressions.count).toBeLessThanOrEqual(
     report.budgets.hookDependencySuppressions.max,
   )
-  expect(report.budgets.hookDependencySuppressions.max).toBeLessThanOrEqual(6)
+  expect(report.budgets.hookDependencySuppressions.max).toBeLessThanOrEqual(5)
   expect(report.directClientStorage.map((entry) => entry.file)).not.toEqual(
     expect.arrayContaining([
       "editor/persisted-settings.ts",

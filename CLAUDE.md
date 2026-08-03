@@ -34,6 +34,26 @@ npx playwright test --grep @matrix-smoke
 
 This is a browser-based Photoshop-style image editor built with Next.js 16, React 19, TypeScript (strict), Tailwind CSS 4, and Radix UI.
 
+### Layout
+
+The editor spans two roots, split by layer:
+
+- `editor/` — the engine. Pure TypeScript: reducer, history, filters, codecs, PSD I/O, colour pipeline, brush and selection algorithms. No JSX.
+- `components/photoshop/` — the React layer. Panels, dialogs, menus, canvas host.
+
+Inside each, files are grouped by the prefix they already had: `canvas/`, `psd/`,
+`raster/`, `document/`, `color/`, `tool/`, `filters/`, `export/`, `advanced/`. The
+`editor-*` group is the `editor/` root itself (`editor/reducer.ts`,
+`editor/store.ts`). `tests/` mirrors the same folders.
+
+Two conventions worth knowing before adding a file:
+
+- **Import through `@/`, never relatively.** Enforced by `no-restricted-imports`.
+  Alias paths survive a `git mv`; relative ones make every file move a diff in its
+  neighbours.
+- **No per-folder `index.ts` barrels.** Import the file. The one barrel that
+  exists, `editor/types.ts`, is a deliberate single import site for shared types.
+
 ### State Management
 
 All editor state lives in `components/photoshop/editor/context.tsx` — a single `EditorProvider` using a reducer pattern. Every state mutation dispatches a typed action (e.g., `set-brush`, `add-layer`, `apply-filter`). This keeps keyboard shortcuts, menu commands, and the command palette all routing through the same dispatch path.
@@ -49,7 +69,7 @@ The right-click context menu (`ContextMenuLayer`) uses this pattern to avoid tri
 
 ### Canvas & Rendering
 
-`components/photoshop/canvas/view.tsx` coordinates rendering and pointer input. Layer composition can use the WebGL compositor with a Canvas 2D fallback. Expensive filters run in a Web Worker with optional tiling (`filter-worker.ts`) — large documents are split into tiles to avoid blocking the main thread. Filter output is verified with golden-image Playwright tests.
+`components/photoshop/canvas/view.tsx` coordinates rendering and pointer input. Layer composition can use the WebGL compositor with a Canvas 2D fallback. Expensive filters run in a Web Worker with optional tiling (`editor/filters/worker.ts`) — large documents are split into tiles to avoid blocking the main thread. Filter output is verified with golden-image Playwright tests.
 
 ### History / Undo
 
@@ -65,9 +85,18 @@ PSD import/export uses `ag-psd` plus dedicated PSD color-mode/resource modules. 
 
 ### Testing
 
-Playwright config (`playwright.config.ts`) auto-starts the dev server and runs two projects:
-- `chromium` — full desktop suite, excludes `@matrix-smoke`
-- `mobile-chromium-smoke` — Pixel 5 viewport, only `@matrix-smoke` tagged tests
+Lanes live in `playwright/`, sharing `playwright/base.ts` (test root, timeouts,
+the Next smoke server). Root `playwright.config.ts` re-exports the main lane so
+bare `npx playwright test <file>` works.
+
+| Lane | Runs |
+|------|------|
+| `playwright/main.config.ts` | full desktop suite + `@matrix-smoke` on Pixel 5, port 3000 |
+| `playwright/smoke.config.ts` | `photoshop-smoke.spec.ts`, desktop + mobile, port 3000 |
+| `playwright/dev.config.ts` | hydration spec against a real `next dev`, port 3001 |
+| `playwright/static.config.ts` | static export from `out/`, port 3001 |
+| `playwright/repeat.config.ts` | one critical spec, repeated, port 3002 |
+| `playwright/node.config.ts` | no server; **always invoked with explicit spec files** |
 
 Trace is captured on first retry. Base URL is `http://127.0.0.1:3000`.
 
@@ -85,5 +114,5 @@ Trace is captured on first retry. Base URL is `http://127.0.0.1:3000`.
 | `editor/filters/worker.ts` | Async + tiled filter execution |
 | `editor/document/io.ts` | PSD + raster file I/O |
 | `editor/brush-engine.ts` | Brush rendering, pressure, dynamics |
-| `playwright.config.ts` | Test configuration |
+| `playwright/base.ts` | Shared Playwright lane skeleton |
 | `scripts/measure-route-bundles.mjs` | Production startup measurement by route |

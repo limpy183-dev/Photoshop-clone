@@ -292,20 +292,31 @@ app/
   marketing/page.tsx          Marketing landing page
   layout.tsx                  App metadata and root layout
 
-components/photoshop/
-  canvas-view.tsx             Canvas rendering, input routing, compositing hooks
-  editor-context.tsx          Document state, actions, history, persistence
+components/photoshop/            React layer: panels, dialogs, menus, canvas host
+  canvas/view.tsx             Canvas rendering, input routing, compositing hooks
+  editor/context.tsx          Document state, actions, history, persistence
   menu-bar.tsx                Photoshop-style menus and command routing
   command-palette.tsx         Searchable commands, tools, panels, filters
-  filters.ts                  Filter registry and pixel algorithms
-  filter-worker.ts            Worker/tiled filter execution helpers
-  document-io.ts              Project, PSD, raster, SVG, GIF, and report helpers
   panel-dock.tsx              Resizable panel dock and workspace behavior
   panel-registry.tsx          Panel definitions and workspace presets
   panels/                     Layers, Adjustments, Timeline, Actions, etc.
+  menus/                      Menu components
 
-tests/
-  *.spec.ts                   Playwright and unit/integration regression tests
+editor/                         Engine: pure TypeScript, no JSX
+  reducer.ts store.ts         Central state machine
+  history-storage.ts          Lossless, cancellable history blob storage
+  types.ts types/             Shared types (barrel + domain modules)
+  filters.ts filters/         Filter registry, pixel algorithms, worker execution
+  document/                   Project, PSD, raster, SVG, GIF, and report helpers
+  psd/ raster/                Format readers and writers
+  color/ webgl-compositor/    Colour pipeline and GPU composition
+  canvas/ tool/ export/       Canvas maths, tool helpers, export planning
+
+playwright/                     Test lanes; base.ts holds the shared skeleton
+
+tests/                          Playwright and unit/integration regression tests
+  canvas/ editor/ psd/ ...    Mirrors the source folders
+  unit/                       vitest, pure modules
 
 docs/images/
   editor-overview.png
