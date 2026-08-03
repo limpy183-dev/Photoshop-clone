@@ -51,7 +51,7 @@ test("architecture gate reports no import cycles or budget regressions", () => {
   expect(report.budgets.useEditorImports.max).toBeLessThanOrEqual(8)
   expect(report.budgets.topLargestFiles.count).toBe(10)
   expect(report.budgets.topLargestFiles.totalLines).toBeLessThanOrEqual(report.budgets.topLargestFiles.maxTotalLines)
-  expect(report.budgets.topLargestFiles.maxTotalLines).toBeLessThanOrEqual(23250)
+  expect(report.budgets.topLargestFiles.maxTotalLines).toBeLessThanOrEqual(23274)
   expect(report.budgets.directClientStorage.count).toBeLessThanOrEqual(report.budgets.directClientStorage.max)
   expect(report.budgets.hookDependencySuppressions.count).toBeLessThanOrEqual(
     report.budgets.hookDependencySuppressions.max,

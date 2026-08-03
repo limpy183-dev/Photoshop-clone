@@ -498,6 +498,31 @@ export function CanvasView() {
     }
   }, [activeDoc])
 
+  /**
+   * Publish the freshly drawn composite as the cache. The canvas does double
+   * duty: identity-reuse, and the previous frame that `canUseLayerPartial`
+   * paints tiles over. Forced renders (every brush frame) have to keep it for
+   * the second job or painting re-composites the whole document every frame —
+   * they just publish an empty `fingerprint` so identity-reuse stays off for
+   * pixels that mutated without a fingerprint change.
+   */
+  const storeCompositeCache = React.useCallback(
+    (cv: HTMLCanvasElement, fp: string, force: boolean, allowed = true) => {
+      const { width, height } = cv
+      if (!allowed || !planCompositeCache({ width, height }).storeCache) {
+        compositeCacheRef.current = { fingerprint: "", drawnFingerprint: fp, width, height, canvas: null }
+        return
+      }
+      const previous = compositeCacheRef.current.canvas
+      const cached = previous?.width === width && previous.height === height ? previous : makeCanvas(width, height)
+      const cachedCtx = cached.getContext("2d")!
+      cachedCtx.clearRect(0, 0, width, height)
+      cachedCtx.drawImage(cv, 0, 0)
+      compositeCacheRef.current = { fingerprint: force ? "" : fp, drawnFingerprint: fp, width, height, canvas: cached }
+    },
+    [],
+  )
+
   const resetCompositeCanvasPlacement = React.useCallback((cv: HTMLCanvasElement) => {
     cv.style.left = "0px"
     cv.style.top = "0px"
@@ -617,14 +642,7 @@ export function CanvasView() {
           ctx.clearRect(0, 0, cv.width, cv.height)
           ctx.drawImage(colorManaged, 0, 0)
         }
-        const cachePlan = planCompositeCache({ width: cv.width, height: cv.height, forcedRender: force })
-        if (cachePlan.storeCache) {
-          const cached = makeCanvas(cv.width, cv.height)
-          cached.getContext("2d")!.drawImage(cv, 0, 0)
-          compositeCacheRef.current = { fingerprint: fp, drawnFingerprint: fp, width: cv.width, height: cv.height, canvas: cached }
-        } else {
-          compositeCacheRef.current = { fingerprint: "", drawnFingerprint: fp, width: cv.width, height: cv.height, canvas: null }
-        }
+        storeCompositeCache(cv, fp, force)
         return
       }
     }
@@ -755,14 +773,7 @@ export function CanvasView() {
           ctx.drawImage(tmp, 0, 0)
           ctx.restore()
         }
-        const cachePlan = planCompositeCache({ width: cv.width, height: cv.height, forcedRender: force })
-        if (cachePlan.storeCache) {
-          const cached = makeCanvas(cv.width, cv.height)
-          cached.getContext("2d")!.drawImage(cv, 0, 0)
-          compositeCacheRef.current = { fingerprint: fp, drawnFingerprint: fp, width: cv.width, height: cv.height, canvas: cached }
-        } else {
-          compositeCacheRef.current = { fingerprint: "", drawnFingerprint: fp, width: cv.width, height: cv.height, canvas: null }
-        }
+        storeCompositeCache(cv, fp, force)
         return
       }
     }
@@ -772,12 +783,18 @@ export function CanvasView() {
     // this to decide whether they can reuse a cached filter output.
     let prefixFp = ""
     const shallowKnockoutBackdrops = new Map<string, HTMLCanvasElement>()
+    // Both backdrops are document-sized snapshots — an allocation plus a full
+    // copy per frame. Skip them entirely unless a layer will actually read one.
+    const knockoutModes = new Set(
+      activeDoc.layers.map((l) => normalizeAdvancedBlending(l.advancedBlending).knockout),
+    )
+    const usesShallowKnockout = knockoutModes.has("shallow")
     // Deep knockout punches all the way through to the document base layer (the
     // locked "Background" layer if present, otherwise transparency). Compute it
     // up-front so every deep-knockout layer reveals the same backdrop regardless
     // of its parent group.
     let deepKnockoutBackdrop: HTMLCanvasElement | null = null
-    const baseLayer = activeDoc.layers.find(
+    const baseLayer = !knockoutModes.has("deep") ? undefined : activeDoc.layers.find(
       (l) =>
         l.visible &&
         l.kind !== "group" &&
@@ -796,7 +813,7 @@ export function CanvasView() {
       if (layer.kind === "group") continue
       if (typeof layer.canvas.getContext !== "function") continue
       const groupKey = layer.parentId ?? "__root__"
-      if (!shallowKnockoutBackdrops.has(groupKey)) {
+      if (usesShallowKnockout && !shallowKnockoutBackdrops.has(groupKey)) {
         const snapshot = makeCanvas(cv.width, cv.height)
         snapshot.getContext("2d")!.drawImage(cv, 0, 0)
         shallowKnockoutBackdrops.set(groupKey, snapshot)
@@ -858,7 +875,6 @@ export function CanvasView() {
       ctx.restore()
     }
 
-    const cachePlan = planCompositeCache({ width: cv.width, height: cv.height, forcedRender: force })
     const memoryPlan = planMemoryBudget({
       width: cv.width,
       height: cv.height,
@@ -866,14 +882,8 @@ export function CanvasView() {
       historyStates: 12,
       memoryBudgetMB: 1024,
     })
-    if (cachePlan.storeCache && !memoryPlan.actions.includes("disable-composite-cache")) {
-      const cached = makeCanvas(cv.width, cv.height)
-      cached.getContext("2d")!.drawImage(cv, 0, 0)
-      compositeCacheRef.current = { fingerprint: fp, drawnFingerprint: fp, width: cv.width, height: cv.height, canvas: cached }
-    } else {
-      compositeCacheRef.current = { fingerprint: "", drawnFingerprint: fp, width: cv.width, height: cv.height, canvas: null }
-    }
-  }, [activeDoc, filterPreviews, resetCompositeCanvasPlacement, viewZoom, visibleDocumentViewport])
+    storeCompositeCache(cv, fp, force, !memoryPlan.actions.includes("disable-composite-cache"))
+  }, [activeDoc, filterPreviews, resetCompositeCanvasPlacement, storeCompositeCache, viewZoom, visibleDocumentViewport])
 
   React.useEffect(() => {
     compose()
@@ -1191,7 +1201,9 @@ export function CanvasView() {
   function renderBufferedStroke() {
     const state = strokeCompositeRef.current
     if (!state) return false
-    const dirty = drawingRef.current.type === "stroke" ? drawingRef.current.dirty : undefined
+    // Only the area painted since the last frame: re-flattening the whole
+    // stroke every frame is what made long strokes crawl.
+    const dirty = drawingRef.current.type === "stroke" ? drawingRef.current.frameDirty : undefined
     const ctx = restoreBufferedStrokeSource(state, dirty)
     ctx.save()
     ctx.globalAlpha = clamp01(state.opacity * state.flow)
@@ -3024,7 +3036,11 @@ export function CanvasView() {
     handle?: TransformHandleId
     guideOrient?: "horizontal" | "vertical"
     refineMode?: "expand" | "subtract"
+    /** Whole-stroke bounds, accumulated to pointer-up for the history commit. */
     dirty?: DirtyRect
+    /** Bounds touched since the last render, cleared each frame. Repainting
+     *  `dirty` instead makes a long stroke quadratic in its own length. */
+    frameDirty?: DirtyRect
     rotateStartAngle?: number
     rotateStartValue?: number
     directLayerId?: string
@@ -3069,6 +3085,7 @@ export function CanvasView() {
     if (drag.type !== "stroke" || !activeDoc) return
     if (symmetry.enabled) {
       drag.dirty = { x: 0, y: 0, w: activeDoc.width, h: activeDoc.height }
+      drag.frameDirty = drag.dirty
       return
     }
     const pad = strokeDirtyPadding()
@@ -3079,12 +3096,19 @@ export function CanvasView() {
       w: Math.abs(to.x - start.x) + pad * 2,
       h: Math.abs(to.y - start.y) + pad * 2,
     })
-    if (dirty) drag.dirty = mergeDirtyRect(drag.dirty, dirty)
+    if (dirty) {
+      drag.dirty = mergeDirtyRect(drag.dirty, dirty)
+      drag.frameDirty = mergeDirtyRect(drag.frameDirty, dirty)
+    }
   }
 
   function requestTileAwareStrokeRender(reason = "tile-only-tool") {
     const drag = drawingRef.current
-    const dirty = drag.type === "stroke" ? drag.dirty : undefined
+    // frameDirty, not dirty: the whole-stroke bounds cross the planner's
+    // full-frame coverage threshold within a few hundred pixels of travel,
+    // which drops every later frame of the stroke onto the slow path.
+    const dirty = drag.type === "stroke" ? drag.frameDirty : undefined
+    drag.frameDirty = undefined
     if (!activeDoc || !activeLayer || !dirty || activeDoc.quickMask || activeSmartFilterMaskCanvas()) {
       requestRender()
       return
