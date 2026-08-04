@@ -80,7 +80,12 @@ function hasPlaywrightBrowserCache(path) {
 }
 
 const nodeMajor = Number(process.versions.node.split(".")[0])
-add("node-version", nodeMajor === 22, `current=${process.versions.node}; expected=${pkg.engines?.node ?? ">=22 <23"}`)
+const expectedNodeMajor = Number(pkg.engines?.node?.match(/\d+/)?.[0])
+add(
+  "node-version",
+  nodeMajor === expectedNodeMajor,
+  `current=${process.versions.node}; expected=${pkg.engines?.node ?? "unset"}`,
+)
 
 const npmVersion = firstCommandOutput(npmCandidates())
 add(

@@ -4,7 +4,7 @@
   "private": true,
   "packageManager": "npm@11.5.2",
   "engines": {
-    "node": ">=22 <23"
+    "node": ">=24 <25"
   },
   "scripts": {
     "predev": "npm run check:node",
@@ -15,7 +15,7 @@
     "build:static": "npm run check:capabilities && npm run check:architecture && node scripts/build-static-export.mjs",
     "start": "next start",
     "preverify": "npm run check:node",
-    "check:node": "node scripts/ensure-node-22.mjs",
+    "check:node": "node scripts/ensure-node-version.mjs",
     "doctor": "node scripts/doctor.mjs",
     "lint": "eslint .",
     "lint:strict": "eslint . --max-warnings=0",

@@ -17,7 +17,7 @@ npm run test:smoke   # fast desktop/mobile Playwright smoke matrix
 npm run verify       # lint + typecheck + capability + architecture + build + bundle + smoke
 ```
 
-Use Node 22 to match CI. On Windows PowerShell setups that block `npm.ps1`,
+Use Node 24 to match CI. On Windows PowerShell setups that block `npm.ps1`,
 run commands through `npm.cmd`, for example `npm.cmd run verify`.
 
 Run a single Playwright test file:

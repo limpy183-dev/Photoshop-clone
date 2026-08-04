@@ -4,7 +4,6 @@ import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)))
-const expectedMajor = "22"
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"))
 
 function readVersionFile(name) {
@@ -16,16 +15,23 @@ function fail(message) {
   process.exit(1)
 }
 
-const nvmVersion = readVersionFile(".nvmrc")
+// .nvmrc is the single source of truth; every other pin is checked against it.
+const expectedMajor = readVersionFile(".nvmrc")
 const nodeVersion = readVersionFile(".node-version")
 const currentMajor = process.versions.node.split(".")[0]
 
-if (nvmVersion !== expectedMajor || nodeVersion !== expectedMajor) {
-  fail(`Node version pins must both be ${expectedMajor}: .nvmrc=${nvmVersion}, .node-version=${nodeVersion}`)
+if (!/^\d+$/.test(expectedMajor)) {
+  fail(`.nvmrc must hold a bare major version; found ${expectedMajor}`)
 }
 
-if (pkg.engines?.node !== ">=22 <23") {
-  fail(`package.json engines.node must be ">=22 <23"; found ${pkg.engines?.node ?? "missing"}`)
+const expectedEngines = `>=${expectedMajor} <${Number(expectedMajor) + 1}`
+
+if (nodeVersion !== expectedMajor) {
+  fail(`Node version pins must both be ${expectedMajor}: .nvmrc=${expectedMajor}, .node-version=${nodeVersion}`)
+}
+
+if (pkg.engines?.node !== expectedEngines) {
+  fail(`package.json engines.node must be "${expectedEngines}"; found ${pkg.engines?.node ?? "missing"}`)
 }
 
 if (currentMajor !== expectedMajor) {

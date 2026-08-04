@@ -76,10 +76,13 @@ test("package metadata pins the local development runtime and verification scrip
     scripts?: Record<string, string>
   }
 
-  expect(pkg.engines?.node).toBe(">=22 <23")
+  const major = readFileSync(".nvmrc", "utf8").trim()
+  expect(major).toMatch(/^\d+$/)
+  expect(readFileSync(".node-version", "utf8").trim()).toBe(major)
+  expect(pkg.engines?.node).toBe(`>=${major} <${Number(major) + 1}`)
   expect(pkg.packageManager).toMatch(/^npm@\d+\.\d+\.\d+$/)
   expect(readFileSync(".npmrc", "utf8")).toContain("engine-strict=true")
-  expect(pkg.scripts?.["check:node"]).toBe("node scripts/ensure-node-22.mjs")
+  expect(pkg.scripts?.["check:node"]).toBe("node scripts/ensure-node-version.mjs")
   expect(pkg.scripts?.predev).toBe("npm run check:node")
   expect(pkg.scripts?.prebuild).toBe("npm run check:node")
   expect(pkg.scripts?.preverify).toBe("npm run check:node")

@@ -164,16 +164,16 @@ The core state lives in the editor context and is mutated through typed actions.
 
 ### Requirements
 
-- Node.js 22 (`.nvmrc` / `.node-version` match CI).
+- Node.js 24 (`.nvmrc` / `.node-version` match CI).
 - npm 11.5.x or the package-manager version declared in `package.json`.
 - A modern Chromium-based browser for the best Canvas and Playwright behavior.
 
-On Windows PowerShell, select Node 22 before installing or building:
+On Windows PowerShell, select Node 24 before installing or building:
 
 ```powershell
 # nvm-windows
-nvm install 22
-nvm use 22
+nvm install 24
+nvm use 24
 node -v
 npm.cmd run doctor
 ```
@@ -181,8 +181,8 @@ npm.cmd run doctor
 For `fnm` users, the equivalent is:
 
 ```powershell
-fnm install 22
-fnm use 22
+fnm install 24
+fnm use 24
 node -v
 npm.cmd run doctor
 ```
