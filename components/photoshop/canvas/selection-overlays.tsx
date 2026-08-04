@@ -151,6 +151,9 @@ export function textEditOverlayStyle(
   }
 }
 
+/** Prompt shown in an empty type box. The box is sized to fit it. */
+const TEXT_PLACEHOLDER = "Type here…"
+
 function measureTextWidth(lines: string[], style: React.CSSProperties): number {
   if (typeof document === "undefined") return 0
   const canvas = document.createElement("canvas")
@@ -193,9 +196,16 @@ export function TextEditOverlay({
   if (!layer || !text) return null
 
   const baseStyle = textEditOverlayStyle(text, zoom)
+  // An empty box still shows the placeholder, so it has to be measured too —
+  // sizing to the empty string collapsed the dashed outline to its 64px floor
+  // and cut "Type here…" off partway through the first word.
   const style = text.boxWidth
     ? baseStyle
-    : textEditOverlayStyle(text, zoom, measureTextWidth(state.value.split("\n"), baseStyle))
+    : textEditOverlayStyle(
+      text,
+      zoom,
+      measureTextWidth(state.value ? state.value.split("\n") : [TEXT_PLACEHOLDER], baseStyle),
+    )
 
   return (
     <textarea
@@ -203,7 +213,11 @@ export function TextEditOverlay({
       data-testid="text-edit-overlay"
       spellCheck={false}
       value={state.value}
-      placeholder="Type here…"
+      // Without this a textarea is two rows tall by default, which left a
+      // single line of point text sitting in the top half of the outline
+      // instead of centred in it.
+      rows={1}
+      placeholder={TEXT_PLACEHOLDER}
       onChange={(e) => setState({ ...state, value: e.target.value })}
       onBlur={commit}
       // The editor sits inside the canvas stage, which routes pointer events to

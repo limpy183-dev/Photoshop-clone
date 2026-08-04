@@ -134,10 +134,14 @@ export function transformedCloneStamp(
         if (dist < r * 0.78 || dist > r) continue
         const sample = transformedCloneSample(src.data, subW, subH, srcMinX, srcMinY, sourceAnchor, destAnchor, docX, docY, scaleFactor, cos, sin)
         const i = (py * sw + px) * 4
-        dr += original[i] - sample.r
-        dg += original[i + 1] - sample.g
-        db += original[i + 2] - sample.b
-        borderCount++
+        // Weighted by opacity for the same reason as healStamp: un-premultiplied
+        // channels carry no colour where alpha is near zero.
+        const weight = (original[i + 3] / 255) * (sample.a / 255)
+        if (weight <= 0.002) continue
+        dr += (original[i] - sample.r) * weight
+        dg += (original[i + 1] - sample.g) * weight
+        db += (original[i + 2] - sample.b) * weight
+        borderCount += weight
       }
     }
     if (borderCount) {
@@ -377,6 +381,8 @@ export interface DodgeBurnOptions {
   range?: "shadows" | "midtones" | "highlights"
   /** Keep hue and saturation by scaling luminance instead of each channel. */
   protectTones?: boolean
+  /** Brush hardness, 0–100. Below 100 the dab fades out toward its rim. */
+  hardness?: number
 }
 
 /**
@@ -405,6 +411,7 @@ export function dodgeBurnStamp(
   if (sw <= 0 || sh <= 0) return
   const range = options?.range ?? "midtones"
   const protectTones = options?.protectTones ?? true
+  const hard = Math.max(0, Math.min(1, (options?.hardness ?? 100) / 100))
   const cx = x - sx
   const cy = y - sy
   const img = ctx.getImageData(sx, sy, sw, sh)
@@ -420,13 +427,26 @@ export function dodgeBurnStamp(
       const green = img.data[i + 1]
       const blue = img.data[i + 2]
       const luma = (0.299 * red + 0.587 * green + 0.114 * blue) / 255
-      const w = (1 - d / r) * strength * toneRangeWeight(luma, range)
+      // Same falloff shape as the clone/heal dabs: flat out to the hard core,
+      // then a linear fade to the rim. The old bare `1 - d/r` cone peaked at a
+      // single pixel and fell away immediately, so a stroke read as a chain of
+      // dark-centred spots rather than an even sweep.
+      const falloff =
+        hard >= 1 || d <= r * hard
+          ? 1
+          : Math.max(0, 1 - (d - r * hard) / Math.max(1, r * (1 - hard)))
+      const w = falloff * strength * toneRangeWeight(luma, range)
       if (w <= 0) continue
-      if (protectTones) {
+      // Scaling the channels by a luminance ratio preserves hue and saturation,
+      // but it multiplies through zero: on a black pixel the ratio can never
+      // lift anything, so dodging shadows did nothing and near-blacks collapsed
+      // to flat black. There is no hue to protect down there, so fall through
+      // to the additive form.
+      if (protectTones && luma > 0.004) {
         // Move luminance, then rescale the pixel to hit it — hue and
         // saturation ride along unchanged.
         const targetLuma = mode === "dodge" ? luma + (1 - luma) * w : luma - luma * w
-        const factor = luma > 0.001 ? targetLuma / luma : 0
+        const factor = targetLuma / luma
         img.data[i] = clampByte(red * factor)
         img.data[i + 1] = clampByte(green * factor)
         img.data[i + 2] = clampByte(blue * factor)
@@ -598,7 +618,13 @@ export function healStamp(
     sw,
     sh,
   )
-  // Compute average color difference around the patch border (texture vs target)
+  // Average colour difference around the patch border (texture vs target),
+  // weighted by how opaque both sides are there.
+  //
+  // Canvas stores RGBA un-premultiplied, so a transparent pixel's colour
+  // channels are arbitrary and a barely-opaque one's are quantised down to a
+  // couple of usable bits. Letting those vote equally is what made healing over
+  // low-opacity colour swing the whole patch to a wild tint.
   let dr = 0
   let dg = 0
   let db = 0
@@ -607,10 +633,12 @@ export function healStamp(
     for (let px = 0; px < sw; px++) {
       if (px === 0 || py === 0 || px === sw - 1 || py === sh - 1) {
         const i = (py * sw + px) * 4
-        dr += dest.data[i] - src.data[i]
-        dg += dest.data[i + 1] - src.data[i + 1]
-        db += dest.data[i + 2] - src.data[i + 2]
-        n++
+        const weight = (dest.data[i + 3] / 255) * (src.data[i + 3] / 255)
+        if (weight <= 0.002) continue
+        dr += (dest.data[i] - src.data[i]) * weight
+        dg += (dest.data[i + 1] - src.data[i + 1]) * weight
+        db += (dest.data[i + 2] - src.data[i + 2]) * weight
+        n += weight
       }
     }
   }
@@ -633,9 +661,24 @@ export function healStamp(
       if (d > r) continue
       const t = 1 - d / r
       const i = (py * sw + px) * 4
-      dest.data[i] = dest.data[i] * (1 - t) + (src.data[i] + dr) * t
-      dest.data[i + 1] = dest.data[i + 1] * (1 - t) + (src.data[i + 1] + dg) * t
-      dest.data[i + 2] = dest.data[i + 2] * (1 - t) + (src.data[i + 2] + db) * t
+      // Blend premultiplied, and carry alpha across too. Mixing raw channels
+      // let a nearly transparent destination pixel's meaningless colour fight
+      // the donor at full strength, which is what made the spot-healing brush
+      // flash and smear over low-opacity paint; it also left alpha untouched,
+      // so healing never actually filled a hole.
+      const destAlpha = dest.data[i + 3] / 255
+      const srcAlpha = src.data[i + 3] / 255
+      const outAlpha = destAlpha + (srcAlpha - destAlpha) * t
+      if (outAlpha <= 0) {
+        dest.data[i + 3] = 0
+        continue
+      }
+      for (let channel = 0; channel < 3; channel++) {
+        const destValue = dest.data[i + channel] * destAlpha
+        const srcValue = (src.data[i + channel] + (channel === 0 ? dr : channel === 1 ? dg : db)) * srcAlpha
+        dest.data[i + channel] = clampByte((destValue + (srcValue - destValue) * t) / outAlpha)
+      }
+      dest.data[i + 3] = clampByte(outAlpha * 255)
     }
   }
   destCtx.putImageData(dest, dxi, dyi)

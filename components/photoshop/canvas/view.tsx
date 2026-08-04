@@ -119,13 +119,17 @@ import {
 } from "@/editor/canvas/compositor"
 import {
   alphaBounds,
+  applySelectionClip,
   applySelectionMaskToCanvas,
   autoPickLayer,
+  captureSelectionClip,
   createRemoveMask,
+  dabTouchesSelection,
   liftSelectionFloat,
   pickTextLayerAt,
   selectBackgroundMaskFromImage,
   translateSelection,
+  type SelectionClip,
 } from "@/editor/canvas/selection-helpers"
 import {
   drawArtboardPreview,
@@ -434,6 +438,7 @@ export function CanvasView() {
   const selectionHitTesterRef = React.useRef<SelectionHitTester | null>(null)
   const mouseMoveCoalescerRef = React.useRef<RafCoalescer<MouseMoveDetail> | null>(null)
   const transparencyLockMaskRef = React.useRef<HTMLCanvasElement | null>(null)
+  const selectionClipRef = React.useRef<SelectionClip | null>(null)
   const eraserSourceRef = React.useRef<HTMLCanvasElement | null>(null)
   const colorReplacementSourceRef = React.useRef<HTMLCanvasElement | null>(null)
   /**
@@ -987,28 +992,6 @@ export function CanvasView() {
     return selectionHitTesterRef.current?.contains(p) ?? containsSelectionPoint(activeDoc.width, activeDoc.height, activeDoc.selection, p)
   }
 
-  function selectionToMask(selection: Selection) {
-    if (!activeDoc) return null
-    if (selection.mask) {
-      const copy = makeCanvas(activeDoc.width, activeDoc.height)
-      copy.getContext("2d")!.drawImage(selection.mask, 0, 0)
-      return copy
-    }
-    if (!selection.bounds) return null
-    const mask = makeCanvas(activeDoc.width, activeDoc.height)
-    const ctx = mask.getContext("2d")!
-    ctx.fillStyle = "#fff"
-    const b = selection.bounds
-    if (selection.shape === "ellipse") {
-      ctx.beginPath()
-      ctx.ellipse(b.x + b.w / 2, b.y + b.h / 2, b.w / 2, b.h / 2, 0, 0, Math.PI * 2)
-      ctx.fill()
-    } else {
-      ctx.fillRect(b.x, b.y, b.w, b.h)
-    }
-    return mask
-  }
-
   /** One zoom-tool click: steps by 1.5× toward or away from the cursor. */
   function applyZoomToolStep(clientX: number, clientY: number, out: boolean) {
     applyViewZoom(
@@ -1033,7 +1016,7 @@ export function CanvasView() {
 
   function commitSelection(raw: Selection) {
     if (!activeDoc) return
-    let rawMask = selectionToMask(raw)
+    let rawMask = selectionToMaskCanvas(activeDoc.width, activeDoc.height, raw)
     if (!rawMask) {
       dispatch({ type: "set-selection", selection: { bounds: null, shape: "rect" } })
       return
@@ -1043,7 +1026,7 @@ export function CanvasView() {
     }
     let nextMask = rawMask
     if (selectionOptions.mode !== "new" && activeDoc.selection.bounds) {
-      const existing = selectionToMask(activeDoc.selection)
+      const existing = selectionToMaskCanvas(activeDoc.width, activeDoc.height, activeDoc.selection)
       if (existing) {
         nextMask = makeCanvas(activeDoc.width, activeDoc.height)
         const nctx = nextMask.getContext("2d")!
@@ -1277,7 +1260,7 @@ export function CanvasView() {
     input: BrushInput,
     options: StampOptions = {},
   ) {
-    if (!activeDoc?.quickMask && !withinSelection({ x, y })) return
+    if (!dabTouchesSelection(activeDoc, x, y, brush.size)) return
     const { dabSize, dabAngle, dabRoundness, tipState } = applyCanvasBrushShapeDynamics(brush, input)
     const { opaMul, flowMul } = applyCanvasBrushTransfer(brush, input)
     const isBuffered = options.includeBrushOpacity === false
@@ -2079,21 +2062,21 @@ export function CanvasView() {
           const t = steps === 0 ? 1 : i / steps
           const x = from ? from.x + (to.x - from.x) * t : to.x
           const y = from ? from.y + (to.y - from.y) * t : to.y
-          if (withinSelection({ x, y })) blurStamp(ctx, x, y, brush.size / 2)
+          if (dabTouchesSelection(activeDoc, x, y, brush.size / 2)) blurStamp(ctx, x, y, brush.size / 2)
         }
       } else if (tool === "sharpen") {
         for (let i = 0; i <= steps; i++) {
           const t = steps === 0 ? 1 : i / steps
           const x = from ? from.x + (to.x - from.x) * t : to.x
           const y = from ? from.y + (to.y - from.y) * t : to.y
-          if (withinSelection({ x, y })) sharpenStamp(ctx, x, y, brush.size / 2)
+          if (dabTouchesSelection(activeDoc, x, y, brush.size / 2)) sharpenStamp(ctx, x, y, brush.size / 2)
         }
       } else if (tool === "smudge") {
         for (let i = 0; i <= steps; i++) {
           const t = steps === 0 ? 1 : i / steps
           const x = from ? from.x + (to.x - from.x) * t : to.x
           const y = from ? from.y + (to.y - from.y) * t : to.y
-          if (withinSelection({ x, y })) smudgeBufferRef.current.step(ctx, x, y, brush.size / 2, brush.flow / 100)
+          if (dabTouchesSelection(activeDoc, x, y, brush.size / 2)) smudgeBufferRef.current.step(ctx, x, y, brush.size / 2, brush.flow / 100)
         }
       } else if (tool === "dodge" || tool === "burn") {
         const dodgeOptions = getDodgeBurnRuntimeOptions()
@@ -2104,10 +2087,11 @@ export function CanvasView() {
           const t = steps === 0 ? 1 : i / steps
           const x = from ? from.x + (to.x - from.x) * t : to.x
           const y = from ? from.y + (to.y - from.y) * t : to.y
-          if (withinSelection({ x, y })) {
+          if (dabTouchesSelection(activeDoc, x, y, brush.size / 2)) {
             dodgeBurnStamp(ctx, x, y, brush.size / 2, tool, strength, {
               range: dodgeOptions.range,
               protectTones: dodgeOptions.protectTones,
+              hardness: brush.hardness,
             })
           }
         }
@@ -2118,7 +2102,7 @@ export function CanvasView() {
           const t = steps === 0 ? 1 : i / steps
           const x = from ? from.x + (to.x - from.x) * t : to.x
           const y = from ? from.y + (to.y - from.y) * t : to.y
-          if (withinSelection({ x, y })) {
+          if (dabTouchesSelection(activeDoc, x, y, brush.size / 2)) {
             spongeStamp(ctx, x, y, brush.size / 2, strength, spongeOptions.mode)
           }
         }
@@ -2139,7 +2123,7 @@ export function CanvasView() {
           const t = steps === 0 ? 1 : i / steps
           const dx = from ? from.x + (to.x - from.x) * t : to.x
           const dy = from ? from.y + (to.y - from.y) * t : to.y
-          if (!withinSelection({ x: dx, y: dy })) continue
+          if (!dabTouchesSelection(activeDoc, dx, dy, brush.size / 2)) continue
           const artDabs = tool === "art-history-brush"
             ? planArtHistoryStroke({ x: dx, y: dy }, brush, { seed: strokeDabRef.current++ + i * 17 })
             : [{ dx: 0, dy: 0, sourceDx: 0, sourceDy: 0, rotation: 0, scale: 1, opacity: 1 }]
@@ -2174,7 +2158,7 @@ export function CanvasView() {
           const t = steps === 0 ? 1 : i / steps
           const dx = from ? from.x + (to.x - from.x) * t : to.x
           const dy = from ? from.y + (to.y - from.y) * t : to.y
-          if (!withinSelection({ x: dx, y: dy })) continue
+          if (!dabTouchesSelection(activeDoc, dx, dy, brush.size / 2)) continue
           transformedCloneStamp(
             ctx,
             sourceCanvas,
@@ -2201,13 +2185,14 @@ export function CanvasView() {
           const t = steps === 0 ? 1 : i / steps
           const x = from ? from.x + (to.x - from.x) * t : to.x
           const y = from ? from.y + (to.y - from.y) * t : to.y
-          if (!withinSelection({ x, y })) continue
+          if (!dabTouchesSelection(activeDoc, x, y, brush.size / 2)) continue
           const r = brush.size / 2
           const donor = pickHealSource(source, x, y, r)
           healStamp(ctx, source, donor.x, donor.y, x, y, r)
         }
       }
     }
+    applySelectionClip(ctx, selectionClipRef.current, { buffered: !!bufferedStroke })
     if (!renderBufferedStroke()) requestTileAwareStrokeRender()
   }
 
@@ -2363,7 +2348,7 @@ export function CanvasView() {
     input: BrushInput,
     opacity: number,
   ) {
-    if (!activeLayer || !activeDoc?.quickMask && !withinSelection({ x, y })) return
+    if (!activeLayer || !dabTouchesSelection(activeDoc, x, y, dabSize)) return
     const settings = replacementSettings()
     const r = Math.max(1, Math.floor(dabSize / 2))
     const x0 = Math.max(0, Math.floor(x - r))
@@ -2828,8 +2813,11 @@ export function CanvasView() {
       return
     }
 
-    // Transform tool
-    if (tool === "transform") {
+    // Transform tool: the first click on a layer puts the box up. Later clicks
+    // must fall through to the handle hit-test below — restarting the session
+    // on every press reset the box to identity and swallowed the press, so a
+    // handle could never actually be grabbed and the tool did nothing.
+    if (tool === "transform" && transformRef.current?.layerId !== activeLayer?.id) {
       if (!layerAllowsMoving(activeLayer)) return
       beginTransform(activeLayer)
       return
@@ -3403,6 +3391,7 @@ export function CanvasView() {
           ? cloneCanvasForTool(activeLayer.canvas)
           : null
       if (tool === "mixer-brush") resetMixerReservoir()
+      selectionClipRef.current = captureSelectionClip(activeDoc, getActiveCtx()?.canvas ?? null)
       if (isStrokeBufferedPaintTool()) {
         const target = getActiveCtx()
         if (!target) return
@@ -3796,6 +3785,7 @@ export function CanvasView() {
     drawingRef.current = { type: null }
     smudgeBufferRef.current.reset()
     transparencyLockMaskRef.current = null
+    selectionClipRef.current = null
     eraserSourceRef.current = null
     eraserSampleRef.current = null
     colorReplacementSourceRef.current = null
@@ -4374,6 +4364,7 @@ export function CanvasView() {
     removeRef.current = null
     smudgeBufferRef.current.reset()
     transparencyLockMaskRef.current = null
+    selectionClipRef.current = null
     eraserSourceRef.current = null
     eraserSampleRef.current = null
     colorReplacementSourceRef.current = null
@@ -4451,6 +4442,7 @@ export function CanvasView() {
           drawingRef.current = { type: null }
           smudgeBufferRef.current.reset()
           transparencyLockMaskRef.current = null
+          selectionClipRef.current = null
         }
         if (transformRef.current) {
           // discard

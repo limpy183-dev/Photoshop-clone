@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
 
-import { spongeStamp } from "@/editor/tool/helpers"
+import { dodgeBurnStamp, healStamp, spongeStamp } from "@/editor/tool/helpers"
 
 class TestImageData {
   data: Uint8ClampedArray
@@ -92,4 +92,89 @@ test("sponge stamp desaturates opaque pixels inside the circular brush only", ()
   expect(getPixel(result.data, result.width, 3, 3)).toEqual([147, 72, 72, 255])
   expect(getPixel(result.data, result.width, 2, 3)).toEqual([10, 220, 30, 0])
   expect(getPixel(result.data, result.width, 0, 0)).toEqual([240, 10, 180, 255])
+})
+
+/* ---- spot healing over low-opacity pixels ---- */
+
+function fakeCanvas(image: ImageData): HTMLCanvasElement {
+  const ctx = fakeContext(image)
+  return {
+    width: image.width,
+    height: image.height,
+    getContext: () => ctx,
+  } as unknown as HTMLCanvasElement
+}
+
+test("heal stamp carries alpha across, so it fills a near-transparent blemish", () => {
+  // A barely-visible patch with a dark blemish in the middle, healed from an
+  // opaque donor. Blending only RGB left the result stuck at the original
+  // alpha, so the spot-healing brush appeared to do nothing on low-opacity
+  // colour while the meaningless channels of those pixels fought the donor.
+  const dest = makeImage(8, 8, [200, 200, 200, 40])
+  setPixel(dest.data, dest.width, 4, 4, [10, 10, 10, 40])
+  const donor = makeImage(8, 8, [100, 100, 100, 255])
+
+  const ctx = fakeContext(dest)
+  healStamp(ctx, fakeCanvas(donor), 4, 4, 4, 4, 3)
+  const result = (ctx as unknown as { __image: () => ImageData }).__image()
+
+  const [r, g, b, a] = getPixel(result.data, result.width, 4, 4)
+  expect(a, "the healed centre takes the donor's opacity").toBeGreaterThan(240)
+  // Donor + the border offset lands back on the surrounding tone, not the blemish.
+  for (const channel of [r, g, b]) expect(Math.abs(channel - 200)).toBeLessThan(12)
+})
+
+test("heal stamp ignores fully transparent border pixels when colour-matching", () => {
+  // Canvas stores RGBA un-premultiplied, so transparent pixels can hold any
+  // colour at all. Letting them into the border average dragged the whole
+  // patch toward that colour — the glitch this guards against.
+  // healStamp samples the r*2 box around the dab, so ring 1..6 is the border of
+  // the patch it colour-matches on. Fill that ring with transparent magenta.
+  const dest = makeImage(8, 8, [200, 200, 200, 255])
+  for (let i = 1; i <= 6; i++) {
+    setPixel(dest.data, dest.width, i, 1, [255, 0, 255, 0])
+    setPixel(dest.data, dest.width, i, 6, [255, 0, 255, 0])
+    setPixel(dest.data, dest.width, 1, i, [255, 0, 255, 0])
+    setPixel(dest.data, dest.width, 6, i, [255, 0, 255, 0])
+  }
+  setPixel(dest.data, dest.width, 4, 4, [10, 10, 10, 255])
+  const donor = makeImage(8, 8, [100, 100, 100, 255])
+
+  const ctx = fakeContext(dest)
+  healStamp(ctx, fakeCanvas(donor), 4, 4, 4, 4, 3)
+  const result = (ctx as unknown as { __image: () => ImageData }).__image()
+
+  const [r, g, b] = getPixel(result.data, result.width, 4, 4)
+  // Neutral, from the donor — not dragged to magenta by pixels that have no
+  // visible colour at all.
+  expect(Math.abs(r - g), "no colour cast from the transparent border").toBeLessThan(12)
+  expect(Math.abs(b - g), "no colour cast from the transparent border").toBeLessThan(12)
+})
+
+/* ---- dodge / burn ---- */
+
+test("dodge lifts a near-black pixel instead of pinning it to black", () => {
+  // Protect Tones scales the channels by a luminance ratio, which multiplies
+  // through zero: dodging shadows did nothing and drove near-blacks to flat
+  // black. Below the floor there is no hue to protect, so it goes additive.
+  const image = makeImage(8, 8, [0, 0, 0, 255])
+  const ctx = fakeContext(image)
+  dodgeBurnStamp(ctx, 4, 4, 3, "dodge", 0.5, { range: "shadows", protectTones: true })
+  const result = (ctx as unknown as { __image: () => ImageData }).__image()
+
+  expect(getPixel(result.data, result.width, 4, 4)[0]).toBeGreaterThan(0)
+})
+
+test("dodge hardness controls how far the dab fades toward its rim", () => {
+  const near = (hardness: number) => {
+    const image = makeImage(16, 16, [128, 128, 128, 255])
+    const ctx = fakeContext(image)
+    dodgeBurnStamp(ctx, 8, 8, 6, "dodge", 0.5, { range: "midtones", protectTones: false, hardness })
+    const result = (ctx as unknown as { __image: () => ImageData }).__image()
+    // A pixel most of the way out to the rim.
+    return getPixel(result.data, result.width, 12, 8)[0]
+  }
+  // A hard brush carries full strength almost to the rim; a soft one has
+  // faded away by the same distance.
+  expect(near(100)).toBeGreaterThan(near(0))
 })

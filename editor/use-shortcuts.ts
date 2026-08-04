@@ -48,6 +48,9 @@ const TOOL_SHORTCUT_GROUPS: ToolShortcutGroup[] = [
   { shortcutId: "tool-blur", tools: ["blur", "sharpen", "smudge"] },
   { shortcutId: "tool-dodge", tools: ["dodge", "burn", "sponge"] },
   { shortcutId: "tool-pen", tools: ["pen", "freeform-pen", "curvature-pen", "add-anchor-point", "delete-anchor-point", "convert-point"] },
+  // The tool palette has always advertised "A" for these two, but the group was
+  // missing here, so the key did nothing and Path Selection looked broken.
+  { shortcutId: "tool-path-select", tools: ["path-select", "direct-select"] },
   { shortcutId: "tool-text", tools: ["type", "type-vertical", "type-mask-horizontal", "type-mask-vertical"] },
   { shortcutId: "tool-shape", tools: ["shape-rect", "shape-rounded-rect", "shape-ellipse", "shape-polygon", "shape-triangle", "shape-line", "custom-shape"] },
   { shortcutId: "tool-hand", tools: ["hand"] },

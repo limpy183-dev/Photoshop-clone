@@ -81,6 +81,7 @@ export const DEFAULT_SHORTCUTS: Shortcut[] = [
   { id: "tool-dodge", keys: "O", action: "Dodge / Burn / Sponge", category: "Tools" },
   { id: "tool-blur", keys: "None", action: "Blur / Sharpen / Smudge", category: "Tools" },
   { id: "tool-pen", keys: "P", action: "Pen Tools", category: "Tools" },
+  { id: "tool-path-select", keys: "A", action: "Path / Direct Selection", category: "Tools" },
   { id: "tool-hand", keys: "H", action: "Hand Tool", category: "Tools" },
   { id: "tool-rotate-view", keys: "R", action: "Rotate View Tool", category: "Tools" },
   { id: "tool-zoom", keys: "Z", action: "Zoom Tool", category: "Tools" },

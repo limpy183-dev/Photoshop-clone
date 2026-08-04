@@ -302,6 +302,24 @@ export function RetouchOptions() {
       {tool === "dodge" || tool === "burn" ? (
         <>
           <Divider />
+          {/* Dodge and burn are brushes, so they get the brush's soft edge too —
+              without it every dab landed as a hard-rimmed disc. */}
+          <div className="flex items-center gap-1.5">
+            <ScrubLabel
+              label="Hardness:"
+              value={brush.hardness}
+              min={0}
+              max={100}
+              onChange={(v) => dispatch({ type: "set-brush", brush: { hardness: v } })}
+            />
+            <PercentInput
+              label="Hardness"
+              value={brush.hardness}
+              onChange={(v) => dispatch({ type: "set-brush", brush: { hardness: v } })}
+            />
+            <span className="text-[11px]">%</span>
+          </div>
+          <Divider />
           <span className={labelClass}>Range:</span>
           <Select value={dodgeBurn.range} onValueChange={(v) => patchDodgeBurn({ range: v as ToneRange })}>
             <SelectTrigger className="h-6 w-24 text-[11px]">

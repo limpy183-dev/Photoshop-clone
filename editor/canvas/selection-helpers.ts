@@ -78,6 +78,91 @@ export function clipToSelection(context: CanvasRenderingContext2D, document: PsD
   context.clip()
 }
 
+/** Everything a stroke needs to stay inside the active selection. */
+export interface SelectionClip {
+  /** The selection, as a mask over the whole document. */
+  mask: HTMLCanvasElement
+  /** The target's own pixels from *outside* the selection. */
+  outside: HTMLCanvasElement
+}
+
+/**
+ * Capture the clip a stroke on `target` should be confined to, or null when the
+ * document has no selection to confine it to.
+ *
+ * Painting used to be gated by a point test on each dab's centre, so a brush
+ * whose centre was just inside a marquee still spilled its whole radius over the
+ * edge — and dabs centred just outside painted nothing at all, even where they
+ * overlapped it. Masking the painted result instead cuts exactly on the
+ * selection boundary, feathered edges included, for every tool that paints.
+ */
+export function captureSelectionClip(
+  document: PsDocument,
+  target: HTMLCanvasElement | null,
+): SelectionClip | null {
+  // Quick Mask paints the selection itself, so it must not be clipped by it.
+  if (!target || document.quickMask || !document.selection.bounds) return null
+  const mask = selectionToMaskCanvas(document.width, document.height, document.selection)
+  if (!mask) return null
+  const outside = makeCanvas(target.width, target.height)
+  const context = outside.getContext("2d")
+  if (!context) return null
+  context.drawImage(target, 0, 0)
+  context.globalCompositeOperation = "destination-out"
+  context.drawImage(mask, 0, 0)
+  return { mask, outside }
+}
+
+/**
+ * Cut the just-painted pixels back to the selection.
+ *
+ * A `buffered` target holds only the stroke, so masking it is the whole job.
+ * Painting straight onto a layer also wipes the pixels outside the selection,
+ * which is why the untouched remainder is composited back underneath — the two
+ * halves are disjoint, so nothing double-composites and an eraser stroke still
+ * erases rather than restoring what it just removed.
+ */
+export function applySelectionClip(
+  context: CanvasRenderingContext2D,
+  clip: SelectionClip | null,
+  options: { buffered: boolean },
+) {
+  if (!clip) return
+  context.save()
+  context.globalCompositeOperation = "destination-in"
+  context.drawImage(clip.mask, 0, 0)
+  if (!options.buffered) {
+    context.globalCompositeOperation = "destination-over"
+    context.drawImage(clip.outside, 0, 0)
+  }
+  context.restore()
+}
+
+/**
+ * Cheap reject for a dab that cannot reach the selection at all.
+ *
+ * The exact cut is `applySelectionClip`'s job; this only spares the per-pixel
+ * stamps the work when a dab's box misses the selection's box outright. It
+ * replaces a test on the dab *centre*, which discarded the half of every
+ * edge-straddling dab that should have painted.
+ */
+export function dabTouchesSelection(
+  document: PsDocument | null | undefined,
+  x: number,
+  y: number,
+  radius: number,
+): boolean {
+  if (!document || document.quickMask) return true
+  const bounds = document.selection.bounds
+  if (!bounds) return true
+  return (
+    x + radius >= bounds.x &&
+    x - radius <= bounds.x + bounds.w &&
+    y + radius >= bounds.y &&
+    y - radius <= bounds.y + bounds.h
+  )
+}
+
 export function autoPickLayer(
   document: PsDocument,
   point: { x: number; y: number },

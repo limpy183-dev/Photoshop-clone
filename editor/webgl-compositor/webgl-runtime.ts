@@ -28,12 +28,26 @@ export function compileShader(gl: WebGLRenderingContext | WebGL2RenderingContext
   return shader
 }
 
+/**
+ * `u_flipY` is +1 when drawing to the canvas and -1 when drawing into a
+ * framebuffer texture.
+ *
+ * The quad pairs clip-space y=+1 with v=0, which is what the default
+ * framebuffer wants: its top row is y=+1, and a texture uploaded from a canvas
+ * has the image's top row at v=0. A framebuffer attachment is the other way up
+ * — texel row 0 sits at y=-1 — so an unflipped pass stores the image upside
+ * down. Every layer is one such pass, which left the composite mirrored on an
+ * odd layer count and blended each layer against a mirrored backdrop on an
+ * even one. Flipping the geometry keeps every intermediate texture in the same
+ * top-row-first orientation as the layer sources.
+ */
 const VERTEX_SHADER = `
   attribute vec2 a_position;
   attribute vec2 a_texcoord;
+  uniform float u_flipY;
   varying vec2 v_texcoord;
   void main() {
-    gl_Position = vec4(a_position, 0.0, 1.0);
+    gl_Position = vec4(a_position.x, a_position.y * u_flipY, 0.0, 1.0);
     v_texcoord = a_texcoord;
   }
 `
@@ -402,6 +416,7 @@ export class WebGL2DCompositor {
       gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer)
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, writeTexture, 0)
       gl.viewport(0, 0, width, height)
+      gl.uniform1f(locations.flipY, -1)
       this.bindTexture(0, baseTexture)
       this.bindTexture(1, sourceTexture)
       this.bindTexture(2, maskTexture)
@@ -438,6 +453,7 @@ export class WebGL2DCompositor {
     gl.viewport(0, 0, width, height)
     gl.clearColor(0, 0, 0, 0)
     gl.clear(gl.COLOR_BUFFER_BIT)
+    gl.uniform1f(locations.flipY, 1)
     this.bindTexture(0, transparentTexture)
     this.bindTexture(1, baseTexture)
     this.bindTexture(2, whiteTexture)
@@ -484,6 +500,7 @@ export class WebGL2DCompositor {
       opacity: gl.getUniformLocation(program, "u_opacity"),
       fillOpacity: gl.getUniformLocation(program, "u_fillOpacity"),
       canvasSize: gl.getUniformLocation(program, "u_canvasSize"),
+      flipY: gl.getUniformLocation(program, "u_flipY"),
       channelMask: gl.getUniformLocation(program, "u_channelMask"),
       hasBlendIf: gl.getUniformLocation(program, "u_hasBlendIf"),
       blendIfThis: gl.getUniformLocation(program, "u_blendIfThis"),

@@ -13,10 +13,10 @@
   "useEditorImports": {
     "max": 8
   },
-  "_topLargestFilesComment": "22184 -> 22330 for the tool-behaviour pass: retouch/type option panels that did not exist, gradient blend+opacity, pen curve handles, selection-aware move. The two largest new panels were split into options-bar-tools.tsx (-363) before raising this.",
+  "_topLargestFilesComment": "22184 -> 22330 for the tool-behaviour pass: retouch/type option panels that did not exist, gradient blend+opacity, pen curve handles, selection-aware move. The two largest new panels were split into options-bar-tools.tsx (-363) before raising this. 22330 -> 22350 for the selection-clip / options-bar remount pass: the clip helpers went to editor/canvas/selection-helpers.ts and view.tsx's duplicate of selectionToMaskCanvas was deleted (view.tsx ends up smaller than it started); the remainder is options-bar.tsx hoisting its stateful option groups to module scope.",
   "topLargestFiles": {
     "count": 10,
-    "maxTotalLines": 22330
+    "maxTotalLines": 22350
   },
   "directClientStorage": {
     "max": 0

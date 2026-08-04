@@ -123,12 +123,18 @@ export function GradientStopsEditor({
       <div
         className="relative h-8 border border-[var(--ps-divider)] rounded-sm cursor-crosshair"
         style={{ background: css }}
-        onDoubleClick={addStop}
+        onClick={addStop}
       >
         {sorted.map((s, i) => (
           <button
             key={i}
-            onClick={() => setActiveIdx(i)}
+            // The handles sit below the ramp but are still its children, so a
+            // click on one would bubble up and add a stop on top of the stop
+            // being selected.
+            onClick={(event) => {
+              event.stopPropagation()
+              setActiveIdx(i)
+            }}
             className={cn(
               "absolute top-full -translate-x-1/2 w-2.5 h-3 mt-0.5 rounded-b-sm border",
               i === activeIdx ? "border-[var(--ps-accent)]" : "border-[var(--ps-divider)]",
@@ -165,7 +171,7 @@ export function GradientStopsEditor({
         />
       </div>
       <div className="flex justify-between">
-        <span className="text-muted-foreground">Double-click bar to add a stop</span>
+        <span className="text-muted-foreground">Click the bar to add a stop</span>
         <button
           onClick={removeStop}
           disabled={sorted.length <= 2}
