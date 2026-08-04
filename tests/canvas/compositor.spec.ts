@@ -151,3 +151,22 @@ test("unstyled layer preparation preserves source and fill opacity", () => {
     height: source.height,
   })
 })
+
+test("layer preparation does not allocate a knockout mask until one is asked for", () => {
+  const source = fixtureCanvas(8, 6)
+  let masks = 0
+  const counted = new Proxy(source, {
+    get(target, property, receiver) {
+      if (property === "width") masks++
+      return Reflect.get(target, property, receiver)
+    },
+  })
+
+  // Only knockout layers read the mask, and the WebGL path never does. Building
+  // it eagerly cost one document-sized canvas per visible layer per frame — the
+  // dominant cost once a document carried a dozen layers.
+  const rendered = renderLayerSourceForCompositor(fixtureLayer(counted))
+  expect(masks).toBe(0)
+  expect(rendered.knockoutMask.width).toBe(source.width)
+  expect(masks).toBeGreaterThan(0)
+})

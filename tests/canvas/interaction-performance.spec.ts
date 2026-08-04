@@ -213,6 +213,46 @@ test("right button drag does not open the canvas context menu", async ({ page })
   await expect(page.getByRole("menu", { name: "App context menu" })).toBeHidden()
 })
 
+test("compositing a many-layer document reuses one WebGL context", async ({ page }) => {
+  // Browsers cap live WebGL contexts (Chrome at 16) and force-lose the oldest
+  // past that. Minting one per composite meant a document with enough layers
+  // spent every frame recompiling the blend shader and thrashing contexts.
+  await page.addInitScript(() => {
+    const win = window as typeof window & { __psGLContexts?: number }
+    win.__psGLContexts = 0
+    const proto = HTMLCanvasElement.prototype
+    const original = proto.getContext
+    proto.getContext = function (this: HTMLCanvasElement, ...args: Parameters<HTMLCanvasElement["getContext"]>) {
+      if (String(args[0]).startsWith("webgl")) win.__psGLContexts = (win.__psGLContexts ?? 0) + 1
+      return original.apply(this, args)
+    } as HTMLCanvasElement["getContext"]
+  })
+  test.setTimeout(90_000)
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await page.goto("/editor")
+  await expect(page.locator("[data-canvas-stage]")).toBeVisible()
+  await selectBrushTool(page)
+
+  // Enough layers to take the WebGL path, few enough that the adds stay quick.
+  const newLayer = page.getByRole("button", { name: "New layer" })
+  for (let i = 0; i < 6; i++) await newLayer.click()
+  await page.waitForTimeout(500)
+
+  const before = await page.evaluate(() => (window as typeof window & { __psGLContexts?: number }).__psGLContexts ?? 0)
+  test.skip(before === 0, "this browser never took the WebGL compositing path")
+
+  const start = await canvasScreenPoint(page, 160, 140)
+  const end = await canvasScreenPoint(page, 620, 430)
+  await page.mouse.move(start.x, start.y)
+  await page.mouse.down()
+  await page.mouse.move(end.x, end.y, { steps: 40 })
+  await page.mouse.up()
+  await page.waitForTimeout(500)
+
+  const after = await page.evaluate(() => (window as typeof window & { __psGLContexts?: number }).__psGLContexts ?? 0)
+  expect(after - before).toBeLessThanOrEqual(1)
+})
+
 test("rapid keyboard undo and redo step through multiple queued paint history entries", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 })
   await page.goto("/editor")

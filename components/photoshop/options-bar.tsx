@@ -13,7 +13,6 @@ import {
   Brush,
   Eraser,
   Pipette,
-  MousePointer2,
   Square,
   Hand,
   ZoomIn,
@@ -33,7 +32,6 @@ import type {
   BlendMode,
   CustomShapeId,
   GradientStop,
-  PathHandleMode,
   QuickMaskPaintMode,
 } from "@/editor/types"
 
@@ -56,7 +54,7 @@ const GRADIENT_BLEND_MODES: BlendMode[] = [
   "color",
   "luminosity",
 ]
-import { RetouchOptions, TypeOptions } from "@/components/photoshop/options-bar-tools"
+import { DirectSelectOptions, RetouchOptions, TypeOptions } from "@/components/photoshop/options-bar-tools"
 import { WORKSPACE_PRESET_OPTIONS, type WorkspacePresetId } from "@/components/photoshop/panel-registry"
 import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "@/editor/events"
 import {
@@ -151,7 +149,7 @@ export function OptionsBar() {
         <PerspectiveCropOptions />
       ) : tool === "artboard" ? (
         <ArtboardOptions />
-      ) : tool === "direct-select" || tool === "add-anchor-point" || tool === "delete-anchor-point" || tool === "convert-point" ? (
+      ) : tool === "path-select" || tool === "direct-select" || tool === "add-anchor-point" || tool === "delete-anchor-point" || tool === "convert-point" ? (
         <DirectSelectOptions />
       ) : tool === "transform" ? (
         <TransformOptions />
@@ -1427,29 +1425,6 @@ function GradientOptions() {
         />
         <span>Cycle</span>
       </label>
-    </>
-  )
-}
-
-function DirectSelectOptions() {
-  const [handleMode, setHandleMode] = React.useState<PathHandleMode>("symmetric")
-  React.useEffect(() => {
-    window.__psPathOptions = { handleMode }
-  }, [handleMode])
-  return (
-    <>
-      <MousePointer2 className="w-3.5 h-3.5" />
-      <span className={labelClass}>Handle:</span>
-      <Select value={handleMode} onValueChange={(value) => setHandleMode(value as PathHandleMode)}>
-        <SelectTrigger className="h-7 w-[118px] bg-[var(--ps-panel-2)] border-[var(--ps-divider)] text-[11px]">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="symmetric">Symmetric</SelectItem>
-          <SelectItem value="broken">Broken</SelectItem>
-        </SelectContent>
-      </Select>
-      <span className={labelClass}>Alt temporarily breaks handles.</span>
     </>
   )
 }

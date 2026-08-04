@@ -251,6 +251,7 @@ export function ToolBadge({ tool }: { tool: ToolId }) {
     count: { Icon: Hash, name: "Count" },
     "perspective-crop": { Icon: Square, name: "Perspective Crop" },
     artboard: { Icon: LayoutTemplate, name: "Artboard" },
+    "path-select": { Icon: MousePointer2, name: "Path Selection" },
     "direct-select": { Icon: MousePointer2, name: "Direct Select" },
     pen: { Icon: PenTool, name: "Pen" },
     "freeform-pen": { Icon: PenLine, name: "Freeform Pen" },

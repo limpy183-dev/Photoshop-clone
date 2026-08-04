@@ -35,6 +35,7 @@ import type {
   BrushSettings,
   CloneSourceSettings,
   GradientSettings,
+  GradientStop,
   Layer,
   PathPoint,
   PathProps,
@@ -50,6 +51,25 @@ interface Point {
 
 /** Below this drag distance (document px) the type tool places point text. */
 export const TEXT_BOX_DRAG_THRESHOLD = 8
+
+const GRADIENT_LUT_SIZE = 256
+
+/**
+ * `GRADIENT_LUT_SIZE` evenly spaced samples of a gradient, as packed RGBA words
+ * ready to store straight into an ImageData's Uint32 view. Built through a byte
+ * array so the word order matches the platform's, whatever its endianness.
+ */
+function gradientLut(gradient: GradientSettings, stops: GradientStop[]): Uint32Array {
+  const bytes = new Uint8Array(GRADIENT_LUT_SIZE * 4)
+  for (let i = 0; i < GRADIENT_LUT_SIZE; i++) {
+    const color = sampleGradient(gradient, stops, i / (GRADIENT_LUT_SIZE - 1))
+    bytes[i * 4] = color.r
+    bytes[i * 4 + 1] = color.g
+    bytes[i * 4 + 2] = color.b
+    bytes[i * 4 + 3] = color.a
+  }
+  return new Uint32Array(bytes.buffer)
+}
 
 export function drawGradientPreview(
   overlay: HTMLCanvasElement,
@@ -109,23 +129,34 @@ export function drawGradientPreview(
       ctx.fill()
     }
   } else {
-    const img = ctx.getImageData(0, 0, overlay.width, overlay.height)
+    // Diamond: no CanvasGradient models the |u|+|v| metric, so it is drawn per
+    // pixel. sampleGradient re-parses both neighbouring stop colours from hex on
+    // every call, which made a full-document drag cost millions of string
+    // parses per pointer-move — bake it into a LUT once and index that instead.
+    // The inner loop then only does integer arithmetic and one 32-bit store.
+    const width = overlay.width
+    const height = overlay.height
+    const img = ctx.createImageData(width, height)
+    const pixels = new Uint32Array(img.data.buffer)
+    const lut = gradientLut(gradient, stops)
+    const last = GRADIENT_LUT_SIZE - 1
+    const cycle = !!gradient.cycle
     const angle = Math.atan2(dy, dx)
     const cos = Math.cos(-angle)
     const sin = Math.sin(-angle)
-    for (let py = 0; py < overlay.height; py++) {
-      for (let px = 0; px < overlay.width; px++) {
-        const rx = px - start.x
-        const ry = py - start.y
-        const ux = rx * cos - ry * sin
-        const uy = rx * sin + ry * cos
-        const t = (Math.abs(ux) + Math.abs(uy)) / Math.max(1, dist)
-        const c = sampleGradient(gradient, stops, t)
-        const i = (py * overlay.width + px) * 4
-        img.data[i] = c.r
-        img.data[i + 1] = c.g
-        img.data[i + 2] = c.b
-        img.data[i + 3] = c.a
+    const scale = 1 / Math.max(1, dist)
+    for (let py = 0; py < height; py++) {
+      const ry = py - start.y
+      // ux and uy are affine in px, so step them along the row instead of
+      // recomputing the rotation for every pixel.
+      let ux = -start.x * cos - ry * sin
+      let uy = -start.x * sin + ry * cos
+      let index = py * width
+      for (let px = 0; px < width; px++, index++, ux += cos, uy += sin) {
+        let t = ((ux < 0 ? -ux : ux) + (uy < 0 ? -uy : uy)) * scale
+        if (cycle) t -= Math.floor(t)
+        else if (t > 1) t = 1
+        pixels[index] = lut[(t * last + 0.5) | 0]
       }
     }
     ctx.putImageData(img, 0, 0)

@@ -54,6 +54,7 @@ import {
   compositeDocumentWithWebGL,
   prepareLayerInputForWebGL,
   planWebGLCompositor,
+  sharedCompositeTarget,
 } from "@/editor/webgl-compositor"
 import { containsSelectionPoint, createSelectionHitTester, type SelectionHitTester } from "@/editor/selection-hit-testing"
 import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "@/editor/events"
@@ -127,6 +128,8 @@ import {
   dabTouchesSelection,
   liftSelectionFloat,
   pickTextLayerAt,
+  reusableMoveFloat,
+  type MoveFloat,
   selectBackgroundMaskFromImage,
   translateSelection,
   type SelectionClip,
@@ -738,16 +741,7 @@ export function CanvasView() {
       webglPlan.path !== "canvas-2d" &&
       activeDoc.colorMode === "RGB"
     ) {
-      const glCanvas = document.createElement("canvas")
-      glCanvas.addEventListener("webglcontextlost", () => {
-        emitRuntimeEvent("webgl-context-loss", {
-          component: "canvas-compositor",
-          fallback: "canvas-2d",
-          recoverable: true,
-        })
-      }, { once: true })
-      glCanvas.width = cv.width
-      glCanvas.height = cv.height
+      const glCanvas = sharedCompositeTarget()
       const result = compositeDocumentWithWebGL(glCanvas, activeDoc.layers, {
         width: cv.width,
         height: cv.height,
@@ -2535,6 +2529,8 @@ export function CanvasView() {
     sampleToBackground?: boolean
   }>({ type: null })
   const brushResizeRef = React.useRef<{ startClientX: number; startSize: number } | null>(null)
+  /** The live floating selection, carried between move-tool drags. */
+  const moveFloatRef = React.useRef<MoveFloat | null>(null)
   const [, setDirectAnchorSelectionState] = React.useState<{ layerId: string; anchors: PathAnchorRef[] } | null>(null)
   const directAnchorSelectionRef = React.useRef<{ layerId: string; anchors: PathAnchorRef[] } | null>(null)
 
@@ -2888,21 +2884,30 @@ export function CanvasView() {
         }
       }
       if (!layerAllowsMoving(layer)) return
+      // A float already lifted from this same selection keeps moving; only a
+      // fresh selection (or an Alt-copy) cuts a new hole.
+      const reuseFloat = reusableMoveFloat(moveFloatRef.current, layer.id, activeDoc.selection, e.altKey)
+      if (!reuseFloat) moveFloatRef.current = null
       drawingRef.current = {
         type: "move",
         moveLayerId: layer.id,
         moveStart: pt,
-        moveOrigin: { x: 0, y: 0 },
+        moveOrigin: reuseFloat ? { x: reuseFloat.x, y: reuseFloat.y } : { x: 0, y: 0 },
         last: pt,
       }
-      // Save layer pixels into a temporary buffer keyed via dataset on canvas
-      const cv = makeCanvas(activeDoc.width, activeDoc.height)
-      cv.getContext("2d")!.drawImage(layer.canvas, 0, 0); layer.canvas.__moveSnapshot = cv
-      // With an active selection, Photoshop moves only the selected pixels.
-      // Lift them into a float buffer and (unless Alt is held, which copies)
-      // punch the hole in the snapshot that stays behind.
-      const float = liftSelectionFloat(activeDoc, cv, e.altKey)
-      if (float) layer.canvas.__moveFloat = float
+      if (reuseFloat) {
+        layer.canvas.__moveSnapshot = reuseFloat.base
+        layer.canvas.__moveFloat = reuseFloat.float
+      } else {
+        // Save layer pixels into a temporary buffer keyed via dataset on canvas
+        const cv = makeCanvas(activeDoc.width, activeDoc.height)
+        cv.getContext("2d")!.drawImage(layer.canvas, 0, 0); layer.canvas.__moveSnapshot = cv
+        // With an active selection, Photoshop moves only the selected pixels.
+        // Lift them into a float buffer and (unless Alt is held, which copies)
+        // punch the hole in the snapshot that stays behind.
+        const float = liftSelectionFloat(activeDoc, cv, e.altKey)
+        if (float) layer.canvas.__moveFloat = float
+      }
       if (moveOptions.showTransformControls) beginTransform(layer)
       return
     }
@@ -3726,9 +3731,10 @@ export function CanvasView() {
       const float = layer.canvas.__moveFloat
       if (float) {
         // Floating selection: the un-selected remainder stays put, the lifted
-        // pixels ride the cursor.
+        // pixels ride the cursor from wherever an earlier drag parked them.
+        const origin = drag.moveOrigin ?? { x: 0, y: 0 }
         ctx.drawImage(snapshot, 0, 0)
-        ctx.drawImage(float, dx, dy)
+        ctx.drawImage(float, origin.x + dx, origin.y + dy)
       } else {
         ctx.drawImage(snapshot, dx, dy)
       }
@@ -3968,7 +3974,9 @@ export function CanvasView() {
             : []),
         ]
         : [drag.moveLayerId]
-      const floated = !!layer?.canvas.__moveFloat
+      const floatCanvas = layer?.canvas.__moveFloat
+      const baseCanvas = layer?.canvas.__moveSnapshot
+      const floated = !!floatCanvas
       // Path Selection drags a vector layer, so the geometry has to travel with
       // the pixels — otherwise the next re-rasterize snapped the shape back to
       // where it was authored and the move looked like it never happened.
@@ -4000,7 +4008,22 @@ export function CanvasView() {
       // picks up the same content rather than re-cutting the original hole.
       const moved = drag.moveDelta
       if (floated && moved && (moved.x || moved.y) && activeDoc.selection.bounds) {
-        dispatch({ type: "set-selection", selection: translateSelection(activeDoc, moved.x, moved.y) })
+        const selection = translateSelection(activeDoc, moved.x, moved.y)
+        dispatch({ type: "set-selection", selection })
+        const origin = drag.moveOrigin ?? { x: 0, y: 0 }
+        // Keep the float alive against the selection we just published, so the
+        // next drag moves these same pixels. Content-Aware Move heals the hole
+        // into the layer itself, which leaves the base stale — it always re-lifts.
+        moveFloatRef.current = layer && floatCanvas && baseCanvas && tool === "move"
+          ? {
+            layerId: layer.id,
+            selection,
+            base: baseCanvas,
+            float: floatCanvas,
+            x: origin.x + moved.x,
+            y: origin.y + moved.y,
+          }
+          : null
       }
       drawingRef.current = { type: null }
       commit(tool === "content-aware-move" ? "Content-Aware Move" : "Move", changedLayerIds)
@@ -4528,6 +4551,12 @@ export function CanvasView() {
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
   }, [activeLayer, requestRender, toggleQuickMask, activeDoc, handleBlurGalleryKeyDown, tool, dispatch, commit, setDirectAnchorSelection])
+
+  // A floating selection only survives inside the move tool. Any other tool
+  // could have repainted the layer, which would make the float's base stale.
+  React.useEffect(() => {
+    if (tool !== "move") moveFloatRef.current = null
+  }, [tool])
 
   React.useEffect(() => {
     function moveOptionsHandler() {

@@ -68,6 +68,8 @@ const TOOL_COMMANDS: { tool: ToolId; title: string; hint: string }[] = [
   { tool: "content-aware-move", title: "Content-Aware Move Tool", hint: "J" },
   { tool: "red-eye", title: "Red Eye Tool", hint: "J" },
   { tool: "color-sampler", title: "Color Sampler Tool", hint: "I" },
+  { tool: "path-select", title: "Path Selection Tool", hint: "A" },
+  { tool: "direct-select", title: "Direct Selection Tool", hint: "A" },
   { tool: "pen", title: "Pen Tool", hint: "P" },
   { tool: "freeform-pen", title: "Freeform Pen Tool", hint: "P" },
   { tool: "add-anchor-point", title: "Add Anchor Point Tool", hint: "P" },

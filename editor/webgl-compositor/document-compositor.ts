@@ -1,9 +1,21 @@
 import type { Layer } from "@/editor/types"
 import type { WebGLCompositeDocumentOptions, WebGLCompositeFallback, WebGLCompositeLayerContext, WebGLCompositeResult, WebGLEffectFallback, WebGLLayerInput } from "@/editor/webgl-compositor/types"
 import { GPU_ADJUSTMENT_TYPES, positiveInt } from "@/editor/webgl-compositor/shared"
-import { detectWebGL, WebGL2DCompositor } from "@/editor/webgl-compositor/webgl-runtime"
+import { detectWebGL, sharedWebGLCompositor } from "@/editor/webgl-compositor/webgl-runtime"
 import { getWebGLLayerCapability, planWebGLLayerStack } from "@/editor/webgl-compositor/planning"
 import { applyGpuAdjustmentLayerToCanvas, prepareLayerInputForWebGL } from "@/editor/webgl-compositor/pass-execution"
+
+let scratchTarget: HTMLCanvasElement | null = null
+
+/**
+ * The scratch surface `compositeDocumentWithWebGL` composites into before the
+ * caller blits it onto the visible canvas. Minting one per frame cost a
+ * document-sized allocation every time the document recomposited; the composite
+ * call resizes this one as needed, so reuse is free.
+ */
+export function sharedCompositeTarget(): HTMLCanvasElement {
+  return (scratchTarget ??= document.createElement("canvas"))
+}
 
 function resolveClipMask(layers: readonly Layer[], index: number): HTMLCanvasElement | null {
   if (!layers[index]?.clipped) return null
@@ -95,10 +107,8 @@ export function compositeDocumentWithWebGL(
 
   const flushGpu = (): WebGLCompositeResult | null => {
     if (!gpuBatch.length) return null
-    const glCanvas = document.createElement("canvas")
-    glCanvas.width = width
-    glCanvas.height = height
-    const result = new WebGL2DCompositor(glCanvas).composite(gpuBatch, { initialSource: target })
+    const { canvas: glCanvas, compositor } = sharedWebGLCompositor(width, height)
+    const result = compositor.composite(gpuBatch, { initialSource: target })
     if (!result.completed) return result
     ctx.clearRect(0, 0, width, height)
     ctx.drawImage(glCanvas, 0, 0)

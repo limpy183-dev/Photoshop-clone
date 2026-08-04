@@ -42,7 +42,7 @@ export {
   buildGradientMapLut,
   prepareLayerInputForWebGL,
 } from "@/editor/webgl-compositor/pass-execution"
-export { compositeDocumentWithWebGL } from "@/editor/webgl-compositor/document-compositor"
+export { compositeDocumentWithWebGL, sharedCompositeTarget } from "@/editor/webgl-compositor/document-compositor"
 export {
   EXTENDED_GPU_ADJUSTMENT_TYPES,
   applyExtendedGpuAdjustment,

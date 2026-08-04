@@ -2,6 +2,7 @@ import type { AdvancedBlending, BlendIfRange } from "@/editor/types"
 import type { WebGLCompositeResult, WebGLLayerInput } from "@/editor/webgl-compositor/types"
 import { BLEND_MODE_CODE, clamp01, positiveInt } from "@/editor/webgl-compositor/shared"
 import { isWebGLBlendModeCompatible } from "@/editor/webgl-compositor/planning"
+import { emitRuntimeEvent } from "@/editor/runtime-telemetry"
 
 export function detectWebGL(canvas: HTMLCanvasElement): WebGLRenderingContext | WebGL2RenderingContext | null {
   try {
@@ -348,6 +349,12 @@ export class WebGL2DCompositor {
     this.initializeBuffers()
   }
 
+  isUsable(): boolean {
+    const gl = this.gl
+    if (!gl || !this.program) return false
+    return typeof gl.isContextLost !== "function" || !gl.isContextLost()
+  }
+
   composite(layers: readonly WebGLLayerInput[], options: { initialSource?: TexImageSource | null } = {}): WebGLCompositeResult {
     const gl = this.gl
     if (!gl || !this.program || !this.positionBuffer || !this.texcoordBuffer) {
@@ -546,5 +553,32 @@ export class WebGL2DCompositor {
       1, 0,
     ]), gl.STATIC_DRAW)
   }
+}
+
+let sharedCompositor: { canvas: HTMLCanvasElement; compositor: WebGL2DCompositor } | null = null
+
+/**
+ * The one compositor context the document compositor draws through.
+ *
+ * Every composite used to mint a fresh canvas and a fresh WebGL context, which
+ * meant recompiling and relinking the blend shader on every frame. Worse,
+ * browsers cap the number of live contexts (Chrome at 16): past that the oldest
+ * is force-lost, so a document with enough layers spent each frame thrashing
+ * contexts instead of drawing. One context, resized in place, costs nothing per
+ * frame. A lost context drops the cache so the next call rebuilds.
+ */
+export function sharedWebGLCompositor(width: number, height: number) {
+  if (sharedCompositor && !sharedCompositor.compositor.isUsable()) sharedCompositor = null
+  if (!sharedCompositor) {
+    const canvas = document.createElement("canvas")
+    canvas.addEventListener("webglcontextlost", () => {
+      emitRuntimeEvent("webgl-context-loss", { component: "canvas-compositor", fallback: "canvas-2d", recoverable: true })
+    })
+    sharedCompositor = { canvas, compositor: new WebGL2DCompositor(canvas) }
+  }
+  const { canvas, compositor } = sharedCompositor
+  if (canvas.width !== width) canvas.width = width
+  if (canvas.height !== height) canvas.height = height
+  return { canvas, compositor }
 }
 

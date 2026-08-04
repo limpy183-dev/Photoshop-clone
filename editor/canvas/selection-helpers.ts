@@ -335,6 +335,42 @@ export function liftSelectionFloat(
   return float
 }
 
+/**
+ * A selection's pixels lifted out of their layer and parked at (x, y).
+ *
+ * Photoshop floats a selection once and keeps moving that float. Re-lifting on
+ * every drag would cut a *second* hole — through whatever the previous drag had
+ * parked the pixels on top of — so dragging back and forth over existing artwork
+ * ate it. `base` is the layer without the float; `base` plus `float` drawn at
+ * (x, y) reproduces what the user sees.
+ */
+export interface MoveFloat {
+  layerId: string
+  /** Identity of the selection this float belongs to; anything else re-lifts. */
+  selection: Selection
+  base: HTMLCanvasElement
+  float: HTMLCanvasElement
+  x: number
+  y: number
+}
+
+/**
+ * The carried float if this press should keep moving it, else null.
+ *
+ * ponytail: keyed on selection identity, layer and tool. A menu edit that
+ * repaints the layer while the move tool and selection both stay put would leave
+ * a stale base — stamp a layer edit counter if that ever shows up.
+ */
+export function reusableMoveFloat(
+  carried: MoveFloat | null,
+  layerId: string,
+  selection: Selection,
+  copy: boolean,
+): MoveFloat | null {
+  if (!carried || copy) return null
+  return carried.layerId === layerId && carried.selection === selection ? carried : null
+}
+
 /** The document's selection translated by (dx, dy), mask included. */
 export function translateSelection(document: PsDocument, dx: number, dy: number): Selection {
   const bounds = document.selection.bounds

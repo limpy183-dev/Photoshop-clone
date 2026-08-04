@@ -97,7 +97,13 @@ export function renderLayerSourceForCompositor(layer: Layer, filterPreviewCanvas
     canvas: toDraw,
     fillOpacity: styleRendered ? 1 : layer.fillOpacity ?? 1,
     styleRendered,
-    knockoutMask: advanced.transparencyShapesLayer ? effectContent : makeOpaqueMask(content.width, content.height),
+    // A getter, not a value: only knockout layers ever read this, and the
+    // WebGL path discards it outright. Building it eagerly cost one
+    // document-sized canvas allocation plus a full fillRect per visible layer
+    // per frame — the dominant cost once a document carried a dozen layers.
+    get knockoutMask() {
+      return advanced.transparencyShapesLayer ? effectContent : makeOpaqueMask(content.width, content.height)
+    },
   }
 }
 

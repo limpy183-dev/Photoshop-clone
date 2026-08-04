@@ -6,9 +6,9 @@ import { useMounted } from "@/editor/use-mounted"
 import { Slider } from "@/components/ui/slider"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Type } from "lucide-react"
+import { MousePointer2, Type } from "lucide-react"
 import { dispatchPhotoshopEvent } from "@/editor/events"
-import type { TextAntiAliasMode, TextProps } from "@/editor/types"
+import type { PathHandleMode, TextAntiAliasMode, TextProps } from "@/editor/types"
 import {
   DEFAULT_TYPE_FONT,
   DEFAULT_TYPE_SIZE,
@@ -132,6 +132,7 @@ export function TypeOptions() {
           <SelectItem value="BoldItalic">Bold Italic</SelectItem>
         </SelectContent>
       </Select>
+      <Divider />
       <div className="flex items-center gap-1.5">
         <ScrubLabel
           label="Size:"
@@ -151,8 +152,15 @@ export function TypeOptions() {
         />
         <span className={labelClass}>pt</span>
       </div>
+      <Divider />
       <div className="flex items-center gap-1.5">
-        <span className={labelClass}>Leading:</span>
+        <ScrubLabel
+          label="Leading:"
+          value={shown.leading ?? Math.round(shown.size * 1.2)}
+          min={0}
+          max={2000}
+          onChange={(v) => apply({ leading: v }, "Type Leading", false)}
+        />
         <Input
           aria-label="Type leading"
           type="number"
@@ -167,6 +175,7 @@ export function TypeOptions() {
           className={numInputClass}
         />
       </div>
+      <Divider />
       <div className="flex items-center gap-1.5">
         <ScrubLabel
           label="Tracking:"
@@ -186,6 +195,7 @@ export function TypeOptions() {
         />
       </div>
       <Divider />
+      <span className={labelClass}>Align:</span>
       <Select value={shown.align} onValueChange={(v) => apply({ align: v as TextProps["align"] }, "Type Align")}>
         <SelectTrigger className="h-6 w-20 text-[11px]">
           <SelectValue />
@@ -196,6 +206,8 @@ export function TypeOptions() {
           <SelectItem value="right">Right</SelectItem>
         </SelectContent>
       </Select>
+      <Divider />
+      <span className={labelClass}>Anti-alias:</span>
       <Select
         value={t ? (t.antiAlias === false ? "none" : t.antiAliasMode ?? "smooth") : "smooth"}
         onValueChange={(v) => {
@@ -217,6 +229,9 @@ export function TypeOptions() {
       <Divider />
       <label className="flex items-center gap-1.5" title="Type colour (foreground when no layer is selected)">
         <span className={labelClass}>Color:</span>
+        {/* Sized and bordered like ColorChip, which is what every other tool
+            shows for a colour — the native control's own chrome was the one
+            control in this bar that did not match. */}
         <input
           type="color"
           aria-label="Type color"
@@ -226,7 +241,7 @@ export function TypeOptions() {
             if (t) apply({ color }, "Type Color")
             else dispatch({ type: "set-foreground", color })
           }}
-          className="h-6 w-8 cursor-pointer border border-[var(--ps-divider)] rounded-sm bg-transparent p-0"
+          className="w-5 h-5 cursor-pointer rounded-sm border border-[var(--ps-divider)] bg-transparent p-0 [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch]:rounded-sm [&::-moz-color-swatch]:border-0 [&::-moz-color-swatch]:rounded-sm"
         />
       </label>
       <Divider />
@@ -240,8 +255,6 @@ export function TypeOptions() {
     </>
   )
 }
-
-
 
 /**
  * Options for the retouch brushes, which previously showed "No options for
@@ -400,3 +413,44 @@ export function RetouchOptions() {
   )
 }
 
+
+/**
+ * Path Selection / Direct Selection options.
+ *
+ * Path Selection moves whole sub-paths, so the handle mode does not apply to it
+ * — it used to fall through to "No options for this tool.", which read as a dead
+ * tool rather than a tool with nothing to configure.
+ */
+export function DirectSelectOptions() {
+  const tool = useEditorSelector((editor) => editor.tool)
+  const [handleMode, setHandleMode] = React.useState<PathHandleMode>("symmetric")
+  React.useEffect(() => {
+    window.__psPathOptions = { handleMode }
+  }, [handleMode])
+  if (tool === "path-select") {
+    return (
+      <>
+        <MousePointer2 className="w-3.5 h-3.5" />
+        <span className={labelClass}>Click a shape, path or type layer to select it, then drag to move it.</span>
+        <Divider />
+        <span className={labelClass}>Alt-drag duplicates the sub-path. Ctrl switches to Direct Selection.</span>
+      </>
+    )
+  }
+  return (
+    <>
+      <MousePointer2 className="w-3.5 h-3.5" />
+      <span className={labelClass}>Handle:</span>
+      <Select value={handleMode} onValueChange={(value) => setHandleMode(value as PathHandleMode)}>
+        <SelectTrigger className="h-6 w-[118px] text-[11px]">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="symmetric">Symmetric</SelectItem>
+          <SelectItem value="broken">Broken</SelectItem>
+        </SelectContent>
+      </Select>
+      <span className={labelClass}>Alt temporarily breaks handles.</span>
+    </>
+  )
+}
