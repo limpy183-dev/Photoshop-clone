@@ -183,6 +183,62 @@ export function rerenderVectorLayer(layer: Layer, foreground: string, strokeWidt
   else if (layer.path) strokePath(ctx, layer.path, foreground, strokeWidth, layer.path.closed, hexToRgba(foreground, 0.3))
 }
 
+/**
+ * Shift a vector layer's geometry by (dx, dy).
+ *
+ * The path-selection tool drags the layer's *pixels*, which looks right until
+ * anything re-rasterizes from the geometry (an options change, an undo, a
+ * direct-selection edit) and the shape jumps back to where it was authored.
+ * Moving the geometry to match keeps the two in step. Returns false when the
+ * layer carries nothing vector-shaped to move.
+ */
+export function translateVectorLayerGeometry(layer: Layer, dx: number, dy: number): boolean {
+  if (!dx && !dy) return false
+  let moved = false
+  const shiftPath = (path: PathProps): PathProps => ({
+    ...path,
+    points: path.points.map((point) => ({
+      ...point,
+      x: point.x + dx,
+      y: point.y + dy,
+      cp1: point.cp1 ? { x: point.cp1.x + dx, y: point.cp1.y + dy } : undefined,
+      cp2: point.cp2 ? { x: point.cp2.x + dx, y: point.cp2.y + dy } : undefined,
+    })),
+    subpaths: path.subpaths?.map(shiftPath),
+  })
+
+  if (layer.path) {
+    layer.path = shiftPath(layer.path)
+    moved = true
+  }
+  if (layer.shape) {
+    layer.shape = {
+      ...layer.shape,
+      x: layer.shape.x + dx,
+      y: layer.shape.y + dy,
+      computedPath: layer.shape.computedPath ? shiftPath(layer.shape.computedPath) : undefined,
+      components: layer.shape.components?.map((component) => ({
+        ...component,
+        shape: { ...component.shape, x: component.shape.x + dx, y: component.shape.y + dy },
+      })),
+    }
+    moved = true
+  }
+  if (layer.text) {
+    layer.text = { ...layer.text, x: layer.text.x + dx, y: layer.text.y + dy }
+    moved = true
+  }
+  if (layer.frame) {
+    layer.frame = { ...layer.frame, x: layer.frame.x + dx, y: layer.frame.y + dy }
+    moved = true
+  }
+  if (layer.artboard) {
+    layer.artboard = { ...layer.artboard, x: layer.artboard.x + dx, y: layer.artboard.y + dy }
+    moved = true
+  }
+  return moved
+}
+
 export interface DirectSelectionDragOptions {
   /** Foreground + stroke width for the path re-render after each edit. */
   foreground: string

@@ -1,4 +1,5 @@
 import type { BrushRgba } from "@/editor/brush-engine"
+import { isCompressedCanvas } from "@/editor/history-storage"
 import { hexToRgb, makeCanvas } from "@/editor/tool/helpers"
 import { hexToRgba } from "@/editor/color/utils"
 import type { GradientStop, Layer, PathPoint, PathProps } from "@/editor/types"
@@ -47,6 +48,29 @@ export function maskBounds(mask: HTMLCanvasElement, width: number, height: numbe
     }
   }
   return hasPixels ? { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 } : null
+}
+
+/**
+ * Pixels the history brush paints back from: the earliest history entry that
+ * still holds usable pixels for `layerId`.
+ *
+ * Entries past the compression threshold have their canvases swapped for 1×1
+ * placeholders backed by a blob. Those still answer `getContext`, so a naive
+ * "first entry that has a canvas" search handed the brush a single stretched
+ * pixel; they have to be skipped for the oldest entry that is still live.
+ */
+export function historySourceCanvas(
+  entries: readonly { layers: readonly { id: string; canvas?: HTMLCanvasElement | null }[] }[],
+  layerId: string,
+): HTMLCanvasElement | null {
+  for (const entry of entries) {
+    const snap = entry.layers.find((candidate) => candidate.id === layerId)
+    const canvas = snap?.canvas
+    if (canvas && typeof canvas.getContext === "function" && !isCompressedCanvas(canvas)) {
+      return canvas
+    }
+  }
+  return null
 }
 
 export function cloneCanvasForTool(canvas: HTMLCanvasElement) {

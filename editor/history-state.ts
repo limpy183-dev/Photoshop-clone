@@ -265,13 +265,21 @@ export function restoreFromEntry(
   options?: { currentEntry?: HistoryEntry; direction?: "undo" | "redo" | null },
 ): Layer[] {
   const currentById = new Map(options?.currentEntry?.layers.map((l) => [l.id, l]) ?? [])
+  // Size restored canvases from the *entry*, not the live doc. The reducer
+  // applies `entry.width/height` to the document only after this runs, so on
+  // any size-changing step (crop, image/canvas size, trim, perspective crop)
+  // `doc` still holds the post-change size. Sizing from it left every layer
+  // canvas stuck at the cropped size while the document went back to its
+  // original — the image reappeared in the top-left corner with the rest blank.
+  const targetW = entry.width ?? doc.width
+  const targetH = entry.height ?? doc.height
   return entry.layers.map((snap) => {
     const existing = doc.layers.find((l) => l.id === snap.id)
     const currentSnap = currentById.get(snap.id)
     const canvas =
-      existing && existing.canvas.width === doc.width && existing.canvas.height === doc.height
+      existing && existing.canvas.width === targetW && existing.canvas.height === targetH
         ? existing.canvas
-        : makeCanvas(doc.width, doc.height)
+        : makeCanvas(targetW, targetH)
     const ctx = canvas.getContext?.("2d")
     // If the snapshot's canvas is still a compressed placeholder (i.e. the
     // caller failed to decompress or the blob was evicted), DON'T draw it
@@ -284,14 +292,18 @@ export function restoreFromEntry(
     if (ctx && snapPixelsAvailable) {
       // When there is no existing layer (e.g. redo after creating a new layer),
       // always draw the full snapshot to ensure the layer's pixels are restored.
-      if (!existing) {
-        drawSnapshotFull(ctx, snap, doc.width, doc.height)
+      // A canvas that had to be re-made for a new size holds no pixels yet, so
+      // it always needs the full draw — the partial path assumes the existing
+      // canvas already carries the rest of the image.
+      const resized = canvas !== existing?.canvas
+      if (!existing || resized) {
+        drawSnapshotFull(ctx, snap, targetW, targetH)
       } else if (!snapshotPixelsEqual(snap, currentSnap)) {
         const partialRect = adjacentRestoreRect(snap, currentSnap, options?.direction ?? null)
         if (partialRect) {
           drawSnapshotRegion(ctx, snap, partialRect)
         } else {
-          drawSnapshotFull(ctx, snap, doc.width, doc.height)
+          drawSnapshotFull(ctx, snap, targetW, targetH)
         }
       }
     }
@@ -300,7 +312,7 @@ export function restoreFromEntry(
       if (existing?.mask && currentSnap?.mask === snap.mask && canReuseCanvasSnapshot(existing.mask, snap.mask)) {
         mask = existing.mask
       } else {
-        const m = makeCanvas(doc.width, doc.height)
+        const m = makeCanvas(targetW, targetH)
         m.getContext("2d")!.drawImage(snap.mask, 0, 0)
         mask = m
       }

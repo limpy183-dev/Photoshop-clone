@@ -139,11 +139,16 @@ export function shapePropsForTool(
     }
     return { type: "custom", x, y, w, h, fill: foreground, stroke, customId: getCustomShapeRuntimeId(), rotation: options.rotation }
   }
+  // Per-corner radii belong to the Rounded Rectangle tool only. The options bar
+  // seeds all four with a default even when their inputs are hidden, so reading
+  // them for the plain Rectangle tool gave it rounded corners nobody asked for.
+  const rounded = tool === "shape-rounded-rect"
   const cornerRadii: [number, number, number, number] | undefined =
-    options.cornerRadiusTL !== undefined ||
-    options.cornerRadiusTR !== undefined ||
-    options.cornerRadiusBR !== undefined ||
-    options.cornerRadiusBL !== undefined
+    rounded &&
+    (options.cornerRadiusTL !== undefined ||
+      options.cornerRadiusTR !== undefined ||
+      options.cornerRadiusBR !== undefined ||
+      options.cornerRadiusBL !== undefined)
       ? [
           Math.max(0, options.cornerRadiusTL ?? options.radius ?? 0),
           Math.max(0, options.cornerRadiusTR ?? options.radius ?? 0),
@@ -156,7 +161,7 @@ export function shapePropsForTool(
     x, y, w, h,
     fill: foreground,
     stroke,
-    radius: tool === "shape-rounded-rect" ? Math.max(4, options.radius || 18) : options.radius,
+    radius: rounded ? Math.max(4, options.radius || 18) : 0,
     cornerRadii,
     rotation: options.rotation,
   }
@@ -164,6 +169,19 @@ export function shapePropsForTool(
 
 export function normalizeViewRotation(value: number) {
   return ((value % 360) + 360) % 360
+}
+
+/**
+ * Snap a view rotation to the nearest `step` multiple (15° covers 30/45/60/90/
+ * 180/270) when it is already within `threshold` of one. Free rotation is kept
+ * outside that window so the drag still feels continuous; `force` (Shift) snaps
+ * unconditionally, matching Photoshop's constrained rotate.
+ */
+export function snapViewRotation(value: number, force = false, step = 15, threshold = 4) {
+  const normalized = normalizeViewRotation(value)
+  const nearest = Math.round(normalized / step) * step
+  const off = Math.abs(normalized - nearest)
+  return force || off <= threshold ? normalizeViewRotation(nearest) : normalized
 }
 
 export function shapeRect(shape: ShapeProps) {

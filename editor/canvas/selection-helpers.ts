@@ -1,6 +1,6 @@
 import { maskAlphaEpoch } from "@/editor/canvas/compositor-cache"
-import { selectBackgroundMask, selectionToMaskCanvas } from "@/editor/tool/helpers"
-import type { Layer, PsDocument } from "@/editor/types"
+import { makeCanvas, selectBackgroundMask, selectionToMaskCanvas } from "@/editor/tool/helpers"
+import type { Layer, PsDocument, Selection } from "@/editor/types"
 
 export function createRemoveMask(
   points: { x: number; y: number }[],
@@ -211,6 +211,58 @@ export function applySelectionMaskToCanvas(
   context.globalCompositeOperation = "destination-in"
   context.drawImage(mask, 0, 0)
   context.restore()
+}
+
+/**
+ * Lift the selected pixels of `snapshot` into their own canvas, and (unless
+ * `copy`) erase them from `snapshot`.
+ *
+ * This is what makes the move tool move a *selection* rather than the whole
+ * layer: the float rides the cursor while the punched-through snapshot stays
+ * put. Returns null when there is no selection, which leaves callers on the
+ * plain whole-layer path.
+ */
+export function liftSelectionFloat(
+  document: PsDocument,
+  snapshot: HTMLCanvasElement,
+  copy: boolean,
+): HTMLCanvasElement | null {
+  if (!document.selection.bounds) return null
+  const mask = selectionToMaskCanvas(document.width, document.height, document.selection)
+  if (!mask) return null
+
+  const float = makeCanvas(document.width, document.height)
+  const fctx = float.getContext("2d")
+  if (!fctx) return null
+  fctx.drawImage(snapshot, 0, 0)
+  fctx.globalCompositeOperation = "destination-in"
+  fctx.drawImage(mask, 0, 0)
+
+  if (!copy) {
+    const sctx = snapshot.getContext("2d")
+    if (sctx) {
+      sctx.save()
+      sctx.globalCompositeOperation = "destination-out"
+      sctx.drawImage(mask, 0, 0)
+      sctx.restore()
+    }
+  }
+  return float
+}
+
+/** The document's selection translated by (dx, dy), mask included. */
+export function translateSelection(document: PsDocument, dx: number, dy: number): Selection {
+  const bounds = document.selection.bounds
+  const shifted: Selection = {
+    ...document.selection,
+    bounds: bounds ? { ...bounds, x: bounds.x + dx, y: bounds.y + dy } : null,
+  }
+  if (document.selection.mask) {
+    const moved = makeCanvas(document.width, document.height)
+    moved.getContext("2d")?.drawImage(document.selection.mask, dx, dy)
+    shifted.mask = moved
+  }
+  return shifted
 }
 
 export function selectBackgroundMaskFromImage(

@@ -48,6 +48,42 @@ export type FrameToolRuntimeOptions = {
 
 export type EyedropperSampleSize = "point" | "3x3" | "5x5"
 
+export type ToneRange = "shadows" | "midtones" | "highlights"
+
+/** Dodge / Burn / Sponge options bar state. */
+export type DodgeBurnRuntimeOptions = {
+  range: ToneRange
+  /** Per-stroke strength, 1–100, mirroring Photoshop's Exposure. */
+  exposure: number
+  /** Adjust luminance only, keeping hue and saturation. */
+  protectTones: boolean
+}
+
+/** Sponge options bar state. */
+export type SpongeRuntimeOptions = {
+  mode: "desaturate" | "saturate"
+  flow: number
+}
+
+/**
+ * Type-tool settings applied to the *next* text layer. Kept separate from any
+ * selected layer so the options bar is usable before a text layer exists —
+ * previously every control there was inert until one was selected, which made
+ * it impossible to choose a size up front.
+ */
+export type TypeRuntimeDefaults = {
+  font: string
+  size: number
+  weight: "normal" | "bold"
+  italic: boolean
+  align: "left" | "center" | "right"
+  leading?: number
+  tracking?: number
+}
+
+export const DEFAULT_TYPE_FONT = "Geist, system-ui, sans-serif"
+export const DEFAULT_TYPE_SIZE = 48
+
 declare global {
   interface Window {
     __psMoveOptions?: Partial<MoveToolRuntimeOptions>
@@ -57,6 +93,9 @@ declare global {
     __psCustomShape?: string
     __psCustomShapePreset?: ShapeProps
     __psEyedropperSampleSize?: EyedropperSampleSize
+    __psDodgeBurnOptions?: Partial<DodgeBurnRuntimeOptions>
+    __psSpongeOptions?: Partial<SpongeRuntimeOptions>
+    __psTypeDefaults?: Partial<TypeRuntimeDefaults>
   }
 }
 
@@ -129,6 +168,38 @@ export function getCustomShapeRuntimePreset(): ShapeProps | null {
 
 export function getEyedropperSampleSize(): EyedropperSampleSize {
   return window.__psEyedropperSampleSize ?? "point"
+}
+
+export function getDodgeBurnRuntimeOptions(): DodgeBurnRuntimeOptions {
+  return {
+    range: window.__psDodgeBurnOptions?.range ?? "midtones",
+    exposure: Math.max(1, Math.min(100, window.__psDodgeBurnOptions?.exposure ?? 50)),
+    protectTones: window.__psDodgeBurnOptions?.protectTones ?? true,
+  }
+}
+
+export function getSpongeRuntimeOptions(): SpongeRuntimeOptions {
+  return {
+    mode: window.__psSpongeOptions?.mode ?? "desaturate",
+    flow: Math.max(1, Math.min(100, window.__psSpongeOptions?.flow ?? 50)),
+  }
+}
+
+export function getTypeRuntimeDefaults(): TypeRuntimeDefaults {
+  const stored = typeof window === "undefined" ? undefined : window.__psTypeDefaults
+  return {
+    font: stored?.font ?? DEFAULT_TYPE_FONT,
+    size: Math.max(1, Math.min(1296, stored?.size ?? DEFAULT_TYPE_SIZE)),
+    weight: stored?.weight ?? "bold",
+    italic: stored?.italic ?? false,
+    align: stored?.align ?? "left",
+    leading: stored?.leading,
+    tracking: stored?.tracking,
+  }
+}
+
+export function setTypeRuntimeDefaults(patch: Partial<TypeRuntimeDefaults>) {
+  window.__psTypeDefaults = { ...getTypeRuntimeDefaults(), ...patch }
 }
 
 export function readCanvasRuntimePreferences(): CanvasRuntimePreferences {

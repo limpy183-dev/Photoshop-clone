@@ -91,6 +91,16 @@ test("text edit overlay resolves layers and retains scaled typography styles", (
     color: "#123456",
     textAlign: "center",
     lineHeight: "43.199999999999996px",
+    // Point text never wraps — it grows to fit and breaks only on Enter, the
+    // same way rasterizeText lays it out.
+    whiteSpace: "pre",
     writingMode: undefined,
+  })
+
+  const paragraph = textLayer()
+  paragraph.text!.boxWidth = 200
+  expect(textEditOverlayStyle(paragraph.text!, 1)).toMatchObject({
+    width: 200,
+    whiteSpace: "pre-wrap",
   })
 })

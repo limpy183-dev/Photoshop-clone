@@ -6,7 +6,7 @@ import {
   useEditorSelector,
   useEditorStoreApi,
 } from "@/components/photoshop/editor/context"
-import { compositeLayer } from "@/editor/blend-modes"
+import { compositeLayer, getNativeComposite } from "@/editor/blend-modes"
 import { applyModeAndColorManagement } from "@/editor/document/color-management"
 import {
   addAnchorPointToPath,
@@ -67,10 +67,12 @@ import { emitRuntimeEvent } from "@/editor/runtime-telemetry"
 import { getLayerHighBitImage, highBitImageToSelectionSource, renderDocumentHighBitPreviewCanvas, syncHighBitLayerFromCanvasChange } from "@/editor/high-bit-document"
 import {
   defaultCanvasRuntimePreferences,
+  getDodgeBurnRuntimeOptions,
   getEyedropperSampleSize,
   getFrameRuntimeOptions,
   getMoveRuntimeOptions,
   getShapeRuntimeOptions,
+  getSpongeRuntimeOptions,
   layerAllowsDrawing,
   layerAllowsMoving,
   readCanvasRuntimePreferences,
@@ -93,6 +95,7 @@ import {
   labelForTool,
   normalizeViewRotation,
   shapePropsForTool,
+  snapViewRotation,
   type DirectShapeHandleId,
 } from "@/editor/canvas/shape-helpers"
 import { SmartGuidesOverlay, smartSnapLayerDelta } from "@/components/photoshop/canvas/smart-guides"
@@ -119,8 +122,10 @@ import {
   applySelectionMaskToCanvas,
   autoPickLayer,
   createRemoveMask,
+  liftSelectionFloat,
   pickTextLayerAt,
   selectBackgroundMaskFromImage,
+  translateSelection,
 } from "@/editor/canvas/selection-helpers"
 import {
   drawArtboardPreview,
@@ -135,6 +140,7 @@ import {
   pickVectorLayer,
   rerenderVectorLayer as rerenderVectorLayerGeometry,
   replaceDirectEditPath,
+  translateVectorLayerGeometry,
   updateDirectSelectionDrag as applyDirectSelectionDrag,
   vectorLayerBounds,
 } from "@/editor/canvas/vector-editing"
@@ -169,6 +175,7 @@ import {
   clamp01,
   cloneCanvasForTool,
   hashNoise,
+  historySourceCanvas,
   makeCurvaturePath,
   maskBounds,
   mergeDirtyRect,
@@ -181,6 +188,7 @@ import {
 import { cn } from "@/lib/utils"
 import {
   healStamp,
+  pickHealSource,
   blurStamp,
   sharpenStamp,
   dodgeBurnStamp,
@@ -214,9 +222,16 @@ import { ColorPickerHud, hexToHsv, hsvToHex, pickFromHud, type ColorPickerHudHsv
 import { MagneticLassoIndicator, GridOverlay, PixelGridOverlay, GuidesOverlay, RetouchFeedbackOverlay } from "@/components/photoshop/canvas/overlays"
 import { SelectionTransformOverlay } from "@/components/photoshop/selection-transform-overlay"
 import { applyThreeDMaterialDrop } from "@/editor/three-d-video-engine"
-import type { Layer, PathPoint, Selection } from "@/editor/types"
+import type { Layer, PathPoint, Selection, ToolId } from "@/editor/types"
 
 type BrushInput = BrushDynamicsInput
+
+/** Tools that read the layer while painting into it, so they need a frozen copy. */
+const SAMPLING_RETOUCH_TOOLS = new Set<ToolId>([
+  "clone-stamp",
+  "healing-brush",
+  "spot-healing",
+])
 
 interface DirtyRect {
   x: number
@@ -373,6 +388,7 @@ export function CanvasView() {
     visualZoomRef,
     applyStageTransform,
     applyViewZoom,
+    docPointFromClient,
     onWheel,
   } = useCanvasViewportController({
     activeDoc,
@@ -401,7 +417,7 @@ export function CanvasView() {
     beginTextEdit,
     commitTextEdit,
     cancelTextEdit,
-  } = useTextEditController({ activeDoc, activeLayer, tool, foreground, dispatch, requestRender, commit })
+  } = useTextEditController({ activeDoc, tool, foreground, dispatch, requestRender, commit })
 
   const cloneSourceRef = React.useRef<{ sourceX: number; sourceY: number; destX?: number; destY?: number; layerId: string } | null>(null)
   const eraserSampleRef = React.useRef<{ r: number; g: number; b: number; a: number } | null>(null)
@@ -420,6 +436,13 @@ export function CanvasView() {
   const transparencyLockMaskRef = React.useRef<HTMLCanvasElement | null>(null)
   const eraserSourceRef = React.useRef<HTMLCanvasElement | null>(null)
   const colorReplacementSourceRef = React.useRef<HTMLCanvasElement | null>(null)
+  /**
+   * Layer pixels frozen at stroke start for the sampling retouch tools. Cloning
+   * and healing read from this rather than the live canvas — reading the canvas
+   * they are also writing to made each dab sample the previous dab, so dragging
+   * smeared the repair across the stroke instead of repeating the source.
+   */
+  const retouchSourceRef = React.useRef<HTMLCanvasElement | null>(null)
   const mixerReservoirRef = React.useRef<Required<BrushRgba> | null>(null)
   const highBitStrokeSourceRef = React.useRef<HTMLCanvasElement | null>(null)
 
@@ -912,6 +935,20 @@ export function CanvasView() {
     return () => root.removeEventListener("wheel", onWheel, { capture: true })
   }, [onWheel, activeDoc?.id])
 
+  // The zoom tool owns the right button (zoom out), so the app-level context
+  // menu must not also open. It listens on `window` during bubble, so a capture
+  // listener here stops the event before it ever gets there.
+  React.useEffect(() => {
+    const root = containerRef.current
+    if (!root || tool !== "zoom") return
+    const suppress = (event: MouseEvent) => {
+      event.preventDefault()
+      event.stopPropagation()
+    }
+    root.addEventListener("contextmenu", suppress, { capture: true })
+    return () => root.removeEventListener("contextmenu", suppress, { capture: true })
+  }, [tool])
+
   /* ---- coords ---- */
 
   const getCanvasPoint = React.useCallback(
@@ -970,6 +1007,28 @@ export function CanvasView() {
       ctx.fillRect(b.x, b.y, b.w, b.h)
     }
     return mask
+  }
+
+  /** One zoom-tool click: steps by 1.5× toward or away from the cursor. */
+  function applyZoomToolStep(clientX: number, clientY: number, out: boolean) {
+    applyViewZoom(
+      visualZoomRef.current * (out ? 1 / 1.5 : 1.5),
+      docPointFromClient(clientX, clientY),
+    )
+  }
+
+  /** Read the composited colour under `pt` into the fore/background swatch. */
+  function sampleEyedropperAt(pt: { x: number; y: number }, toBackground: boolean) {
+    const cv = compositeRef.current
+    if (!cv || !activeDoc) return
+    const clamped = {
+      x: Math.max(0, Math.min(activeDoc.width - 1, pt.x)),
+      y: Math.max(0, Math.min(activeDoc.height - 1, pt.y)),
+    }
+    const px = sampleCanvasColor(cv, clamped, getEyedropperSampleSize())
+    if (px.a === 0) return
+    const hex = "#" + [px.r, px.g, px.b].map((c) => c.toString(16).padStart(2, "0")).join("")
+    dispatch(toBackground ? { type: "set-background", color: hex } : { type: "set-foreground", color: hex })
   }
 
   function commitSelection(raw: Selection) {
@@ -1884,7 +1943,11 @@ export function CanvasView() {
 
   function cloneSamplingCanvas(sourceLayer: Layer) {
     if (!activeDoc) return sourceLayer.canvas
-    if (cloneSource.sample === "current-layer") return sourceLayer.canvas
+    if (cloneSource.sample === "current-layer") {
+      // Prefer the stroke-start freeze so a stroke never samples its own output.
+      const frozen = retouchSourceRef.current
+      return frozen && sourceLayer.id === activeLayer?.id ? frozen : sourceLayer.canvas
+    }
     const out = makeCanvas(activeDoc.width, activeDoc.height)
     const octx = out.getContext("2d")!
     const activeIndex = activeDoc.layers.findIndex((layer) => layer.id === activeLayer?.id)
@@ -1901,10 +1964,7 @@ export function CanvasView() {
     if (!activeLayer) return null
     const current = editorStore.getSnapshot()
     const docId = current.activeDocId
-    const history = docId ? current.histories[docId]?.entries ?? [] : []
-    const sourceEntry = history.find((entry) => entry.layers.some((snap) => snap.id === activeLayer.id && snap.canvas)) ?? history[0]
-    const snap = sourceEntry?.layers.find((candidate) => candidate.id === activeLayer.id)
-    return snap?.canvas && typeof snap.canvas.getContext === "function" ? snap.canvas : null
+    return historySourceCanvas(docId ? current.histories[docId]?.entries ?? [] : [], activeLayer.id)
   }
 
   function brushInputFromPointer(
@@ -2036,18 +2096,31 @@ export function CanvasView() {
           if (withinSelection({ x, y })) smudgeBufferRef.current.step(ctx, x, y, brush.size / 2, brush.flow / 100)
         }
       } else if (tool === "dodge" || tool === "burn") {
+        const dodgeOptions = getDodgeBurnRuntimeOptions()
+        // 0.12 peak per dab at 100% exposure: dabs land every `spacing` px, so
+        // the stroke builds up gradually instead of clipping on contact.
+        const strength = (dodgeOptions.exposure / 100) * 0.12
         for (let i = 0; i <= steps; i++) {
           const t = steps === 0 ? 1 : i / steps
           const x = from ? from.x + (to.x - from.x) * t : to.x
           const y = from ? from.y + (to.y - from.y) * t : to.y
-          if (withinSelection({ x, y })) dodgeBurnStamp(ctx, x, y, brush.size / 2, tool, (brush.flow / 100) * 0.6)
+          if (withinSelection({ x, y })) {
+            dodgeBurnStamp(ctx, x, y, brush.size / 2, tool, strength, {
+              range: dodgeOptions.range,
+              protectTones: dodgeOptions.protectTones,
+            })
+          }
         }
       } else if (tool === "sponge") {
+        const spongeOptions = getSpongeRuntimeOptions()
+        const strength = (spongeOptions.flow / 100) * 0.15
         for (let i = 0; i <= steps; i++) {
           const t = steps === 0 ? 1 : i / steps
           const x = from ? from.x + (to.x - from.x) * t : to.x
           const y = from ? from.y + (to.y - from.y) * t : to.y
-          if (withinSelection({ x, y })) spongeStamp(ctx, x, y, brush.size / 2, brush.flow / 100)
+          if (withinSelection({ x, y })) {
+            spongeStamp(ctx, x, y, brush.size / 2, strength, spongeOptions.mode)
+          }
         }
       } else if (tool === "clone-stamp" || tool === "history-brush" || tool === "art-history-brush") {
         const historySource = tool === "history-brush" || tool === "art-history-brush" ? historySourceCanvasForActiveLayer() : null
@@ -2118,17 +2191,20 @@ export function CanvasView() {
           )
         }
       } else if (tool === "spot-healing") {
-        // Use surrounding pixels to "heal" the dab area on the same layer.
+        // Heal from surrounding pixels. The source is the stroke-start freeze,
+        // not the live canvas, and the donor patch is chosen per dab instead of
+        // always being "2r to the right" — a fixed offset walked off-canvas at
+        // the edges and, mid-drag, sampled pixels this same stroke had already
+        // repaired.
+        const source = retouchSourceRef.current ?? canvas
         for (let i = 0; i <= steps; i++) {
           const t = steps === 0 ? 1 : i / steps
           const x = from ? from.x + (to.x - from.x) * t : to.x
           const y = from ? from.y + (to.y - from.y) * t : to.y
           if (!withinSelection({ x, y })) continue
           const r = brush.size / 2
-          // Sample to the right or below
-          const sx = Math.min(canvas.width - r * 2, x + r * 2)
-          const sy = y
-          healStamp(ctx, canvas, sx, sy, x, y, r)
+          const donor = pickHealSource(source, x, y, r)
+          healStamp(ctx, source, donor.x, donor.y, x, y, r)
         }
       }
     }
@@ -2152,15 +2228,28 @@ export function CanvasView() {
     const ov = overlayRef.current
     if (!ov) return
     const ctx = activeLayer.canvas.getContext("2d")!
+    // The overlay already carries the ramp at the configured opacity, so only
+    // the blend mode and the two masks (selection, transparency) apply here.
+    let source: HTMLCanvasElement = ov
     if (activeDoc.selection.bounds?.w && activeDoc.selection.bounds.h) {
       const paint = makeCanvas(activeDoc.width, activeDoc.height)
-      const pctx = paint.getContext("2d")!
-      pctx.drawImage(ov, 0, 0)
+      paint.getContext("2d")!.drawImage(ov, 0, 0)
       applySelectionMaskToCanvas(paint, activeDoc)
-      ctx.drawImage(paint, 0, 0)
-    } else {
-      ctx.drawImage(ov, 0, 0)
+      source = paint
     }
+    if (gradient.preserveTransparency) {
+      const masked = source === ov ? makeCanvas(activeDoc.width, activeDoc.height) : source
+      const mctx = masked.getContext("2d")!
+      if (masked !== source) mctx.drawImage(ov, 0, 0)
+      mctx.globalCompositeOperation = "destination-in"
+      mctx.drawImage(activeLayer.canvas, 0, 0)
+      mctx.globalCompositeOperation = "source-over"
+      source = masked
+    }
+    ctx.save()
+    ctx.globalCompositeOperation = getNativeComposite(gradient.blendMode ?? "normal") ?? "source-over"
+    ctx.drawImage(source, 0, 0)
+    ctx.restore()
     ov.getContext("2d")!.clearRect(0, 0, ov.width, ov.height)
     requestRender()
   }
@@ -2211,10 +2300,10 @@ export function CanvasView() {
     drawPatchPreviewOverlay(ov, patch, offset)
   }
 
-  function drawPathPreview() {
+  function drawPathPreview(hover?: { x: number; y: number } | null) {
     const ov = overlayRef.current
     if (!ov || !pathDraftRef.current) return
-    drawPathPreviewOverlay(ov, pathDraftRef.current)
+    drawPathPreviewOverlay(ov, pathDraftRef.current, hover)
   }
 
   /* ---- transform handles ---- */
@@ -2427,6 +2516,8 @@ export function CanvasView() {
     | "patch-drag"
     | "brush-resize"
     | "text-box"
+    | "eyedropper"
+    | "pen-handle"
     | null
     last?: { x: number; y: number }
     start?: { x: number; y: number }
@@ -2436,6 +2527,8 @@ export function CanvasView() {
     moveLayerId?: string
     moveStart?: { x: number; y: number }
     moveOrigin?: { x: number; y: number }
+    /** Snapped delta actually applied by the last move frame, read on commit. */
+    moveDelta?: { x: number; y: number }
     handle?: TransformHandleId
     guideOrient?: "horizontal" | "vertical"
     refineMode?: "expand" | "subtract"
@@ -2453,6 +2546,8 @@ export function CanvasView() {
     directShapeHandle?: DirectShapeHandleId
     directSelectedAnchors?: PathAnchorRef[]
     sliceDraftId?: string
+    /** Eyedropper started with Alt: samples the background swatch. */
+    sampleToBackground?: boolean
   }>({ type: null })
   const brushResizeRef = React.useRef<{ startClientX: number; startSize: number } | null>(null)
   const [, setDirectAnchorSelectionState] = React.useState<{ layerId: string; anchors: PathAnchorRef[] } | null>(null)
@@ -2588,6 +2683,15 @@ export function CanvasView() {
       return
     }
 
+    // Zoom tool: right-click (or Alt+click) zooms out, both anchored at the
+    // cursor. Taken before the generic right-button bail-out below; the
+    // matching contextmenu suppression lives with the wheel listener.
+    if (tool === "zoom" && e.button === 2) {
+      e.preventDefault()
+      applyZoomToolStep(e.clientX, e.clientY, true)
+      return
+    }
+
     if (e.button === 2) return
 
     // A click on the canvas while the type editor is open commits that edit
@@ -2616,13 +2720,12 @@ export function CanvasView() {
       return
     }
 
-    // Eyedropper tool
+    // Eyedropper tool. Alt samples into the background swatch, as in Photoshop.
+    // The drag state keeps sampling on pointer-move so the swatch tracks the
+    // cursor live instead of only updating on the initial click.
     if (tool === "eyedropper") {
-      const cv = compositeRef.current!
-      const px = sampleCanvasColor(cv, pt, getEyedropperSampleSize())
-      const hex =
-        "#" + [px.r, px.g, px.b].map((c) => c.toString(16).padStart(2, "0")).join("")
-      dispatch({ type: "set-foreground", color: hex })
+      drawingRef.current = { type: "eyedropper", start: pt, last: pt, sampleToBackground: e.altKey }
+      sampleEyedropperAt(pt, e.altKey)
       return
     }
 
@@ -2807,6 +2910,11 @@ export function CanvasView() {
       // Save layer pixels into a temporary buffer keyed via dataset on canvas
       const cv = makeCanvas(activeDoc.width, activeDoc.height)
       cv.getContext("2d")!.drawImage(layer.canvas, 0, 0); layer.canvas.__moveSnapshot = cv
+      // With an active selection, Photoshop moves only the selected pixels.
+      // Lift them into a float buffer and (unless Alt is held, which copies)
+      // punch the hole in the snapshot that stays behind.
+      const float = liftSelectionFloat(activeDoc, cv, e.altKey)
+      if (float) layer.canvas.__moveFloat = float
       if (moveOptions.showTransformControls) beginTransform(layer)
       return
     }
@@ -2897,6 +3005,10 @@ export function CanvasView() {
         const nextPoint = e.shiftKey ? constrainPointTo45(draft.points[draft.points.length - 1], pt) : pt
         draft.points.push({ x: nextPoint.x, y: nextPoint.y })
       }
+      // Dragging off the anchor pulls out symmetric bezier handles, which is
+      // how the pen makes curves; a plain click leaves it a corner point. The
+      // curvature pen derives its own handles, so it stays click-only.
+      if (!curvature) drawingRef.current = { type: "pen-handle", start: pt, last: pt }
       drawPathPreview()
       return
     }
@@ -3176,8 +3288,7 @@ export function CanvasView() {
     }
 
     if (tool === "zoom") {
-      const factor = e.altKey ? 1 / 1.5 : 1.5
-      applyViewZoom(visualZoomRef.current * factor)
+      applyZoomToolStep(e.clientX, e.clientY, e.altKey)
       return
     }
 
@@ -3274,9 +3385,11 @@ export function CanvasView() {
       tool === "spot-healing" ||
       tool === "healing-brush"
     ) {
-      if (tool === "clone-stamp" || tool === "healing-brush") {
-        resolveCloneState(pt)
-      }
+      // No source point means nothing to clone from. Bail before starting a
+      // stroke; the options bar shows the "Alt-click to set source" hint.
+      if ((tool === "clone-stamp" || tool === "healing-brush") && !resolveCloneState(pt)) return
+      retouchSourceRef.current =
+        activeLayer && SAMPLING_RETOUCH_TOOLS.has(tool) ? cloneCanvasForTool(activeLayer.canvas) : null
       captureHighBitPaintSource()
       prepareTransparencyLockMask()
       eraserSampleRef.current = null
@@ -3340,14 +3453,10 @@ export function CanvasView() {
 
     const drag = drawingRef.current
     if (drag.type === null) {
-      // Polygonal lasso live-preview
-      if (
-        (tool === "lasso-polygon" || tool === "lasso-magnetic") &&
-        drag.type === null &&
-        // workaround: polylasso state is preserved across pointer-up; we check lazily
-        false
-      ) {
-        // no-op
+      // Pen rubber-band: with a path in progress, trail the pending segment
+      // from the last anchor to the cursor between clicks.
+      if ((tool === "pen" || tool === "curvature-pen") && pathDraftRef.current) {
+        drawPathPreview(pt)
       }
       return
     }
@@ -3364,11 +3473,32 @@ export function CanvasView() {
       return
     }
 
+    if (drag.type === "eyedropper") {
+      sampleEyedropperAt(pt, drag.sampleToBackground ?? false)
+      drag.last = pt
+      return
+    }
+
+    if (drag.type === "pen-handle" && drag.start && pathDraftRef.current) {
+      const draft = pathDraftRef.current
+      const anchor = draft.points[draft.points.length - 1]
+      if (anchor) {
+        const end = e.shiftKey ? constrainPointTo45(drag.start, pt) : pt
+        // Symmetric handles: the outgoing one follows the cursor, the incoming
+        // one mirrors it through the anchor, giving a smooth point.
+        anchor.cp2 = { x: end.x, y: end.y }
+        anchor.cp1 = { x: anchor.x - (end.x - anchor.x), y: anchor.y - (end.y - anchor.y) }
+        drag.last = end
+        drawPathPreview()
+      }
+      return
+    }
+
     if (drag.type === "rotate-view" && activeDoc && drag.rotateStartAngle !== undefined && drag.rotateStartValue !== undefined) {
       const center = { x: activeDoc.width / 2, y: activeDoc.height / 2 }
       const angle = Math.atan2(pt.y - center.y, pt.x - center.x)
       const delta = ((angle - drag.rotateStartAngle) * 180) / Math.PI
-      const next = normalizeViewRotation(drag.rotateStartValue + delta)
+      const next = snapViewRotation(drag.rotateStartValue + delta, e.shiftKey)
       dispatch({ type: "set-rotation", rotation: next as 0 | 90 | 180 | 270 })
       drag.last = pt
       return
@@ -3531,8 +3661,6 @@ export function CanvasView() {
         drawFramePlaceholder(ctx, { shape: getFrameRuntimeOptions().shape, x, y, w, h })
       } else if (tool === "artboard") {
         drawArtboardPreview(ctx, x, y, w, h, background)
-      } else if (tool === "custom-shape" || tool === "shape-polygon" || tool === "shape-star" || tool === "shape-triangle" || tool === "shape-rounded-rect") {
-        rasterizeShape(ov, shapePropsForTool(tool, x, y, w, h, drag.start, pt, foreground, background))
       } else if (tool === "shape-line") {
         ctx.strokeStyle = foreground
         ctx.lineWidth = Math.max(1, getShapeRuntimeOptions().strokeWidth || brush.size / 4)
@@ -3549,23 +3677,11 @@ export function CanvasView() {
           dx,
           dy,
         })
-      } else if (tool === "shape-ellipse") {
-        ctx.fillStyle = foreground
-        ctx.beginPath()
-        ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2)
-        ctx.fill()
       } else {
-        const shapeOptions = getShapeRuntimeOptions()
-        rasterizeShape(ov, {
-          type: "rect",
-          x,
-          y,
-          w,
-          h,
-          fill: foreground,
-          stroke: shapeOptions.strokeWidth > 0 ? { color: background, width: shapeOptions.strokeWidth } : null,
-          radius: shapeOptions.radius,
-        })
+        // Every shape tool previews through the same props builder the commit
+        // uses, so corner radii, stroke and rotation can't differ between the
+        // drag and what lands on release.
+        rasterizeShape(ov, shapePropsForTool(tool, x, y, w, h, drag.start, pt, foreground, background))
       }
       ctx.restore()
       drag.last = pt
@@ -3589,8 +3705,10 @@ export function CanvasView() {
     }
 
     if (drag.type === "gradient" && drag.start) {
-      drawGradientPreview(drag.start, pt)
-      drag.last = pt
+      // Shift constrains the ramp axis to 45° steps, as in Photoshop.
+      const end = e.shiftKey ? constrainPointTo45(drag.start, pt) : pt
+      drawGradientPreview(drag.start, end)
+      drag.last = end
       return
     }
 
@@ -3613,9 +3731,18 @@ export function CanvasView() {
       const snapped = smartSnapLayerDelta(activeDoc, layer, snapshot, constrainedDx, constrainedDy)
       const dx = snapped.dx
       const dy = snapped.dy
+      drag.moveDelta = { x: dx, y: dy }
       const ctx = layer.canvas.getContext("2d")!
       ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height)
-      ctx.drawImage(snapshot, dx, dy)
+      const float = layer.canvas.__moveFloat
+      if (float) {
+        // Floating selection: the un-selected remainder stays put, the lifted
+        // pixels ride the cursor.
+        ctx.drawImage(snapshot, 0, 0)
+        ctx.drawImage(float, dx, dy)
+      } else {
+        ctx.drawImage(snapshot, dx, dy)
+      }
       // also move linked layers
       if (layer.linkGroupId) {
         for (const other of activeDoc.layers) {
@@ -3851,6 +3978,20 @@ export function CanvasView() {
             : []),
         ]
         : [drag.moveLayerId]
+      const floated = !!layer?.canvas.__moveFloat
+      // Path Selection drags a vector layer, so the geometry has to travel with
+      // the pixels — otherwise the next re-rasterize snapped the shape back to
+      // where it was authored and the move looked like it never happened.
+      if (tool === "path-select" && layer && drag.moveDelta) {
+        const { x: dx, y: dy } = drag.moveDelta
+        if (translateVectorLayerGeometry(layer, dx, dy)) {
+          rerenderVectorLayer(layer)
+          if (layer.path) dispatch({ type: "set-layer-path", id: layer.id, path: layer.path })
+          if (layer.shape) dispatch({ type: "set-layer-shape", id: layer.id, shape: layer.shape })
+          if (layer.text) dispatch({ type: "set-layer-text", id: layer.id, text: layer.text })
+          drawPathSelectionPreview(layer)
+        }
+      }
       if (layer) {
         if (tool === "content-aware-move") {
           const snapshot: HTMLCanvasElement | undefined = layer.canvas.__moveSnapshot
@@ -3860,12 +4001,24 @@ export function CanvasView() {
           }
         }
         delete layer.canvas.__moveSnapshot
+        delete layer.canvas.__moveFloat
         if (layer.linkGroupId) {
           for (const o of activeDoc.layers) if (o.linkGroupId === layer.linkGroupId) delete o.canvas.__moveSnapshot
         }
       }
+      // The marching ants travel with the pixels they lifted, so a second drag
+      // picks up the same content rather than re-cutting the original hole.
+      const moved = drag.moveDelta
+      if (floated && moved && (moved.x || moved.y) && activeDoc.selection.bounds) {
+        dispatch({ type: "set-selection", selection: translateSelection(activeDoc, moved.x, moved.y) })
+      }
       drawingRef.current = { type: null }
       commit(tool === "content-aware-move" ? "Content-Aware Move" : "Move", changedLayerIds)
+      return
+    }
+
+    if (drag.type === "eyedropper" || drag.type === "pen-handle") {
+      drawingRef.current = { type: null }
       return
     }
 
@@ -4281,9 +4434,11 @@ export function CanvasView() {
   const cancelBufferedStrokeRef = React.useRef(cancelBufferedStroke)
   const beginTransformRef = React.useRef(beginTransform)
   const commitTransformRef = React.useRef(commitTransform)
+  const commitPathRef = React.useRef(commitPath)
   cancelBufferedStrokeRef.current = cancelBufferedStroke
   beginTransformRef.current = beginTransform
   commitTransformRef.current = commitTransform
+  commitPathRef.current = commitPath
 
   React.useEffect(() => {
     function handler(e: KeyboardEvent) {
@@ -4323,6 +4478,16 @@ export function CanvasView() {
       }
       if (e.key === "Enter" && transformRef.current) {
         commitTransformRef.current()
+      }
+      // Enter finishes an open pen path — otherwise the only ways out were
+      // double-clicking or closing back onto the first anchor, so a simple
+      // open path could not be completed at all.
+      if (e.key === "Enter" && !transformRef.current && pathDraftRef.current) {
+        e.preventDefault()
+        if (pathDraftRef.current.points.length >= 2) commitPathRef.current(false)
+        else pathDraftRef.current = null
+        const ov = overlayRef.current
+        if (ov) ov.getContext("2d")!.clearRect(0, 0, ov.width, ov.height)
       }
       if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key.toLowerCase() === "q") {
         e.preventDefault()
@@ -4599,17 +4764,24 @@ export function CanvasView() {
 
   function applyCrop(b: { x: number; y: number; w: number; h: number }) {
     if (!activeDoc) return
-    const newW = Math.round(b.w)
-    const newH = Math.round(b.h)
-    for (const layer of activeDoc.layers) {
-      if (typeof layer.canvas.getContext !== "function") continue
+    const newW = Math.max(1, Math.round(b.w))
+    const newH = Math.max(1, Math.round(b.h))
+    // Resize a canvas in place to the crop, keeping the pixels under the box.
+    const cropCanvas = (canvas: HTMLCanvasElement) => {
       const tmp = makeCanvas(newW, newH)
-      tmp.getContext("2d")!.drawImage(layer.canvas, -b.x, -b.y)
-      layer.canvas.width = newW
-      layer.canvas.height = newH
-      const ctx = layer.canvas.getContext("2d")!
+      tmp.getContext("2d")!.drawImage(canvas, -b.x, -b.y)
+      canvas.width = newW
+      canvas.height = newH
+      const ctx = canvas.getContext("2d")!
       ctx.clearRect(0, 0, newW, newH)
       ctx.drawImage(tmp, 0, 0)
+    }
+    for (const layer of activeDoc.layers) {
+      if (typeof layer.canvas.getContext !== "function") continue
+      cropCanvas(layer.canvas)
+      // Masks are document-sized too; leaving them at the old size made every
+      // masked layer read its mask against mismatched coordinates after a crop.
+      if (layer.mask && typeof layer.mask.getContext === "function") cropCanvas(layer.mask)
     }
     activeDoc.width = newW
     activeDoc.height = newH

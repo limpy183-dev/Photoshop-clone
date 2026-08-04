@@ -134,6 +134,12 @@ export function textEditOverlayStyle(
     width: boxWidth,
     height: boxHeight,
     minHeight: lineHeight,
+    // Point text (no paragraph box) must not wrap: it grows to fit and breaks
+    // only where the typist presses Enter, matching how rasterizeText lays it
+    // out. Leaving it wrappable meant any shortfall in the width measurement —
+    // canvas metrics vs. the DOM's, a webfont still loading — pushed the last
+    // character onto its own line. Paragraph boxes keep wrapping.
+    whiteSpace: text.boxWidth ? "pre-wrap" : "pre",
     fontFamily: text.font,
     fontSize: text.size * zoom,
     fontWeight: text.weight,
@@ -225,7 +231,8 @@ export function TextEditOverlay({
         e.stopPropagation()
       }}
       className={cn(
-        "absolute z-30 m-0 resize-none overflow-hidden whitespace-pre-wrap bg-transparent p-0",
+        // `whiteSpace` comes from the style object — point text must not wrap.
+        "absolute z-30 m-0 resize-none overflow-hidden bg-transparent p-0",
         "outline outline-1 outline-dashed outline-cyan-400 focus:outline-cyan-300",
         "caret-cyan-400 placeholder:text-current placeholder:opacity-40",
       )}

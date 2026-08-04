@@ -20,6 +20,7 @@ export {
   dodgeBurnStamp,
   spongeStamp,
   healStamp,
+  pickHealSource,
 } from "@/editor/tool/helpers/retouch-stamps"
 
 export {

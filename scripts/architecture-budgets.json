@@ -13,9 +13,10 @@
   "useEditorImports": {
     "max": 8
   },
+  "_topLargestFilesComment": "22184 -> 22330 for the tool-behaviour pass: retouch/type option panels that did not exist, gradient blend+opacity, pen curve handles, selection-aware move. The two largest new panels were split into options-bar-tools.tsx (-363) before raising this.",
   "topLargestFiles": {
     "count": 10,
-    "maxTotalLines": 22184
+    "maxTotalLines": 22330
   },
   "directClientStorage": {
     "max": 0
@@ -31,7 +32,8 @@
     },
     "components/photoshop/editor/context.tsx": {
       "maxImports": 24,
-      "maxFanIn": 96
+      "_maxFanInComment": "96 -> 97: options-bar-tools.tsx subscribes directly rather than taking props, so only the retouch/type panels re-render on state changes instead of the whole options bar.",
+      "maxFanIn": 97
     },
     "components/photoshop/menu-bar.tsx": {
       "maxImports": 32,

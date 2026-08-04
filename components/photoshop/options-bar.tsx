@@ -15,7 +15,6 @@ import {
   Pipette,
   MousePointer2,
   Square,
-  Type,
   Hand,
   ZoomIn,
   Frame as FrameIcon,
@@ -31,12 +30,33 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type {
+  BlendMode,
   CustomShapeId,
   GradientStop,
   PathHandleMode,
   QuickMaskPaintMode,
-  TextAntiAliasMode,
 } from "@/editor/types"
+
+/** Blend modes Canvas can composite natively — the ones the gradient honours. */
+const GRADIENT_BLEND_MODES: BlendMode[] = [
+  "normal",
+  "darken",
+  "multiply",
+  "color-burn",
+  "lighten",
+  "screen",
+  "color-dodge",
+  "overlay",
+  "soft-light",
+  "hard-light",
+  "difference",
+  "exclusion",
+  "hue",
+  "saturation",
+  "color",
+  "luminosity",
+]
+import { RetouchOptions, TypeOptions } from "@/components/photoshop/options-bar-tools"
 import { WORKSPACE_PRESET_OPTIONS, type WorkspacePresetId } from "@/components/photoshop/panel-registry"
 import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "@/editor/events"
 import {
@@ -93,6 +113,8 @@ export function OptionsBar() {
         renderBrushOptions()
       ) : tool === "clone-stamp" || tool === "healing-brush" ? (
         <CloneSourceOptions />
+      ) : tool === "dodge" || tool === "burn" || tool === "sponge" || tool === "blur" || tool === "sharpen" || tool === "smudge" || tool === "spot-healing" || tool === "history-brush" ? (
+        <RetouchOptions />
       ) : tool === "move" || tool === "content-aware-move" ? (
         <MoveOptions />
       ) : tool === "marquee-rect" || tool === "marquee-ellipse" || tool === "marquee-row" || tool === "marquee-col" ? (
@@ -421,10 +443,15 @@ export function OptionsBar() {
   }
 
   function CloneSourceOptions() {
+    // Until a source is sampled the tool paints nothing, so say so plainly
+    // rather than letting the stroke silently no-op.
+    const hasSource = !!cloneSource.activePresetId
     return (
       <>
         <Brush className="w-3.5 h-3.5" />
-        <span className={labelClass}>Alt-click to sample.</span>
+        <span className={cn(labelClass, hasSource ? "" : "text-[var(--ps-accent)]")}>
+          {hasSource ? "Alt-click to re-sample." : "Alt-click the canvas to set a source."}
+        </span>
         <Divider />
         <span className={labelClass}>Sample:</span>
         <select
@@ -859,105 +886,6 @@ export function OptionsBar() {
     )
   }
 
-  function TypeOptions() {
-    const { activeLayer, dispatch, commit, requestRender } = useEditorSelector((editor) => editor)
-    const t = activeLayer?.kind === "text" ? activeLayer.text : null
-    return (
-      <>
-        <Type className="w-3.5 h-3.5" />
-        <Select
-          value={t?.font ?? "Geist"}
-          onValueChange={(v) => {
-            if (!activeLayer || !t) return
-            const next = { ...t, font: v }
-            dispatch({ type: "set-layer-text", id: activeLayer.id, text: next })
-            requestRender()
-            commit("Type Font", [activeLayer.id])
-          }}
-        >
-          <SelectTrigger className="h-6 w-32 text-[11px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="Geist">Geist</SelectItem>
-            <SelectItem value="Inter">Inter</SelectItem>
-            <SelectItem value="Helvetica">Helvetica</SelectItem>
-            <SelectItem value="Times">Times</SelectItem>
-            <SelectItem value="Courier">Courier</SelectItem>
-            <SelectItem value="Georgia">Georgia</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select
-          value={t ? (t.weight === "bold" && t.italic ? "BoldItalic" : t.weight === "bold" ? "Bold" : t.italic ? "Italic" : "Regular") : "Regular"}
-          onValueChange={(v) => {
-            if (!activeLayer || !t) return
-            const next = {
-              ...t,
-              weight: v.includes("Bold") ? ("bold" as const) : ("normal" as const),
-              italic: v.includes("Italic"),
-            }
-            dispatch({ type: "set-layer-text", id: activeLayer.id, text: next })
-            requestRender()
-            commit("Type Style", [activeLayer.id])
-          }}
-        >
-          <SelectTrigger className="h-6 w-24 text-[11px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="Regular">Regular</SelectItem>
-            <SelectItem value="Bold">Bold</SelectItem>
-            <SelectItem value="Italic">Italic</SelectItem>
-            <SelectItem value="BoldItalic">Bold Italic</SelectItem>
-          </SelectContent>
-        </Select>
-        <Input
-          type="number"
-          value={t?.size ?? 48}
-          onChange={(e) => {
-            if (!activeLayer || !t) return
-            const next = { ...t, size: Number(e.target.value) || t.size }
-            dispatch({ type: "set-layer-text", id: activeLayer.id, text: next })
-            requestRender()
-          }}
-          className={numInputClass}
-        />
-        <span className={labelClass}>pt</span>
-        <Divider />
-        <Select
-          value={t ? (t.antiAlias === false ? "none" : t.antiAliasMode ?? "smooth") : "smooth"}
-          onValueChange={(v) => {
-            if (!activeLayer || !t) return
-            const mode = v as TextAntiAliasMode
-            const next = { ...t, antiAliasMode: mode, antiAlias: mode !== "none" }
-            dispatch({ type: "set-layer-text", id: activeLayer.id, text: next })
-            requestRender()
-            commit("Type Anti-Alias", [activeLayer.id])
-          }}
-        >
-          <SelectTrigger className="h-6 w-24 text-[11px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none">None</SelectItem>
-            <SelectItem value="sharp">Sharp</SelectItem>
-            <SelectItem value="crisp">Crisp</SelectItem>
-            <SelectItem value="strong">Strong</SelectItem>
-            <SelectItem value="smooth">Smooth</SelectItem>
-          </SelectContent>
-        </Select>
-        <Divider />
-        <button
-          className="h-6 px-2 border border-[var(--ps-divider)] rounded-sm hover:bg-[var(--ps-tool-hover)]"
-          onClick={() => dispatchPhotoshopEvent("ps-open-warp-text")}
-          disabled={!activeLayer || activeLayer.kind !== "text"}
-        >
-          Warp Text…
-        </button>
-      </>
-    )
-  }
-
   function EyedropperOptions() {
     const helper =
       tool === "color-sampler"
@@ -1062,7 +990,9 @@ export function OptionsBar() {
     type ShapeBooleanOptionKey = "polygonStarMode" | "smoothCorners" | "smoothIndent"
     const [opts, setOpts] = React.useState({
       strokeWidth: 0,
-      radius: 18,
+      // Square corners by default; the Rounded Rectangle tool substitutes its
+      // own minimum. Photoshop's Rectangle tool starts at 0 too.
+      radius: tool === "shape-rounded-rect" ? 18 : 0,
       sides: tool === "shape-triangle" ? 3 : 6,
       innerRadiusRatio: 0.45,
       vertexRoundness: 0,
@@ -1207,7 +1137,6 @@ export function OptionsBar() {
       </>
     )
   }
-
   function GradientOptions() {
     const stops: GradientStop[] = gradient.stops ?? [
       { offset: 0, color: foreground, opacity: 1 },
@@ -1254,6 +1183,41 @@ export function OptionsBar() {
           </SelectContent>
         </Select>
         <Divider />
+        <span className={labelClass}>Mode:</span>
+        <Select
+          value={gradient.blendMode ?? "normal"}
+          onValueChange={(v) =>
+            dispatch({ type: "set-gradient", gradient: { blendMode: v as BlendMode } })
+          }
+        >
+          <SelectTrigger className="h-6 w-28 text-[11px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {GRADIENT_BLEND_MODES.map((mode) => (
+              <SelectItem key={mode} value={mode}>
+                {mode.replace(/(^|-)([a-z])/g, (_, sep, ch) => (sep ? " " : "") + ch.toUpperCase())}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Divider />
+        <div className="flex items-center gap-1.5">
+          <ScrubLabel
+            label="Opacity:"
+            value={Math.round((gradient.opacity ?? 1) * 100)}
+            min={0}
+            max={100}
+            onChange={(v) => dispatch({ type: "set-gradient", gradient: { opacity: v / 100 } })}
+          />
+          <PercentInput
+            label="Gradient opacity"
+            value={Math.round((gradient.opacity ?? 1) * 100)}
+            onChange={(v) => dispatch({ type: "set-gradient", gradient: { opacity: v / 100 } })}
+          />
+          <span className="text-[11px]">%</span>
+        </div>
+        <Divider />
         <label className="flex items-center gap-1.5">
           <input
             type="checkbox"
@@ -1262,6 +1226,17 @@ export function OptionsBar() {
             className="accent-[var(--ps-accent)]"
           />
           <span>Reverse</span>
+        </label>
+        <label className="flex items-center gap-1.5" title="Paint only where the layer already has pixels">
+          <input
+            type="checkbox"
+            checked={gradient.preserveTransparency ?? false}
+            onChange={(e) =>
+              dispatch({ type: "set-gradient", gradient: { preserveTransparency: e.target.checked } })
+            }
+            className="accent-[var(--ps-accent)]"
+          />
+          <span>Transparency</span>
         </label>
         <label className="flex items-center gap-1.5">
           <input

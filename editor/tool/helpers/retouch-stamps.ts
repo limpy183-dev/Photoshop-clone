@@ -365,6 +365,29 @@ export class SmudgeBuffer {
 }
 
 /** Dodge / Burn brush stamp: lightens or darkens. */
+/** Weight of a tonal range at luminance `l` (0–1). Peaks where the range lives. */
+export function toneRangeWeight(l: number, range: "shadows" | "midtones" | "highlights") {
+  if (range === "shadows") return Math.max(0, 1 - l * 1.6)
+  if (range === "highlights") return Math.max(0, (l - 0.375) * 1.6)
+  return Math.max(0, 1 - Math.abs(l - 0.5) * 2)
+}
+
+export interface DodgeBurnOptions {
+  /** Which tones the brush acts on. Photoshop defaults to midtones. */
+  range?: "shadows" | "midtones" | "highlights"
+  /** Keep hue and saturation by scaling luminance instead of each channel. */
+  protectTones?: boolean
+}
+
+/**
+ * Dodge / burn dab.
+ *
+ * `strength` is the peak effect at the dab centre for pixels squarely inside
+ * the selected tonal range; the radial falloff and the range weight both scale
+ * it down. Restricting the effect by tone is what stops dodge from driving
+ * everything to flat white — pushing every channel toward 255 regardless of the
+ * pixel's starting luminance blows out highlights after one or two dabs.
+ */
 export function dodgeBurnStamp(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -372,6 +395,7 @@ export function dodgeBurnStamp(
   radius: number,
   mode: "dodge" | "burn",
   strength: number,
+  options?: DodgeBurnOptions,
 ) {
   const r = Math.max(2, Math.floor(radius))
   const sx = Math.max(0, Math.floor(x - r))
@@ -379,23 +403,41 @@ export function dodgeBurnStamp(
   const sw = Math.min(ctx.canvas.width - sx, r * 2)
   const sh = Math.min(ctx.canvas.height - sy, r * 2)
   if (sw <= 0 || sh <= 0) return
+  const range = options?.range ?? "midtones"
+  const protectTones = options?.protectTones ?? true
+  const cx = x - sx
+  const cy = y - sy
   const img = ctx.getImageData(sx, sy, sw, sh)
   for (let py = 0; py < sh; py++) {
     for (let px = 0; px < sw; px++) {
-      const dx = px - r
-      const dy = py - r
+      const dx = px - cx
+      const dy = py - cy
       const d = Math.sqrt(dx * dx + dy * dy)
       if (d > r) continue
-      const w = (1 - d / r) * strength
       const i = (py * sw + px) * 4
-      if (mode === "dodge") {
-        img.data[i] = Math.min(255, img.data[i] + (255 - img.data[i]) * w)
-        img.data[i + 1] = Math.min(255, img.data[i + 1] + (255 - img.data[i + 1]) * w)
-        img.data[i + 2] = Math.min(255, img.data[i + 2] + (255 - img.data[i + 2]) * w)
+      if (img.data[i + 3] === 0) continue
+      const red = img.data[i]
+      const green = img.data[i + 1]
+      const blue = img.data[i + 2]
+      const luma = (0.299 * red + 0.587 * green + 0.114 * blue) / 255
+      const w = (1 - d / r) * strength * toneRangeWeight(luma, range)
+      if (w <= 0) continue
+      if (protectTones) {
+        // Move luminance, then rescale the pixel to hit it — hue and
+        // saturation ride along unchanged.
+        const targetLuma = mode === "dodge" ? luma + (1 - luma) * w : luma - luma * w
+        const factor = luma > 0.001 ? targetLuma / luma : 0
+        img.data[i] = clampByte(red * factor)
+        img.data[i + 1] = clampByte(green * factor)
+        img.data[i + 2] = clampByte(blue * factor)
+      } else if (mode === "dodge") {
+        img.data[i] = clampByte(red + (255 - red) * w)
+        img.data[i + 1] = clampByte(green + (255 - green) * w)
+        img.data[i + 2] = clampByte(blue + (255 - blue) * w)
       } else {
-        img.data[i] = Math.max(0, img.data[i] - img.data[i] * w)
-        img.data[i + 1] = Math.max(0, img.data[i + 1] - img.data[i + 1] * w)
-        img.data[i + 2] = Math.max(0, img.data[i + 2] - img.data[i + 2] * w)
+        img.data[i] = clampByte(red - red * w)
+        img.data[i + 1] = clampByte(green - green * w)
+        img.data[i + 2] = clampByte(blue - blue * w)
       }
     }
   }
@@ -403,7 +445,14 @@ export function dodgeBurnStamp(
 }
 
 /** Sponge brush stamp: desaturates opaque pixels inside the brush footprint. */
-export function spongeStamp(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, strength: number) {
+export function spongeStamp(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  radius: number,
+  strength: number,
+  mode: "desaturate" | "saturate" = "desaturate",
+) {
   const r = Math.max(2, Math.floor(radius))
   const sx = Math.max(0, Math.floor(x - r))
   const sy = Math.max(0, Math.floor(y - r))
@@ -431,15 +480,96 @@ export function spongeStamp(ctx: CanvasRenderingContext2D, x: number, y: number,
       const gg = data[i + 1]
       const bb = data[i + 2]
       const lum = 0.299 * rr + 0.587 * gg + 0.114 * bb
-      data[i] = rr + (lum - rr) * strength
-      data[i + 1] = gg + (lum - gg) * strength
-      data[i + 2] = bb + (lum - bb) * strength
+      // Desaturate pulls channels toward luminance; saturate pushes them away
+      // along the same axis, so the two modes are one sign flip apart.
+      const amount = mode === "saturate" ? -strength : strength
+      data[i] = clampByte(rr + (lum - rr) * amount)
+      data[i + 1] = clampByte(gg + (lum - gg) * amount)
+      data[i + 2] = clampByte(bb + (lum - bb) * amount)
     }
   }
   ctx.putImageData(img, sx, sy)
 }
 
 /** Healing brush: clone with luminance correction towards target area. */
+/**
+ * Choose where the spot-healing brush should take its donor patch from.
+ *
+ * Tries the four cardinal neighbours a patch-width away and keeps the one whose
+ * mean colour is closest to the ring *around* the blemish — that ring is what
+ * the repair has to blend into, while the blemish itself is what we want to
+ * avoid re-sampling. Candidates are clamped inside the canvas, so healing near
+ * an edge still finds real pixels instead of transparent margin.
+ */
+export function pickHealSource(
+  srcCanvas: HTMLCanvasElement,
+  x: number,
+  y: number,
+  radius: number,
+): { x: number; y: number } {
+  const ctx = srcCanvas.getContext("2d")
+  const r = Math.max(2, Math.floor(radius))
+  const fallback = { x: Math.min(srcCanvas.width - r, x + r * 2), y }
+  if (!ctx) return fallback
+
+  const clampX = (v: number) => Math.max(r, Math.min(srcCanvas.width - r, v))
+  const clampY = (v: number) => Math.max(r, Math.min(srcCanvas.height - r, v))
+  const meanAt = (cx: number, cy: number) => {
+    const sx = Math.max(0, Math.min(srcCanvas.width - 1, Math.floor(cx - r)))
+    const sy = Math.max(0, Math.min(srcCanvas.height - 1, Math.floor(cy - r)))
+    const sw = Math.max(1, Math.min(srcCanvas.width - sx, r * 2))
+    const sh = Math.max(1, Math.min(srcCanvas.height - sy, r * 2))
+    const data = ctx.getImageData(sx, sy, sw, sh).data
+    let sr = 0
+    let sg = 0
+    let sb = 0
+    let n = 0
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] === 0) continue
+      sr += data[i]
+      sg += data[i + 1]
+      sb += data[i + 2]
+      n++
+    }
+    return n ? { r: sr / n, g: sg / n, b: sb / n, n } : null
+  }
+
+  // Reference = the annulus just outside the dab, approximated by the mean of a
+  // patch one radius further out in each direction.
+  const ring = [
+    meanAt(clampX(x + r * 3), clampY(y)),
+    meanAt(clampX(x - r * 3), clampY(y)),
+    meanAt(clampX(x), clampY(y + r * 3)),
+    meanAt(clampX(x), clampY(y - r * 3)),
+  ].filter((m): m is NonNullable<typeof m> => m !== null)
+  if (!ring.length) return fallback
+  const target = {
+    r: ring.reduce((s, m) => s + m.r, 0) / ring.length,
+    g: ring.reduce((s, m) => s + m.g, 0) / ring.length,
+    b: ring.reduce((s, m) => s + m.b, 0) / ring.length,
+  }
+
+  const candidates = [
+    { x: clampX(x + r * 2), y: clampY(y) },
+    { x: clampX(x - r * 2), y: clampY(y) },
+    { x: clampX(x), y: clampY(y + r * 2) },
+    { x: clampX(x), y: clampY(y - r * 2) },
+  ]
+  let best = fallback
+  let bestScore = Number.POSITIVE_INFINITY
+  for (const candidate of candidates) {
+    const mean = meanAt(candidate.x, candidate.y)
+    if (!mean) continue
+    const score =
+      Math.abs(mean.r - target.r) + Math.abs(mean.g - target.g) + Math.abs(mean.b - target.b)
+    if (score < bestScore) {
+      bestScore = score
+      best = candidate
+    }
+  }
+  return best
+}
+
 export function healStamp(
   destCtx: CanvasRenderingContext2D,
   srcCanvas: HTMLCanvasElement,
@@ -489,10 +619,16 @@ export function healStamp(
     dg /= n
     db /= n
   }
+  // The dab centre sits at (r, r) only when the patch was not clipped by a
+  // canvas edge; near one, dxi/dyi stop short and the centre shifts. Measuring
+  // it from the real patch origin keeps the falloff under the cursor instead of
+  // sliding off it along the top and left edges.
+  const cx = dx - dxi
+  const cy = dy - dyi
   for (let py = 0; py < sh; py++) {
     for (let px = 0; px < sw; px++) {
-      const ddx = px - r
-      const ddy = py - r
+      const ddx = px - cx
+      const ddy = py - cy
       const d = Math.sqrt(ddx * ddx + ddy * ddy)
       if (d > r) continue
       const t = 1 - d / r

@@ -15,6 +15,12 @@ declare global {
     __origH?: number
     /** Internal: move-tool snapshot (canvas-view.tsx) */
     __moveSnapshot?: HTMLCanvasElement
+    /**
+     * Internal: pixels lifted out of `__moveSnapshot` by an active selection
+     * (canvas-view.tsx). When set, the move tool drags this alone and leaves
+     * the snapshot in place, matching Photoshop's floating selection.
+     */
+    __moveFloat?: HTMLCanvasElement
   }
   interface Window {
     /** Internal: current custom shape selection */

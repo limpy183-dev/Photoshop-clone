@@ -120,6 +120,9 @@ test("rectangle construction retains stroke corner fallback and rounded radius b
     rotation: 12,
   }
 
+  // The plain Rectangle tool is square-cornered: corner radii belong to the
+  // Rounded Rectangle tool, and the options bar seeds them even while their
+  // inputs are hidden.
   expect(shapePropsForTool("shape-rect", 10, 20, 100, 60, { x: 10, y: 20 }, { x: 110, y: 80 }, "#ffffff", "#000000")).toEqual({
     type: "rect",
     x: 10,
@@ -128,9 +131,15 @@ test("rectangle construction retains stroke corner fallback and rounded radius b
     h: 60,
     fill: "#ffffff",
     stroke: { color: "#000000", width: 2 },
+    radius: 0,
+    cornerRadii: undefined,
+    rotation: 12,
+  })
+
+  // The rounded variant still reads every corner, falling back to `radius`.
+  expect(shapePropsForTool("shape-rounded-rect", 10, 20, 100, 60, { x: 10, y: 20 }, { x: 110, y: 80 }, "#ffffff", "#000000")).toMatchObject({
     radius: 6,
     cornerRadii: [1, 6, 0, 6],
-    rotation: 12,
   })
 
   window.__psShapeOptions = { radius: 0 }

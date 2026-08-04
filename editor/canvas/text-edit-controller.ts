@@ -20,12 +20,10 @@ export interface TextEditState {
   isNew: boolean
 }
 
-const DEFAULT_TEXT_FONT = "Geist, system-ui, sans-serif"
-const DEFAULT_TEXT_SIZE = 48
+import { getTypeRuntimeDefaults } from "@/editor/canvas/view-runtime"
 
 export interface TextEditControllerOptions {
   activeDoc: PsDocument | null | undefined
-  activeLayer: Layer | null | undefined
   tool: ToolId
   foreground: string
   dispatch: React.Dispatch<Action>
@@ -47,7 +45,6 @@ export interface TextEditController {
 
 export function useTextEditController({
   activeDoc,
-  activeLayer,
   tool,
   foreground,
   dispatch,
@@ -61,16 +58,24 @@ export function useTextEditController({
   // for editing without going through history.
   const editingTextOriginalRef = React.useRef<string>("")
 
+  /**
+   * Properties a newly placed type layer starts from. These come from the
+   * options bar's runtime defaults, which the bar keeps in sync when a text
+   * layer is selected — so "set the size, then click to place text" works,
+   * and placing another layer reuses the last settings.
+   */
   function activeTextDefaults(): TextProps {
-    const source = activeLayer?.kind === "text" ? activeLayer.text : null
+    const defaults = getTypeRuntimeDefaults()
     return {
       content: "",
-      font: source?.font ?? DEFAULT_TEXT_FONT,
-      size: source?.size ?? DEFAULT_TEXT_SIZE,
-      weight: source?.weight ?? "bold",
-      italic: source?.italic ?? false,
+      font: defaults.font,
+      size: defaults.size,
+      weight: defaults.weight,
+      italic: defaults.italic,
       color: foreground,
-      align: source?.align ?? "left",
+      align: defaults.align,
+      leading: defaults.leading,
+      tracking: defaults.tracking,
       x: 0,
       y: 0,
     }

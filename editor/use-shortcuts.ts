@@ -11,6 +11,7 @@ import {
   shortcutPrimaryKey,
 } from "@/editor/shortcuts"
 import { requestCanvasZoom } from "@/editor/zoom-events"
+import { selectionToMaskCanvas } from "@/editor/tool/helpers"
 import {
   createAdjustmentLayer as createAdjustmentLayerModel,
   invertAdjustmentMask,
@@ -411,22 +412,42 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
         return
       }
 
-      if (e.key === "Backspace" && !meta) {
+      // Delete and Backspace both clear; Alt/Shift fill with fore/background.
+      // All three are clipped to the active selection when there is one —
+      // without that, deleting after any selection gesture (lasso, marquee,
+      // wand, quick-select) wiped the entire layer.
+      // `defaultPrevented` means the canvas already consumed this key for a
+      // narrower job (deleting selected path anchors) — don't also clear pixels.
+      if ((e.key === "Backspace" || e.key === "Delete") && !meta && !e.defaultPrevented) {
         e.preventDefault()
         if (activeDoc && activeLayer && !activeLayer.locked) {
           const ctx = activeLayer.canvas.getContext("2d")!
-          if (e.altKey) {
-            ctx.fillStyle = foreground
+          const mask = selectionToMaskCanvas(activeDoc.width, activeDoc.height, activeDoc.selection)
+          const fill = e.altKey ? foreground : e.shiftKey ? background : null
+          const label = e.altKey ? "Fill with Foreground" : e.shiftKey ? "Fill with Background" : "Clear"
+          ctx.save()
+          if (fill && mask) {
+            // Tint the mask and composite it: keeps feathered/antialiased
+            // selection edges instead of a hard rectangular fill.
+            const paint = makeCanvas(activeDoc.width, activeDoc.height)
+            const pctx = paint.getContext("2d")!
+            pctx.drawImage(mask, 0, 0)
+            pctx.globalCompositeOperation = "source-in"
+            pctx.fillStyle = fill
+            pctx.fillRect(0, 0, activeDoc.width, activeDoc.height)
+            ctx.drawImage(paint, 0, 0)
+          } else if (fill) {
+            ctx.fillStyle = fill
             ctx.fillRect(0, 0, activeDoc.width, activeDoc.height)
-            commit("Fill with Foreground", [activeLayer.id])
-          } else if (e.shiftKey) {
-            ctx.fillStyle = background
-            ctx.fillRect(0, 0, activeDoc.width, activeDoc.height)
-            commit("Fill with Background", [activeLayer.id])
+          } else if (mask) {
+            ctx.globalCompositeOperation = "destination-out"
+            ctx.drawImage(mask, 0, 0)
           } else {
             ctx.clearRect(0, 0, activeDoc.width, activeDoc.height)
-            commit("Clear", [activeLayer.id])
           }
+          ctx.restore()
+          commit(label, [activeLayer.id])
+          requestRender()
         }
         return
       }

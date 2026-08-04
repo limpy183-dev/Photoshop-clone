@@ -64,6 +64,9 @@ export function drawGradientPreview(
   ctx.clearRect(0, 0, overlay.width, overlay.height)
   const stops = getGradientStops(gradient, foreground, background)
   ctx.save()
+  // Preview at the configured opacity so the drag shows what will land, not a
+  // full-strength ramp that changes on release.
+  ctx.globalAlpha = gradient.opacity ?? 1
   if (document.selection.bounds) {
     clipToSelection(ctx, document)
   }
@@ -428,29 +431,49 @@ export function drawPatchPreview(
 export function drawPathPreview(
   overlay: HTMLCanvasElement,
   draft: { points: PathPoint[]; closed: boolean; curvature?: boolean },
+  /** Cursor position, drawn as a rubber band from the last anchor. */
+  hover?: { x: number; y: number } | null,
 ) {
   const ctx = overlay.getContext("2d")!
   ctx.clearRect(0, 0, overlay.width, overlay.height)
   const points = draft.curvature ? makeCurvaturePath(draft.points, draft.closed) : draft.points
   if (points.length < 1) return
   ctx.save()
+  // Rubber band to the cursor so the next segment is visible before clicking.
+  if (hover && !draft.closed) {
+    const last = points[points.length - 1]
+    ctx.save()
+    ctx.strokeStyle = "rgba(6, 182, 212, 0.55)"
+    ctx.lineWidth = 1
+    ctx.setLineDash([4, 3])
+    ctx.beginPath()
+    ctx.moveTo(last.x, last.y)
+    const c1 = last.cp2 ?? last
+    ctx.bezierCurveTo(c1.x, c1.y, hover.x, hover.y, hover.x, hover.y)
+    ctx.stroke()
+    ctx.restore()
+  }
   ctx.strokeStyle = "#06b6d4"
   ctx.lineWidth = 1.5
+  // Handle order must match appendPathToCanvas — the segment prev→cur is
+  // controlled by prev's *outgoing* handle (cp2) and cur's *incoming* one
+  // (cp1). Reading them the other way round drew a mirrored curve, so the
+  // committed path never matched the shape the preview promised.
   ctx.beginPath()
   ctx.moveTo(points[0].x, points[0].y)
   for (let i = 1; i < points.length; i++) {
     const prev = points[i - 1]
     const cur = points[i]
-    const cp1 = prev.cp1 ?? prev
-    const cp2 = cur.cp2 ?? cur
-    ctx.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, cur.x, cur.y)
+    const c1 = prev.cp2 ?? prev
+    const c2 = cur.cp1 ?? cur
+    ctx.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, cur.x, cur.y)
   }
   if (draft.closed && points.length > 2) {
     const last = points[points.length - 1]
     const first = points[0]
-    const cp1 = last.cp1 ?? last
-    const cp2 = first.cp2 ?? first
-    ctx.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, first.x, first.y)
+    const c1 = last.cp2 ?? last
+    const c2 = first.cp1 ?? first
+    ctx.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, first.x, first.y)
   }
   ctx.stroke()
   ctx.fillStyle = "#06b6d4"

@@ -1,5 +1,6 @@
 
 
+import type { BlendMode } from "@/editor/types/core"
 import type { CustomShapeId, GradientStop } from "@/editor/types/typography"
 export type ToolId =
   | "move"
@@ -291,6 +292,12 @@ export interface GradientSettings {
   cycle?: boolean
   /** Multi-stop gradient (when set, used over fg/bg). */
   stops?: GradientStop[]
+  /** Paint opacity, 0–1. Defaults to 1. */
+  opacity?: number
+  /** Blend mode used when the ramp is composited onto the layer. */
+  blendMode?: BlendMode
+  /** Paint only where the layer is already opaque (Photoshop's Transparency). */
+  preserveTransparency?: boolean
 }
 
 export type SymmetryAxis =

@@ -33,6 +33,33 @@ export function imageRenderingForZoom(zoom: number): "pixelated" | "auto" {
   return zoom >= 4 ? "pixelated" : "auto"
 }
 
+/**
+ * Pan offset that keeps the document point `anchor` under the same screen pixel
+ * across a zoom change.
+ *
+ * The stage is transformed as `translate(pan) rotate(r) scale(s)` about its own
+ * centre, so a document point lands at `stageCentre + pan + R(r)·(zoom·(p−c))`.
+ * The layout size cancels out, leaving the pan correction below — which is why
+ * this works identically during the transient scale and after the zoom commits
+ * to a new layout size.
+ */
+export function zoomAnchoredPan(
+  pan: ViewportPan,
+  anchor: { x: number; y: number },
+  center: { x: number; y: number },
+  fromZoom: number,
+  toZoom: number,
+  rotationDeg = 0,
+): ViewportPan {
+  const dz = fromZoom - toZoom
+  const dx = (anchor.x - center.x) * dz
+  const dy = (anchor.y - center.y) * dz
+  const rad = (rotationDeg * Math.PI) / 180
+  const cos = Math.cos(rad)
+  const sin = Math.sin(rad)
+  return { x: pan.x + dx * cos - dy * sin, y: pan.y + dx * sin + dy * cos }
+}
+
 export function wheelViewportChange(input: WheelViewportInput): WheelViewportChange {
   if (input.modifierPressed) {
     return {
@@ -50,7 +77,7 @@ export function wheelViewportChange(input: WheelViewportInput): WheelViewportCha
 }
 
 export interface CanvasViewportControllerOptions {
-  activeDoc: Pick<PsDocument, "zoom" | "rotation" | "dpi"> | null | undefined
+  activeDoc: Pick<PsDocument, "zoom" | "rotation" | "dpi" | "width" | "height"> | null | undefined
   canvasPrefs: Pick<CanvasRuntimePreferences, "screenDpi" | "printResolution">
   compositeRef: React.RefObject<HTMLCanvasElement | null>
   overlayRef: React.RefObject<HTMLCanvasElement | null>
@@ -63,7 +90,10 @@ export interface CanvasViewportController {
   viewZoom: number
   visualZoomRef: React.RefObject<number>
   applyStageTransform: (transientScale?: number) => void
-  applyViewZoom: (zoom: number) => void
+  /** `anchor` is a document point to hold still; omitted zooms about the centre. */
+  applyViewZoom: (zoom: number, anchor?: { x: number; y: number } | null) => void
+  /** Document point under a client coordinate, or null if it misses the canvas. */
+  docPointFromClient: (clientX: number, clientY: number) => { x: number; y: number } | null
   onWheel: (event: WheelEvent) => void
 }
 
@@ -101,9 +131,38 @@ export function useCanvasViewportController({
     [activeDoc, applyStageTransform, compositeRef, overlayRef],
   )
 
+  /**
+   * Anchoring is skipped while the view is rotated: `getBoundingClientRect`
+   * reports the axis-aligned box of a rotated element, so the mapping below
+   * would place the anchor wrong. Centre-zoom is the safe fallback there.
+   */
+  const docPointFromClient = React.useCallback(
+    (clientX: number, clientY: number) => {
+      const cv = compositeRef.current
+      if (!cv || !activeDoc || (activeDoc.rotation ?? 0) !== 0) return null
+      const rect = cv.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0) return null
+      const u = (clientX - rect.left) / rect.width
+      const v = (clientY - rect.top) / rect.height
+      if (u < 0 || u > 1 || v < 0 || v > 1) return null
+      return { x: u * activeDoc.width, y: v * activeDoc.height }
+    },
+    [activeDoc, compositeRef],
+  )
+
   const applyViewZoom = React.useCallback(
-    (zoom: number) => {
+    (zoom: number, anchor?: { x: number; y: number } | null) => {
       const next = clampZoom(zoom)
+      if (anchor && activeDoc) {
+        panRef.current = zoomAnchoredPan(
+          panRef.current,
+          anchor,
+          { x: activeDoc.width / 2, y: activeDoc.height / 2 },
+          visualZoomRef.current,
+          next,
+          activeDoc.rotation ?? 0,
+        )
+      }
       visualZoomRef.current = next
       pendingZoomRef.current = next
 
@@ -128,7 +187,7 @@ export function useCanvasViewportController({
         onCommitZoom(committedZoom)
       }, ZOOM_COMMIT_IDLE_MS)
     },
-    [applyZoomStyles, onCommitZoom],
+    [activeDoc, applyZoomStyles, onCommitZoom],
   )
 
   React.useEffect(() => {
@@ -186,12 +245,14 @@ export function useCanvasViewportController({
     })
     if (change.kind === "zoom") {
       event.preventDefault()
-      applyViewZoom(change.zoom)
+      // Zoom toward the pointer when it is over the image; off-canvas (or
+      // rotated) falls back to zooming about the centre.
+      applyViewZoom(change.zoom, docPointFromClient(event.clientX, event.clientY))
     } else {
       panRef.current = change.pan
       applyStageTransform()
     }
-  }, [activeDoc, applyStageTransform, applyViewZoom])
+  }, [activeDoc, applyStageTransform, applyViewZoom, docPointFromClient])
 
   return {
     panRef,
@@ -199,6 +260,7 @@ export function useCanvasViewportController({
     visualZoomRef,
     applyStageTransform,
     applyViewZoom,
+    docPointFromClient,
     onWheel,
   }
 }
