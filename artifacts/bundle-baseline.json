@@ -2,23 +2,23 @@
   "schemaVersion": 1,
   "routes": {
     "/": {
-      "encodedBodyBytes": 173732,
-      "decodedBodyBytes": 574914,
+      "encodedBodyBytes": 178769,
+      "decodedBodyBytes": 593170,
       "requestCount": 12
     },
     "/editor": {
-      "encodedBodyBytes": 385268,
-      "decodedBodyBytes": 1253534,
+      "encodedBodyBytes": 390243,
+      "decodedBodyBytes": 1271850,
       "requestCount": 16
     },
     "/marketing": {
-      "encodedBodyBytes": 215506,
-      "decodedBodyBytes": 678080,
+      "encodedBodyBytes": 220644,
+      "decodedBodyBytes": 696560,
       "requestCount": 16
     },
     "/documentation": {
-      "encodedBodyBytes": 146347,
-      "decodedBodyBytes": 483314,
+      "encodedBodyBytes": 151384,
+      "decodedBodyBytes": 501570,
       "requestCount": 11
     }
   },

@@ -30,15 +30,15 @@
   "totals": {
     "chunkCount": 162,
     "initialFiles": 5,
-    "initialJsBytes": 542708
+    "initialJsBytes": 561033
   },
   "largest": [
     {
-      "file": ".next/static/chunks/raster-decoders.c4f298f9b0c48629.js",
+      "file": ".next/static/chunks/raster-decoders.166937786ca14c67.js",
       "bytes": 1414672
     },
     {
-      "file": ".next/static/chunks/document-decoders.cb03d5907d2ed71a.js",
+      "file": ".next/static/chunks/document-decoders.2a7c8b3099490c12.js",
       "bytes": 779006
     },
     {
@@ -46,36 +46,36 @@
       "bytes": 484568
     },
     {
-      "file": ".next/static/chunks/3321.d799ccdbb64ff0b0.js",
-      "bytes": 468721
+      "file": ".next/static/chunks/3321.b712956379c5fec3.js",
+      "bytes": 468729
     },
     {
-      "file": ".next/static/chunks/8478.1157d0ca8f8cb00d.js",
+      "file": ".next/static/chunks/8478.d2baba8e509c20bd.js",
       "bytes": 242225
     },
     {
-      "file": ".next/static/chunks/5271.18f4cbe3f773ce3d.js",
-      "bytes": 231138
+      "file": ".next/static/chunks/3794-d7cddff008311ab3.js",
+      "bytes": 239893
     },
     {
-      "file": ".next/static/chunks/3794-c66b3d8325973459.js",
-      "bytes": 222758
+      "file": ".next/static/chunks/5271.ee78eba5f188423a.js",
+      "bytes": 231150
     },
     {
-      "file": ".next/static/chunks/4bd1b696-e356ca5ba0218e27.js",
-      "bytes": 199870
+      "file": ".next/static/chunks/4bd1b696-8a4ab4fdf0ae305a.js",
+      "bytes": 201060
     },
     {
-      "file": ".next/static/chunks/framework-594babcea68f40f6.js",
-      "bytes": 189700
+      "file": ".next/static/chunks/framework-461b899b66554474.js",
+      "bytes": 189686
     },
     {
       "file": ".next/static/chunks/4501.7a5929084f10caa1.js",
       "bytes": 181451
     },
     {
-      "file": ".next/static/chunks/main-4ab15addd4deb4eb.js",
-      "bytes": 132570
+      "file": ".next/static/chunks/main-2b2f4b0cdd0e2fa6.js",
+      "bytes": 134125
     },
     {
       "file": ".next/static/chunks/3173.55488333efeee39d.js",
@@ -94,8 +94,8 @@
       "bytes": 112594
     },
     {
-      "file": ".next/static/chunks/4486-38125abcbf0c0834.js",
-      "bytes": 85111
+      "file": ".next/static/chunks/4486-1dc639fed3ddc611.js",
+      "bytes": 85335
     },
     {
       "file": ".next/static/chunks/67b122cf.b58abe6e1703d298.js",
@@ -106,8 +106,8 @@
       "bytes": 74303
     },
     {
-      "file": ".next/static/chunks/486.db36d5a4ad6bf6bd.js",
-      "bytes": 63788
+      "file": ".next/static/chunks/486.2e24d53d9dbda613.js",
+      "bytes": 63777
     },
     {
       "file": ".next/static/chunks/7696.3f789345a8e06b3e.js",
@@ -116,17 +116,17 @@
   ],
   "decoderChunks": [
     {
-      "file": ".next/static/chunks/raster-decoders.c4f298f9b0c48629.js",
+      "file": ".next/static/chunks/raster-decoders.166937786ca14c67.js",
       "bytes": 1414672
     },
     {
-      "file": ".next/static/chunks/document-decoders.cb03d5907d2ed71a.js",
+      "file": ".next/static/chunks/document-decoders.2a7c8b3099490c12.js",
       "bytes": 779006
     }
   ],
   "chunkOwnership": [
     {
-      "file": ".next/static/chunks/raster-decoders.c4f298f9b0c48629.js",
+      "file": ".next/static/chunks/raster-decoders.166937786ca14c67.js",
       "bytes": 1414672,
       "classification": "decoder",
       "routes": [],
@@ -155,7 +155,7 @@
       ]
     },
     {
-      "file": ".next/static/chunks/document-decoders.cb03d5907d2ed71a.js",
+      "file": ".next/static/chunks/document-decoders.2a7c8b3099490c12.js",
       "bytes": 779006,
       "classification": "decoder",
       "routes": [],
@@ -213,8 +213,8 @@
       ]
     },
     {
-      "file": ".next/static/chunks/3321.d799ccdbb64ff0b0.js",
-      "bytes": 468721,
+      "file": ".next/static/chunks/3321.b712956379c5fec3.js",
+      "bytes": 468729,
       "classification": "shared-or-dynamic",
       "routes": [],
       "moduleSamples": [],
@@ -242,7 +242,7 @@
       ]
     },
     {
-      "file": ".next/static/chunks/8478.1157d0ca8f8cb00d.js",
+      "file": ".next/static/chunks/8478.d2baba8e509c20bd.js",
       "bytes": 242225,
       "classification": "shared-or-dynamic",
       "routes": [],
@@ -271,8 +271,37 @@
       ]
     },
     {
-      "file": ".next/static/chunks/5271.18f4cbe3f773ce3d.js",
-      "bytes": 231138,
+      "file": ".next/static/chunks/3794-d7cddff008311ab3.js",
+      "bytes": 239893,
+      "classification": "shared-or-dynamic",
+      "routes": [],
+      "moduleSamples": [],
+      "moduleSampleCount": 0,
+      "sourcemapModuleSamples": [],
+      "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [
+        "node_modules/@swc/helpers/esm/_interop_require_default.js",
+        "node_modules/@swc/helpers/esm/_interop_require_wildcard.js",
+        "node_modules/next/dist/build/polyfills/polyfill-module.js",
+        "node_modules/next/dist/build/polyfills/process.js",
+        "node_modules/next/dist/build/webpack/loaders/instrumentation-client-stub.js",
+        "node_modules/next/dist/client/add-base-path.js",
+        "node_modules/next/dist/client/app-bootstrap.js",
+        "node_modules/next/dist/client/app-call-server.js",
+        "node_modules/next/dist/client/app-find-source-map-url.js",
+        "node_modules/next/dist/client/app-globals.js",
+        "node_modules/next/dist/client/app-index.js",
+        "node_modules/next/dist/client/app-next.js"
+      ],
+      "webpackStatsModuleSampleCount": 153,
+      "webpackStatsPath": "artifacts/webpack-stats.json",
+      "ownershipSources": [
+        "webpack-stats"
+      ]
+    },
+    {
+      "file": ".next/static/chunks/5271.ee78eba5f188423a.js",
+      "bytes": 231150,
       "classification": "shared-or-dynamic",
       "routes": [],
       "moduleSamples": [],
@@ -300,37 +329,8 @@
       ]
     },
     {
-      "file": ".next/static/chunks/3794-c66b3d8325973459.js",
-      "bytes": 222758,
-      "classification": "shared-or-dynamic",
-      "routes": [],
-      "moduleSamples": [],
-      "moduleSampleCount": 0,
-      "sourcemapModuleSamples": [],
-      "sourcemapModuleSampleCount": 0,
-      "webpackStatsModuleSamples": [
-        "node_modules/@swc/helpers/esm/_interop_require_default.js",
-        "node_modules/@swc/helpers/esm/_interop_require_wildcard.js",
-        "node_modules/next/dist/build/polyfills/polyfill-module.js",
-        "node_modules/next/dist/build/polyfills/process.js",
-        "node_modules/next/dist/client/add-base-path.js",
-        "node_modules/next/dist/client/app-bootstrap.js",
-        "node_modules/next/dist/client/app-call-server.js",
-        "node_modules/next/dist/client/app-find-source-map-url.js",
-        "node_modules/next/dist/client/app-globals.js",
-        "node_modules/next/dist/client/app-index.js",
-        "node_modules/next/dist/client/app-next.js",
-        "node_modules/next/dist/client/app-webpack.js"
-      ],
-      "webpackStatsModuleSampleCount": 147,
-      "webpackStatsPath": "artifacts/webpack-stats.json",
-      "ownershipSources": [
-        "webpack-stats"
-      ]
-    },
-    {
-      "file": ".next/static/chunks/4bd1b696-e356ca5ba0218e27.js",
-      "bytes": 199870,
+      "file": ".next/static/chunks/4bd1b696-8a4ab4fdf0ae305a.js",
+      "bytes": 201060,
       "classification": "shared-or-dynamic",
       "routes": [],
       "moduleSamples": [],
@@ -347,8 +347,8 @@
       ]
     },
     {
-      "file": ".next/static/chunks/framework-594babcea68f40f6.js",
-      "bytes": 189700,
+      "file": ".next/static/chunks/framework-461b899b66554474.js",
+      "bytes": 189686,
       "classification": "framework",
       "routes": [],
       "moduleSamples": [],
@@ -403,8 +403,8 @@
       ]
     },
     {
-      "file": ".next/static/chunks/main-4ab15addd4deb4eb.js",
-      "bytes": 132570,
+      "file": ".next/static/chunks/main-2b2f4b0cdd0e2fa6.js",
+      "bytes": 134125,
       "classification": "shared-or-dynamic",
       "routes": [],
       "moduleSamples": [],
@@ -416,16 +416,16 @@
         "node_modules/@swc/helpers/esm/_interop_require_wildcard.js",
         "node_modules/next/dist/build/polyfills/polyfill-module.js",
         "node_modules/next/dist/build/polyfills/process.js",
+        "node_modules/next/dist/build/webpack/loaders/instrumentation-client-stub.js",
         "node_modules/next/dist/client/add-base-path.js",
         "node_modules/next/dist/client/add-locale.js",
         "node_modules/next/dist/client/components/http-access-fallback/http-access-fallback.js",
         "node_modules/next/dist/client/components/is-next-router-error.js",
         "node_modules/next/dist/client/components/readonly-url-search-params.js",
         "node_modules/next/dist/client/components/redirect-error.js",
-        "node_modules/next/dist/client/components/redirect-status-code.js",
-        "node_modules/next/dist/client/detect-domain-locale.js"
+        "node_modules/next/dist/client/components/redirect-status-code.js"
       ],
-      "webpackStatsModuleSampleCount": 106,
+      "webpackStatsModuleSampleCount": 107,
       "webpackStatsPath": "artifacts/webpack-stats.json",
       "ownershipSources": [
         "webpack-stats"
@@ -529,8 +529,8 @@
       "ownershipSources": []
     },
     {
-      "file": ".next/static/chunks/4486-38125abcbf0c0834.js",
-      "bytes": 85111,
+      "file": ".next/static/chunks/4486-1dc639fed3ddc611.js",
+      "bytes": 85335,
       "classification": "shared-or-dynamic",
       "routes": [
         "/marketing/page"
@@ -629,8 +629,8 @@
       ]
     },
     {
-      "file": ".next/static/chunks/486.db36d5a4ad6bf6bd.js",
-      "bytes": 63788,
+      "file": ".next/static/chunks/486.2e24d53d9dbda613.js",
+      "bytes": 63777,
       "classification": "shared-or-dynamic",
       "routes": [],
       "moduleSamples": [],
@@ -853,13 +853,13 @@
     },
     {
       "route": "/marketing",
-      "file": ".next/static/chunks/4486-38125abcbf0c0834.js",
-      "decodedBodyBytes": 85111,
-      "encodedBodyBytes": 33883,
-      "transferBytes": 34183,
+      "file": ".next/static/chunks/4486-1dc639fed3ddc611.js",
+      "decodedBodyBytes": 85335,
+      "encodedBodyBytes": 33982,
+      "transferBytes": 34282,
       "owner": {
-        "file": ".next/static/chunks/4486-38125abcbf0c0834.js",
-        "bytes": 85111,
+        "file": ".next/static/chunks/4486-1dc639fed3ddc611.js",
+        "bytes": 85335,
         "classification": "shared-or-dynamic",
         "routes": [
           "/marketing/page"
@@ -953,8 +953,8 @@
     },
     {
       "route": "/marketing",
-      "file": ".next/static/chunks/4486-38125abcbf0c0834.js",
-      "decodedBodyBytes": 85111,
+      "file": ".next/static/chunks/4486-1dc639fed3ddc611.js",
+      "decodedBodyBytes": 85335,
       "budget": 819200,
       "appOwnedModuleSamples": [
         "components/marketing/decorative-motion.tsx",
@@ -1027,22 +1027,22 @@
   ],
   "routeDeltas": {
     "/": {
-      "encodedBodyBytes": 2,
+      "encodedBodyBytes": 0,
       "decodedBodyBytes": 0,
       "requestCount": 0
     },
     "/editor": {
-      "encodedBodyBytes": 1,
+      "encodedBodyBytes": 0,
       "decodedBodyBytes": 0,
       "requestCount": 0
     },
     "/marketing": {
-      "encodedBodyBytes": 2,
+      "encodedBodyBytes": 0,
       "decodedBodyBytes": 0,
       "requestCount": 0
     },
     "/documentation": {
-      "encodedBodyBytes": 2,
+      "encodedBodyBytes": 0,
       "decodedBodyBytes": 0,
       "requestCount": 0
     }
@@ -1050,37 +1050,37 @@
   "newOwnerModules": [],
   "routeMetrics": {
     "/": {
-      "encodedBodyBytes": 173734,
-      "decodedBodyBytes": 574914,
-      "transferBytes": 177334,
+      "encodedBodyBytes": 178769,
+      "decodedBodyBytes": 593170,
+      "transferBytes": 182369,
       "requestCount": 12,
       "largestStartupChunk": {
-        "decodedBodyBytes": 222758,
-        "encodedBodyBytes": 60719,
-        "transferBytes": 61019,
-        "url": "http://bundle.local/_next/static/chunks/3794-c66b3d8325973459.js"
+        "decodedBodyBytes": 239893,
+        "encodedBodyBytes": 65311,
+        "transferBytes": 65611,
+        "url": "http://bundle.local/_next/static/chunks/3794-d7cddff008311ab3.js"
       },
       "resources": [
         {
-          "decodedBodySize": 9751,
-          "encodedBodySize": 4021,
+          "decodedBodySize": 9682,
+          "encodedBodySize": 4040,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/1674-adca1a21a64925d4.js",
-          "transferSize": 4321
+          "name": "http://bundle.local/_next/static/chunks/1674-f2e55a07bc148610.js",
+          "transferSize": 4340
         },
         {
-          "decodedBodySize": 222758,
-          "encodedBodySize": 60719,
+          "decodedBodySize": 239893,
+          "encodedBodySize": 65311,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/3794-c66b3d8325973459.js",
-          "transferSize": 61019
+          "name": "http://bundle.local/_next/static/chunks/3794-d7cddff008311ab3.js",
+          "transferSize": 65611
         },
         {
-          "decodedBodySize": 199870,
-          "encodedBodySize": 62880,
+          "decodedBodySize": 201060,
+          "encodedBodySize": 63303,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js",
-          "transferSize": 63180
+          "name": "http://bundle.local/_next/static/chunks/4bd1b696-8a4ab4fdf0ae305a.js",
+          "transferSize": 63603
         },
         {
           "decodedBodySize": 74303,
@@ -1128,15 +1128,15 @@
           "decodedBodySize": 484,
           "encodedBodySize": 484,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/main-app-0f4757ef7e5957f9.js",
+          "name": "http://bundle.local/_next/static/chunks/main-app-1d8d842d49b96fd0.js",
           "transferSize": 784
         },
         {
           "decodedBodySize": 7002,
-          "encodedBodySize": 3906,
+          "encodedBodySize": 3907,
           "initiatorType": "link",
-          "name": "http://bundle.local/_next/static/chunks/webpack-9aef7fccca098403.js",
-          "transferSize": 4206
+          "name": "http://bundle.local/_next/static/chunks/webpack-3f0c7b853e11cdd9.js",
+          "transferSize": 4207
         },
         {
           "decodedBodySize": 1914,
@@ -1154,9 +1154,9 @@
       }
     },
     "/editor": {
-      "encodedBodyBytes": 385269,
-      "decodedBodyBytes": 1253534,
-      "transferBytes": 390069,
+      "encodedBodyBytes": 390243,
+      "decodedBodyBytes": 1271850,
+      "transferBytes": 395043,
       "requestCount": 16,
       "largestStartupChunk": {
         "decodedBodyBytes": 484568,
@@ -1166,32 +1166,32 @@
       },
       "resources": [
         {
-          "decodedBodySize": 22572,
-          "encodedBodySize": 7100,
+          "decodedBodySize": 22574,
+          "encodedBodySize": 7097,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/2619.9aac8983f30c7c8a.js",
-          "transferSize": 7400
+          "name": "http://bundle.local/_next/static/chunks/2619.9431a3f48da8eef4.js",
+          "transferSize": 7397
         },
         {
-          "decodedBodySize": 222758,
-          "encodedBodySize": 60719,
+          "decodedBodySize": 239893,
+          "encodedBodySize": 65311,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/3794-c66b3d8325973459.js",
-          "transferSize": 61019
+          "name": "http://bundle.local/_next/static/chunks/3794-d7cddff008311ab3.js",
+          "transferSize": 65611
         },
         {
-          "decodedBodySize": 63788,
-          "encodedBodySize": 21052,
+          "decodedBodySize": 63777,
+          "encodedBodySize": 21013,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/486.db36d5a4ad6bf6bd.js",
-          "transferSize": 21352
+          "name": "http://bundle.local/_next/static/chunks/486.2e24d53d9dbda613.js",
+          "transferSize": 21313
         },
         {
-          "decodedBodySize": 199870,
-          "encodedBodySize": 62880,
+          "decodedBodySize": 201060,
+          "encodedBodySize": 63303,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js",
-          "transferSize": 63180
+          "name": "http://bundle.local/_next/static/chunks/4bd1b696-8a4ab4fdf0ae305a.js",
+          "transferSize": 63603
         },
         {
           "decodedBodySize": 130753,
@@ -1260,15 +1260,15 @@
           "decodedBodySize": 484,
           "encodedBodySize": 484,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/main-app-0f4757ef7e5957f9.js",
+          "name": "http://bundle.local/_next/static/chunks/main-app-1d8d842d49b96fd0.js",
           "transferSize": 784
         },
         {
           "decodedBodySize": 7002,
-          "encodedBodySize": 3906,
+          "encodedBodySize": 3907,
           "initiatorType": "link",
-          "name": "http://bundle.local/_next/static/chunks/webpack-9aef7fccca098403.js",
-          "transferSize": 4206
+          "name": "http://bundle.local/_next/static/chunks/webpack-3f0c7b853e11cdd9.js",
+          "transferSize": 4207
         },
         {
           "decodedBodySize": 1914,
@@ -1286,30 +1286,30 @@
       }
     },
     "/marketing": {
-      "encodedBodyBytes": 215508,
-      "decodedBodyBytes": 678080,
-      "transferBytes": 220308,
+      "encodedBodyBytes": 220644,
+      "decodedBodyBytes": 696560,
+      "transferBytes": 225444,
       "requestCount": 16,
       "largestStartupChunk": {
-        "decodedBodyBytes": 222758,
-        "encodedBodyBytes": 60719,
-        "transferBytes": 61019,
-        "url": "http://bundle.local/_next/static/chunks/3794-c66b3d8325973459.js"
+        "decodedBodyBytes": 239893,
+        "encodedBodyBytes": 65311,
+        "transferBytes": 65611,
+        "url": "http://bundle.local/_next/static/chunks/3794-d7cddff008311ab3.js"
       },
       "resources": [
         {
-          "decodedBodySize": 9751,
-          "encodedBodySize": 4021,
+          "decodedBodySize": 9682,
+          "encodedBodySize": 4040,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/1674-adca1a21a64925d4.js",
-          "transferSize": 4321
+          "name": "http://bundle.local/_next/static/chunks/1674-f2e55a07bc148610.js",
+          "transferSize": 4340
         },
         {
-          "decodedBodySize": 222758,
-          "encodedBodySize": 60719,
+          "decodedBodySize": 239893,
+          "encodedBodySize": 65311,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/3794-c66b3d8325973459.js",
-          "transferSize": 61019
+          "name": "http://bundle.local/_next/static/chunks/3794-d7cddff008311ab3.js",
+          "transferSize": 65611
         },
         {
           "decodedBodySize": 4239,
@@ -1326,18 +1326,18 @@
           "transferSize": 2007
         },
         {
-          "decodedBodySize": 85111,
-          "encodedBodySize": 33883,
+          "decodedBodySize": 85335,
+          "encodedBodySize": 33982,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/4486-38125abcbf0c0834.js",
-          "transferSize": 34183
+          "name": "http://bundle.local/_next/static/chunks/4486-1dc639fed3ddc611.js",
+          "transferSize": 34282
         },
         {
-          "decodedBodySize": 199870,
-          "encodedBodySize": 62880,
+          "decodedBodySize": 201060,
+          "encodedBodySize": 63303,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js",
-          "transferSize": 63180
+          "name": "http://bundle.local/_next/static/chunks/4bd1b696-8a4ab4fdf0ae305a.js",
+          "transferSize": 63603
         },
         {
           "decodedBodySize": 33591,
@@ -1383,24 +1383,24 @@
         },
         {
           "decodedBodySize": 51579,
-          "encodedBodySize": 19779,
+          "encodedBodySize": 19781,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/c15bf2b0-d565fc5052a6465c.js",
-          "transferSize": 20079
+          "name": "http://bundle.local/_next/static/chunks/c15bf2b0-58a879671c4f0dc3.js",
+          "transferSize": 20081
         },
         {
           "decodedBodySize": 484,
           "encodedBodySize": 484,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/main-app-0f4757ef7e5957f9.js",
+          "name": "http://bundle.local/_next/static/chunks/main-app-1d8d842d49b96fd0.js",
           "transferSize": 784
         },
         {
           "decodedBodySize": 7002,
-          "encodedBodySize": 3906,
+          "encodedBodySize": 3907,
           "initiatorType": "link",
-          "name": "http://bundle.local/_next/static/chunks/webpack-9aef7fccca098403.js",
-          "transferSize": 4206
+          "name": "http://bundle.local/_next/static/chunks/webpack-3f0c7b853e11cdd9.js",
+          "transferSize": 4207
         },
         {
           "decodedBodySize": 1914,
@@ -1418,37 +1418,37 @@
       }
     },
     "/documentation": {
-      "encodedBodyBytes": 146349,
-      "decodedBodyBytes": 483314,
-      "transferBytes": 149649,
+      "encodedBodyBytes": 151384,
+      "decodedBodyBytes": 501570,
+      "transferBytes": 154684,
       "requestCount": 11,
       "largestStartupChunk": {
-        "decodedBodyBytes": 222758,
-        "encodedBodyBytes": 60719,
-        "transferBytes": 61019,
-        "url": "http://bundle.local/_next/static/chunks/3794-c66b3d8325973459.js"
+        "decodedBodyBytes": 239893,
+        "encodedBodyBytes": 65311,
+        "transferBytes": 65611,
+        "url": "http://bundle.local/_next/static/chunks/3794-d7cddff008311ab3.js"
       },
       "resources": [
         {
-          "decodedBodySize": 9751,
-          "encodedBodySize": 4021,
+          "decodedBodySize": 9682,
+          "encodedBodySize": 4040,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/1674-adca1a21a64925d4.js",
-          "transferSize": 4321
+          "name": "http://bundle.local/_next/static/chunks/1674-f2e55a07bc148610.js",
+          "transferSize": 4340
         },
         {
-          "decodedBodySize": 222758,
-          "encodedBodySize": 60719,
+          "decodedBodySize": 239893,
+          "encodedBodySize": 65311,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/3794-c66b3d8325973459.js",
-          "transferSize": 61019
+          "name": "http://bundle.local/_next/static/chunks/3794-d7cddff008311ab3.js",
+          "transferSize": 65611
         },
         {
-          "decodedBodySize": 199870,
-          "encodedBodySize": 62880,
+          "decodedBodySize": 201060,
+          "encodedBodySize": 63303,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/4bd1b696-e356ca5ba0218e27.js",
-          "transferSize": 63180
+          "name": "http://bundle.local/_next/static/chunks/4bd1b696-8a4ab4fdf0ae305a.js",
+          "transferSize": 63603
         },
         {
           "decodedBodySize": 33591,
@@ -1489,15 +1489,15 @@
           "decodedBodySize": 484,
           "encodedBodySize": 484,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/main-app-0f4757ef7e5957f9.js",
+          "name": "http://bundle.local/_next/static/chunks/main-app-1d8d842d49b96fd0.js",
           "transferSize": 784
         },
         {
           "decodedBodySize": 7002,
-          "encodedBodySize": 3906,
+          "encodedBodySize": 3907,
           "initiatorType": "link",
-          "name": "http://bundle.local/_next/static/chunks/webpack-9aef7fccca098403.js",
-          "transferSize": 4206
+          "name": "http://bundle.local/_next/static/chunks/webpack-3f0c7b853e11cdd9.js",
+          "transferSize": 4207
         },
         {
           "decodedBodySize": 1914,
