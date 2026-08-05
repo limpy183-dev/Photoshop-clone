@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
 
-import { dodgeBurnStamp, healStamp, spongeStamp } from "@/editor/tool/helpers"
+import { blurStamp, dodgeBurnStamp, healStamp, spongeStamp } from "@/editor/tool/helpers"
 
 class TestImageData {
   data: Uint8ClampedArray
@@ -92,6 +92,55 @@ test("sponge stamp desaturates opaque pixels inside the circular brush only", ()
   expect(getPixel(result.data, result.width, 3, 3)).toEqual([147, 72, 72, 255])
   expect(getPixel(result.data, result.width, 2, 3)).toEqual([10, 220, 30, 0])
   expect(getPixel(result.data, result.width, 0, 0)).toEqual([240, 10, 180, 255])
+})
+
+test("blur stamp scales with the brush and honours Strength", () => {
+  // A hard black/white split down the middle of a 40px image. The old fixed
+  // 3x3 kernel left every pixel more than one column from the seam untouched
+  // however big the brush was, and ignored Strength entirely.
+  const edged = () => {
+    const img = makeImage(40, 40, [0, 0, 0, 255])
+    for (let y = 0; y < 40; y++) {
+      for (let x = 20; x < 40; x++) setPixel(img.data, img.width, x, y, [255, 255, 255, 255])
+    }
+    return img
+  }
+
+  const full = fakeContext(edged())
+  blurStamp(full, 20, 20, 16, 1)
+  const blurred = (full as unknown as { __image: () => ImageData }).__image()
+  // Two pixels from the seam is outside a 3x3 kernel's reach, so this stayed
+  // at 0 no matter the brush size before.
+  const [near] = getPixel(blurred.data, blurred.width, 18, 20)
+  expect(near).toBeGreaterThan(10)
+  // ...and stay inside the dab: the far corner is untouched.
+  expect(getPixel(blurred.data, blurred.width, 0, 0)).toEqual([0, 0, 0, 255])
+
+  // Half strength moves the same pixel about half as far.
+  const half = fakeContext(edged())
+  blurStamp(half, 20, 20, 16, 0.5)
+  const softer = (half as unknown as { __image: () => ImageData }).__image()
+  expect(Math.abs(getPixel(softer.data, softer.width, 18, 20)[0] - near / 2)).toBeLessThanOrEqual(1)
+
+  // Strength 0 is a no-op.
+  const none = fakeContext(edged())
+  blurStamp(none, 20, 20, 16, 0)
+  const same = (none as unknown as { __image: () => ImageData }).__image()
+  expect(getPixel(same.data, same.width, 18, 20)).toEqual([0, 0, 0, 255])
+})
+
+test("blur stamp softens the alpha edge of a cutout", () => {
+  const img = makeImage(40, 40, [255, 0, 0, 0])
+  for (let y = 0; y < 40; y++) {
+    for (let x = 20; x < 40; x++) setPixel(img.data, img.width, x, y, [255, 0, 0, 255])
+  }
+  const ctx = fakeContext(img)
+  blurStamp(ctx, 20, 20, 16, 1)
+  const result = (ctx as unknown as { __image: () => ImageData }).__image()
+
+  const alpha = getPixel(result.data, result.width, 18, 20)[3]
+  expect(alpha).toBeGreaterThan(0)
+  expect(alpha).toBeLessThan(255)
 })
 
 /* ---- spot healing over low-opacity pixels ---- */

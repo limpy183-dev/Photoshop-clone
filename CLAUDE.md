@@ -71,19 +71,50 @@ The right-click context menu (`ContextMenuLayer`) uses this pattern to avoid tri
 
 `components/photoshop/canvas/view.tsx` coordinates rendering and pointer input. Layer composition can use the WebGL compositor with a Canvas 2D fallback. Expensive filters run in a Web Worker with optional tiling (`editor/filters/worker.ts`) — large documents are split into tiles to avoid blocking the main thread. Filter output is verified with golden-image Playwright tests.
 
-`view.tsx` is a coordinator, not a dumping ground: it owns document state, the
-composite loop, and pointer routing. Everything a tool gesture *does* lives in
-`editor/canvas/*` and is called from a thin wrapper here. When adding canvas
-behaviour, put it in one of these and call it:
+`view.tsx` is a coordinator, not a dumping ground: it holds the refs, mounts the
+controllers, assembles the pointer context, and renders. **Nothing a tool gesture
+*does* lives there** — it all lives in `editor/canvas/*`.
+
+The controllers are hooks that own a subsystem's refs and expose its verbs.
+`view.tsx` mounts each one once and passes the bundle around:
+
+| Controller | Owns |
+|------------|------|
+| `paint-session.ts` | a stroke's lifetime: paint target, frozen sources, stroke buffer, mixer reservoir, dirty rects, `drawSegment` |
+| `path-editing-controller.ts` | the pen draft, the direct-selection anchor set, anchor-level edits |
+| `transform-controller.ts` | the Free Transform session and the transform menu commands |
+| `selection-commit.ts` | every path from a gesture to `set-selection`, plus the magnetic lasso |
+| `document-operations.ts` | one-shot pixel rewrites: both crops, gradient commit, red-eye, magic eraser |
+| `overlay-preview-bindings.ts` | binds the pure painters below to the live overlay canvas |
+| `color-hud-controller.ts` | the Alt+Shift+right-click colour HUD |
+| `viewport-controller.ts` | pan / zoom / wheel |
+| `filter-overlay-controller.ts` | Blur Gallery / Lighting Effects on-canvas widgets |
+| `text-edit-controller.ts` | the type tool's DOM editing session |
+
+Pointer input is routed, not handled, by `view.tsx`. The handlers are plain
+functions over one context object:
 
 | Module | Holds |
 |--------|-------|
+| `pointer-context.ts` | `CanvasPointerContext` — everything the handlers may reach |
+| `pointer-down.ts` | the tool dispatch that starts a gesture |
+| `pointer-move.ts` | advancing whatever gesture is open |
+| `pointer-up.ts` | commit, cancel, and double-click |
+| `drag-state.ts` | `CanvasDragState`, the one in-progress gesture |
+
+The pure leaves those call, none of which touch React:
+
+| Module | Holds |
+|--------|-------|
+| `composite-renderer.ts` | the whole render decision tree (cache, tiles, high-bit, WebGL, Canvas 2D) |
+| `brush-stamping.ts` | one brush sample → pixels: dab shapes, textures, symmetry, scatter |
+| `replacement-stamps.ts` | the two read-before-write dabs (background eraser, colour replacement) |
 | `overlay-previews.ts` | pure overlay-canvas draws (marquee, gradient ramp, path skeleton, transform handles) |
 | `vector-editing.ts` | vector hit-testing and direct-selection drags |
-| `filter-overlay-controller.ts` | Blur Gallery / Lighting Effects on-canvas widgets |
-| `text-edit-controller.ts` | the type tool's DOM editing session |
 | `transform-geometry.ts` | free-transform math, including handle drags |
-| `viewport-controller.ts` | pan / zoom / wheel |
+
+`components/photoshop/canvas/view-overlays.tsx` is the sibling holding the DOM
+layers stacked over the canvases (marching ants, guides, grids, type editor).
 
 `view.tsx` has an import budget in `scripts/architecture-budgets.json` for
 exactly this reason — a new import there is a prompt to check whether the logic
@@ -142,7 +173,10 @@ Trace is captured on first retry. Base URL is `http://127.0.0.1:3000`.
 |------|---------|
 | `components/photoshop/editor/context.tsx` | Central state machine |
 | `editor/types.ts` | All shared types (ToolId, BlendMode, LayerKind, …) |
-| `components/photoshop/canvas/view.tsx` | Canvas render + pointer routing |
+| `components/photoshop/canvas/view.tsx` | Canvas coordinator: refs, controllers, pointer routing |
+| `editor/canvas/composite-renderer.ts` | Which of the five composite paths draws this frame |
+| `editor/canvas/paint-session.ts` | A paint stroke, from first dab to history commit |
+| `editor/canvas/pointer-down.ts` | Which gesture the active tool starts |
 | `editor/canvas/overlay-previews.ts` | Overlay-canvas tool previews |
 | `editor/canvas/vector-editing.ts` | Vector hit-test + direct-selection drags |
 | `editor/webgl-compositor.ts` | WebGL composition with Canvas fallback |

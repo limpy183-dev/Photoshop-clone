@@ -6,9 +6,9 @@
   "rawPhotoshopListeners": {
     "max": 0
   },
-  "_oversizeFilesComment": "7 -> 3 after the file-split pass. rich-tooltip, properties-panel, subsystems-dialog and options-bar all dropped under the line; layers-panel, menu-bar and view.tsx are what is left.",
+  "_oversizeFilesComment": "7 -> 3 after the file-split pass. rich-tooltip, properties-panel, subsystems-dialog and options-bar all dropped under the line; layers-panel, menu-bar and view.tsx were what was left. 3 -> 2 when view.tsx was split into editor/canvas/* (5494 -> 865 lines); layers-panel and menu-bar are the remaining two.",
   "oversizeFiles": {
-    "max": 3,
+    "max": 2,
     "maxLines": 1500
   },
   "_useEditorImportsComment": "8 -> 16 when subsystems-dialog.tsx was split into one file per tab. This budget counts FILES, and the nine workspaces that used to share a file now have their own. The number of useEditor() call sites is unchanged at 9 (verified before and after), so nothing subscribes to whole-editor state that did not already. Lower this only by converting a workspace to useEditorSelector, not by re-merging files.",
@@ -18,7 +18,7 @@
   "_topLargestFilesComment": "22184 -> 22330 for the tool-behaviour pass: retouch/type option panels that did not exist, gradient blend+opacity, pen curve handles, selection-aware move. The two largest new panels were split into options-bar-tools.tsx (-363) before raising this. 22330 -> 22350 for the selection-clip / options-bar remount pass: the clip helpers went to editor/canvas/selection-helpers.ts and view.tsx's duplicate of selectionToMaskCanvas was deleted (view.tsx ends up smaller than it started); the remainder is options-bar.tsx hoisting its stateful option groups to module scope. 22350 -> 20095 for the file-split pass: preview painters left rich-tooltip for editor/tool/, ToolSection left properties-panel, the nine subsystem workspaces left subsystems-dialog, four option groups left options-bar, and layers-panel shed its leaf components plus the health/filter logic to editor/document/.",
   "topLargestFiles": {
     "count": 10,
-    "maxTotalLines": 20095
+    "maxTotalLines": 16000
   },
   "directClientStorage": {
     "max": 0
@@ -26,10 +26,10 @@
   "hookDependencySuppressions": {
     "max": 5
   },
-  "_coordinationFilesComment": "view.tsx maxImports went 49 -> 50 when it was split: five subsystems (overlay previews, vector editing, filter overlays, text editing, transform drag) moved to editor/canvas/*, trading one extra import for ~1100 fewer lines. Lower it again as more leaves.",
+  "_coordinationFilesComment": "view.tsx maxImports went 49 -> 50 when it was split: five subsystems (overlay previews, vector editing, filter overlays, text editing, transform drag) moved to editor/canvas/*, trading one extra import for ~1100 fewer lines. 50 -> 30 when the rest left: compositing, the paint session, pointer routing, selection/document ops and the vector + transform controllers are all their own modules now, so view.tsx imports controllers rather than the primitives they call.",
   "coordinationFiles": {
     "components/photoshop/canvas/view.tsx": {
-      "maxImports": 50,
+      "maxImports": 30,
       "maxFanIn": 3
     },
     "components/photoshop/editor/context.tsx": {

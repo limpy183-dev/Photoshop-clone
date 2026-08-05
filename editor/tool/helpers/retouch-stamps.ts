@@ -194,69 +194,130 @@ function transformedCloneSample(
   return sampleImageData(data, width, height, sx - originX, sy - originY)
 }
 
-/** Apply a localised blur stamp at (x,y). Pixels outside the circular
- *  brush radius are restored to the original so the blur stays inside
- *  the visible round brush footprint. */
+/**
+ * One pass of a box blur along rows (`horizontal`) or columns, over
+ * premultiplied RGBA floats. Running-sum, so the cost is independent of the
+ * kernel width; the window clamps at the line ends by replicating the edge
+ * sample.
+ */
+function boxBlurPass(
+  src: Float32Array,
+  dst: Float32Array,
+  w: number,
+  h: number,
+  k: number,
+  horizontal: boolean,
+) {
+  const outer = horizontal ? h : w
+  const inner = horizontal ? w : h
+  const step = (horizontal ? 1 : w) * 4
+  const lineStep = (horizontal ? w : 1) * 4
+  const win = k * 2 + 1
+  for (let o = 0; o < outer; o++) {
+    const base = o * lineStep
+    let s0 = 0
+    let s1 = 0
+    let s2 = 0
+    let s3 = 0
+    for (let j = -k; j <= k; j++) {
+      const i = base + Math.min(inner - 1, Math.max(0, j)) * step
+      s0 += src[i]
+      s1 += src[i + 1]
+      s2 += src[i + 2]
+      s3 += src[i + 3]
+    }
+    for (let p = 0; p < inner; p++) {
+      const i = base + p * step
+      dst[i] = s0 / win
+      dst[i + 1] = s1 / win
+      dst[i + 2] = s2 / win
+      dst[i + 3] = s3 / win
+      const add = base + Math.min(inner - 1, p + k + 1) * step
+      const sub = base + Math.max(0, p - k) * step
+      s0 += src[add] - src[sub]
+      s1 += src[add + 1] - src[sub + 1]
+      s2 += src[add + 2] - src[sub + 2]
+      s3 += src[add + 3] - src[sub + 3]
+    }
+  }
+}
+
+/**
+ * Blur dab at (x,y).
+ *
+ * `strength` (0–1) is the options-bar Strength: how far each dab moves a pixel
+ * toward its blurred value, so the stroke builds up rather than replacing in
+ * one hit. The kernel scales with the brush — a fixed 3×3 under a 100px dab is
+ * invisible, which is what made the tool feel like it did nothing.
+ *
+ * Channels are averaged premultiplied so transparent neighbours contribute no
+ * colour, and alpha is blurred too — otherwise a hard cutout keeps its hard
+ * edge no matter how long you scrub it.
+ */
 export function blurStamp(
   ctx: CanvasRenderingContext2D,
   x: number,
   y: number,
   radius: number,
+  strength = 1,
 ) {
+  const mixMax = Math.max(0, Math.min(1, strength))
+  if (mixMax <= 0) return
   const r = Math.max(2, Math.floor(radius))
-  const w = ctx.canvas.width
-  const h = ctx.canvas.height
-  const sx = Math.max(0, Math.floor(x - r))
-  const sy = Math.max(0, Math.floor(y - r))
-  const sw = Math.min(w - sx, r * 2)
-  const sh = Math.min(h - sy, r * 2)
-  if (sw <= 0 || sh <= 0) return
-  const img = ctx.getImageData(sx, sy, sw, sh)
-  const src = img.data
-  const out = new Uint8ClampedArray(src)
-  const cx = x - sx
-  const cy = y - sy
-  const r2 = r * r
-  const feather = Math.max(1, r - 1)
-  const feather2 = feather * feather
-  const featherDelta = Math.max(1e-6, r - feather)
-  for (let py = 0; py < sh; py++) {
-    for (let px = 0; px < sw; px++) {
-      const ddx = px + 0.5 - cx
-      const ddy = py + 0.5 - cy
-      const d2 = ddx * ddx + ddy * ddy
-      if (d2 > r2) continue
-      if (px < 1 || py < 1 || px > sw - 2 || py > sh - 2) continue
-      let r0 = 0
-      let g0 = 0
-      let b0 = 0
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const ni = ((py + dy) * sw + (px + dx)) * 4
-          r0 += src[ni]
-          g0 += src[ni + 1]
-          b0 += src[ni + 2]
-        }
-      }
-      const i = (py * sw + px) * 4
-      const br = r0 / 9
-      const bg = g0 / 9
-      const bb = b0 / 9
-      if (d2 > feather2) {
-        const t = (Math.sqrt(d2) - feather) / featherDelta
-        const k = 1 - Math.max(0, Math.min(1, t))
-        out[i] = br * k + src[i] * (1 - k)
-        out[i + 1] = bg * k + src[i + 1] * (1 - k)
-        out[i + 2] = bb * k + src[i + 2] * (1 - k)
-      } else {
-        out[i] = br
-        out[i + 1] = bg
-        out[i + 2] = bb
-      }
+  // ponytail: capped kernel; repeated dabs still converge toward a wider blur,
+  // so the cap only limits how fast a single dab gets there.
+  const k = Math.max(1, Math.min(12, Math.round(r * 0.25)))
+  // Read a patch padded by the kernel, so pixels at the dab rim average real
+  // neighbours instead of a replicated patch edge.
+  const x0 = Math.max(0, Math.floor(x - r) - k)
+  const y0 = Math.max(0, Math.floor(y - r) - k)
+  const x1 = Math.min(ctx.canvas.width, Math.ceil(x + r) + k)
+  const y1 = Math.min(ctx.canvas.height, Math.ceil(y + r) + k)
+  const pw = x1 - x0
+  const ph = y1 - y0
+  if (pw <= 0 || ph <= 0) return
+
+  const img = ctx.getImageData(x0, y0, pw, ph)
+  const data = img.data
+  const count = pw * ph
+  const a = new Float32Array(count * 4)
+  const b = new Float32Array(count * 4)
+  for (let i = 0; i < count * 4; i += 4) {
+    const alpha = data[i + 3] / 255
+    a[i] = data[i] * alpha
+    a[i + 1] = data[i + 1] * alpha
+    a[i + 2] = data[i + 2] * alpha
+    a[i + 3] = data[i + 3]
+  }
+  boxBlurPass(a, b, pw, ph, k, true)
+  boxBlurPass(b, a, pw, ph, k, false)
+
+  const cx = x - x0
+  const cy = y - y0
+  // Soft rim over the outer quarter of the dab, so overlapping dabs blend into
+  // a stroke instead of leaving a chain of hard-edged discs.
+  const core = r * 0.75
+  const fade = Math.max(1e-6, r - core)
+  const pxMin = Math.max(0, Math.floor(cx - r))
+  const pxMax = Math.min(pw - 1, Math.ceil(cx + r))
+  const pyMin = Math.max(0, Math.floor(cy - r))
+  const pyMax = Math.min(ph - 1, Math.ceil(cy + r))
+  for (let py = pyMin; py <= pyMax; py++) {
+    for (let px = pxMin; px <= pxMax; px++) {
+      const d = Math.hypot(px + 0.5 - cx, py + 0.5 - cy)
+      if (d > r) continue
+      const mix = mixMax * (d <= core ? 1 : 1 - (d - core) / fade)
+      if (mix <= 0) continue
+      const i = (py * pw + px) * 4
+      const outAlpha = a[i + 3]
+      const unmul = outAlpha > 0.5 ? 255 / outAlpha : 0
+      data[i] = clampByte(data[i] + (a[i] * unmul - data[i]) * mix)
+      data[i + 1] = clampByte(data[i + 1] + (a[i + 1] * unmul - data[i + 1]) * mix)
+      data[i + 2] = clampByte(data[i + 2] + (a[i + 2] * unmul - data[i + 2]) * mix)
+      data[i + 3] = clampByte(data[i + 3] + (outAlpha - data[i + 3]) * mix)
     }
   }
-  const imgOut = new ImageData(out, sw, sh)
-  ctx.putImageData(imgOut, sx, sy, 0, 0, sw, sh)
+  ctx.putImageData(img, x0, y0)
 }
 
 /** Sharpen stamp via 3x3 unsharp. Restricted to the circular brush
@@ -266,7 +327,10 @@ export function sharpenStamp(
   x: number,
   y: number,
   radius: number,
+  strength = 1,
 ) {
+  const mix = Math.max(0, Math.min(1, strength))
+  if (mix <= 0) return
   const r = Math.max(2, Math.floor(radius))
   const w = ctx.canvas.width
   const h = ctx.canvas.height
@@ -300,9 +364,9 @@ export function sharpenStamp(
         }
       }
       const i = (py * sw + px) * 4
-      out[i] = Math.max(0, Math.min(255, r0))
-      out[i + 1] = Math.max(0, Math.min(255, g0))
-      out[i + 2] = Math.max(0, Math.min(255, b0))
+      out[i] = clampByte(src[i] + (r0 - src[i]) * mix)
+      out[i + 1] = clampByte(src[i + 1] + (g0 - src[i + 1]) * mix)
+      out[i + 2] = clampByte(src[i + 2] + (b0 - src[i + 2]) * mix)
     }
   }
   ctx.putImageData(new ImageData(out, sw, sh), sx, sy)

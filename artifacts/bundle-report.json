@@ -42,12 +42,12 @@
       "bytes": 779006
     },
     {
-      "file": ".next/static/chunks/8721.9115ea2e02b0ddc3.js",
-      "bytes": 487080
+      "file": ".next/static/chunks/6742.4a0cda3e5ae65f34.js",
+      "bytes": 491344
     },
     {
-      "file": ".next/static/chunks/9468.c642672e52900e4b.js",
-      "bytes": 482887
+      "file": ".next/static/chunks/8721.d3b83047e9998718.js",
+      "bytes": 487624
     },
     {
       "file": ".next/static/chunks/8478.d2baba8e509c20bd.js",
@@ -86,7 +86,7 @@
       "bytes": 130753
     },
     {
-      "file": ".next/static/chunks/7064.8a4ede4edd86f6c8.js",
+      "file": ".next/static/chunks/7064.db33c35465b076d5.js",
       "bytes": 118540
     },
     {
@@ -110,7 +110,7 @@
       "bytes": 63777
     },
     {
-      "file": ".next/static/chunks/9995.9eae32d928753f68.js",
+      "file": ".next/static/chunks/9995.34488c1aecac0a66.js",
       "bytes": 62646
     }
   ],
@@ -184,8 +184,37 @@
       ]
     },
     {
-      "file": ".next/static/chunks/8721.9115ea2e02b0ddc3.js",
-      "bytes": 487080,
+      "file": ".next/static/chunks/6742.4a0cda3e5ae65f34.js",
+      "bytes": 491344,
+      "classification": "shared-or-dynamic",
+      "routes": [],
+      "moduleSamples": [],
+      "moduleSampleCount": 0,
+      "sourcemapModuleSamples": [],
+      "sourcemapModuleSampleCount": 0,
+      "webpackStatsModuleSamples": [
+        "components/photoshop/canvas/overlays.tsx",
+        "components/photoshop/canvas/rulers.tsx",
+        "components/photoshop/canvas/selection-overlays.tsx",
+        "components/photoshop/canvas/smart-guides.tsx",
+        "components/photoshop/canvas/view-overlays.tsx",
+        "components/photoshop/canvas/view.tsx",
+        "components/photoshop/color/picker-hud.tsx",
+        "components/photoshop/document/tabs.tsx",
+        "components/photoshop/editor/shell.tsx",
+        "components/photoshop/menu-bar.tsx",
+        "components/photoshop/menus/file-menu.tsx",
+        "components/photoshop/menus/filter-menu.tsx"
+      ],
+      "webpackStatsModuleSampleCount": 84,
+      "webpackStatsPath": "artifacts/webpack-stats.json",
+      "ownershipSources": [
+        "webpack-stats"
+      ]
+    },
+    {
+      "file": ".next/static/chunks/8721.d3b83047e9998718.js",
+      "bytes": 487624,
       "classification": "shared-or-dynamic",
       "routes": [],
       "moduleSamples": [],
@@ -207,35 +236,6 @@
         "editor/canvas/limits.ts"
       ],
       "webpackStatsModuleSampleCount": 105,
-      "webpackStatsPath": "artifacts/webpack-stats.json",
-      "ownershipSources": [
-        "webpack-stats"
-      ]
-    },
-    {
-      "file": ".next/static/chunks/9468.c642672e52900e4b.js",
-      "bytes": 482887,
-      "classification": "shared-or-dynamic",
-      "routes": [],
-      "moduleSamples": [],
-      "moduleSampleCount": 0,
-      "sourcemapModuleSamples": [],
-      "sourcemapModuleSampleCount": 0,
-      "webpackStatsModuleSamples": [
-        "components/photoshop/canvas/overlays.tsx",
-        "components/photoshop/canvas/rulers.tsx",
-        "components/photoshop/canvas/selection-overlays.tsx",
-        "components/photoshop/canvas/smart-guides.tsx",
-        "components/photoshop/canvas/view.tsx",
-        "components/photoshop/color/picker-hud.tsx",
-        "components/photoshop/document/tabs.tsx",
-        "components/photoshop/editor/shell.tsx",
-        "components/photoshop/menu-bar.tsx",
-        "components/photoshop/menus/file-menu.tsx",
-        "components/photoshop/menus/filter-menu.tsx",
-        "components/photoshop/menus/media-workspace-menus.tsx"
-      ],
-      "webpackStatsModuleSampleCount": 69,
       "webpackStatsPath": "artifacts/webpack-stats.json",
       "ownershipSources": [
         "webpack-stats"
@@ -490,7 +490,7 @@
       ]
     },
     {
-      "file": ".next/static/chunks/7064.8a4ede4edd86f6c8.js",
+      "file": ".next/static/chunks/7064.db33c35465b076d5.js",
       "bytes": 118540,
       "classification": "shared-or-dynamic",
       "routes": [],
@@ -661,7 +661,7 @@
       ]
     },
     {
-      "file": ".next/static/chunks/9995.9eae32d928753f68.js",
+      "file": ".next/static/chunks/9995.34488c1aecac0a66.js",
       "bytes": 62646,
       "classification": "shared-or-dynamic",
       "routes": [],
@@ -821,13 +821,13 @@
     },
     {
       "route": "/editor",
-      "file": ".next/static/chunks/8721.9115ea2e02b0ddc3.js",
-      "decodedBodyBytes": 487080,
-      "encodedBodyBytes": 155712,
-      "transferBytes": 156012,
+      "file": ".next/static/chunks/8721.d3b83047e9998718.js",
+      "decodedBodyBytes": 487624,
+      "encodedBodyBytes": 155855,
+      "transferBytes": 156155,
       "owner": {
-        "file": ".next/static/chunks/8721.9115ea2e02b0ddc3.js",
-        "bytes": 487080,
+        "file": ".next/static/chunks/8721.d3b83047e9998718.js",
+        "bytes": 487624,
         "classification": "shared-or-dynamic",
         "routes": [],
         "moduleSamples": [],
@@ -909,8 +909,8 @@
   "appOwnedStartupChunkReasons": [
     {
       "route": "/editor",
-      "file": ".next/static/chunks/8721.9115ea2e02b0ddc3.js",
-      "decodedBodyBytes": 487080,
+      "file": ".next/static/chunks/8721.d3b83047e9998718.js",
+      "decodedBodyBytes": 487624,
       "budget": 819200,
       "appOwnedModuleSamples": [
         "components/photoshop/editor/app.tsx",
@@ -1031,22 +1031,22 @@
   ],
   "routeDeltas": {
     "/": {
-      "encodedBodyBytes": 5,
+      "encodedBodyBytes": -1,
       "decodedBodyBytes": -1,
       "requestCount": 0
     },
     "/editor": {
-      "encodedBodyBytes": 983,
-      "decodedBodyBytes": 2511,
+      "encodedBodyBytes": 1120,
+      "decodedBodyBytes": 3055,
       "requestCount": 0
     },
     "/marketing": {
-      "encodedBodyBytes": 5,
+      "encodedBodyBytes": -1,
       "decodedBodyBytes": -1,
       "requestCount": 0
     },
     "/documentation": {
-      "encodedBodyBytes": 5,
+      "encodedBodyBytes": -1,
       "decodedBodyBytes": -1,
       "requestCount": 0
     }
@@ -1054,9 +1054,9 @@
   "newOwnerModules": [],
   "routeMetrics": {
     "/": {
-      "encodedBodyBytes": 178774,
+      "encodedBodyBytes": 178768,
       "decodedBodyBytes": 593169,
-      "transferBytes": 182374,
+      "transferBytes": 182368,
       "requestCount": 12,
       "largestStartupChunk": {
         "decodedBodyBytes": 239893,
@@ -1137,10 +1137,10 @@
         },
         {
           "decodedBodySize": 7001,
-          "encodedBodySize": 3912,
+          "encodedBodySize": 3906,
           "initiatorType": "link",
-          "name": "http://bundle.local/_next/static/chunks/webpack-e49503db6c0839c0.js",
-          "transferSize": 4212
+          "name": "http://bundle.local/_next/static/chunks/webpack-40f4125a17b1e1f6.js",
+          "transferSize": 4206
         },
         {
           "decodedBodySize": 1914,
@@ -1158,15 +1158,15 @@
       }
     },
     "/editor": {
-      "encodedBodyBytes": 391226,
-      "decodedBodyBytes": 1274361,
-      "transferBytes": 396026,
+      "encodedBodyBytes": 391363,
+      "decodedBodyBytes": 1274905,
+      "transferBytes": 396163,
       "requestCount": 16,
       "largestStartupChunk": {
-        "decodedBodyBytes": 487080,
-        "encodedBodyBytes": 155712,
-        "transferBytes": 156012,
-        "url": "http://bundle.local/_next/static/chunks/8721.9115ea2e02b0ddc3.js"
+        "decodedBodyBytes": 487624,
+        "encodedBodyBytes": 155855,
+        "transferBytes": 156155,
+        "url": "http://bundle.local/_next/static/chunks/8721.d3b83047e9998718.js"
       },
       "resources": [
         {
@@ -1219,11 +1219,11 @@
           "transferSize": 9585
         },
         {
-          "decodedBodySize": 487080,
-          "encodedBodySize": 155712,
+          "decodedBodySize": 487624,
+          "encodedBodySize": 155855,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/8721.9115ea2e02b0ddc3.js",
-          "transferSize": 156012
+          "name": "http://bundle.local/_next/static/chunks/8721.d3b83047e9998718.js",
+          "transferSize": 156155
         },
         {
           "decodedBodySize": 540,
@@ -1269,10 +1269,10 @@
         },
         {
           "decodedBodySize": 7001,
-          "encodedBodySize": 3912,
+          "encodedBodySize": 3906,
           "initiatorType": "link",
-          "name": "http://bundle.local/_next/static/chunks/webpack-e49503db6c0839c0.js",
-          "transferSize": 4212
+          "name": "http://bundle.local/_next/static/chunks/webpack-40f4125a17b1e1f6.js",
+          "transferSize": 4206
         },
         {
           "decodedBodySize": 1914,
@@ -1290,9 +1290,9 @@
       }
     },
     "/marketing": {
-      "encodedBodyBytes": 220649,
+      "encodedBodyBytes": 220643,
       "decodedBodyBytes": 696559,
-      "transferBytes": 225449,
+      "transferBytes": 225443,
       "requestCount": 16,
       "largestStartupChunk": {
         "decodedBodyBytes": 239893,
@@ -1401,10 +1401,10 @@
         },
         {
           "decodedBodySize": 7001,
-          "encodedBodySize": 3912,
+          "encodedBodySize": 3906,
           "initiatorType": "link",
-          "name": "http://bundle.local/_next/static/chunks/webpack-e49503db6c0839c0.js",
-          "transferSize": 4212
+          "name": "http://bundle.local/_next/static/chunks/webpack-40f4125a17b1e1f6.js",
+          "transferSize": 4206
         },
         {
           "decodedBodySize": 1914,
@@ -1422,9 +1422,9 @@
       }
     },
     "/documentation": {
-      "encodedBodyBytes": 151389,
+      "encodedBodyBytes": 151383,
       "decodedBodyBytes": 501569,
-      "transferBytes": 154689,
+      "transferBytes": 154683,
       "requestCount": 11,
       "largestStartupChunk": {
         "decodedBodyBytes": 239893,
@@ -1498,10 +1498,10 @@
         },
         {
           "decodedBodySize": 7001,
-          "encodedBodySize": 3912,
+          "encodedBodySize": 3906,
           "initiatorType": "link",
-          "name": "http://bundle.local/_next/static/chunks/webpack-e49503db6c0839c0.js",
-          "transferSize": 4212
+          "name": "http://bundle.local/_next/static/chunks/webpack-40f4125a17b1e1f6.js",
+          "transferSize": 4206
         },
         {
           "decodedBodySize": 1914,

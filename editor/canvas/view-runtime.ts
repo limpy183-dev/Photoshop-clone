@@ -4,7 +4,7 @@ import {
   type CursorStylePreference,
   type RulerUnitPreference,
 } from "@/editor/preferences-engine"
-import type { CustomShapeId, Layer, PathHandleMode, ShapeProps } from "@/editor/types"
+import type { CustomShapeId, Layer, PathHandleMode, ShapeProps, ToolId } from "@/editor/types"
 
 export interface CanvasRuntimePreferences {
   cursorStyle: CursorStylePreference
@@ -235,4 +235,16 @@ export function layerAllowsDrawing(layer: Layer | null | undefined): layer is La
 
 export function layerAllowsMoving(layer: Layer | null | undefined): layer is Layer {
   return Boolean(layer && !layerBlocksAllEdits(layer) && !layer.lockMove && layer.kind !== "group")
+}
+
+/** Tools whose cursor is the brush ring rather than a plain crosshair. */
+const BRUSH_CURSOR_TOOLS = new Set<ToolId>([
+  "brush", "eraser", "pencil", "mixer-brush", "color-replace", "background-eraser",
+  "magic-eraser", "pattern-stamp", "blur", "sharpen", "smudge", "dodge", "burn",
+  "sponge", "clone-stamp", "history-brush", "art-history-brush", "red-eye",
+  "spot-healing", "healing-brush", "remove-tool", "refine-edge-brush",
+])
+
+export function isBrushCursorTool(tool: ToolId) {
+  return BRUSH_CURSOR_TOOLS.has(tool)
 }
