@@ -25,6 +25,17 @@ export interface HistoryJumpScheduler {
   cancel(): void
 }
 
+/**
+ * How many history entries one auto-repeat tick of a held Ctrl+Z / Ctrl+Y
+ * should cover. `repeats` counts the auto-repeat events seen so far for the
+ * current hold (0 on the initial keypress). Stays at one step for the first
+ * ~third of a second of repeats so a short hold still feels discrete, then
+ * ramps up so rolling back a long session doesn't take 60 keypresses.
+ */
+export function heldStepMagnitude(repeats: number): number {
+  return Math.min(8, 1 + Math.floor(Math.max(0, repeats) / 8))
+}
+
 export function createHistoryJumpScheduler(
   jump: (index: number) => void,
   requestFrame?: (callback: FrameRequestCallback) => number,

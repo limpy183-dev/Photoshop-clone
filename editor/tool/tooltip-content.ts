@@ -1,8 +1,9 @@
 import type { ToolId } from "@/editor/types"
 
 /**
- * Animated canvas preview kinds. Each kind corresponds to a renderer in
- * {@link drawToolPreviewFrame} (see `rich-tooltip.tsx`). Renderers are kept
+ * Animated canvas preview kinds. Each kind corresponds to a renderer reached
+ * through {@link drawToolPreviewFrame} (see `preview-painters.ts`, which
+ * dispatches into `preview-raster/vector/viewport.ts`). Renderers are kept
  * intentionally tiny so the looping demo plays smoothly inside an ~80x60
  * tooltip canvas without blocking the main thread.
  */

@@ -30,13 +30,13 @@ import {
   Hash,
   Ruler as RulerIcon,
   StickyNote,
-  PaintbrushVertical,
   LayoutTemplate,
   PenTool,
   PenLine,
   Crosshair,
   RotateCw,
 } from "lucide-react"
+import { GradientIcon } from "@/components/photoshop/tool/gradient-icon"
 import { cn } from "@/lib/utils"
 import type { CustomShapeId, GradientStop, ToolId } from "@/editor/types"
 
@@ -242,7 +242,7 @@ export function ToolBadge({ tool }: { tool: ToolId }) {
     "shape-triangle": { Icon: TriangleIcon, name: "Triangle" },
     "shape-line": { Icon: Square, name: "Line" },
     "custom-shape": { Icon: Star, name: "Custom Shape" },
-    gradient: { Icon: PaintbrushVertical, name: "Gradient" },
+    gradient: { Icon: GradientIcon, name: "Gradient" },
     frame: { Icon: FrameIcon, name: "Frame" },
     slice: { Icon: Scissors, name: "Slice" },
     "slice-select": { Icon: MousePointer2, name: "Slice Select" },

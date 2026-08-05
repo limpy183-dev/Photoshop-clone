@@ -11,6 +11,7 @@ import {
   shortcutPrimaryKey,
 } from "@/editor/shortcuts"
 import { requestCanvasZoom } from "@/editor/zoom-events"
+import { heldStepMagnitude } from "@/editor/history-jump-scheduler"
 import { selectionToMaskCanvas } from "@/editor/tool/helpers"
 import {
   createAdjustmentLayer as createAdjustmentLayerModel,
@@ -95,6 +96,21 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
     requestCloseDocument,
     requestRender,
   } = useEditorSelector((editor) => editor)
+
+  // Held undo/redo: count the auto-repeat ticks of the current hold so each
+  // tick can cover more entries the longer the key stays down.
+  const heldStepRef = React.useRef({ dir: 0, repeats: 0 })
+  React.useEffect(() => {
+    const reset = () => {
+      heldStepRef.current = { dir: 0, repeats: 0 }
+    }
+    window.addEventListener("keyup", reset)
+    window.addEventListener("blur", reset)
+    return () => {
+      window.removeEventListener("keyup", reset)
+      window.removeEventListener("blur", reset)
+    }
+  }, [])
 
   React.useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -190,21 +206,35 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
         return
       }
 
+      // stepHistoryBy reads bounds from stateRef so it stays correct even
+      // when the most recent push-history's React render is still queued
+      // (deferred via startTransition). Using `historyIndex` from the
+      // hook closure here would risk a stale read where the user just
+      // painted a stroke that's already in the reducer state but not yet
+      // visible in the rendered context value.
+      const stepHeld = (dir: 1 | -1) => {
+        const held = heldStepRef.current
+        if (!e.repeat || held.dir !== dir) {
+          heldStepRef.current = { dir, repeats: 0 }
+          stepHistoryBy(dir)
+          return
+        }
+        held.repeats += 1
+        const steps = heldStepMagnitude(held.repeats)
+        for (let i = 0; i < steps; i++) {
+          if (!stepHistoryBy(dir)) break
+        }
+      }
+
       if (isShortcut("edit-redo")) {
         e.preventDefault()
-        // stepHistoryBy reads bounds from stateRef so it stays correct even
-        // when the most recent push-history's React render is still queued
-        // (deferred via startTransition). Using `historyIndex` from the
-        // hook closure here would risk a stale read where the user just
-        // painted a stroke that's already in the reducer state but not yet
-        // visible in the rendered context value.
-        if (!e.repeat) stepHistoryBy(1)
+        stepHeld(1)
         return
       }
 
       if (isShortcut("edit-undo") || isShortcut("edit-stepback")) {
         e.preventDefault()
-        if (!e.repeat) stepHistoryBy(-1)
+        stepHeld(-1)
         return
       }
 

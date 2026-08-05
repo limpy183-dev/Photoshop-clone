@@ -1,6 +1,21 @@
 import { expect, test } from "@playwright/test"
 
-import { createHistoryJumpScheduler } from "@/editor/history-jump-scheduler"
+import { createHistoryJumpScheduler, heldStepMagnitude } from "@/editor/history-jump-scheduler"
+
+test("held undo/redo starts at one step and accelerates to a capped rate", () => {
+  expect(heldStepMagnitude(0)).toBe(1)
+  expect(heldStepMagnitude(7)).toBe(1)
+  expect(heldStepMagnitude(8)).toBe(2)
+  expect(heldStepMagnitude(24)).toBe(4)
+  expect(heldStepMagnitude(1000)).toBe(8)
+  // Monotonic — a longer hold never undoes fewer entries per tick.
+  let previous = 0
+  for (let repeats = 0; repeats < 200; repeats++) {
+    const steps = heldStepMagnitude(repeats)
+    expect(steps).toBeGreaterThanOrEqual(previous)
+    previous = steps
+  }
+})
 
 test("history jump scheduler coalesces rapid absolute-index requests to the latest target", () => {
   // `request(absoluteIndex)` is the scrubbing path — when the user drags

@@ -329,7 +329,9 @@ test("every problematic export limitation has at least one one-click alternative
 })
 
 test("advanced subsystem video export uses revoking Blob downloads", () => {
-  const source = readFileSync("components/photoshop/advanced/subsystems-dialog.tsx", "utf8")
+  // The video tab moved out of subsystems-dialog.tsx into its own workspace file;
+  // the dialog now only owns the tab list and the switch.
+  const source = readFileSync("components/photoshop/advanced/subsystems-video-workspace.tsx", "utf8")
 
   expect(source).not.toContain("downloadDataUrl(URL.createObjectURL(")
   expect(source).toContain("downloadBlob(blob, `${activeDoc.name}-${preset.id}.${ext}`)")

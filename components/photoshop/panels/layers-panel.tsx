@@ -1,8 +1,8 @@
 "use client"
 
 import * as React from "react"
-import { useEditorSelector, useRenderSubscription } from "@/components/photoshop/editor/context"
-import { makeCanvas } from "@/components/photoshop/editor/context"
+import { useEditorSelector } from "@/components/photoshop/editor/context"
+import { makeCanvas } from "@/editor/canvas/utils"
 import { FILTER_META } from "@/editor/filters-meta"
 import {
   Eye,
@@ -26,10 +26,6 @@ import {
   Filter,
   ListChecks,
   X,
-  Type as TypeIcon,
-  Square as SquareIcon,
-  Image as ImageIcon,
-  PenTool,
   Palette,
   GripVertical,
   AlertTriangle,
@@ -62,252 +58,28 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
-import type { AdjustmentType, BlendMode, Layer, LayerKind, PsDocument } from "@/editor/types"
+import type { AdjustmentType, BlendMode, Layer } from "@/editor/types"
 import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop } from "@/editor/adjustment-layers"
 import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "@/editor/events"
-import type { MergedRenderChange } from "@/editor/render-bus"
 import { createLayerMetadata, layerMatchesQuery } from "@/editor/layer-workflows"
 import { copyLayerCss, copyLayerSvg } from "@/editor/vector-clipboard"
 import { uid } from "@/editor/uid"
-
-const BLENDS: BlendMode[] = [
-  "normal",
-  "dissolve",
-  "darken",
-  "multiply",
-  "color-burn",
-  "linear-burn",
-  "darker-color",
-  "lighten",
-  "screen",
-  "color-dodge",
-  "linear-dodge",
-  "lighter-color",
-  "overlay",
-  "soft-light",
-  "hard-light",
-  "vivid-light",
-  "linear-light",
-  "pin-light",
-  "hard-mix",
-  "difference",
-  "exclusion",
-  "subtract",
-  "divide",
-  "hue",
-  "saturation",
-  "color",
-  "luminosity",
-]
-
-type FilterKind = "all" | string
-
-const LAYER_FILTER_TOKENS: Record<string, string> = {
-  // Kind
-  raster: "kind:pixel",
-  text: "kind:text",
-  shape: "kind:shape",
-  adjustment: "kind:adjustment",
-  "smart-object": "attr:smart",
-  frame: "kind:frame",
-  artboard: "kind:artboard",
-  group: "kind:group",
-  threeD: "kind:3d",
-  video: "kind:video",
-  // Attribute
-  locked: "attr:locked",
-  hidden: "attr:hidden",
-  visible: "visible:true",
-  linked: "attr:linked",
-  masked: "attr:masked",
-  styled: "attr:effects",
-  smart: "attr:smart",
-  clipped: "attr:clipped",
-  "attr:smart-filter": "attr:smart-filter",
-  "attr:knockout": "attr:knockout",
-  "attr:blend-if": "attr:blend-if",
-  // Mode
-  "mode:normal": "mode:normal",
-  "mode:multiply": "mode:multiply",
-  "mode:screen": "mode:screen",
-  "mode:overlay": "mode:overlay",
-  "mode:soft-light": "mode:soft-light",
-  "mode:hard-light": "mode:hard-light",
-  "mode:darken": "mode:darken",
-  "mode:lighten": "mode:lighten",
-  // Effect
-  "effect:drop-shadow": "effect:drop-shadow",
-  "effect:inner-shadow": "effect:inner-shadow",
-  "effect:outer-glow": "effect:outer-glow",
-  "effect:inner-glow": "effect:inner-glow",
-  "effect:bevel": "effect:bevel",
-  "effect:satin": "effect:satin",
-  "effect:stroke": "effect:stroke",
-  "effect:glow": "effect:glow",
-  "effect:color-overlay": "effect:color-overlay",
-  "effect:gradient-overlay": "effect:gradient-overlay",
-  "effect:pattern-overlay": "effect:pattern-overlay",
-  // Color label
-  "label:red": "color:red",
-  "label:orange": "color:orange",
-  "label:yellow": "color:yellow",
-  "label:green": "color:green",
-  "label:blue": "color:blue",
-  "label:violet": "color:violet",
-  "label:gray": "color:gray",
-  "label:none": "color:none",
-  // Channels
-  "channel:r-off": "channel:r-off",
-  "channel:g-off": "channel:g-off",
-  "channel:b-off": "channel:b-off",
-}
-
-export const COLOR_LABELS: { id: NonNullable<Layer["colorLabel"]>; bg: string; label: string }[] = [
-  { id: "none", bg: "transparent", label: "None" },
-  { id: "red", bg: "#d04a4a", label: "Red" },
-  { id: "orange", bg: "#e08a3c", label: "Orange" },
-  { id: "yellow", bg: "#d8c44a", label: "Yellow" },
-  { id: "green", bg: "#5fa55a", label: "Green" },
-  { id: "blue", bg: "#4f88c8", label: "Blue" },
-  { id: "violet", bg: "#9266c4", label: "Violet" },
-  { id: "gray", bg: "#7d7d7d", label: "Gray" },
-]
+import { maskCoverageState } from "@/editor/document/mask-state"
+import { BLEND_MODE_OPTIONS, COLOR_LABELS } from "@/editor/document/layer-options"
+import { LAYER_FILTER_PRESETS, LAYER_FILTER_TOKENS, type FilterKind } from "@/editor/document/layer-filtering"
+import { analyzeLayerHealth } from "@/editor/document/layer-health"
+import {
+  AdjustmentMaskThumb,
+  AdjustmentThumb,
+  KindIcon,
+  LayerThumb,
+  PanelBtn,
+  SmartFilterMaskThumb,
+} from "@/components/photoshop/panels/layers-panel-thumbs"
 
 function adjustmentMaskState(layer: Layer) {
   if (layer.kind !== "adjustment") return undefined
-  if (layer.maskEnabled === false) return "disabled"
-  if (!layer.mask) return "none"
-  const ctx = layer.mask.getContext("2d")
-  if (!ctx) return "none"
-  const points = [
-    [0, 0],
-    [Math.max(0, Math.floor(layer.mask.width / 2)), Math.max(0, Math.floor(layer.mask.height / 2))],
-    [Math.max(0, layer.mask.width - 1), 0],
-    [0, Math.max(0, layer.mask.height - 1)],
-    [Math.max(0, layer.mask.width - 1), Math.max(0, layer.mask.height - 1)],
-  ]
-  let min = 255
-  let max = 0
-  for (const [x, y] of points) {
-    const px = ctx.getImageData(x, y, 1, 1).data
-    const lum = (px[0] + px[1] + px[2]) / 3
-    min = Math.min(min, lum)
-    max = Math.max(max, lum)
-  }
-  if (max <= 8) return "hidden"
-  if (min >= 247) return "revealed"
-  return "mixed"
-}
-
-function smartFilterMaskState(mask: HTMLCanvasElement | null | undefined, enabled: boolean) {
-  if (!enabled) return "disabled"
-  if (!mask) return "none"
-  const ctx = mask.getContext("2d")
-  if (!ctx) return "none"
-  const points = [
-    [0, 0],
-    [Math.max(0, Math.floor(mask.width / 2)), Math.max(0, Math.floor(mask.height / 2))],
-    [Math.max(0, mask.width - 1), 0],
-    [0, Math.max(0, mask.height - 1)],
-    [Math.max(0, mask.width - 1), Math.max(0, mask.height - 1)],
-  ]
-  let min = 255
-  let max = 0
-  for (const [x, y] of points) {
-    const px = ctx.getImageData(x, y, 1, 1).data
-    const lum = (px[0] + px[1] + px[2]) / 3
-    min = Math.min(min, lum)
-    max = Math.max(max, lum)
-  }
-  if (max <= 8) return "hidden"
-  if (min >= 247) return "revealed"
-  return "mixed"
-}
-
-// One-click filter presets surfaced as buttons above the layer list. Each maps
-// to the same query tokens the dropdown filter uses, except "empty" which is
-// resolved against the live emptiness analysis below.
-const LAYER_FILTER_PRESETS: { label: string; kind: string }[] = [
-  { label: "Visible only", kind: "visible" },
-  { label: "Has mask", kind: "masked" },
-  { label: "Has effects", kind: "styled" },
-  { label: "Smart object", kind: "smart-object" },
-  { label: "Adjustment", kind: "adjustment" },
-  { label: "Locked", kind: "locked" },
-  { label: "Empty", kind: "empty" },
-]
-
-interface LayerHealthWarning {
-  id: string
-  layerId?: string
-  message: string
-  severity: "warn" | "info"
-}
-
-/** Cheap downscaled probe — true if the canvas has any non-transparent pixel. */
-function canvasHasPixels(canvas: HTMLCanvasElement): boolean {
-  const sw = Math.max(1, Math.min(64, canvas.width))
-  const sh = Math.max(1, Math.min(64, canvas.height))
-  const probe = makeCanvas(sw, sh)
-  const ctx = probe.getContext("2d", { willReadFrequently: true })
-  if (!ctx) return true
-  try {
-    ctx.clearRect(0, 0, sw, sh)
-    ctx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, sw, sh)
-    const data = ctx.getImageData(0, 0, sw, sh).data
-    for (let i = 3; i < data.length; i += 4) if (data[i] !== 0) return true
-  } catch {
-    return true
-  }
-  return false
-}
-
-/** True if a mask is effectively all-black (fully hides its layer). */
-function maskFullyHidden(mask: HTMLCanvasElement): boolean {
-  const sw = Math.max(1, Math.min(64, mask.width))
-  const sh = Math.max(1, Math.min(64, mask.height))
-  const probe = makeCanvas(sw, sh)
-  const ctx = probe.getContext("2d", { willReadFrequently: true })
-  if (!ctx) return false
-  try {
-    ctx.drawImage(mask, 0, 0, mask.width, mask.height, 0, 0, sw, sh)
-    const data = ctx.getImageData(0, 0, sw, sh).data
-    for (let i = 0; i < data.length; i += 4) {
-      if ((data[i] + data[i + 1] + data[i + 2]) / 3 > 8) return false
-    }
-  } catch {
-    return false
-  }
-  return true
-}
-
-/** Surface non-fatal "layer health" issues a user would want flagged. */
-function analyzeLayerHealth(doc: PsDocument): { warnings: LayerHealthWarning[]; emptyIds: Set<string> } {
-  const warnings: LayerHealthWarning[] = []
-  const emptyIds = new Set<string>()
-  for (const layer of doc.layers) {
-    if (layer.kind === "group") continue
-    const isPixel = !layer.kind || layer.kind === "raster"
-    if (isPixel && !layer.smartObject && layer.kind !== "smart-object" && !canvasHasPixels(layer.canvas)) {
-      emptyIds.add(layer.id)
-      warnings.push({ id: `empty-${layer.id}`, layerId: layer.id, message: `"${layer.name}" is empty`, severity: "warn" })
-    }
-    if (layer.visible === false) {
-      warnings.push({ id: `hidden-${layer.id}`, layerId: layer.id, message: `"${layer.name}" is hidden`, severity: "info" })
-    }
-    if (layer.mask && maskFullyHidden(layer.mask)) {
-      warnings.push({ id: `masked-${layer.id}`, layerId: layer.id, message: `"${layer.name}" is fully hidden by its mask`, severity: "warn" })
-    }
-  }
-  const bytes = doc.width * doc.height * 4 * Math.max(1, doc.layers.length)
-  if (bytes > 320 * 1024 * 1024) {
-    warnings.push({
-      id: "memory",
-      message: `High memory: ~${Math.round(bytes / (1024 * 1024))} MB across ${doc.layers.length} layers`,
-      severity: "warn",
-    })
-  }
-  return { warnings, emptyIds }
+  return maskCoverageState(layer.mask, layer.maskEnabled !== false)
 }
 
 export function LayersPanel() {
@@ -825,7 +597,7 @@ export function LayersPanel() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {BLENDS.map((b) => (
+            {BLEND_MODE_OPTIONS.map((b) => (
               <SelectItem key={b} value={b} className="text-[11px] capitalize">
                 {b.replace("-", " ")}
               </SelectItem>
@@ -1788,239 +1560,5 @@ export function LayersPanel() {
         </PanelBtn>
       </div>
     </div>
-  )
-}
-
-function PanelBtn({
-  children,
-  label,
-  onClick,
-  disabled,
-}: {
-  children: React.ReactNode
-  label: string
-  onClick?: () => void
-  disabled?: boolean
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={label}
-      aria-label={label}
-      disabled={disabled}
-      className={cn(
-        "w-7 h-7 rounded-sm flex items-center justify-center hover:bg-[var(--ps-tool-hover)]",
-        disabled && "opacity-40 cursor-not-allowed hover:bg-transparent",
-      )}
-    >
-      {children}
-    </button>
-  )
-}
-
-function KindIcon({ kind }: { kind: LayerKind }) {
-  const cls = "w-2.5 h-2.5 text-[var(--ps-text-dim)] shrink-0"
-  if (kind === "text") return <TypeIcon className={cls} aria-label="Text" />
-  if (kind === "shape") return <SquareIcon className={cls} aria-label="Shape" />
-  if (kind === "adjustment") return <Palette className={cls} aria-label="Adjustment" />
-  if (kind === "frame") return <ImageIcon className={cls} aria-label="Frame" />
-  if (kind === "artboard") return <SquareIcon className={cls} aria-label="Artboard" />
-  if (kind === "raster") return <PenTool className={cls} aria-label="Pixel" />
-  return null
-}
-
-function AdjustmentThumb({ layer }: { layer: Layer }) {
-  const label = layer.adjustment ? FILTER_META[layer.adjustment.type]?.name ?? layer.adjustment.type : "Adjustment"
-  return (
-    <div
-      data-testid={`adjustment-thumb-${layer.name}`}
-      title={`${label} adjustment`}
-      aria-label={`${label} adjustment thumbnail`}
-      className="flex h-6 w-8 shrink-0 items-center justify-center rounded-[2px] border border-[var(--ps-divider)] bg-[radial-gradient(circle_at_34%_34%,#f8fafc_0_18%,#9ca3af_19%_42%,#27272a_43%_100%)]"
-    >
-      <Palette className="h-3.5 w-3.5 text-white drop-shadow" />
-    </div>
-  )
-}
-
-function AdjustmentMaskThumb({ layer, maskState }: { layer: Layer; maskState: string }) {
-  const ref = React.useRef<HTMLCanvasElement>(null)
-
-  React.useEffect(() => {
-    const dst = ref.current
-    if (!dst) return
-    const ctx = dst.getContext("2d")!
-    ctx.clearRect(0, 0, dst.width, dst.height)
-    ctx.fillStyle = "#222"
-    ctx.fillRect(0, 0, dst.width, dst.height)
-    if (layer.mask && typeof layer.mask.getContext === "function") {
-      ctx.drawImage(layer.mask, 0, 0, dst.width, dst.height)
-    } else {
-      ctx.strokeStyle = "#777"
-      ctx.strokeRect(3, 3, dst.width - 6, dst.height - 6)
-      ctx.beginPath()
-      ctx.moveTo(4, 4)
-      ctx.lineTo(dst.width - 4, dst.height - 4)
-      ctx.stroke()
-    }
-  }, [layer.mask, maskState])
-
-  return (
-    <canvas
-      ref={ref}
-      width={32}
-      height={24}
-      data-testid={`adjustment-mask-thumb-${layer.name}`}
-      title={`Adjustment mask: ${maskState}`}
-      aria-label={`Adjustment mask ${maskState}`}
-      className="h-6 w-8 shrink-0 rounded-[2px] border border-[var(--ps-divider)] bg-[var(--ps-panel-2)]"
-    />
-  )
-}
-
-function SmartFilterMaskThumb({
-  layerId,
-  layerName,
-  filterName,
-  mask,
-  enabled,
-  editing,
-  linked,
-  density,
-  feather,
-}: {
-  layerId: string
-  layerName: string
-  filterName: string
-  mask?: HTMLCanvasElement | null
-  enabled: boolean
-  editing: boolean
-  linked: boolean
-  density: number
-  feather: number
-}) {
-  const ref = React.useRef<HTMLCanvasElement>(null)
-  const state = smartFilterMaskState(mask, enabled)
-  const draw = React.useCallback(() => {
-    const canvas = ref.current
-    if (!canvas) return
-    const ctx = canvas.getContext("2d")
-    if (!ctx) return
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
-    ctx.fillStyle = "#202020"
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-    const sq = 4
-    ctx.fillStyle = "#2f2f2f"
-    for (let y = 0; y < canvas.height; y += sq) {
-      for (let x = 0; x < canvas.width; x += sq) {
-        if (((x / sq) + (y / sq)) % 2 === 0) ctx.fillRect(x, y, sq, sq)
-      }
-    }
-    if (mask) {
-      ctx.globalAlpha = enabled ? 1 : 0.35
-      // Preserve aspect ratio so painted strokes are visible in the higher-res thumb.
-      const ratio = Math.min(canvas.width / mask.width, canvas.height / mask.height)
-      const dw = mask.width * ratio
-      const dh = mask.height * ratio
-      const dx = (canvas.width - dw) / 2
-      const dy = (canvas.height - dh) / 2
-      ctx.drawImage(mask, dx, dy, dw, dh)
-      ctx.globalAlpha = 1
-      const densityWidth = Math.round(canvas.width * Math.max(0, Math.min(1, density)))
-      ctx.fillStyle = enabled ? "#5aa7ff" : "#777"
-      ctx.fillRect(0, canvas.height - 3, densityWidth, 3)
-      if (feather > 0) {
-        ctx.fillStyle = "rgba(255,255,255,0.55)"
-        ctx.fillRect(Math.max(0, canvas.width - 5), 1, 2, canvas.height - 5)
-      }
-    } else {
-      ctx.strokeStyle = "#777"
-      ctx.setLineDash([2, 2])
-      ctx.strokeRect(2, 2, canvas.width - 4, canvas.height - 4)
-      ctx.setLineDash([])
-    }
-    ctx.fillStyle = linked ? "#9ad27b" : "#777"
-    ctx.beginPath()
-    ctx.arc(canvas.width - 5, 5, 2.5, 0, Math.PI * 2)
-    ctx.fill()
-    if (editing) {
-      ctx.strokeStyle = "#5aa7ff"
-      ctx.lineWidth = 2
-      ctx.strokeRect(1, 1, canvas.width - 2, canvas.height - 2)
-    }
-  }, [mask, enabled, editing, linked, density, feather])
-  React.useEffect(() => {
-    draw()
-  }, [draw])
-  // Smart filter masks are painted by the canvas without changing their
-  // identity, so subscribe to the render bus to redraw the thumbnail whenever
-  // the underlying mask canvas is mutated (paint strokes, fills, inverts).
-  useRenderSubscription(
-    React.useCallback(
-      (change: MergedRenderChange) => {
-        if (!mask) return
-        if (change.layerIds === "all" || change.layerIds.includes(layerId)) draw()
-      },
-      [draw, layerId, mask],
-    ),
-  )
-
-  return (
-    <canvas
-      ref={ref}
-      width={28}
-      height={28}
-      data-testid={`layer-smart-filter-mask-thumb-${layerName}-${filterName}`}
-      data-smart-filter-mask-state={state}
-      data-smart-filter-mask-linked={linked ? "true" : "false"}
-      data-smart-filter-mask-density={String(Math.round(Math.max(0, Math.min(1, density)) * 100))}
-      data-smart-filter-mask-feather={String(Math.round(Math.max(0, feather)))}
-      className={cn("shrink-0 rounded-sm border", editing ? "border-[var(--ps-accent)]" : "border-[var(--ps-divider)]")}
-      title={`Smart filter mask: ${state}, ${linked ? "linked" : "unlinked"}, density ${Math.round(Math.max(0, Math.min(1, density)) * 100)}%, feather ${Math.round(Math.max(0, feather))} px`}
-      aria-label={editing ? `Editing ${filterName} smart filter mask` : `${filterName} smart filter mask`}
-    />
-  )
-}
-
-function LayerThumb({ layer }: { layer: Layer }) {
-  const ref = React.useRef<HTMLCanvasElement>(null)
-
-  const draw = React.useCallback((change?: MergedRenderChange) => {
-    if (change?.layerIds !== "all" && change?.layerIds && !change.layerIds.includes(layer.id)) return
-    const dst = ref.current
-    if (!dst) return
-    if (typeof layer.canvas.getContext !== "function") return
-    const ctx = dst.getContext("2d")!
-    ctx.clearRect(0, 0, dst.width, dst.height)
-    ctx.fillStyle = "#fff"
-    ctx.fillRect(0, 0, dst.width, dst.height)
-    ctx.fillStyle = "#c8c8c8"
-    const sq = 4
-    for (let y = 0; y < dst.height; y += sq) {
-      for (let x = 0; x < dst.width; x += sq) {
-        if (((x / sq) + (y / sq)) % 2 === 0) ctx.fillRect(x, y, sq, sq)
-      }
-    }
-    const ratio = Math.min(dst.width / layer.canvas.width, dst.height / layer.canvas.height)
-    const w = layer.canvas.width * ratio
-    const h = layer.canvas.height * ratio
-    ctx.drawImage(layer.canvas, (dst.width - w) / 2, (dst.height - h) / 2, w, h)
-  }, [layer])
-
-  React.useEffect(() => {
-    draw()
-  }, [draw])
-
-  // Subscribe to render bus so thumb updates while drawing without React state
-  useRenderSubscription(draw)
-
-  return (
-    <canvas
-      ref={ref}
-      width={32}
-      height={24}
-      className="border border-[var(--ps-divider)] bg-white shrink-0"
-    />
   )
 }

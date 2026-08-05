@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { useEditorSelector } from "@/components/photoshop/editor/context"
-import { COLOR_LABELS } from "@/components/photoshop/panels/layers-panel"
+import { COLOR_LABELS } from "@/editor/document/layer-options"
 import type { Layer } from "@/editor/types"
 
 export function ColorLabelsDialog({

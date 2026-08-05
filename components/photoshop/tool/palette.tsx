@@ -39,6 +39,7 @@ import {
   RotateCw,
   Crosshair,
 } from "lucide-react"
+import { GradientIcon } from "@/components/photoshop/tool/gradient-icon"
 import { useEditorSelector } from "@/components/photoshop/editor/context"
 import type { ToolId } from "@/editor/types"
 import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "@/editor/events"
@@ -142,7 +143,7 @@ const TOOL_GROUPS: ToolGroup[] = [
     ],
   },
   {
-    primary: { id: "gradient", name: "Gradient Tool", shortcut: "G", icon: PaintbrushVertical },
+    primary: { id: "gradient", name: "Gradient Tool", shortcut: "G", icon: GradientIcon },
     others: [{ id: "paint-bucket", name: "Paint Bucket Tool", shortcut: "G", icon: PaintBucket }],
   },
   {

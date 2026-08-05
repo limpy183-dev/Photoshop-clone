@@ -48,7 +48,13 @@ test("architecture gate reports no import cycles or budget regressions", () => {
   expect(report.budgets.oversizeFiles.count).toBeLessThanOrEqual(report.budgets.oversizeFiles.max)
   expect(report.budgets.oversizeFiles.max).toBeLessThanOrEqual(7)
   expect(report.budgets.useEditorImports.count).toBeLessThanOrEqual(report.budgets.useEditorImports.max)
-  expect(report.budgets.useEditorImports.max).toBeLessThanOrEqual(8)
+  // 8 -> 16 when subsystems-dialog.tsx was split into one file per tab. The budget
+  // counts files, so nine workspaces that already called useEditor() from inside a
+  // shared file now each count once. The number of call sites is unchanged at 9, so
+  // nothing new subscribes to whole-editor state. Raise this only for the same
+  // reason; a genuinely new useEditor() consumer should still be pushed to
+  // useEditorSelector instead.
+  expect(report.budgets.useEditorImports.max).toBeLessThanOrEqual(16)
   expect(report.budgets.topLargestFiles.count).toBe(10)
   expect(report.budgets.topLargestFiles.totalLines).toBeLessThanOrEqual(report.budgets.topLargestFiles.maxTotalLines)
   expect(report.budgets.topLargestFiles.maxTotalLines).toBeLessThanOrEqual(23274)

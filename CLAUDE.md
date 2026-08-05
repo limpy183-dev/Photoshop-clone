@@ -97,6 +97,24 @@ Last 12 history entries are kept as raw snapshots; older canvas-bearing history 
 
 Panels are registered in `panel-registry.tsx` — this is the single source of truth for the right dock, workspace presets, and command-palette discovery. Heavy dialogs (`CommandPalette`, `ImageSizeDialog`, etc.) are lazy-loaded with `React.lazy` to reduce first-paint bundle size.
 
+The big panels and dialogs are split rather than grown, along two seams. Anything
+pure — a probe, a picker list, an image-math pass — belongs in `editor/`, not in a
+`.tsx` file; `editor/document/` collects the layer-side ones (`mask-state.ts`,
+`layer-health.ts`, `layer-filtering.ts`, `layer-options.ts`, `auto-adjust.ts`).
+Anything that is one self-contained region of UI gets a sibling file next to its
+parent:
+
+| Parent | Siblings |
+|--------|----------|
+| `properties-panel.tsx` | `properties-tool-section.tsx` (per-tool controls), `properties-controls.tsx` (shared primitives) |
+| `layers-panel.tsx` | `layers-panel-thumbs.tsx` (row leaf components) |
+| `options-bar.tsx` | `options-bar-tools.tsx` (per-tool option groups), `options-bar-shared.tsx` |
+| `advanced/subsystems-dialog.tsx` | one `subsystems-<tab>-workspace.tsx` per tab |
+| `rich-tooltip.tsx` | `editor/tool/preview-{painters,primitives,raster,vector,viewport}.ts` |
+
+The shared primitives live in their own file for a reason: a section file and its
+parent must not import each other, or the import-cycle gate fails.
+
 ### PSD I/O
 
 PSD import/export uses `ag-psd` plus dedicated PSD color-mode/resource modules. The document model supports high-bit/color intent, ICC metadata, and CMYK/Lab/multichannel compatibility paths. Browser Canvas editing still resolves through RGBA surfaces, so unsupported native fidelity is reported rather than silently promised.
@@ -133,6 +151,8 @@ Trace is captured on first retry. Base URL is `http://127.0.0.1:3000`.
 | `editor/filters.ts` | Filter registry (60+ filters) |
 | `editor/filters/worker.ts` | Async + tiled filter execution |
 | `editor/document/io.ts` | PSD + raster file I/O |
+| `editor/document/mask-state.ts` | Mask coverage probe behind every mask thumbnail |
+| `editor/document/layer-options.ts` | Blend-mode and colour-label picker vocabulary |
 | `editor/brush-engine.ts` | Brush rendering, pressure, dynamics |
 | `playwright/base.ts` | Shared Playwright lane skeleton |
 | `scripts/measure-route-bundles.mjs` | Production startup measurement by route |
