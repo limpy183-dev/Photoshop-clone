@@ -10,11 +10,8 @@ import {
   layerCompExportFilename,
   layerCompNeedsUpdate,
 } from "@/components/photoshop/panels/layer-comps-panel"
-import {
-  actionFolderGroups,
-  buildInsertPathStep,
-  playbackSpeedToDelayMs,
-} from "@/components/photoshop/panels/actions-panel"
+import { playbackSpeedToDelayMs } from "@/components/photoshop/panels/actions-panel"
+import { actionFolderGroups, buildInsertPathStep } from "@/editor/document/action-serialization"
 import {
   filterToolPresetAssets,
   reorderToolPresetAssets,

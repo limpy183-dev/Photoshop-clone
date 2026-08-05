@@ -1,9 +1,11 @@
 import { expect, test } from "@playwright/test"
 
-import * as actionsPanel from "@/components/photoshop/panels/actions-panel"
+// The import validation moved out of the panel into editor/document/ when
+// actions-panel.tsx was split; the panel keeps only the UI.
+import * as actionSerialization from "@/editor/document/action-serialization"
 import { parsePreferencesSet } from "@/editor/preferences-engine"
 
-const parseActionImportPayload = (actionsPanel as {
+const parseActionImportPayload = (actionSerialization as {
   parseActionImportPayload?: (value: unknown) => unknown[]
 }).parseActionImportPayload
 

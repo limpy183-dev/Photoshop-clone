@@ -5,12 +5,7 @@ import {
   MAX_ASSET_IMPORT_COUNT,
   normalizeImportedAssetLibrary,
 } from "@/components/photoshop/panels/assets-panel"
-import {
-  MAX_BRUSH_IMPORT_BYTES,
-  MAX_BRUSH_PRESET_IMPORT_COUNT,
-  normalizeImportedBrushPayload,
-  parseAbrPresets,
-} from "@/components/photoshop/panels/brush-panel"
+import { MAX_BRUSH_IMPORT_BYTES, MAX_BRUSH_PRESET_IMPORT_COUNT, normalizeImportedBrushPayload, parseAbrPresets } from "@/editor/document/brush-import"
 
 function bytesFromText(text: string) {
   const bytes = new TextEncoder().encode(text)

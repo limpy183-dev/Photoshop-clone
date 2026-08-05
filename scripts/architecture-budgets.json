@@ -12,8 +12,9 @@
     "maxLines": 1500
   },
   "_useEditorImportsComment": "8 -> 16 when subsystems-dialog.tsx was split into one file per tab. This budget counts FILES, and the nine workspaces that used to share a file now have their own. The number of useEditor() call sites is unchanged at 9 (verified before and after), so nothing subscribes to whole-editor state that did not already. Lower this only by converting a workspace to useEditorSelector, not by re-merging files.",
+  "_useEditorImportsComment2": "16 -> 21 when adjustment-dialogs.tsx became one file per dialog and the preset/brush/actions panels shed siblings. Same arithmetic as the 8 -> 16 raise above: call sites across every file touched were 7 before and 7 after (verified), so no new consumer of whole-editor state exists. Lower this by converting a dialog to useEditorSelector, never by re-merging files.",
   "useEditorImports": {
-    "max": 16
+    "max": 21
   },
   "_topLargestFilesComment": "22184 -> 22330 for the tool-behaviour pass: retouch/type option panels that did not exist, gradient blend+opacity, pen curve handles, selection-aware move. The two largest new panels were split into options-bar-tools.tsx (-363) before raising this. 22330 -> 22350 for the selection-clip / options-bar remount pass: the clip helpers went to editor/canvas/selection-helpers.ts and view.tsx's duplicate of selectionToMaskCanvas was deleted (view.tsx ends up smaller than it started); the remainder is options-bar.tsx hoisting its stateful option groups to module scope. 22350 -> 20095 for the file-split pass: preview painters left rich-tooltip for editor/tool/, ToolSection left properties-panel, the nine subsystem workspaces left subsystems-dialog, four option groups left options-bar, and layers-panel shed its leaf components plus the health/filter logic to editor/document/. 16000 -> 15113 when the last seven menus left menu-bar.tsx for components/photoshop/menus/.",
   "topLargestFiles": {
@@ -35,7 +36,7 @@
     "components/photoshop/editor/context.tsx": {
       "maxImports": 24,
       "_maxFanInComment": "96 -> 97: options-bar-tools.tsx subscribes directly rather than taking props, so only the retouch/type panels re-render on state changes instead of the whole options bar. 97 -> 107 for the file-split pass, which is arithmetic rather than coupling: the nine subsystem workspaces, properties-tool-section and layers-panel-thumbs already talked to the context, they just did it from inside a bigger file. No new consumer was introduced.",
-      "maxFanIn": 107
+      "maxFanIn": 112
     },
     "components/photoshop/menu-bar.tsx": {
       "_maxImportsComment": "32 -> 35 when the last seven menus left for components/photoshop/menus/: Edit, Image, Layer and Type each got a file and Plugins/Window/Help were grouped, trading three imports for 878 fewer lines. Same trade view.tsx made above. menu-bar.tsx is now the command layer — it owns the state and the handlers and passes them down; every menu's JSX lives in menus/.",

@@ -274,19 +274,19 @@ const NewGuideDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean)
 // not fit the generic FilterDialog renderer, so they ship as purpose-built
 // dialogs lazily mounted only when their menu entry is used.
 const ShadowsHighlightsDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("@/components/photoshop/adjustment-dialogs").then((m) => ({ default: m.ShadowsHighlightsDialog })),
+  () => import("@/components/photoshop/adjustments/shadows-highlights-dialog").then((m) => ({ default: m.ShadowsHighlightsDialog })),
 )
 const HdrToningDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("@/components/photoshop/adjustment-dialogs").then((m) => ({ default: m.HdrToningDialog })),
+  () => import("@/components/photoshop/adjustments/hdr-toning-dialog").then((m) => ({ default: m.HdrToningDialog })),
 )
 const MatchColorDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("@/components/photoshop/adjustment-dialogs").then((m) => ({ default: m.MatchColorDialog })),
+  () => import("@/components/photoshop/adjustments/match-color-dialog").then((m) => ({ default: m.MatchColorDialog })),
 )
 const ReplaceColorDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("@/components/photoshop/adjustment-dialogs").then((m) => ({ default: m.ReplaceColorDialog })),
+  () => import("@/components/photoshop/adjustments/replace-color-dialog").then((m) => ({ default: m.ReplaceColorDialog })),
 )
 const EqualizePromptDialog = lazyDialog<{ open: boolean; onOpenChange: (open: boolean) => void }>(
-  () => import("@/components/photoshop/adjustment-dialogs").then((m) => ({ default: m.EqualizePromptDialog })),
+  () => import("@/components/photoshop/adjustments/equalize-prompt-dialog").then((m) => ({ default: m.EqualizePromptDialog })),
 )
 
 export type AutoAlgorithmId =
@@ -301,7 +301,7 @@ const AutoOptionsDialog = lazyDialog<{
   initialAlgorithm?: AutoAlgorithmId
   label?: string
 }>(
-  () => import("@/components/photoshop/adjustment-dialogs").then((m) => ({ default: m.AutoOptionsDialog })),
+  () => import("@/components/photoshop/adjustments/auto-options-dialog").then((m) => ({ default: m.AutoOptionsDialog })),
 )
 
 interface MenuDialogsProps {

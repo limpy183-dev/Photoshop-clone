@@ -15,7 +15,12 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson, type ClientStorageKey } from "@/editor/client-storage"
+import {
+  CLIENT_STORAGE_KEYS,
+  readClientStorageJson,
+  writeClientStorageJson,
+  type ClientStorageKey,
+} from "@/editor/client-storage"
 import { downloadText } from "@/editor/document/io"
 import { useEditor } from "@/components/photoshop/editor/context"
 import { dispatchPhotoshopEvent } from "@/editor/events"
@@ -23,15 +28,10 @@ import type {
   AssetLibraryItem,
   BrushPreset,
   BrushSettings,
-  CloneSourceSettings,
   CustomShapeId,
-  EraserSettings,
   GradientSettings,
-  GradientStop,
   LayerStyle,
   PsDocument,
-  SelectionOptions,
-  ToolId,
 } from "@/editor/types"
 import {
   collectPresetFamilies,
@@ -43,7 +43,6 @@ import {
   movePresetToSet,
   parsePresetBundle,
   presetFamilyLabel,
-  presetKey,
   renamePresetItem,
   reorderPresetItem,
   type PresetFamilyFilter,
@@ -51,62 +50,35 @@ import {
   type UnifiedPresetFamily,
   type UnifiedPresetItem,
 } from "@/editor/preset-manager"
-import {
-  readShapePresets,
-  writeShapePresets,
-  type ShapePresetEntry,
-} from "@/editor/shape-preset-library"
+import { readShapePresets, writeShapePresets, type ShapePresetEntry } from "@/editor/shape-preset-library"
 import {
   loadSwatches as loadStoredSwatches,
   saveSwatches as saveStoredSwatches,
 } from "@/editor/swatches-store"
-
-type ManagerSwatchEntry = {
-  id?: string
-  color: string
-  name?: string
-  group?: string
-  createdAt?: number
-}
-
-type ManagerGradientEntry = {
-  id: string
-  name: string
-  stops: { pos: number; color: string }[]
-  category?: string
-  createdAt?: number
-}
-
-type ManagerPatternEntry = {
-  id: string
-  name: string
-  group?: string
-  dataURL: string
-  width: number
-  height: number
-  createdAt?: number
-}
-
-type ManagerStylePreset = NonNullable<PsDocument["stylePresets"]>[number] & {
-  group?: string
-  createdAt?: number
-}
-
-type ToolPresetPayload = {
-  tool?: ToolId
-  brush?: Partial<BrushSettings>
-  eraser?: Partial<EraserSettings>
-  cloneSource?: Partial<CloneSourceSettings>
-  selectionOptions?: Partial<SelectionOptions>
-  foreground?: string
-  background?: string
-}
-
-const MAX_UNIFIED_IMPORT_BYTES = 2 * 1024 * 1024
-
-const HEX_OR_RGBA = /^(#[0-9a-f]{3,8}|rgba?\([^()]{1,80}\))$/i
-const IMAGE_DATA_URL = /^data:image\/(?:png|jpe?g|webp|gif);base64,[a-z0-9+/=]+$/i
-
+import {
+  applyToolPreset,
+  assetToItem,
+  brushPresetToItem,
+  cleanNumber,
+  gradientCss,
+  gradientToItem,
+  HEX_OR_RGBA,
+  IMAGE_DATA_URL,
+  itemToBrushPreset,
+  itemToGradientSettings,
+  MAX_UNIFIED_IMPORT_BYTES,
+  patternToItem,
+  recordOf,
+  safeColor,
+  shapeToItem,
+  splitUnifiedItems,
+  styleToItem,
+  swatchToItem,
+  type ToolPresetPayload,
+} from "@/editor/document/preset-conversion"
+// These entry shapes are owned by the stores that persist them; the panel used
+// to re-declare its own structurally-identical copies.
+import type { ManagerGradientEntry, ManagerPatternEntry, ManagerSwatchEntry } from "@/editor/preset-stores"
 const FAMILY_ACCENTS: Record<UnifiedPresetFamily, string> = {
   brush: "#38bdf8",
   swatch: "#f97316",
@@ -263,7 +235,7 @@ export function PresetManagerPanel() {
       return
     }
     if (item.family === "swatch") {
-      const color = getPayloadRecord(item.payload).color
+      const color = recordOf(item.payload).color
       if (typeof color === "string") dispatch({ type: "set-foreground", color })
       return
     }
@@ -277,7 +249,7 @@ export function PresetManagerPanel() {
       return
     }
     if (item.family === "shape") {
-      const customId = getPayloadRecord(item.payload).customId
+      const customId = recordOf(item.payload).customId
       if (typeof customId === "string") {
         window.__psCustomShape = customId as CustomShapeId
         dispatch({ type: "set-tool", tool: "custom-shape" })
@@ -475,7 +447,7 @@ export function PresetManagerPanel() {
 }
 
 function PresetPreview({ item }: { item: UnifiedPresetItem }) {
-  const record = getPayloadRecord(item.payload)
+  const record = recordOf(item.payload)
   if (item.family === "swatch") {
     return <span className="h-7 w-7 rounded-sm border border-[var(--ps-divider)]" style={{ backgroundColor: safeColor(record.color, "#000000") }} />
   }
@@ -531,248 +503,6 @@ function buildUnifiedItems(input: {
   ]
 }
 
-function splitUnifiedItems(items: readonly UnifiedPresetItem[]) {
-  const brushPresets = items.filter((item) => item.family === "brush").map(itemToBrushPreset)
-  const swatches = items.filter((item) => item.family === "swatch").map(itemToSwatch)
-  const gradients = items.filter((item) => item.family === "gradient").map(itemToGradient)
-  const patterns = items.filter((item) => item.family === "pattern").map(itemToPattern).filter(Boolean) as ManagerPatternEntry[]
-  const styles = items.filter((item) => item.family === "style").map(itemToStyle)
-  const shapes = items.filter((item) => item.family === "shape").map(itemToShape)
-  const assets = items
-    .filter((item) => item.family === "tool-preset" || item.family === "asset")
-    .map(itemToAsset)
-    .filter(Boolean) as AssetLibraryItem[]
-  return { brushPresets, swatches, gradients, patterns, styles, shapes, assets }
-}
-
-function brushPresetToItem(preset: BrushPreset): UnifiedPresetItem {
-  return {
-    key: presetKey("brush", preset.id),
-    family: "brush",
-    id: preset.id,
-    name: preset.name,
-    set: preset.folder ?? "General",
-    payload: {
-      size: preset.size,
-      hardness: preset.hardness,
-      spacing: preset.spacing,
-      settings: preset.settings,
-      thumbnail: preset.thumbnail,
-    },
-    preview: preset.thumbnail,
-  }
-}
-
-function swatchToItem(swatch: ManagerSwatchEntry, index: number): UnifiedPresetItem {
-  const id = swatch.id ?? `swatch-${index}-${swatch.color.replace("#", "")}`
-  return {
-    key: presetKey("swatch", id),
-    family: "swatch",
-    id,
-    name: swatch.name ?? swatch.color.toUpperCase(),
-    set: swatch.group ?? "Default",
-    payload: { color: swatch.color },
-    createdAt: swatch.createdAt,
-  }
-}
-
-function gradientToItem(preset: ManagerGradientEntry): UnifiedPresetItem {
-  return {
-    key: presetKey("gradient", preset.id),
-    family: "gradient",
-    id: preset.id,
-    name: preset.name,
-    set: preset.category ?? "Custom",
-    payload: { stops: preset.stops },
-    createdAt: preset.createdAt,
-  }
-}
-
-function patternToItem(pattern: ManagerPatternEntry): UnifiedPresetItem {
-  return {
-    key: presetKey("pattern", pattern.id),
-    family: "pattern",
-    id: pattern.id,
-    name: pattern.name,
-    set: pattern.group ?? "User",
-    payload: {
-      dataURL: pattern.dataURL,
-      width: pattern.width,
-      height: pattern.height,
-    },
-    createdAt: pattern.createdAt,
-  }
-}
-
-function styleToItem(preset: NonNullable<PsDocument["stylePresets"]>[number]): UnifiedPresetItem {
-  const styled = preset as ManagerStylePreset
-  return {
-    key: presetKey("style", styled.id),
-    family: "style",
-    id: styled.id,
-    name: styled.name,
-    set: styled.group ?? "Styles",
-    payload: styled.style,
-    createdAt: styled.createdAt,
-  }
-}
-
-function shapeToItem(shape: ShapePresetEntry): UnifiedPresetItem {
-  return {
-    key: presetKey("shape", shape.id),
-    family: "shape",
-    id: shape.id,
-    name: shape.name,
-    set: shape.group,
-    payload: { customId: shape.customId },
-    createdAt: shape.createdAt,
-  }
-}
-
-function assetToItem(asset: AssetLibraryItem): UnifiedPresetItem {
-  if (asset.kind === "tool-preset") {
-    return {
-      key: presetKey("tool-preset", asset.id),
-      family: "tool-preset",
-      id: asset.id,
-      name: asset.name,
-      set: asset.group ?? "Tools",
-      payload: asset.payload,
-      createdAt: asset.createdAt,
-      sourceKind: asset.kind,
-    }
-  }
-  return {
-    key: presetKey("asset", asset.id),
-    family: "asset",
-    id: asset.id,
-    name: asset.name,
-    set: asset.group ?? asset.kind,
-    payload: asset.payload,
-    createdAt: asset.createdAt,
-    sourceKind: asset.kind,
-  }
-}
-
-function itemToBrushPreset(item: UnifiedPresetItem): BrushPreset {
-  const record = getPayloadRecord(item.payload)
-  const settings = getPayloadRecord(record.settings) as Partial<BrushSettings>
-  return {
-    id: item.id,
-    name: item.name,
-    folder: item.set,
-    size: cleanNumber(record.size, 1, 500, settings.size ?? 30),
-    hardness: cleanNumber(record.hardness, 0, 100, settings.hardness ?? 80),
-    spacing: cleanNumber(record.spacing, 1, 400, settings.spacing ?? 25),
-    settings,
-    thumbnail: typeof record.thumbnail === "string" ? record.thumbnail : item.preview,
-  }
-}
-
-function itemToSwatch(item: UnifiedPresetItem): ManagerSwatchEntry {
-  const record = getPayloadRecord(item.payload)
-  const color = safeColor(record.color, "#000000")
-  return {
-    id: item.id,
-    name: item.name === color.toUpperCase() ? undefined : item.name,
-    group: item.set,
-    color,
-    createdAt: item.createdAt,
-  }
-}
-
-function itemToGradient(item: UnifiedPresetItem): ManagerGradientEntry {
-  const record = getPayloadRecord(item.payload)
-  return {
-    id: item.id,
-    name: item.name,
-    category: item.set,
-    stops: normalizeGradientStops(record.stops),
-    createdAt: item.createdAt,
-  }
-}
-
-function itemToPattern(item: UnifiedPresetItem): ManagerPatternEntry | null {
-  const record = getPayloadRecord(item.payload)
-  const dataURL = typeof record.dataURL === "string" ? record.dataURL : ""
-  if (!IMAGE_DATA_URL.test(dataURL)) return null
-  return {
-    id: item.id,
-    name: item.name,
-    group: item.set,
-    dataURL,
-    width: cleanNumber(record.width, 1, 4096, 1),
-    height: cleanNumber(record.height, 1, 4096, 1),
-    createdAt: item.createdAt,
-  }
-}
-
-function itemToStyle(item: UnifiedPresetItem): ManagerStylePreset {
-  return {
-    id: item.id,
-    name: item.name,
-    group: item.set,
-    style: getPayloadRecord(item.payload) as LayerStyle,
-    createdAt: item.createdAt,
-  }
-}
-
-function itemToShape(item: UnifiedPresetItem): ShapePresetEntry {
-  const customId = getPayloadRecord(item.payload).customId
-  return {
-    id: item.id,
-    name: item.name,
-    group: item.set,
-    customId: typeof customId === "string" ? (customId as CustomShapeId) : "star5",
-    createdAt: item.createdAt,
-  }
-}
-
-function itemToAsset(item: UnifiedPresetItem): AssetLibraryItem | null {
-  const kind = item.family === "tool-preset"
-    ? "tool-preset"
-    : isAssetKind(item.sourceKind)
-      ? item.sourceKind
-      : "cloud-library"
-  return {
-    id: item.id,
-    name: item.name,
-    kind,
-    group: item.set,
-    payload: item.payload,
-    createdAt: item.createdAt ?? Date.now(),
-  }
-}
-
-function itemToGradientSettings(item: UnifiedPresetItem): Partial<GradientSettings> {
-  const record = getPayloadRecord(item.payload)
-  if (typeof record.type === "string") return record as Partial<GradientSettings>
-  return {
-    type: "linear",
-    reverse: false,
-    stops: normalizeGradientStops(record.stops).map((stop) => ({
-      offset: stop.pos,
-      color: stop.color,
-      opacity: 1,
-    } satisfies GradientStop)),
-  }
-}
-
-function applyToolPreset(
-  payload: ToolPresetPayload,
-  dispatch: ReturnType<typeof useEditor>["dispatch"],
-) {
-  if (payload.tool) dispatch({ type: "set-tool", tool: payload.tool })
-  if (payload.brush) dispatch({ type: "set-brush", brush: payload.brush })
-  if (payload.eraser && typeof payload.eraser === "object") dispatch({ type: "set-eraser", eraser: payload.eraser })
-  if (payload.cloneSource && typeof payload.cloneSource === "object") dispatch({ type: "set-clone-source", cloneSource: payload.cloneSource })
-  if (payload.selectionOptions && typeof payload.selectionOptions === "object") {
-    dispatch({ type: "set-selection-options", selectionOptions: payload.selectionOptions })
-  }
-  if (typeof payload.foreground === "string") dispatch({ type: "set-foreground", color: payload.foreground })
-  if (typeof payload.background === "string") dispatch({ type: "set-background", color: payload.background })
-}
-
 function applyAssetPreset(
   item: UnifiedPresetItem,
   activeLayerId: string | undefined,
@@ -781,7 +511,7 @@ function applyAssetPreset(
 ) {
   const kind = item.sourceKind
   if (kind === "swatch") {
-    const color = getPayloadRecord(item.payload).color
+    const color = recordOf(item.payload).color
     if (typeof color === "string") dispatch({ type: "set-foreground", color })
   } else if (kind === "brush") {
     dispatch({ type: "set-brush", brush: item.payload as Partial<BrushSettings> })
@@ -791,7 +521,7 @@ function applyAssetPreset(
     dispatch({ type: "set-layer-style", id: activeLayerId, style: item.payload as LayerStyle })
     window.setTimeout(() => commit("Apply Asset Style", [activeLayerId]), 0)
   } else if (kind === "export") {
-    const payload = getPayloadRecord(item.payload)
+    const payload = recordOf(item.payload)
     if (payload.dialog === "batch-export" || payload.scope) {
       dispatchPhotoshopEvent("ps-open-batch-export", item.payload)
     } else {
@@ -924,48 +654,11 @@ function normalizeGradientStops(value: unknown): { pos: number; color: string }[
   ]
 }
 
-function gradientCss(stops: unknown[]) {
-  const normalized = normalizeGradientStops(stops)
-  return `linear-gradient(90deg, ${normalized.map((stop) => `${stop.color} ${Math.round(stop.pos * 100)}%`).join(", ")})`
-}
-
-function getPayloadRecord(payload: unknown): Record<string, unknown> {
-  return isRecord(payload) ? payload : {}
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value)
-}
-
-function safeColor(value: unknown, fallback: string) {
-  return typeof value === "string" && HEX_OR_RGBA.test(value) ? value : fallback
-}
-
-function cleanNumber(value: unknown, min: number, max: number, fallback: number) {
-  const next = typeof value === "number" && Number.isFinite(value) ? value : fallback
-  return Math.round(Math.max(min, Math.min(max, next)))
 }
 
 function finiteTimestamp(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined
 }
 
-function isAssetKind(value: unknown): value is AssetLibraryItem["kind"] {
-  return (
-    value === "brush" ||
-    value === "gradient" ||
-    value === "pattern" ||
-    value === "style" ||
-    value === "swatch" ||
-    value === "shape" ||
-    value === "export" ||
-    value === "tool-preset" ||
-    value === "plugin" ||
-    value === "cloud-library" ||
-    value === "stock" ||
-    value === "font" ||
-    value === "icc-profile" ||
-    value === "variable-data" ||
-    value === "prepress"
-  )
-}
