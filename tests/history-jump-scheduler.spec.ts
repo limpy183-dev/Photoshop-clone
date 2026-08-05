@@ -1,6 +1,12 @@
 import { expect, test } from "@playwright/test"
 
-import { createHistoryJumpScheduler, heldStepMagnitude } from "@/editor/history-jump-scheduler"
+import {
+  createHistoryJumpScheduler,
+  heldRepeatShouldStep,
+  heldStepMagnitude,
+  HELD_REPEAT_DELAY_MS,
+  HELD_REPEAT_INTERVAL_MS,
+} from "@/editor/history-jump-scheduler"
 
 test("held undo/redo starts at one step and accelerates to a capped rate", () => {
   expect(heldStepMagnitude(0)).toBe(1)
@@ -15,6 +21,31 @@ test("held undo/redo starts at one step and accelerates to a capped rate", () =>
     expect(steps).toBeGreaterThanOrEqual(previous)
     previous = steps
   }
+})
+
+test("held undo/redo repeats are gated on elapsed time, not on event count", () => {
+  // A burst of repeat events inside one tick — synthetic events, a stuck key,
+  // an event storm — must not each undo something.
+  expect(heldRepeatShouldStep(0, 0)).toBe(false)
+  expect(heldRepeatShouldStep(5, 5)).toBe(false)
+  expect(heldRepeatShouldStep(HELD_REPEAT_DELAY_MS - 1, 999)).toBe(false)
+
+  // Real auto-repeat clears both gates: the OS delay before the first tick is
+  // far longer than ours, and ~30Hz ticks are slower than the interval floor.
+  expect(heldRepeatShouldStep(500, 33)).toBe(true)
+  expect(heldRepeatShouldStep(HELD_REPEAT_DELAY_MS, HELD_REPEAT_INTERVAL_MS)).toBe(true)
+
+  // Past the initial delay, ticks still cannot arrive faster than the floor.
+  expect(heldRepeatShouldStep(1000, HELD_REPEAT_INTERVAL_MS - 1)).toBe(false)
+
+  // Both gates must clear the FASTEST setting real hardware offers, not just
+  // the default, or a user with key repeat turned up loses their first ticks:
+  // macOS bottoms out at ~225ms delay-until-repeat, Windows at ~250ms, and
+  // sustained repeat tops out around 30Hz (~33ms per tick).
+  expect(HELD_REPEAT_DELAY_MS).toBeLessThan(225)
+  expect(HELD_REPEAT_INTERVAL_MS).toBeLessThan(33)
+  // ...while still being far longer than a same-tick synthetic burst (2-6ms measured).
+  expect(HELD_REPEAT_DELAY_MS).toBeGreaterThan(60)
 })
 
 test("history jump scheduler coalesces rapid absolute-index requests to the latest target", () => {

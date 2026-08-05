@@ -36,6 +36,34 @@ export function heldStepMagnitude(repeats: number): number {
   return Math.min(8, 1 + Math.floor(Math.max(0, repeats) / 8))
 }
 
+/**
+ * A real keyboard waits out an initial delay before auto-repeat starts, then
+ * ticks at a steady rate. Nothing guarantees the events we receive look like
+ * that: a synthetic burst, a stuck key, or an event storm can deliver many
+ * `repeat: true` keydowns inside a single tick, and counting them one-for-one
+ * turns a brief Ctrl+Z into a rollback of everything the user has done.
+ *
+ * So held undo/redo is rate limited on the wall clock rather than on the event
+ * count, and both gates sit below the *fastest* setting real hardware offers —
+ * not merely below the typical one — so a genuine hold still accelerates
+ * through {@link heldStepMagnitude} exactly as before:
+ *
+ *  - Delay: macOS's shortest "Delay Until Repeat" is ~225ms and Windows' is
+ *    ~250ms, so 180ms never swallows a real first tick. It is still ~30x the
+ *    2-6ms in which a same-tick synthetic burst arrives.
+ *  - Interval: the fastest sustained repeat rate is ~30Hz (~33ms/tick), so a
+ *    20ms floor never drops a real tick either.
+ *
+ * Both numbers want to stay inside those bounds; widening one is what
+ * `tests/history-jump-scheduler.spec.ts` guards.
+ */
+export const HELD_REPEAT_DELAY_MS = 180
+export const HELD_REPEAT_INTERVAL_MS = 20
+
+export function heldRepeatShouldStep(sincePress: number, sinceLastStep: number): boolean {
+  return sincePress >= HELD_REPEAT_DELAY_MS && sinceLastStep >= HELD_REPEAT_INTERVAL_MS
+}
+
 export function createHistoryJumpScheduler(
   jump: (index: number) => void,
   requestFrame?: (callback: FrameRequestCallback) => number,

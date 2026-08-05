@@ -57,12 +57,15 @@ test("purge status reports freed memory with stable units", () => {
 })
 
 test("Edit menu and command palette wire purge commands to notifications", () => {
+  // The Purge sub-menu markup lives in edit-menu.tsx; menu-bar.tsx still owns
+  // runPurge, which is what actually fires the notification.
+  const editMenuSource = fs.readFileSync(path.join(process.cwd(), "components/photoshop/menus/edit-menu.tsx"), "utf8")
   const menuSource = fs.readFileSync(path.join(process.cwd(), "components/photoshop/menu-bar.tsx"), "utf8")
   const paletteSource = fs.readFileSync(path.join(process.cwd(), "components/photoshop/command-palette.tsx"), "utf8")
 
-  expect(menuSource).toContain("DropdownMenuSubTrigger>Purge")
-  expect(menuSource).toContain("PURGE_COMMANDS.map")
-  expect(menuSource).toContain("runPurge(command.target)")
+  expect(editMenuSource).toContain("DropdownMenuSubTrigger>Purge")
+  expect(editMenuSource).toContain("PURGE_COMMANDS.map")
+  expect(editMenuSource).toContain("runPurge(command.target)")
   expect(menuSource).toContain("toast.info(formatPurgeStatus(target, result.freedBytes))")
 
   expect(paletteSource).toContain("PURGE_COMMANDS.map")

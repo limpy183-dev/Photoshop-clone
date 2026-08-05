@@ -11,7 +11,7 @@ import {
   shortcutPrimaryKey,
 } from "@/editor/shortcuts"
 import { requestCanvasZoom } from "@/editor/zoom-events"
-import { heldStepMagnitude } from "@/editor/history-jump-scheduler"
+import { heldRepeatShouldStep, heldStepMagnitude } from "@/editor/history-jump-scheduler"
 import { selectionToMaskCanvas } from "@/editor/tool/helpers"
 import {
   createAdjustmentLayer as createAdjustmentLayerModel,
@@ -99,10 +99,10 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
 
   // Held undo/redo: count the auto-repeat ticks of the current hold so each
   // tick can cover more entries the longer the key stays down.
-  const heldStepRef = React.useRef({ dir: 0, repeats: 0 })
+  const heldStepRef = React.useRef({ dir: 0, repeats: 0, pressedAt: 0, lastStepAt: 0 })
   React.useEffect(() => {
     const reset = () => {
-      heldStepRef.current = { dir: 0, repeats: 0 }
+      heldStepRef.current = { dir: 0, repeats: 0, pressedAt: 0, lastStepAt: 0 }
     }
     window.addEventListener("keyup", reset)
     window.addEventListener("blur", reset)
@@ -214,12 +214,18 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
       // visible in the rendered context value.
       const stepHeld = (dir: 1 | -1) => {
         const held = heldStepRef.current
+        const now = Date.now()
         if (!e.repeat || held.dir !== dir) {
-          heldStepRef.current = { dir, repeats: 0 }
+          heldStepRef.current = { dir, repeats: 0, pressedAt: now, lastStepAt: now }
           stepHistoryBy(dir)
           return
         }
+        // Auto-repeat is gated on elapsed time, not on how many repeat events
+        // arrived: a burst delivered inside one tick must not multiply into a
+        // burst of undos. Real auto-repeat clears both gates comfortably.
+        if (!heldRepeatShouldStep(now - held.pressedAt, now - held.lastStepAt)) return
         held.repeats += 1
+        held.lastStepAt = now
         const steps = heldStepMagnitude(held.repeats)
         for (let i = 0; i < steps; i++) {
           if (!stepHistoryBy(dir)) break

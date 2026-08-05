@@ -2,22 +2,19 @@
 
 import * as React from "react"
 import { toast } from "sonner"
+import { Menubar } from "@/components/ui/menubar"
 import {
-  Menubar,
-  MenubarContent as DropdownMenuContent,
-  MenubarItem as DropdownMenuItem,
-  MenubarLabel as DropdownMenuLabel,
-  MenubarMenu as DropdownMenu,
-  MenubarSeparator as DropdownMenuSeparator,
-  MenubarShortcut as DropdownMenuShortcut,
-  MenubarSub as DropdownMenuSub,
-  MenubarSubContent as DropdownMenuSubContent,
-  MenubarSubTrigger as DropdownMenuSubTrigger,
-  MenubarTrigger as DropdownMenuTrigger,
-} from "@/components/ui/menubar"
-import { useEditorSelector, makeDocument, makeCanvas, type DocumentLifecycleState, type FileSystemFileHandleLike } from "@/components/photoshop/editor/context"
+  useEditorSelector,
+  makeDocument,
+  makeCanvas,
+  type DocumentLifecycleState,
+  type FileSystemFileHandleLike,
+} from "@/components/photoshop/editor/context"
 import { FILTER_META } from "@/editor/filters-meta"
-import type { AdvancedSubsystemTab, ColorWorkflowMode } from "@/components/photoshop/advanced/subsystems-dialog"
+import type {
+  AdvancedSubsystemTab,
+  ColorWorkflowMode,
+} from "@/components/photoshop/advanced/subsystems-dialog"
 import type { GapWorkflowKind } from "@/components/photoshop/gap-workflow-dialog"
 import type { SelectionOperation } from "@/components/photoshop/management-dialogs"
 import type { WorkflowPackId } from "@/editor/workflow-presets"
@@ -36,7 +33,6 @@ import {
   safeExportName,
 } from "@/editor/menus/image-operations"
 import { MenuDialogs, type AutoAlgorithmId } from "@/components/photoshop/menus/menu-dialogs"
-import { loadAdvancedCommands } from "@/editor/menus/advanced-command-service"
 import { loadDocumentCommands } from "@/editor/menus/document-command-service"
 import { FilterMenu } from "@/components/photoshop/menus/filter-menu"
 import {
@@ -54,16 +50,14 @@ import {
 import { loadImageCommands } from "@/editor/menus/image-command-service"
 import { MediaWorkspaceMenus } from "@/components/photoshop/menus/media-workspace-menus"
 import { SelectMenu } from "@/components/photoshop/menus/select-menu"
-import { loadTypeCommands } from "@/editor/menus/type-command-service"
 import { ViewMenu } from "@/components/photoshop/menus/view-menu"
+import { EditMenu } from "@/components/photoshop/menus/edit-menu"
+import { ImageMenu } from "@/components/photoshop/menus/image-menu"
+import { LayerMenu } from "@/components/photoshop/menus/layer-menu"
+import { TypeMenu } from "@/components/photoshop/menus/type-menu"
+import { WorkspaceMenus } from "@/components/photoshop/menus/workspace-menus"
 import { readWorkspaceLibrary } from "@/editor/workspace-layouts"
-
-import {
-  PANEL_CATEGORIES,
-  PANEL_DEFINITIONS,
-  WORKSPACE_PRESET_OPTIONS,
-  type WorkspacePresetId,
-} from "@/components/photoshop/panel-registry"
+import { type WorkspacePresetId } from "@/components/photoshop/panel-registry"
 import {
   createLargeDocumentInspectionDocument,
   describeLargeDocumentRecovery,
@@ -77,16 +71,29 @@ import {
   type RecentDocument,
 } from "@/editor/recent-documents"
 import { MAX_PROJECT_FILE_BYTES, assertFileSize } from "@/editor/canvas/limits"
-import type { AdjustmentType, ColorManagementSettings, DocumentModeSettings, Layer, PluginCommandDescriptor, PluginDescriptor, TextAntiAliasMode } from "@/editor/types"
-import { createAdjustmentLayer as createAdjustmentLayerModel, isAdjustmentNoop } from "@/editor/adjustment-layers"
-import { createSmartObjectSource, relinkSmartObjectToFile, syncLinkedSmartObjectSource } from "@/editor/smart-objects"
+import type {
+  AdjustmentType,
+  ColorManagementSettings,
+  DocumentModeSettings,
+  Layer,
+  PluginCommandDescriptor,
+  PluginDescriptor,
+} from "@/editor/types"
+import {
+  createAdjustmentLayer as createAdjustmentLayerModel,
+  isAdjustmentNoop,
+} from "@/editor/adjustment-layers"
+import {
+  createSmartObjectSource,
+  relinkSmartObjectToFile,
+  syncLinkedSmartObjectSource,
+} from "@/editor/smart-objects"
 import { PURGE_COMMANDS, formatPurgeStatus, type PurgeTarget } from "@/editor/purge-commands"
 import {
   revealSourceInBrowser,
   sourceInfoForSmartObject,
   type SourceFileHandleLike,
 } from "@/editor/source-location"
-
 const menuClass = MENU_TRIGGER_CLASS
 
 interface MenuBarProps {
@@ -1698,808 +1705,21 @@ export function MenuBar({
           revealDocumentSourceFromMenu, setPreflightOpen, setDocumentReportOpen,
         }} />
 
-        <DropdownMenu>
-          <DropdownMenuTrigger className={menuClass}>Edit</DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-72">
-            <DropdownMenuItem onSelect={undo}>
-              Undo <DropdownMenuShortcut>⌘Z</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={redo}>
-              Redo <DropdownMenuShortcut>⌘Y</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={undo}>
-              Step Backward <DropdownMenuShortcut>⌘⌥Z</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onSelect={() => copySelection(true)}
-              disabled={!activeLayer || activeLayer.locked}
-            >
-              Cut <DropdownMenuShortcut>⌘X</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => copySelection(false)}
-              disabled={!activeLayer}
-            >
-              Copy <DropdownMenuShortcut>⌘C</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => {
-                if (!activeDoc) return
-                dispatch({ type: "set-clipboard", canvas: flattenVisibleLayers(activeDoc) })
-              }}
-              disabled={!activeDoc}
-            >
-              Copy Merged <DropdownMenuShortcut>⌘⇧C</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={pasteAsLayer}>
-              Paste <DropdownMenuShortcut>⌘V</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => fillForeground("fg")}>
-              Fill <DropdownMenuShortcut>⇧F5</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={fillContentAware}
-            >
-              Content-Aware Fill...
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setStrokeOpen(true)} disabled={!activeLayer}>
-              Stroke…
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onSelect={() => dispatchPhotoshopEvent("ps-free-transform")}
-              disabled={!activeLayer || activeLayer.locked}
-            >
-              Free Transform <DropdownMenuShortcut>⌘T</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setAlgorithmOpen(true)} disabled={!activeDoc}>
-              Algorithmic Operations...
-            </DropdownMenuItem>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Transform</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-transform-flip", "horizontal")} disabled={!activeLayer}>
-                  Flip Horizontal
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-transform-flip", "vertical")} disabled={!activeLayer}>
-                  Flip Vertical
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-transform-rotate", 90)} disabled={!activeLayer}>
-                  Rotate 90° CW
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-transform-rotate", -90)} disabled={!activeLayer}>
-                  Rotate 90° CCW
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-transform-rotate", 180)} disabled={!activeLayer}>
-                  Rotate 180°
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Purge</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                {PURGE_COMMANDS.map((command) => (
-                  <DropdownMenuItem key={command.target} onSelect={() => runPurge(command.target)}>
-                    {command.menuLabel}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Presets</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => setPresetManagerOpen(true)}>
-                  Preset Manager…
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "brush")}>
-                  Brushes Panel
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "swatches")}>
-                  Swatches Panel
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "gradients")}>
-                  Gradients Panel
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "patterns")}>
-                  Patterns Panel
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "styles")}>
-                  Styles Panel
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "shapes")}>
-                  Shapes Panel
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "tool-presets")}>
-                  Tool Presets Panel
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => dispatchPhotoshopEvent("ps-open-panel", "assets")}>
-                  Assets Panel
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuItem onSelect={() => setPreferencesOpen(true)}>
-              Preferences
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setShortcutsOpen(true)}>Keyboard Shortcuts…</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setMenuCustomizationOpen(true)}>Menus…</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <EditMenu {...{
+          menuClass, activeDoc, activeLayer, dispatch, copySelection, pasteAsLayer, undo, redo, fillForeground, fillContentAware, runPurge, setAlgorithmOpen, setMenuCustomizationOpen, setPreferencesOpen, setPresetManagerOpen, setShortcutsOpen, setStrokeOpen,
+        }} />
 
-        <DropdownMenu>
-          <DropdownMenuTrigger className={menuClass}>Image</DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-72">
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Mode</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => setColorMode("RGB")}>
-                  {activeDoc?.colorMode === "RGB" ? "✓ " : ""}RGB Color
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setColorMode("Grayscale")}>
-                  {activeDoc?.colorMode === "Grayscale" ? "✓ " : ""}Grayscale
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setColorMode("CMYK")}>
-                  {activeDoc?.colorMode === "CMYK" ? "✓ " : ""}CMYK Color
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setColorModeTarget("Duotone")}>
-                  {activeDoc?.colorMode === "Duotone" ? "✓ " : ""}Duotone...
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setColorModeTarget("Indexed")}>
-                  {activeDoc?.colorMode === "Indexed" ? "✓ " : ""}Indexed Color...
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setColorMode("Multichannel")}>
-                  {activeDoc?.colorMode === "Multichannel" ? "✓ " : ""}Multichannel...
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setColorModeTarget("Bitmap")}>
-                  {activeDoc?.colorMode === "Bitmap" ? "✓ " : ""}Bitmap / Halftone...
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setColorModeTarget("ColorTable")}>
-                  Color Table...
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem disabled>{activeDoc?.bitDepth ?? 8} Bits/Channel</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openColorWorkflow("assign")} disabled={!activeDoc}>
-                  Assign Profile...
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openColorWorkflow("convert")} disabled={!activeDoc}>
-                  Convert to Profile...
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => openColorWorkflow("proof")} disabled={!activeDoc}>
-                  Color Settings / Proof Setup...
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuItem onSelect={() => setGapWorkflow("apply-image")} disabled={!activeLayer}>
-              Apply Image...
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setGapWorkflow("calculations")} disabled={!activeDoc}>
-              Calculations...
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setGapWorkflow("split-channels")} disabled={!activeDoc}>
-              Split Channels...
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setGapWorkflow("merge-channels")} disabled={!documents.length}>
-              Merge Channels...
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setAlgorithmOpen(true)} disabled={!activeDoc}>
-              Algorithmic Operations...
-            </DropdownMenuItem>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Adjustments</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("levels")}>
-                  Levels… <DropdownMenuShortcut>⌘L</DropdownMenuShortcut>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("curves")}>
-                  Curves… <DropdownMenuShortcut>⌘M</DropdownMenuShortcut>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("brightness-contrast")}>
-                  Brightness/Contrast…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("exposure")}>
-                  Exposure…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("vibrance")}>
-                  Vibrance…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("hue-saturation")}>
-                  Hue/Saturation… <DropdownMenuShortcut>⌘U</DropdownMenuShortcut>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("color-balance")}>
-                  Color Balance… <DropdownMenuShortcut>⌘B</DropdownMenuShortcut>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("black-white")}>
-                  Black & White…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("photo-filter")}>
-                  Photo Filter…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("channel-mixer")}>
-                  Channel Mixer…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("color-lookup")}>
-                  Color Lookup…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("invert")}>
-                  Invert <DropdownMenuShortcut>⌘I</DropdownMenuShortcut>
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("posterize")}>
-                  Posterize…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("threshold")}>
-                  Threshold…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("gradient-map")}>
-                  Gradient Map…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("selective-color")}>
-                  Selective Color…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setShadowsHighlightsOpen(true)} disabled={!activeDoc}>
-                  Shadows/Highlights…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setHdrToningOpen(true)} disabled={!activeDoc}>
-                  HDR Toning…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => addAdjustmentLayer("desaturate")}>
-                  Desaturate
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setMatchColorOpen(true)} disabled={!activeDoc}>
-                  Match Color…
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setReplaceColorOpen(true)} disabled={!activeDoc}>
-                  Replace Color…
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => {
-                    // Photoshop's Equalize either runs immediately (no selection)
-                    // or prompts the user when a selection is active. We
-                    // reproduce that prompt only when a selection is present;
-                    // otherwise we apply directly.
-                    if (!activeDoc) return
-                    if (activeDoc.selection.bounds || activeDoc.selection.mask) {
-                      setEqualizePromptOpen(true)
-                    } else {
-                      addAdjustmentLayer("equalize")
-                    }
-                  }}
-                  disabled={!activeDoc}
-                >
-                  Equalize…
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Auto</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem
-                  onSelect={() => openSelectionOperation("expand")}
-                >
-                  Expand...
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => openSelectionOperation("contract")}
-                >
-                  Contract...
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => {
-                    // Auto Tone: stretch luminance
-                    if (!activeLayer || activeLayer.locked) return
-                    if (typeof activeLayer.canvas.getContext !== "function") return
-                    const ctx = activeLayer.canvas.getContext("2d")!
-                    const src = ctx.getImageData(0, 0, activeLayer.canvas.width, activeLayer.canvas.height)
-                    let min = 255
-                    let max = 0
-                    for (let i = 0; i < src.data.length; i += 4) {
-                      const lum =
-                        0.299 * src.data[i] +
-                        0.587 * src.data[i + 1] +
-                        0.114 * src.data[i + 2]
-                      if (src.data[i + 3] === 0) continue
-                      if (lum < min) min = lum
-                      if (lum > max) max = lum
-                    }
-                    const range = Math.max(1, max - min)
-                    for (let i = 0; i < src.data.length; i += 4) {
-                      src.data[i] = Math.max(0, Math.min(255, ((src.data[i] - min) * 255) / range))
-                      src.data[i + 1] = Math.max(0, Math.min(255, ((src.data[i + 1] - min) * 255) / range))
-                      src.data[i + 2] = Math.max(0, Math.min(255, ((src.data[i + 2] - min) * 255) / range))
-                    }
-                    ctx.putImageData(src, 0, 0)
-                    commit("Auto Tone", [activeLayer.id])
-                  }}
-                >
-                  Auto Tone
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={autoContrast}>Auto Contrast</DropdownMenuItem>
-                <DropdownMenuItem onSelect={autoColor}>Auto Color</DropdownMenuItem>
-                <DropdownMenuItem onSelect={autoWhiteBalance}>Auto White Balance</DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onSelect={() => setAutoOptions({ algorithm: "per-channel-contrast", label: "Auto Tone" })}
-                  disabled={!activeDoc}
-                >
-                  Auto Tone Options…
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => setAutoOptions({ algorithm: "monochromatic-contrast", label: "Auto Contrast" })}
-                  disabled={!activeDoc}
-                >
-                  Auto Contrast Options…
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => setAutoOptions({ algorithm: "dark-light-colors", label: "Auto Color" })}
-                  disabled={!activeDoc}
-                >
-                  Auto Color Options…
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => setImageSizeOpen(true)} disabled={!activeDoc}>
-              Image Size… <DropdownMenuShortcut>⌘⌥I</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setCanvasSizeOpen(true)} disabled={!activeDoc}>
-              Canvas Size… <DropdownMenuShortcut>⌘⌥C</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Image Rotation</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => rotateImage(180)}>180°</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => rotateImage(90)}>90° Clockwise</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => rotateImage(-90)}>
-                  90° Counter Clockwise
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => {
-                    const raw = window.prompt("Rotate canvas by degrees", "15")
-                    const deg = raw == null ? NaN : Number(raw)
-                    if (Number.isFinite(deg) && deg !== 0) rotateImage(deg)
-                  }}
-                >
-                  Arbitrary...
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => flipImage("horizontal")}>
-                  Flip Horizontal
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => flipImage("vertical")}>
-                  Flip Vertical
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuItem
-              onSelect={() => {
-                const bounds = contentBounds()
-                if (bounds) cropDocumentToBounds(bounds, "Trim Transparent Pixels")
-              }}
-              disabled={!activeDoc}
-            >
-              Trim Transparent Pixels
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={revealAll} disabled={!activeDoc}>
-              Reveal All
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setFitImageOpen(true)} disabled={!activeDoc}>
-              Fit Image…
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <ImageMenu {...{
+          menuClass, activeDoc, activeLayer, commit, documents, addAdjustmentLayer, autoColor, autoContrast, autoWhiteBalance, contentBounds, cropDocumentToBounds, revealAll, flipImage, rotateImage, setColorMode, openColorWorkflow, openSelectionOperation, setAlgorithmOpen, setAutoOptions, setCanvasSizeOpen, setColorModeTarget, setEqualizePromptOpen, setFitImageOpen, setGapWorkflow, setHdrToningOpen, setImageSizeOpen, setMatchColorOpen, setReplaceColorOpen, setShadowsHighlightsOpen,
+        }} />
 
-        <DropdownMenu>
-          <DropdownMenuTrigger className={menuClass}>Layer</DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="max-h-[calc(100vh-56px)] w-72 overflow-y-auto">
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>New</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => newLayer()}>
-                  Layer… <DropdownMenuShortcut>⌘⇧N</DropdownMenuShortcut>
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => newGroup()}
-                  disabled={!selectedLayers.length}
-                >
-                  Group from Layers… <DropdownMenuShortcut>⌘G</DropdownMenuShortcut>
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Layer Style</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => setLayerStyleOpen(true)} disabled={!activeLayer}>
-                  Blending Options...
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={copyLayerStyle}>
-                  Copy Layer Style
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={pasteLayerStyle}>
-                  Paste Layer Style
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={clearLayerStyle}>
-                  Clear Layer Style
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={flattenAllLayerEffects} disabled={!activeDoc}>
-                  Flatten All Layer Effects
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Layer Mask</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem
-                  onSelect={addLayerMask}
-                  disabled={!activeLayer || !!activeLayer?.mask}
-                >
-                  Reveal All
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => {
-                    if (!activeDoc || !activeLayer) return
-                    addLayerMask()
-                    setTimeout(() => {
-                      if (activeLayer.mask) {
-                        const ctx = activeLayer.mask.getContext("2d")!
-                        ctx.fillStyle = "#000"
-                        ctx.fillRect(0, 0, activeDoc.width, activeDoc.height)
-                        commit("Hide All Mask", [activeLayer.id])
-                      }
-                    }, 16)
-                  }}
-                  disabled={!activeLayer || !!activeLayer?.mask}
-                >
-                  Hide All
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={toggleLayerMaskEnabled}
-                >
-                  {activeLayer?.maskEnabled === false ? "Enable Mask" : "Disable Mask"}
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => setSelectMaskOpen(true)}
-                >
-                  Refine Mask...
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={applyLayerMask}
-                >
-                  Apply Mask
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => {
-                    if (!activeLayer) {
-                      toast.info("Select a layer before deleting a mask.")
-                      return
-                    }
-                    if (!activeLayer.mask) {
-                      toast.info("Add a layer mask before deleting it.")
-                      return
-                    }
-                    dispatch({ type: "set-layer-mask", id: activeLayer.id, mask: null })
-                    setTimeout(() => commit("Delete Mask", [activeLayer.id]), 0)
-                  }}
-                >
-                  Delete Mask
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={flattenAllMasks} disabled={!activeDoc}>
-                  Flatten All Masks
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Rasterize</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => rasterizeLayers("type")} disabled={!activeLayer || activeLayer.kind !== "text"}>
-                  Type
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => rasterizeLayers("shape")} disabled={!activeLayer || (activeLayer.kind !== "shape" && !activeLayer.path)}>
-                  Shape
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => rasterizeLayers("smart-object")} disabled={!activeLayer || (!activeLayer.smartObject && activeLayer.kind !== "smart-object")}>
-                  Smart Object
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => rasterizeLayers("layer-style")} disabled={!activeLayer?.style}>
-                  Layer Style
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => rasterizeLayers("video")}
-                  disabled={!activeLayer || (activeLayer.kind !== "video" && !activeLayer.video)}
-                >
-                  Video
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={() => rasterizeLayers("3d")}
-                  disabled={!activeLayer || (activeLayer.kind !== "3d" && !activeLayer.threeD)}
-                >
-                  3D
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => rasterizeLayers("layer")} disabled={!activeLayer}>
-                  Layer
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => rasterizeLayers("all")} disabled={!activeDoc}>
-                  All Layers
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuItem
-              onSelect={() => {
-                if (!activeLayer) return
-                dispatch({ type: "set-layer-smart", id: activeLayer.id, smart: true })
-                setTimeout(() => commit("Convert to Smart Object", [activeLayer.id]), 0)
-              }}
-              disabled={!activeLayer || activeLayer.smartObject}
-            >
-              Convert to Smart Object
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={editSmartObjectContentsFromMenu}
-            >
-              Edit Smart Object Contents
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => void replaceSmartObjectFromFile("embedded")}
-              disabled={!activeLayer || (!activeLayer.smartObject && activeLayer.kind !== "smart-object")}
-            >
-              Replace Contents...
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => void replaceSmartObjectFromFile("linked")}
-              disabled={!activeLayer || (!activeLayer.smartObject && activeLayer.kind !== "smart-object")}
-            >
-              Relink to File...
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => void updateLinkedSmartObjectFromMenu()}
-              disabled={!activeLayer || (!activeLayer.smartObject && activeLayer.kind !== "smart-object")}
-            >
-              Update Linked Smart Object
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => void revealSmartObjectSourceFromMenu()}
-              disabled={!activeLayer || (!activeLayer.smartObject && activeLayer.kind !== "smart-object")}
-            >
-              Reveal Smart Object Source...
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => void exportSmartObjectContentsFromMenu()}
-              disabled={!activeLayer || (!activeLayer.smartObject && activeLayer.kind !== "smart-object")}
-            >
-              Export Contents...
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={updateSmartObjectParentFromMenu}
-            >
-              Update Parent Smart Object
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => {
-                if (!activeLayer) return
-                dispatch({ type: "toggle-layer-clipped", id: activeLayer.id })
-                setTimeout(() => commit("Toggle Clipping Mask", [activeLayer.id]), 0)
-              }}
-              disabled={!activeLayer}
-            >
-              Create Clipping Mask <DropdownMenuShortcut>⌘⌥G</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onSelect={() => activeLayer && dispatch({ type: "duplicate-layer", id: activeLayer.id })}
-              disabled={!activeLayer}
-            >
-              Duplicate Layer… <DropdownMenuShortcut>⌘J</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => activeLayer && dispatch({ type: "remove-layer", id: activeLayer.id })}
-              disabled={!activeLayer}
-            >
-              Delete Layer
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={deleteAllEmptyLayers} disabled={!activeDoc}>
-              Delete All Empty Layers
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onSelect={() => dispatch({ type: "link-selected" })}
-            >
-              Link Layers
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => dispatch({ type: "unlink-selected" })}>
-              Unlink Layers
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onSelect={() => activeLayer && dispatch({ type: "merge-down", id: activeLayer.id })}
-            >
-              Merge Down <DropdownMenuShortcut>⌘E</DropdownMenuShortcut>
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => {
-                dispatch({ type: "merge-selected" })
-                setTimeout(() => commit("Merge Layers", "all"), 0)
-              }}
-            >
-              Merge Selected
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={!activeDoc}
-              onSelect={() => setFlattenTransparencyOpen(true)}
-            >
-              Flatten Transparency…
-            </DropdownMenuItem>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger disabled={!activeLayer}>
-                Flatten Transparency
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => flattenTransparency("clear", background, "Background Color")}>
-                  Background Color
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => flattenTransparency("clear", foreground, "Foreground Color")}>
-                  Foreground Color
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => flattenTransparency("preserve", background, "Preserve Alpha")}>
-                  Preserve Alpha
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuItem
-              onSelect={() => {
-                dispatch({ type: "flatten" })
-                setTimeout(() => commit("Flatten", "all"), 0)
-              }}
-            >
-              Flatten Image
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => {
-                dispatch({ type: "stamp-visible" })
-                setTimeout(() => commit("Stamp Visible", "all"), 0)
-              }}
-            >
-              Stamp Visible <DropdownMenuShortcut>⌘⇧⌥E</DropdownMenuShortcut>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <LayerMenu {...{
+          menuClass, activeDoc, activeLayer, commit, dispatch, foreground, background, selectedLayers, newLayer, newGroup, addLayerMask, copyLayerStyle, pasteLayerStyle, clearLayerStyle, flattenAllLayerEffects, flattenAllMasks, deleteAllEmptyLayers, toggleLayerMaskEnabled, applyLayerMask, editSmartObjectContentsFromMenu, updateSmartObjectParentFromMenu, exportSmartObjectContentsFromMenu, replaceSmartObjectFromFile, updateLinkedSmartObjectFromMenu, revealSmartObjectSourceFromMenu, rasterizeLayers, flattenTransparency, setFlattenTransparencyOpen, setLayerStyleOpen, setSelectMaskOpen,
+        }} />
 
-        <DropdownMenu>
-          <DropdownMenuTrigger className={menuClass}>Type</DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-64">
-            <DropdownMenuLabel>Type</DropdownMenuLabel>
-            <DropdownMenuItem
-              onSelect={async () => {
-                if (!activeLayer || activeLayer.kind !== "text" || !activeLayer.text) return
-                const { rasterizeText } = await loadImageCommands()
-                const enabled = activeLayer.text.antiAlias === false
-                const next = { ...activeLayer.text, antiAlias: enabled, antiAliasMode: enabled ? "smooth" : "none" as TextAntiAliasMode }
-                dispatch({ type: "set-layer-text", id: activeLayer.id, text: next })
-                rasterizeText(activeLayer.canvas, next)
-                setTimeout(() => commit(`Anti-Alias ${enabled ? "On" : "Off"}`, [activeLayer.id]), 0)
-              }}
-            >
-              {activeLayer?.text?.antiAlias === false ? "" : "✓ "}Anti-Alias
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={async () => {
-                if (!activeLayer || activeLayer.kind !== "text" || !activeLayer.text) return
-                const { convertTextToEditablePath } = await loadTypeCommands()
-                const path = convertTextToEditablePath(activeLayer.text)
-                dispatch({ type: "set-layer-path", id: activeLayer.id, path })
-                dispatch({ type: "set-layer-kind", id: activeLayer.id, kind: "shape" })
-                setTimeout(() => commit("Convert Text to Path", [activeLayer.id]), 0)
-              }}
-            >
-              Convert to Shape/Path
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={async () => {
-                if (!activeDoc) {
-                  toast.info("Open a document before placing text inside a shape.")
-                  return
-                }
-                if (!activeLayer?.text) {
-                  toast.info("Select a text layer before placing text inside a shape.")
-                  return
-                }
-                const shapeLayer = activeDoc.layers.find((layer) => layer.id !== activeLayer.id && layer.shape)
-                if (!shapeLayer?.shape) {
-                  toast.info("Select or create a shape layer to use as the text container.")
-                  return
-                }
-                const { applyTextInsideShape } = await loadTypeCommands()
-                const { rasterizeText } = await loadImageCommands()
-                const next = applyTextInsideShape(activeLayer.text, shapeLayer.shape, { inset: activeLayer.text.textShapeInset ?? 8 })
-                dispatch({ type: "set-layer-text", id: activeLayer.id, text: next })
-                rasterizeText(activeLayer.canvas, next)
-                setTimeout(() => commit("Text Inside Shape", [activeLayer.id]), 0)
-              }}
-            >
-              Text Inside Shape
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => setWarpTextOpen(true)}
-            >
-              Warp Text…
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={async () => {
-                if (!activeLayer || activeLayer.kind !== "text" || !activeLayer.text) return
-                const { matchFontForLayer } = await loadTypeCommands()
-                const { rasterizeText } = await loadImageCommands()
-                const match = matchFontForLayer(activeLayer.text)
-                const next = {
-                  ...activeLayer.text,
-                  font: match.best.family,
-                  variableAxisDefinitions: match.best.variableAxes,
-                  variableAxes: match.best.variableAxes?.length ? { wght: activeLayer.text.weight === "bold" ? 700 : 400 } : activeLayer.text.variableAxes,
-                }
-                dispatch({ type: "set-layer-text", id: activeLayer.id, text: next })
-                rasterizeText(activeLayer.canvas, next)
-                setTimeout(() => commit(`Match Font: ${next.font}`, [activeLayer.id]), 0)
-              }}
-            >
-              Match Font…
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={async () => {
-                if (!activeDoc) return
-                const { diagnoseDocumentFonts } = await loadTypeCommands()
-                const diagnostics = diagnoseDocumentFonts(activeDoc.layers)
-                if (diagnostics.missingFonts.length) {
-                  toast.warning(`Missing fonts: ${diagnostics.missingFonts.join(", ")}`)
-                } else {
-                  toast.success("All text layer fonts are available in this browser.")
-                }
-                setPreflightOpen(true)
-              }}
-              disabled={!activeDoc}
-            >
-              Font Diagnostics...
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={async () => {
-                if (!activeDoc) {
-                  toast.info("Open a document before creating 3D text.")
-                  return
-                }
-                if (!activeLayer?.text) {
-                  toast.info("Select a text layer before creating 3D text extrusion.")
-                  return
-                }
-                const { createTextExtrusionScene } = await loadTypeCommands()
-                const { renderThreeDScene } = await loadAdvancedCommands()
-                const scene = createTextExtrusionScene({
-                  ...activeLayer.text,
-                  extrusion: activeLayer.text.extrusion ?? { enabled: true, depth: 30, bevel: 3, angle: 35, color: activeLayer.text.color },
-                })
-                const rendered = renderThreeDScene(scene, activeDoc.width, activeDoc.height)
-                const canvas = makeCanvas(activeDoc.width, activeDoc.height)
-                canvas.getContext("2d")!.drawImage(rendered, 0, 0)
-                const layer: Layer = {
-                  id: `layer_text3d_${Date.now()}`,
-                  name: `${activeLayer.name} 3D Text`,
-                  kind: "3d",
-                  visible: true,
-                  locked: false,
-                  opacity: 1,
-                  blendMode: "normal",
-                  canvas,
-                  threeD: scene,
-                }
-                dispatch({ type: "add-layer", layer })
-                setTimeout(() => commit("Create 3D Text", [layer.id]), 0)
-              }}
-            >
-              3D Text Extrusion
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <TypeMenu {...{
+          menuClass, activeDoc, activeLayer, commit, dispatch, setPreflightOpen, setWarpTextOpen,
+        }} />
 
         <SelectMenu
           menuClass={menuClass}
@@ -2551,107 +1771,9 @@ export function MenuBar({
           openAdvancedTab={openAdvancedTab}
         />
 
-        <DropdownMenu>
-          <DropdownMenuTrigger className={menuClass}>Plugins</DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-72">
-            <DropdownMenuItem onSelect={() => openAdvancedTab("plugins")} disabled={!activeDoc}>Plugin Manager...</DropdownMenuItem>
-            {pluginCommandItems.length ? (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel>Installed Commands</DropdownMenuLabel>
-                {pluginCommandItems.slice(0, 12).map(({ plugin, command, disabledReason }) => (
-                  <DropdownMenuItem
-                    key={`${plugin.id}-${command.id}`}
-                    disabled={!!disabledReason}
-                    onSelect={() => runPluginCommandFromMenu(plugin, command)}
-                  >
-                    {command.title}
-                    <DropdownMenuShortcut className="max-w-32 truncate">{plugin.name}</DropdownMenuShortcut>
-                  </DropdownMenuItem>
-                ))}
-              </>
-            ) : null}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => openAdvancedTab("libraries")} disabled={!activeDoc}>Creative Cloud Libraries...</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => openAdvancedTab("libraries")} disabled={!activeDoc}>Adobe Stock / Fonts...</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger className={menuClass}>Window</DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-64">
-            <DropdownMenuLabel>Workspace</DropdownMenuLabel>
-            {WORKSPACE_PRESET_OPTIONS.map((preset) => (
-              <DropdownMenuItem key={preset.id} onSelect={() => applyWorkspacePreset(preset.id)}>
-                {preset.id === "essentials" ? `${preset.label} (Default)` : preset.label}
-              </DropdownMenuItem>
-            ))}
-            {savedWorkspaces.length ? (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel>Saved Workspaces</DropdownMenuLabel>
-                {savedWorkspaces.map((workspace) => (
-                  <DropdownMenuItem
-                    key={workspace.name}
-                    onSelect={() =>
-                      dispatchPhotoshopEvent("ps-apply-workspace", { name: workspace.name })
-                    }
-                  >
-                    {workspace.name}
-                  </DropdownMenuItem>
-                ))}
-              </>
-            ) : null}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={saveCurrentWorkspace}>Save Current Workspace...</DropdownMenuItem>
-            <DropdownMenuItem onSelect={deleteSavedWorkspace} disabled={!savedWorkspaces.length}>
-              Delete Saved Workspace...
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setWorkspaceManagerOpen(true)}>
-              Workspace Manager...
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => applyWorkspacePreset("essentials")}>
-              Reset Essentials
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel>Panels</DropdownMenuLabel>
-            {PANEL_CATEGORIES.map((category) => {
-              const panels = PANEL_DEFINITIONS.filter((panel) => panel.category === category)
-              return (
-                <DropdownMenuSub key={category}>
-                  <DropdownMenuSubTrigger>{category}</DropdownMenuSubTrigger>
-                  <DropdownMenuSubContent className="w-60">
-                    {panels.map((panel) => (
-                      <DropdownMenuItem key={panel.id} onSelect={() => openPanel(panel.id)}>
-                        {panel.label}
-                        <DropdownMenuShortcut className="capitalize">{panel.complexity}</DropdownMenuShortcut>
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuSubContent>
-                </DropdownMenuSub>
-              )
-            })}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => openPanel("browser-diagnostics")}>
-              Browser Diagnostics
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setLayerCompsOpen(true)}>
-              Layer Comps...
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setColorLabelsOpen(true)}>
-              Color Labels...
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger className={menuClass}>Help</DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            <DropdownMenuItem onSelect={() => setAboutOpen(true)}>About Photoshop Web</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setShortcutsOpen(true)}>Keyboard Shortcuts</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setFileInfoOpen(true)} disabled={!activeDoc}>System Info…</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <WorkspaceMenus {...{
+          menuClass, activeDoc, openAdvancedTab, pluginCommandItems, runPluginCommandFromMenu, applyWorkspacePreset, saveCurrentWorkspace, deleteSavedWorkspace, savedWorkspaces, openPanel, setColorLabelsOpen, setLayerCompsOpen, setWorkspaceManagerOpen, setAboutOpen, setFileInfoOpen, setShortcutsOpen,
+        }} />
         </Menubar>
       </div>
 

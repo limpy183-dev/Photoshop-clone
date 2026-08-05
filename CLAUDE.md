@@ -141,10 +141,24 @@ parent:
 | `layers-panel.tsx` | `layers-panel-thumbs.tsx` (row leaf components) |
 | `options-bar.tsx` | `options-bar-tools.tsx` (per-tool option groups), `options-bar-shared.tsx` |
 | `advanced/subsystems-dialog.tsx` | one `subsystems-<tab>-workspace.tsx` per tab |
+| `menu-bar.tsx` | one `menus/<name>-menu.tsx` per menu |
 | `rich-tooltip.tsx` | `editor/tool/preview-{painters,primitives,raster,vector,viewport}.ts` |
 
 The shared primitives live in their own file for a reason: a section file and its
 parent must not import each other, or the import-cycle gate fails.
+
+`menu-bar.tsx` is the clearest case of the split: it is the **command layer** and
+owns nothing visual. Every menu's JSX lives in `components/photoshop/menus/`, and
+each one is presentation-only — it takes the state and handlers it needs as typed
+props (`SetValue<T>` in `menus/menu-shared.ts` keeps those signatures short) and
+calls back. Menus small enough not to earn a file are grouped, the way
+`media-workspace-menus.tsx` holds 3D + Video and `workspace-menus.tsx` holds
+Plugins + Window + Help. Prop types are written as indexed access on
+`EditorContextValue` so they cannot drift from the context.
+
+Heavy engines stay behind the `load*Commands` services rather than being imported
+eagerly — `tests/menu-command-access.spec.ts` enforces that across the whole
+`menus/` folder, not just `menu-bar.tsx`.
 
 ### PSD I/O
 

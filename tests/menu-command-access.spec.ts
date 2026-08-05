@@ -1,8 +1,17 @@
 import { expect, type Page, test } from "@playwright/test"
-import { readFileSync } from "node:fs"
+import { readdirSync, readFileSync } from "node:fs"
 
 test("menu keeps heavy command engines behind dynamic command services", () => {
-  const source = readFileSync("components/photoshop/menu-bar.tsx", "utf8")
+  // The menu layer is menu-bar.tsx plus the per-menu files it renders, so the
+  // eager-import ban has to cover all of them: TypeMenu took the type/image/
+  // advanced loaders with it when the menus moved to components/photoshop/menus/.
+  const menuFiles = [
+    "components/photoshop/menu-bar.tsx",
+    ...readdirSync("components/photoshop/menus")
+      .filter((f) => f.endsWith(".tsx"))
+      .map((f) => `components/photoshop/menus/${f}`),
+  ]
+  const sources = menuFiles.map((file) => ({ file, source: readFileSync(file, "utf8") }))
 
   for (const eagerImport of [
     'from "@/editor/document/io"',
@@ -10,15 +19,19 @@ test("menu keeps heavy command engines behind dynamic command services", () => {
     'from "@/editor/typography-engine"',
     'from "@/editor/advanced/subsystems"',
   ]) {
-    expect(source).not.toContain(eagerImport)
+    for (const { file, source } of sources) {
+      expect(source, `${file} must not eagerly import ${eagerImport}`).not.toContain(eagerImport)
+    }
   }
+
+  const combined = sources.map((entry) => entry.source).join("\n")
   for (const loader of [
     "loadDocumentCommands",
     "loadImageCommands",
     "loadTypeCommands",
     "loadAdvancedCommands",
   ]) {
-    expect(source).toContain(loader)
+    expect(combined, `${loader} should still gate its engine`).toContain(loader)
   }
 })
 

@@ -42,12 +42,12 @@
       "bytes": 779006
     },
     {
-      "file": ".next/static/chunks/6742.4a0cda3e5ae65f34.js",
-      "bytes": 491344
+      "file": ".next/static/chunks/1190.76fa6dfb1656b156.js",
+      "bytes": 495301
     },
     {
-      "file": ".next/static/chunks/8721.d3b83047e9998718.js",
-      "bytes": 487624
+      "file": ".next/static/chunks/8721.428922df62094c40.js",
+      "bytes": 488524
     },
     {
       "file": ".next/static/chunks/8478.d2baba8e509c20bd.js",
@@ -184,8 +184,8 @@
       ]
     },
     {
-      "file": ".next/static/chunks/6742.4a0cda3e5ae65f34.js",
-      "bytes": 491344,
+      "file": ".next/static/chunks/1190.76fa6dfb1656b156.js",
+      "bytes": 495301,
       "classification": "shared-or-dynamic",
       "routes": [],
       "moduleSamples": [],
@@ -203,18 +203,18 @@
         "components/photoshop/document/tabs.tsx",
         "components/photoshop/editor/shell.tsx",
         "components/photoshop/menu-bar.tsx",
-        "components/photoshop/menus/file-menu.tsx",
-        "components/photoshop/menus/filter-menu.tsx"
+        "components/photoshop/menus/edit-menu.tsx",
+        "components/photoshop/menus/file-menu.tsx"
       ],
-      "webpackStatsModuleSampleCount": 84,
+      "webpackStatsModuleSampleCount": 89,
       "webpackStatsPath": "artifacts/webpack-stats.json",
       "ownershipSources": [
         "webpack-stats"
       ]
     },
     {
-      "file": ".next/static/chunks/8721.d3b83047e9998718.js",
-      "bytes": 487624,
+      "file": ".next/static/chunks/8721.428922df62094c40.js",
+      "bytes": 488524,
       "classification": "shared-or-dynamic",
       "routes": [],
       "moduleSamples": [],
@@ -821,13 +821,13 @@
     },
     {
       "route": "/editor",
-      "file": ".next/static/chunks/8721.d3b83047e9998718.js",
-      "decodedBodyBytes": 487624,
-      "encodedBodyBytes": 155855,
-      "transferBytes": 156155,
+      "file": ".next/static/chunks/8721.428922df62094c40.js",
+      "decodedBodyBytes": 488524,
+      "encodedBodyBytes": 156251,
+      "transferBytes": 156551,
       "owner": {
-        "file": ".next/static/chunks/8721.d3b83047e9998718.js",
-        "bytes": 487624,
+        "file": ".next/static/chunks/8721.428922df62094c40.js",
+        "bytes": 488524,
         "classification": "shared-or-dynamic",
         "routes": [],
         "moduleSamples": [],
@@ -909,8 +909,8 @@
   "appOwnedStartupChunkReasons": [
     {
       "route": "/editor",
-      "file": ".next/static/chunks/8721.d3b83047e9998718.js",
-      "decodedBodyBytes": 487624,
+      "file": ".next/static/chunks/8721.428922df62094c40.js",
+      "decodedBodyBytes": 488524,
       "budget": 819200,
       "appOwnedModuleSamples": [
         "components/photoshop/editor/app.tsx",
@@ -1031,22 +1031,22 @@
   ],
   "routeDeltas": {
     "/": {
-      "encodedBodyBytes": -1,
+      "encodedBodyBytes": 2,
       "decodedBodyBytes": -1,
       "requestCount": 0
     },
     "/editor": {
-      "encodedBodyBytes": 1120,
-      "decodedBodyBytes": 3055,
+      "encodedBodyBytes": 1519,
+      "decodedBodyBytes": 3955,
       "requestCount": 0
     },
     "/marketing": {
-      "encodedBodyBytes": -1,
+      "encodedBodyBytes": 2,
       "decodedBodyBytes": -1,
       "requestCount": 0
     },
     "/documentation": {
-      "encodedBodyBytes": -1,
+      "encodedBodyBytes": 2,
       "decodedBodyBytes": -1,
       "requestCount": 0
     }
@@ -1054,9 +1054,9 @@
   "newOwnerModules": [],
   "routeMetrics": {
     "/": {
-      "encodedBodyBytes": 178768,
+      "encodedBodyBytes": 178771,
       "decodedBodyBytes": 593169,
-      "transferBytes": 182368,
+      "transferBytes": 182371,
       "requestCount": 12,
       "largestStartupChunk": {
         "decodedBodyBytes": 239893,
@@ -1137,10 +1137,10 @@
         },
         {
           "decodedBodySize": 7001,
-          "encodedBodySize": 3906,
+          "encodedBodySize": 3909,
           "initiatorType": "link",
-          "name": "http://bundle.local/_next/static/chunks/webpack-40f4125a17b1e1f6.js",
-          "transferSize": 4206
+          "name": "http://bundle.local/_next/static/chunks/webpack-557624fc009c2c77.js",
+          "transferSize": 4209
         },
         {
           "decodedBodySize": 1914,
@@ -1158,15 +1158,15 @@
       }
     },
     "/editor": {
-      "encodedBodyBytes": 391363,
-      "decodedBodyBytes": 1274905,
-      "transferBytes": 396163,
+      "encodedBodyBytes": 391762,
+      "decodedBodyBytes": 1275805,
+      "transferBytes": 396562,
       "requestCount": 16,
       "largestStartupChunk": {
-        "decodedBodyBytes": 487624,
-        "encodedBodyBytes": 155855,
-        "transferBytes": 156155,
-        "url": "http://bundle.local/_next/static/chunks/8721.d3b83047e9998718.js"
+        "decodedBodyBytes": 488524,
+        "encodedBodyBytes": 156251,
+        "transferBytes": 156551,
+        "url": "http://bundle.local/_next/static/chunks/8721.428922df62094c40.js"
       },
       "resources": [
         {
@@ -1219,11 +1219,11 @@
           "transferSize": 9585
         },
         {
-          "decodedBodySize": 487624,
-          "encodedBodySize": 155855,
+          "decodedBodySize": 488524,
+          "encodedBodySize": 156251,
           "initiatorType": "script",
-          "name": "http://bundle.local/_next/static/chunks/8721.d3b83047e9998718.js",
-          "transferSize": 156155
+          "name": "http://bundle.local/_next/static/chunks/8721.428922df62094c40.js",
+          "transferSize": 156551
         },
         {
           "decodedBodySize": 540,
@@ -1269,10 +1269,10 @@
         },
         {
           "decodedBodySize": 7001,
-          "encodedBodySize": 3906,
+          "encodedBodySize": 3909,
           "initiatorType": "link",
-          "name": "http://bundle.local/_next/static/chunks/webpack-40f4125a17b1e1f6.js",
-          "transferSize": 4206
+          "name": "http://bundle.local/_next/static/chunks/webpack-557624fc009c2c77.js",
+          "transferSize": 4209
         },
         {
           "decodedBodySize": 1914,
@@ -1290,9 +1290,9 @@
       }
     },
     "/marketing": {
-      "encodedBodyBytes": 220643,
+      "encodedBodyBytes": 220646,
       "decodedBodyBytes": 696559,
-      "transferBytes": 225443,
+      "transferBytes": 225446,
       "requestCount": 16,
       "largestStartupChunk": {
         "decodedBodyBytes": 239893,
@@ -1401,10 +1401,10 @@
         },
         {
           "decodedBodySize": 7001,
-          "encodedBodySize": 3906,
+          "encodedBodySize": 3909,
           "initiatorType": "link",
-          "name": "http://bundle.local/_next/static/chunks/webpack-40f4125a17b1e1f6.js",
-          "transferSize": 4206
+          "name": "http://bundle.local/_next/static/chunks/webpack-557624fc009c2c77.js",
+          "transferSize": 4209
         },
         {
           "decodedBodySize": 1914,
@@ -1422,9 +1422,9 @@
       }
     },
     "/documentation": {
-      "encodedBodyBytes": 151383,
+      "encodedBodyBytes": 151386,
       "decodedBodyBytes": 501569,
-      "transferBytes": 154683,
+      "transferBytes": 154686,
       "requestCount": 11,
       "largestStartupChunk": {
         "decodedBodyBytes": 239893,
@@ -1498,10 +1498,10 @@
         },
         {
           "decodedBodySize": 7001,
-          "encodedBodySize": 3906,
+          "encodedBodySize": 3909,
           "initiatorType": "link",
-          "name": "http://bundle.local/_next/static/chunks/webpack-40f4125a17b1e1f6.js",
-          "transferSize": 4206
+          "name": "http://bundle.local/_next/static/chunks/webpack-557624fc009c2c77.js",
+          "transferSize": 4209
         },
         {
           "decodedBodySize": 1914,

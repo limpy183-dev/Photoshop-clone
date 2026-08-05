@@ -15,10 +15,10 @@
   "useEditorImports": {
     "max": 16
   },
-  "_topLargestFilesComment": "22184 -> 22330 for the tool-behaviour pass: retouch/type option panels that did not exist, gradient blend+opacity, pen curve handles, selection-aware move. The two largest new panels were split into options-bar-tools.tsx (-363) before raising this. 22330 -> 22350 for the selection-clip / options-bar remount pass: the clip helpers went to editor/canvas/selection-helpers.ts and view.tsx's duplicate of selectionToMaskCanvas was deleted (view.tsx ends up smaller than it started); the remainder is options-bar.tsx hoisting its stateful option groups to module scope. 22350 -> 20095 for the file-split pass: preview painters left rich-tooltip for editor/tool/, ToolSection left properties-panel, the nine subsystem workspaces left subsystems-dialog, four option groups left options-bar, and layers-panel shed its leaf components plus the health/filter logic to editor/document/.",
+  "_topLargestFilesComment": "22184 -> 22330 for the tool-behaviour pass: retouch/type option panels that did not exist, gradient blend+opacity, pen curve handles, selection-aware move. The two largest new panels were split into options-bar-tools.tsx (-363) before raising this. 22330 -> 22350 for the selection-clip / options-bar remount pass: the clip helpers went to editor/canvas/selection-helpers.ts and view.tsx's duplicate of selectionToMaskCanvas was deleted (view.tsx ends up smaller than it started); the remainder is options-bar.tsx hoisting its stateful option groups to module scope. 22350 -> 20095 for the file-split pass: preview painters left rich-tooltip for editor/tool/, ToolSection left properties-panel, the nine subsystem workspaces left subsystems-dialog, four option groups left options-bar, and layers-panel shed its leaf components plus the health/filter logic to editor/document/. 16000 -> 15113 when the last seven menus left menu-bar.tsx for components/photoshop/menus/.",
   "topLargestFiles": {
     "count": 10,
-    "maxTotalLines": 16000
+    "maxTotalLines": 15113
   },
   "directClientStorage": {
     "max": 0
@@ -38,7 +38,8 @@
       "maxFanIn": 107
     },
     "components/photoshop/menu-bar.tsx": {
-      "maxImports": 32,
+      "_maxImportsComment": "32 -> 35 when the last seven menus left for components/photoshop/menus/: Edit, Image, Layer and Type each got a file and Plugins/Window/Help were grouped, trading three imports for 878 fewer lines. Same trade view.tsx made above. menu-bar.tsx is now the command layer — it owns the state and the handlers and passes them down; every menu's JSX lives in menus/.",
+      "maxImports": 35,
       "maxFanIn": 3
     }
   }
