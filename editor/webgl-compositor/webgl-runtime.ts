@@ -185,10 +185,17 @@ const FRAGMENT_SHADER = `
     return ((mask.r + mask.g + mask.b) / 3.0) * mask.a;
   }
 
+  // A clipping base clips by alpha, not luminance: black artwork still shows
+  // whatever is clipped to it.
+  float clipAmount(sampler2D samplerValue, int enabled) {
+    if (enabled == 0) return 1.0;
+    return texture2D(samplerValue, v_texcoord).a;
+  }
+
   void main() {
     vec4 base = texture2D(u_base, v_texcoord);
     vec4 src = texture2D(u_source, v_texcoord);
-    float coverage = maskAmount(u_mask, u_hasMask) * maskAmount(u_vectorMask, u_hasVectorMask) * maskAmount(u_clipMask, u_hasClipMask);
+    float coverage = maskAmount(u_mask, u_hasMask) * maskAmount(u_vectorMask, u_hasVectorMask) * clipAmount(u_clipMask, u_hasClipMask);
     float sa = src.a * clamp(u_opacity, 0.0, 1.0) * clamp(u_fillOpacity, 0.0, 1.0) * coverage;
     float ba = base.a;
 

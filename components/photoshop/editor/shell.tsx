@@ -13,6 +13,8 @@ import { ToolPalette } from "@/components/photoshop/tool/palette"
 
 interface EditorShellProps {
   hideMenuBar: boolean
+  hideOptionsBar: boolean
+  hideDocumentTabs: boolean
   hidePanels: boolean
   hideStatusBar: boolean
   hideToolPalette: boolean
@@ -35,6 +37,8 @@ interface EditorShellProps {
  */
 export function EditorShell({
   hideMenuBar,
+  hideOptionsBar,
+  hideDocumentTabs,
   hidePanels,
   hideStatusBar,
   hideToolPalette,
@@ -51,15 +55,14 @@ export function EditorShell({
 }: EditorShellProps) {
   return (
     <>
-      {hideMenuBar ? null : (
-        <MenuBar
-          onOpenNew={onOpenNew}
-          statusBarVisible={statusBarVisible && !hideStatusBar}
-          onToggleStatusBar={onToggleStatusBar}
-        />
-      )}
-      {hideMenuBar ? null : <OptionsBar />}
-      {hideMenuBar ? null : <DocumentTabs />}
+      <MenuBar
+        hidden={hideMenuBar}
+        onOpenNew={onOpenNew}
+        statusBarVisible={statusBarVisible && !hideStatusBar}
+        onToggleStatusBar={onToggleStatusBar}
+      />
+      {hideOptionsBar ? null : <OptionsBar />}
+      {hideDocumentTabs ? null : <DocumentTabs />}
       <div className="relative flex min-h-0 flex-1">
         {hideToolPalette ? null : <ToolPalette />}
         {showCanvas ? <CanvasView /> : centerContent}

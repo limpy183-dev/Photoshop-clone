@@ -14,6 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
+import { InterfaceSettings } from "@/components/photoshop/interface-settings"
 import { CLIENT_STORAGE_KEYS, removeClientStorageItem } from "@/editor/client-storage"
 import { downloadText } from "@/editor/document/io"
 import { addPhotoshopEventListener, dispatchPhotoshopEvent } from "@/editor/events"
@@ -61,6 +62,7 @@ import { requestPrintSizeView } from "@/editor/zoom-events"
 
 type PreferenceTab =
   | "general"
+  | "interface"
   | "performance"
   | "scratch"
   | "gpu"
@@ -73,6 +75,7 @@ type PreferenceTab =
 
 const TABS: Array<{ id: PreferenceTab; label: string }> = [
   { id: "general", label: "General" },
+  { id: "interface", label: "Interface & Layout" },
   { id: "performance", label: "Performance" },
   { id: "scratch", label: "Scratch Disks" },
   { id: "gpu", label: "GPU" },
@@ -86,6 +89,7 @@ const TABS: Array<{ id: PreferenceTab; label: string }> = [
 
 const TAB_SECTION: Partial<Record<PreferenceTab, Parameters<typeof resetPreferencesSet>[0]>> = {
   general: "general",
+  interface: "interface",
   performance: "memory",
   scratch: "scratchDisks",
   gpu: "gpu",
@@ -259,15 +263,27 @@ function preferenceFileName(name: string) {
   return name.trim().replace(/[\\/:*?"<>|]+/g, "-") || "photoshop-preferences"
 }
 
-export function PreferencesDialog({
+export function PreferencesDialog(props: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  return <PreferencesSurface {...props} surface="dialog" />
+}
+
+/** The same preferences UI as a full page, for the `/settings` route. */
+export function PreferencesPage() {
+  return <PreferencesSurface open onOpenChange={() => {}} surface="page" />
+}
+
+function PreferencesSurface({
   open,
   onOpenChange,
+  surface,
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
+  surface: "dialog" | "page"
 }) {
   const [prefs, setPrefs] = React.useState<PhotoshopPreferences>(() => loadPreferencesFromStorage())
   const [tab, setTab] = React.useState<PreferenceTab>("general")
+  const [savedNote, setSavedNote] = React.useState("")
   const [importError, setImportError] = React.useState("")
   const [calibrationError, setCalibrationError] = React.useState("")
   const [calibrationMeasuredMm, setCalibrationMeasuredMm] = React.useState(DEFAULT_CALIBRATION_LINE_MM)
@@ -316,6 +332,7 @@ export function PreferencesDialog({
   )
 
   const setNormalized = React.useCallback((next: PhotoshopPreferences | ((current: PhotoshopPreferences) => PhotoshopPreferences)) => {
+    setSavedNote("")
     setPrefs((current) => normalizePreferences(typeof next === "function" ? next(current) : next))
   }, [])
 
@@ -365,8 +382,11 @@ export function PreferencesDialog({
     try {
       const normalized = savePreferencesToStorage(prefs)
       dispatchPhotoshopEvent("ps-preferences-changed", normalized)
-    } catch {}
-    onOpenChange(false)
+      setSavedNote("Saved")
+    } catch {
+      setSavedNote("Could not save preferences")
+    }
+    if (surface === "dialog") onOpenChange(false)
   }
 
   const restoreDefaults = () => {
@@ -479,18 +499,8 @@ export function PreferencesDialog({
     }
   }
 
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="sm:max-w-[820px] max-h-[calc(100vh-2rem)] overflow-hidden bg-[var(--ps-panel)] border-[var(--ps-divider)] text-[var(--ps-text)]"
-        onDragOver={handleDialogDragOver}
-        onDragLeave={() => setIsDraggingPreferenceFile(false)}
-        onDrop={handleDialogDrop}
-      >
-        <DialogHeader>
-          <DialogTitle>Preferences</DialogTitle>
-          <DialogDescription className="sr-only">Application, performance, file handling, history, cursor, ruler, grid, and technology preview settings.</DialogDescription>
-        </DialogHeader>
+  const body = (
+    <>
         {isDraggingPreferenceFile ? (
           <div className="pointer-events-none absolute inset-2 z-50 grid place-items-center rounded-sm border border-dashed border-[var(--ps-accent)] bg-black/45 text-[12px] font-medium text-white">
             Drop JSON preference file
@@ -511,7 +521,8 @@ export function PreferencesDialog({
             ))}
           </nav>
 
-          <div className="max-h-[calc(100vh-260px)] sm:max-h-[470px] overflow-y-auto pr-1">
+          {/* The dialog caps its own scroll area; the page lets the window scroll. */}
+          <div className={surface === "page" ? "pr-1" : "max-h-[calc(100vh-260px)] sm:max-h-[470px] overflow-y-auto pr-1"}>
             <div className="space-y-5">
               {tab === "general" && (
                 <>
@@ -544,6 +555,13 @@ export function PreferencesDialog({
                     </div>
                   </Section>
                 </>
+              )}
+
+              {tab === "interface" && (
+                <InterfaceSettings
+                  prefs={prefs.interface}
+                  onChange={(next) => setNormalized((current) => ({ ...current, interface: next }))}
+                />
               )}
 
               {tab === "performance" && (
@@ -1064,9 +1082,57 @@ export function PreferencesDialog({
           <Button variant="outline" size="sm" onClick={resetSection} disabled={!TAB_SECTION[tab] && tab !== "technology"}>
             Reset Section
           </Button>
-          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button size="sm" onClick={save}>OK</Button>
+          {surface === "dialog" ? (
+            <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
+          ) : null}
+          <Button size="sm" onClick={save}>{surface === "page" ? "Save" : "OK"}</Button>
         </DialogFooter>
+    </>
+  )
+
+  if (surface === "page") {
+    return (
+      <div
+        className="mx-auto w-full max-w-[960px] px-4 py-6"
+        onDragOver={handleDialogDragOver}
+        onDragLeave={() => setIsDraggingPreferenceFile(false)}
+        onDrop={handleDialogDrop}
+      >
+        <header className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--ps-divider)] pb-3">
+          <div>
+            <h1 className="text-[15px] font-semibold text-[var(--ps-text)]">Settings</h1>
+            <p className="text-[11px] text-[var(--ps-text-dim)]">
+              Interface, performance, storage, files, tools, and units. Changes apply to any editor tab as soon as you save.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {savedNote ? <span className="text-[11px] text-[var(--ps-accent-2)]">{savedNote}</span> : null}
+            <a
+              href="/editor"
+              className="rounded-sm border border-[var(--ps-divider)] px-2 py-1 text-[11px] text-[var(--ps-text)] hover:bg-[var(--ps-tool-hover)]"
+            >
+              Back to editor
+            </a>
+          </div>
+        </header>
+        {body}
+      </div>
+    )
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className="sm:max-w-[820px] max-h-[calc(100vh-2rem)] overflow-hidden bg-[var(--ps-panel)] border-[var(--ps-divider)] text-[var(--ps-text)]"
+        onDragOver={handleDialogDragOver}
+        onDragLeave={() => setIsDraggingPreferenceFile(false)}
+        onDrop={handleDialogDrop}
+      >
+        <DialogHeader>
+          <DialogTitle>Preferences</DialogTitle>
+          <DialogDescription className="sr-only">Application, interface layout, performance, file handling, history, cursor, ruler, grid, and technology preview settings.</DialogDescription>
+        </DialogHeader>
+        {body}
       </DialogContent>
     </Dialog>
   )

@@ -141,10 +141,19 @@ async function importImageFile(file: File, order: number): Promise<ImportedImage
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="grid gap-1.5">
-      <Label className="text-[11px] text-[var(--ps-text-dim)]">{label}</Label>
+    <div className="grid min-w-0 gap-1.5">
+      <Label className="truncate text-[11px] text-[var(--ps-text-dim)]">{label}</Label>
       {children}
     </div>
+  )
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="grid min-w-0 gap-2 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2.5">
+      <h3 className="text-[10px] font-semibold uppercase tracking-wide text-[var(--ps-text-dim)]">{title}</h3>
+      {children}
+    </section>
   )
 }
 
@@ -185,7 +194,7 @@ function Select({
       value={value}
       aria-label={ariaLabel}
       onChange={(event) => onChange(event.target.value)}
-      className="h-8 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px]"
+      className="h-8 w-full min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-2 text-[11px]"
     >
       {children}
     </select>
@@ -217,7 +226,7 @@ function NumberInput({
         if (!Number.isFinite(next)) return
         onChange(Math.max(min, max ? Math.min(max, Math.round(next)) : Math.round(next)))
       }}
-      className="h-8 text-[11px]"
+      className="h-8 w-full min-w-0 text-[11px]"
     />
   )
 }
@@ -568,8 +577,8 @@ export function ContactSheetDialog({
             </TabsTrigger>
           </TabsList>
 
-          <div className="grid h-[calc(100vh-220px)] min-h-[360px] max-h-[520px] grid-cols-[280px_1fr] gap-4">
-            <div className="space-y-3 overflow-y-auto pr-1">
+          <div className="grid h-[calc(100vh-230px)] min-h-[340px] max-h-[560px] grid-cols-[290px_minmax(0,1fr)] gap-4">
+            <div className="min-w-0 space-y-2.5 overflow-y-auto pr-1">
               <label
                 onDragEnter={(event) => {
                   event.preventDefault()
@@ -602,230 +611,226 @@ export function ContactSheetDialog({
                 />
               </label>
 
-              <div className="grid gap-2 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
-                <Field label="Saved preset">
-                  <Select
-                    ariaLabel="Saved contact sheet preset"
-                    value={selectedPresetId}
-                    onChange={(value) => {
-                      setSelectedPresetId(value)
-                      const preset = savedPresets.find((item) => item.id === value)
-                      if (preset) {
-                        setPresetName(preset.name)
-                        applyPresetSettings(preset.settings)
-                      }
-                    }}
-                  >
-                    <option value="">Custom</option>
-                    {savedPresets.map((preset) => (
-                      <option key={preset.id} value={preset.id}>{preset.name}</option>
-                    ))}
-                  </Select>
-                </Field>
-                <div className="grid grid-cols-[1fr_auto_auto] gap-2">
+              <Section title="Preset">
+                <Select
+                  ariaLabel="Saved contact sheet preset"
+                  value={selectedPresetId}
+                  onChange={(value) => {
+                    setSelectedPresetId(value)
+                    const preset = savedPresets.find((item) => item.id === value)
+                    if (preset) {
+                      setPresetName(preset.name)
+                      applyPresetSettings(preset.settings)
+                    }
+                  }}
+                >
+                  <option value="">Custom</option>
+                  {savedPresets.map((preset) => (
+                    <option key={preset.id} value={preset.id}>{preset.name}</option>
+                  ))}
+                </Select>
+                <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-1.5">
                   <Input
                     aria-label="Contact sheet preset name"
                     value={presetName}
                     onChange={(event) => setPresetName(event.target.value)}
                     placeholder="Preset name"
-                    className="h-8 text-[11px]"
+                    className="h-8 min-w-0 text-[11px]"
                   />
-                  <Button type="button" variant="outline" size="sm" onClick={savePreset} className="h-8 px-2 text-[11px]">
+                  <Button type="button" variant="outline" size="sm" aria-label="Save preset" title="Save preset" onClick={savePreset} className="h-8 w-8 p-0">
                     <Save className="h-3.5 w-3.5" />
-                    Save Preset
                   </Button>
-                  <Button type="button" variant="outline" size="sm" disabled={!selectedPresetId} onClick={deletePreset} className="h-8 px-2 text-[11px]">
+                  <Button type="button" variant="outline" size="sm" aria-label="Delete preset" title="Delete preset" disabled={!selectedPresetId} onClick={deletePreset} className="h-8 w-8 p-0">
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </div>
-              </div>
+              </Section>
 
-              <Field label="Print size">
-                <Select ariaLabel="Print size preset" value={pagePresetId} onChange={applyPagePreset}>
-                  <option value="custom">Custom</option>
-                  {CONTACT_SHEET_PAGE_PRESETS.map((preset) => (
-                    <option key={preset.id} value={preset.id}>{preset.name}</option>
-                  ))}
-                </Select>
-              </Field>
-
-              <div className="grid grid-cols-2 gap-2">
-                <Field label="Page W">
-                  <NumberInput
-                    ariaLabel="Page W"
-                    value={pageWidth}
-                    min={64}
-                    max={8192}
-                    onChange={(value) => {
-                      setPagePresetId("custom")
-                      setPageWidth(value)
-                    }}
-                  />
-                </Field>
-                <Field label="Page H">
-                  <NumberInput
-                    ariaLabel="Page H"
-                    value={pageHeight}
-                    min={64}
-                    max={8192}
-                    onChange={(value) => {
-                      setPagePresetId("custom")
-                      setPageHeight(value)
-                    }}
-                  />
-                </Field>
-              </div>
-
-              <TabsContent value="contact-sheet" className="mt-0 space-y-3">
-                <div className="grid grid-cols-2 gap-2">
-                  <Field label="Columns">
-                    <NumberInput ariaLabel="Columns" value={columns} min={1} max={24} onChange={setColumns} />
-                  </Field>
-                  <Field label="Rows">
-                    <NumberInput ariaLabel="Rows" value={rows} min={1} max={24} onChange={setRows} />
-                  </Field>
-                </div>
-              </TabsContent>
-
-              <TabsContent value="picture-package" className="mt-0 space-y-3">
-                <Field label="Template">
-                  <Select ariaLabel="Picture package template" value={templateId} onChange={setTemplateId}>
-                    {CONTACT_SHEET_TEMPLATES.map((template) => (
-                      <option key={template.id} value={template.id}>{template.name}</option>
+              <Section title="Page">
+                <Field label="Print size">
+                  <Select ariaLabel="Print size preset" value={pagePresetId} onChange={applyPagePreset}>
+                    <option value="custom">Custom</option>
+                    {CONTACT_SHEET_PAGE_PRESETS.map((preset) => (
+                      <option key={preset.id} value={preset.id}>{preset.name}</option>
                     ))}
                   </Select>
                 </Field>
-              </TabsContent>
+                <div className="grid grid-cols-2 gap-2">
+                  <Field label="Page W">
+                    <NumberInput
+                      ariaLabel="Page W"
+                      value={pageWidth}
+                      min={64}
+                      max={8192}
+                      onChange={(value) => {
+                        setPagePresetId("custom")
+                        setPageWidth(value)
+                      }}
+                    />
+                  </Field>
+                  <Field label="Page H">
+                    <NumberInput
+                      ariaLabel="Page H"
+                      value={pageHeight}
+                      min={64}
+                      max={8192}
+                      onChange={(value) => {
+                        setPagePresetId("custom")
+                        setPageHeight(value)
+                      }}
+                    />
+                  </Field>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <Field label="Margin">
+                    <NumberInput ariaLabel="Margin" value={margin} min={0} max={1000} onChange={setMargin} />
+                  </Field>
+                  <Field label="Spacing">
+                    <NumberInput ariaLabel="Spacing" value={spacing} min={0} max={400} onChange={setSpacing} />
+                  </Field>
+                </div>
+                <Field label="Background">
+                  <Input type="color" value={background} onChange={(event) => setBackground(event.target.value)} className="h-8 w-full p-1" />
+                </Field>
+              </Section>
 
-              <div className="grid grid-cols-2 gap-2">
-                <Field label="Margin">
-                  <NumberInput ariaLabel="Margin" value={margin} min={0} max={1000} onChange={setMargin} />
-                </Field>
-                <Field label="Spacing">
-                  <NumberInput ariaLabel="Spacing" value={spacing} min={0} max={400} onChange={setSpacing} />
-                </Field>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <Field label="Sort">
-                  <Select ariaLabel="Sort" value={sort} onChange={(value) => setSort(value as SortMode)}>
-                    <option value="name">By name</option>
-                    <option value="original">Original order</option>
-                  </Select>
-                </Field>
-                <Field label="Fit">
-                  <Select ariaLabel="Fit" value={fitMode} onChange={(value) => setFitMode(value as ContactSheetFitMode)}>
-                    <option value="contain">Fit inside</option>
-                    <option value="cover">Fill slot</option>
-                  </Select>
-                </Field>
-              </div>
-
-              {images.length ? (
-                <div className="grid gap-2 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] p-2">
-                  <div className="grid grid-cols-[1fr_100px] gap-2">
-                    <Field label="Image">
-                      <Select ariaLabel="Image override target" value={selectedImageId} onChange={setSelectedImageId}>
-                        {images.map((image) => (
-                          <option key={image.id} value={image.id}>{image.name}</option>
-                        ))}
-                      </Select>
+              <Section title="Layout">
+                <TabsContent value="contact-sheet" className="mt-0">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label="Columns">
+                      <NumberInput ariaLabel="Columns" value={columns} min={1} max={24} onChange={setColumns} />
                     </Field>
-                    <Field label="Image fit">
-                      <Select ariaLabel="Image fit override" value={selectedImage?.fitMode ?? "global"} onChange={setSelectedFitOverride}>
-                        <option value="global">Global</option>
-                        <option value="contain">Fit</option>
-                        <option value="cover">Fill</option>
-                      </Select>
+                    <Field label="Rows">
+                      <NumberInput ariaLabel="Rows" value={rows} min={1} max={24} onChange={setRows} />
                     </Field>
                   </div>
-                  <div className="grid grid-cols-4 gap-2">
-                    <Field label="Crop X%">
+                </TabsContent>
+
+                <TabsContent value="picture-package" className="mt-0">
+                  <Field label="Template">
+                    <Select ariaLabel="Picture package template" value={templateId} onChange={setTemplateId}>
+                      {CONTACT_SHEET_TEMPLATES.map((template) => (
+                        <option key={template.id} value={template.id}>{template.name}</option>
+                      ))}
+                    </Select>
+                  </Field>
+                </TabsContent>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <Field label="Sort">
+                    <Select ariaLabel="Sort" value={sort} onChange={(value) => setSort(value as SortMode)}>
+                      <option value="name">By name</option>
+                      <option value="original">Original order</option>
+                    </Select>
+                  </Field>
+                  <Field label="Fit">
+                    <Select ariaLabel="Fit" value={fitMode} onChange={(value) => setFitMode(value as ContactSheetFitMode)}>
+                      <option value="contain">Fit inside</option>
+                      <option value="cover">Fill slot</option>
+                    </Select>
+                  </Field>
+                </div>
+              </Section>
+
+              {images.length ? (
+                <Section title="Selected image">
+                  <Field label="Image">
+                    <Select ariaLabel="Image override target" value={selectedImageId} onChange={setSelectedImageId}>
+                      {images.map((image) => (
+                        <option key={image.id} value={image.id}>{image.name}</option>
+                      ))}
+                    </Select>
+                  </Field>
+                  <Field label="Image fit">
+                    <Select ariaLabel="Image fit override" value={selectedImage?.fitMode ?? "global"} onChange={setSelectedFitOverride}>
+                      <option value="global">Global</option>
+                      <option value="contain">Fit</option>
+                      <option value="cover">Fill</option>
+                    </Select>
+                  </Field>
+                  <div className="grid grid-cols-4 gap-1.5">
+                    <Field label="X%">
                       <NumberInput ariaLabel="Crop X percent" value={Math.round(selectedCrop.x * 100)} min={0} max={99} onChange={(value) => setSelectedCropPercent("x", value)} />
                     </Field>
-                    <Field label="Crop Y%">
+                    <Field label="Y%">
                       <NumberInput ariaLabel="Crop Y percent" value={Math.round(selectedCrop.y * 100)} min={0} max={99} onChange={(value) => setSelectedCropPercent("y", value)} />
                     </Field>
-                    <Field label="Crop W%">
+                    <Field label="W%">
                       <NumberInput ariaLabel="Crop width percent" value={Math.round(selectedCrop.width * 100)} min={1} max={100} onChange={(value) => setSelectedCropPercent("width", value)} />
                     </Field>
-                    <Field label="Crop H%">
+                    <Field label="H%">
                       <NumberInput ariaLabel="Crop height percent" value={Math.round(selectedCrop.height * 100)} min={1} max={100} onChange={(value) => setSelectedCropPercent("height", value)} />
                     </Field>
                   </div>
-                  <Button type="button" variant="outline" size="sm" onClick={resetSelectedOverrides} className="h-7 justify-self-start text-[11px]">
+                  <Button type="button" variant="outline" size="sm" onClick={resetSelectedOverrides} className="h-7 w-full text-[11px]">
                     Reset Overrides
                   </Button>
-                </div>
+                </Section>
               ) : null}
 
-              <div className="grid grid-cols-2 gap-2">
-                <Field label="Background">
-                  <Input type="color" value={background} onChange={(event) => setBackground(event.target.value)} className="h-8 w-20 p-1" />
-                </Field>
-                <Field label="Label color">
-                  <Input type="color" value={labelColor} onChange={(event) => setLabelColor(event.target.value)} className="h-8 w-20 p-1" />
-                </Field>
-              </div>
-
-              <div className="grid grid-cols-[1fr_68px] items-end gap-2">
-                <Field label="Label size">
-                  <Slider min={6} max={32} step={1} value={[labelFontSize]} onValueChange={(value) => setLabelFontSize(value[0])} />
-                </Field>
-                <NumberInput ariaLabel="Label size" value={labelFontSize} min={6} max={72} onChange={setLabelFontSize} />
-              </div>
-
-              <CheckRow label="Filename labels" checked={includeLabels} onCheckedChange={setIncludeLabels} />
-
-              <Field label="Label template">
-                <Input
-                  aria-label="Label template"
-                  value={labelTemplate}
-                  disabled={!includeLabels}
-                  onChange={(event) => setLabelTemplate(event.target.value)}
-                  className="h-8 text-[11px]"
-                />
-              </Field>
-
-              <div className="grid grid-cols-[1fr_80px] items-end gap-2">
-                <Field label="Export format">
-                  <Select ariaLabel="Export format" value={format} onChange={(value) => setFormat(value as ContactSheetExportFormat)}>
-                    <option value="png">PNG</option>
-                    <option value="jpeg">JPEG</option>
-                    <option value="pdf">PDF</option>
-                    <option value="zip">ZIP</option>
-                  </Select>
-                </Field>
-                <Field label="Quality">
+              <Section title="Labels">
+                <CheckRow label="Filename labels" checked={includeLabels} onCheckedChange={setIncludeLabels} />
+                <Field label="Label template">
                   <Input
-                    type="number"
-                    value={Math.round(quality * 100)}
-                    min={1}
-                    max={100}
-                    aria-label="Quality"
-                    disabled={!effectiveJpegQuality}
-                    onChange={(event) => setQuality(Math.max(0.01, Math.min(1, (Number(event.target.value) || 92) / 100)))}
-                    className="h-8 text-[11px]"
+                    aria-label="Label template"
+                    value={labelTemplate}
+                    disabled={!includeLabels}
+                    onChange={(event) => setLabelTemplate(event.target.value)}
+                    className="h-8 min-w-0 text-[11px]"
                   />
                 </Field>
-              </div>
-
-              {format === "zip" ? (
-                <Field label="ZIP images">
-                  <Select ariaLabel="ZIP image format" value={zipImageFormat} onChange={(value) => setZipImageFormat(value as ContactSheetImageFormat)}>
-                    <option value="png">PNG</option>
-                    <option value="jpeg">JPEG</option>
-                  </Select>
+                <div className="grid grid-cols-[minmax(0,1fr)_64px] items-end gap-2">
+                  <Field label="Label size">
+                    <Slider min={6} max={32} step={1} value={[labelFontSize]} onValueChange={(value) => setLabelFontSize(value[0])} />
+                  </Field>
+                  <NumberInput ariaLabel="Label size" value={labelFontSize} min={6} max={72} onChange={setLabelFontSize} />
+                </div>
+                <Field label="Label color">
+                  <Input type="color" value={labelColor} onChange={(event) => setLabelColor(event.target.value)} className="h-8 w-full p-1" />
                 </Field>
-              ) : null}
+              </Section>
+
+              <Section title="Export">
+                <div className="grid grid-cols-[minmax(0,1fr)_72px] gap-2">
+                  <Field label="Format">
+                    <Select ariaLabel="Export format" value={format} onChange={(value) => setFormat(value as ContactSheetExportFormat)}>
+                      <option value="png">PNG</option>
+                      <option value="jpeg">JPEG</option>
+                      <option value="pdf">PDF</option>
+                      <option value="zip">ZIP</option>
+                    </Select>
+                  </Field>
+                  <Field label="Quality">
+                    <Input
+                      type="number"
+                      value={Math.round(quality * 100)}
+                      min={1}
+                      max={100}
+                      aria-label="Quality"
+                      disabled={!effectiveJpegQuality}
+                      onChange={(event) => setQuality(Math.max(0.01, Math.min(1, (Number(event.target.value) || 92) / 100)))}
+                      className="h-8 min-w-0 text-[11px]"
+                    />
+                  </Field>
+                </div>
+
+                {format === "zip" ? (
+                  <Field label="ZIP images">
+                    <Select ariaLabel="ZIP image format" value={zipImageFormat} onChange={(value) => setZipImageFormat(value as ContactSheetImageFormat)}>
+                      <option value="png">PNG</option>
+                      <option value="jpeg">JPEG</option>
+                    </Select>
+                  </Field>
+                ) : null}
+              </Section>
             </div>
 
             <div className="flex min-w-0 flex-col gap-3">
-              <div className="flex items-center justify-between text-[11px] text-[var(--ps-text-dim)]">
-                <div>
+              <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--ps-text-dim)]">
+                <div className="min-w-0 truncate">
                   {layout.width} x {layout.height}px, Page {layout.pageIndex + 1} of {layout.pageCount}, {layout.placements.length} slot{layout.placements.length === 1 ? "" : "s"}
                 </div>
-                <div className="flex items-center gap-1">
+                <div className="flex shrink-0 items-center gap-1">
                   <Button
                     type="button"
                     variant="outline"
@@ -884,9 +889,9 @@ export function ContactSheetDialog({
               <div className="max-h-24 overflow-auto rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)]">
                 {orderedImages.length ? (
                   orderedImages.map((image) => (
-                    <div key={image.id} className="grid grid-cols-[1fr_auto_auto] items-center gap-2 border-b border-[var(--ps-divider)] px-2 py-1.5 text-[11px] last:border-b-0">
+                    <div key={image.id} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 border-b border-[var(--ps-divider)] px-2 py-1.5 text-[11px] last:border-b-0">
                       <span className="truncate">{image.name}</span>
-                      <span className="text-[var(--ps-text-dim)]">{image.width} x {image.height}</span>
+                      <span className="shrink-0 whitespace-nowrap text-[var(--ps-text-dim)]">{image.width} x {image.height}</span>
                       <button
                         type="button"
                         aria-label={`Remove ${image.name}`}

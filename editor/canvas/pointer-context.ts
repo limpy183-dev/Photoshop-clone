@@ -68,7 +68,7 @@ export interface CanvasPointerContext {
   drawingRef: CanvasDragRef
   removeRef: React.RefObject<{ points: { x: number; y: number }[] } | null>
   patchRef: React.RefObject<PatchDraft | null>
-  brushResizeRef: React.RefObject<{ startClientX: number; startSize: number } | null>
+  brushResizeRef: React.RefObject<{ startSize: number; deltaX: number } | null>
   moveFloatRef: React.RefObject<MoveFloat | null>
   mouseMoveCoalescerRef: React.RefObject<RafCoalescer<{ x: number; y: number; inside: boolean }> | null>
 

@@ -30,6 +30,7 @@ export interface EditorContextValue {
   recordingActionId: string | null
   isPlayingAction: boolean
   activeSmartFilterMaskTarget: ActiveSmartFilterMaskTarget | null
+  maskEditLayerId: string | null
   activeDoc: PsDocument | null
   activeLayer: Layer | null
   selectedLayers: Layer[]

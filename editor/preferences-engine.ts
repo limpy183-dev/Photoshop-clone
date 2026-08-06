@@ -1,9 +1,15 @@
 import type { PsDocument } from "@/editor/types"
 import { CLIENT_STORAGE_KEYS, readClientStorageJson, writeClientStorageJson } from "@/editor/client-storage"
 import { dispatchPhotoshopEvent } from "@/editor/events"
+import {
+  DEFAULT_INTERFACE_PREFERENCES,
+  UI_ELEMENTS,
+  normalizeInterfacePreferences,
+  type InterfacePreferences,
+} from "@/editor/ui-layout"
 
 export const PREFERENCES_STORAGE_KEY = CLIENT_STORAGE_KEYS.preferences.key
-export const PREFERENCES_SCHEMA_VERSION = 5
+export const PREFERENCES_SCHEMA_VERSION = 6
 export const MAX_PREFERENCES_IMPORT_BYTES = 1024 * 1024
 export const MAX_IMPORTED_SCRATCH_DISKS = 32
 export const MAX_IMPORTED_HISTORY_ENTRIES = 10000
@@ -57,6 +63,7 @@ export type TechnologyPreviewFlagState = (typeof TECHNOLOGY_PREVIEW_FLAGS)[numbe
 
 export type PreferenceSection =
   | "general"
+  | "interface"
   | "memory"
   | "scratchDisks"
   | "gpu"
@@ -68,6 +75,7 @@ export type PreferenceSection =
 
 export const PREFERENCE_IMPORT_SECTIONS: PreferenceSection[] = [
   "general",
+  "interface",
   "memory",
   "scratchDisks",
   "gpu",
@@ -80,6 +88,7 @@ export const PREFERENCE_IMPORT_SECTIONS: PreferenceSection[] = [
 
 export const PREFERENCE_SECTION_LABELS: Record<PreferenceSection, string> = {
   general: "General",
+  interface: "Interface & Layout",
   memory: "Performance",
   scratchDisks: "Scratch Disks",
   gpu: "GPU",
@@ -200,6 +209,7 @@ export interface PhotoshopPreferences {
   showTooltips: boolean
   autoSave: boolean
   smoothing: number
+  interface: InterfacePreferences
   memory: MemoryPreferences
   scratchDisks: ScratchDiskPreference[]
   gpu: GpuPreferences
@@ -270,6 +280,7 @@ export const DEFAULT_PREFERENCES: PhotoshopPreferences = {
   showTooltips: true,
   autoSave: false,
   smoothing: 18,
+  interface: DEFAULT_INTERFACE_PREFERENCES,
   memory: {
     performanceMode: "balanced",
     ramPercent: 70,
@@ -539,6 +550,7 @@ function validatePreferenceImportShape(value: unknown) {
   validateNumberField(root, "smoothing")
 
   validateObjectSection(root, "general")
+  validateObjectSection(root, "interface")
   validateObjectSection(root, "memory")
   validateArraySection(root, "scratchDisks")
   validateObjectSection(root, "gpu")
@@ -547,6 +559,21 @@ function validatePreferenceImportShape(value: unknown) {
   validateObjectSection(root, "toolBehavior")
   validateObjectSection(root, "rulerGrid")
   validateObjectSection(root, "technologyPreviews")
+
+  const interfacePrefs = asRecord(root.interface)
+  validateStringField(interfacePrefs, "theme", "interface.theme")
+  validateStringField(interfacePrefs, "accentColor", "interface.accentColor")
+  validateStringField(interfacePrefs, "canvasBackground", "interface.canvasBackground")
+  if ("elements" in interfacePrefs && !isRecord(interfacePrefs.elements)) {
+    throw new Error("interface.elements must be an object.")
+  }
+  UI_ELEMENTS.forEach((element) => {
+    const stored = asRecord(interfacePrefs.elements)[element.id]
+    if (stored === undefined) return
+    if (!isRecord(stored)) throw new Error(`interface.elements.${element.id} must be an object.`)
+    validateBooleanField(stored, "visible", `interface.elements.${element.id}.visible`)
+    validateNumberField(stored, "size", `interface.elements.${element.id}.size`)
+  })
 
   const memory = asRecord(root.memory)
   ;["ramPercent", "maxCacheMB", "cacheLevels", "tileSize", "historyStates"].forEach((key) =>
@@ -927,6 +954,7 @@ export function normalizePreferences(input?: unknown): PhotoshopPreferences {
     ...defaults,
     schemaVersion: PREFERENCES_SCHEMA_VERSION,
     defaultBackground: colorValue(raw.defaultBackground, defaults.defaultBackground),
+    interface: normalizeInterfacePreferences(raw.interface),
     memory,
     scratchDisks: normalizeScratchDisks(raw.scratchDisks),
     gpu: normalizeGpu(nestedRecord(raw, "gpu")),
@@ -984,6 +1012,7 @@ export function importPreferenceSections(
   if (selected.has("general")) {
     next.defaultBackground = imported.defaultBackground
   }
+  if (selected.has("interface")) next.interface = clone(imported.interface)
   if (selected.has("memory")) next.memory = clone(imported.memory)
   if (selected.has("scratchDisks")) next.scratchDisks = clone(imported.scratchDisks)
   if (selected.has("gpu")) next.gpu = clone(imported.gpu)

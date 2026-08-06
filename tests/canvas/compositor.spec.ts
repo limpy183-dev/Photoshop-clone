@@ -152,6 +152,46 @@ test("unstyled layer preparation preserves source and fill opacity", () => {
   })
 })
 
+// A layer mask used to be applied by copying the layer into a scratch canvas,
+// reading that back with getImageData and walking every pixel in JS. The
+// compositor does this once per masked layer per frame, so one mask made every
+// brush stroke on a large document stutter. Masking is a destination-in draw
+// now: nothing the compositor allocates is ever read back, only the mask is,
+// and that conversion is cached until the mask changes.
+test("applying a layer mask reads back nothing the compositor allocated", () => {
+  const source = fixtureCanvas(8, 6)
+  const mask = fixtureMask(8, 6)
+  const rendered = renderLayerSourceForCompositor(fixtureLayer(source, { mask }))
+  expect(rendered.canvas).not.toBe(source)
+
+  let reads = 0
+  const create = document.createElement.bind(document)
+  document.createElement = ((tag: string) => {
+    const element = create(tag)
+    if (tag !== "canvas") return element
+    const canvas = element as HTMLCanvasElement
+    const getContext = canvas.getContext.bind(canvas)
+    canvas.getContext = ((type: string) => {
+      const context = getContext(type as "2d")
+      if (!context) return context
+      const read = context.getImageData.bind(context)
+      context.getImageData = ((...args: Parameters<typeof read>) => {
+        reads++
+        return read(...args)
+      }) as typeof context.getImageData
+      return context
+    }) as typeof canvas.getContext
+    return canvas
+  }) as typeof document.createElement
+
+  try {
+    renderLayerSourceForCompositor(fixtureLayer(source, { mask }))
+  } finally {
+    document.createElement = create
+  }
+  expect(reads).toBe(0)
+})
+
 test("layer preparation does not allocate a knockout mask until one is asked for", () => {
   const source = fixtureCanvas(8, 6)
   let masks = 0

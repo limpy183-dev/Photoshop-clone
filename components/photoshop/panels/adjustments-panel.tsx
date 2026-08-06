@@ -21,9 +21,9 @@ import {
   adjustmentParamsWithDefaults,
   createAdjustmentLayer as createAdjustmentLayerModel,
   defaultAdjustmentParams,
-  invertAdjustmentMask,
   isAdjustmentNoop,
 } from "@/editor/adjustment-layers"
+import { invertMaskCanvas } from "@/editor/layer-workflows"
 
 const ADJUSTMENTS: AdjustmentType[] = [
   "brightness-contrast",
@@ -197,12 +197,7 @@ export function AdjustmentsPanel() {
   const invertMask = () => {
     if (!adjustmentLayer?.mask) return
     flushPendingAdjustment()
-    const mask = invertAdjustmentMask({
-      layer: adjustmentLayer,
-      width: activeDoc.width,
-      height: activeDoc.height,
-      makeCanvas,
-    })
+    const mask = invertMaskCanvas(adjustmentLayer.mask)
     dispatch({ type: "set-layer-mask", id: adjustmentLayer.id, mask })
     requestRender()
     window.setTimeout(() => commit("Invert Adjustment Mask", [adjustmentLayer.id]), 0)

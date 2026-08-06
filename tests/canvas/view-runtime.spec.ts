@@ -119,6 +119,7 @@ test("canvas preferences map the existing runtime fields and zoom keeps its boun
   preferences.rulerGrid.screenDpi = 144
   preferences.rulerGrid.printResolution = 600
   preferences.rulerGrid.rulerUnits = "cm"
+  preferences.interface.elements.canvasRulers.visible = false
 
   expect(canvasRuntimePreferencesFrom(preferences)).toEqual({
     cursorStyle: "precise",
@@ -128,6 +129,7 @@ test("canvas preferences map the existing runtime fields and zoom keeps its boun
     screenDpi: 144,
     printResolution: 600,
     rulerUnits: "cm",
+    showRulers: false,
   })
   expect(clampZoom(-1)).toBe(0.05)
   expect(clampZoom(1.25)).toBe(1.25)

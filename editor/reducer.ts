@@ -1,9 +1,12 @@
+import { adjustmentInsertIndex } from "@/editor/adjustment-layers"
 import { compositeLayer } from "@/editor/blend-modes"
 import { makeCanvas } from "@/editor/canvas/utils"
 import {
 cloneCanvas,
 cloneLayerIntoDocument,
-deepClonePlain
+cloneLayerSubtree,
+deepClonePlain,
+layerSubtreeIds
 } from "@/editor/document-cloning"
 import {
 makeDocumentLifecycle
@@ -50,6 +53,8 @@ function reduceEditorState(
       return { ...state, tool: action.tool }
     case "set-active-smart-filter-mask":
       return { ...state, activeSmartFilterMaskTarget: action.target }
+    case "set-mask-edit-layer":
+      return { ...state, maskEditLayerId: action.id }
     case "set-foreground":
       return { ...state, foreground: action.color }
     case "set-background":
@@ -310,27 +315,42 @@ function reduceEditorState(
     case "set-selection":
       return mutateActiveDoc(state, (d) => ({ ...d, selection: action.selection }))
     case "add-layer":
-      return mutateActiveDoc(state, (d) => ({
-        ...d,
-        layers: [...d.layers, action.layer],
-        activeLayerId: action.layer.id,
-        selectedLayerIds: [action.layer.id],
-      }))
+      return mutateActiveDoc(state, (d) => {
+        const layers = [...d.layers]
+        let layer = action.layer
+        if (layer.kind === "adjustment") {
+          const { index, parentId } = adjustmentInsertIndex(d.layers, d.activeLayerId)
+          layer = { ...layer, parentId }
+          layers.splice(index, 0, layer)
+        } else {
+          layers.push(layer)
+        }
+        return { ...d, layers, activeLayerId: layer.id, selectedLayerIds: [layer.id] }
+      })
     case "remove-layer":
       return mutateActiveDoc(state, (d) => {
         if (d.layers.length <= 1) return d
         const target = d.layers.find((l) => l.id === action.id)
         if (isLayerLocked(target)) return d
-        const layers = d.layers.filter((l) => l.id !== action.id)
+        // A folder carries its contents out with it. Dropping only the group
+        // row left the children behind with a parentId pointing at a layer
+        // that no longer exists — they rendered as orphans and every later
+        // undo/redo restored that corrupted tree.
+        const removed = layerSubtreeIds(d.layers, action.id)
+        const layers = d.layers
+          .filter((l) => !removed.has(l.id))
+          .map((l) => (l.childIds?.some((id) => removed.has(id))
+            ? { ...l, childIds: l.childIds.filter((id) => !removed.has(id)) }
+            : l))
+        if (!layers.length) return d
         const activeLayerId =
-          d.activeLayerId === action.id ? layers[layers.length - 1].id : d.activeLayerId
+          removed.has(d.activeLayerId) ? layers[layers.length - 1].id : d.activeLayerId
+        const keptSelected = d.selectedLayerIds.filter((id) => !removed.has(id))
         return {
           ...d,
           layers,
           activeLayerId,
-          selectedLayerIds: d.selectedLayerIds.filter((id) => id !== action.id).concat(
-            d.selectedLayerIds.includes(action.id) ? [activeLayerId] : [],
-          ),
+          selectedLayerIds: keptSelected.length ? keptSelected : [activeLayerId],
         }
       })
     case "duplicate-layer":
@@ -338,26 +358,19 @@ function reduceEditorState(
         const idx = d.layers.findIndex((l) => l.id === action.id)
         if (idx < 0) return d
         const src = d.layers[idx]
-        const newCanvas = makeCanvas(d.width, d.height)
-        newCanvas.getContext?.("2d")?.drawImage(src.canvas, 0, 0)
-        const copy: Layer = {
-          ...src,
-          id: makeId("layer"),
-          name: `${src.name} copy`,
-          locked: false,
-          canvas: newCanvas,
-          mask: src.mask ? cloneCanvas(src.mask) ?? undefined : undefined,
-          maskEnabled: src.maskEnabled,
-          threeD: src.threeD ? deepClonePlain(src.threeD) : undefined,
-          video: src.video ? deepClonePlain(src.video) : undefined,
-          linkGroupId: undefined,
-        }
-        const layers = [...d.layers.slice(0, idx + 1), copy, ...d.layers.slice(idx + 1)]
+        // Groups carry their contents: the copy is the whole subtree, not the folder alone.
+        const { copies, rootCopyId } = cloneLayerSubtree(d.layers, action.id)
+        const withParent = d.layers.map((l) =>
+          l.id === src.parentId && l.childIds
+            ? { ...l, childIds: [...l.childIds, rootCopyId] }
+            : l,
+        )
+        const layers = [...withParent.slice(0, idx + 1), ...copies, ...withParent.slice(idx + 1)]
         return {
           ...d,
           layers,
-          activeLayerId: copy.id,
-          selectedLayerIds: [copy.id],
+          activeLayerId: rootCopyId,
+          selectedLayerIds: [rootCopyId],
         }
       })
     case "set-active-layer": {
@@ -370,6 +383,7 @@ function reduceEditorState(
         ...next,
         activeSmartFilterMaskTarget:
           state.activeSmartFilterMaskTarget?.layerId === action.id ? state.activeSmartFilterMaskTarget : null,
+        maskEditLayerId: state.maskEditLayerId === action.id ? state.maskEditLayerId : null,
       }
     }
     case "set-selected-layers": {
@@ -382,6 +396,7 @@ function reduceEditorState(
         ...next,
         activeSmartFilterMaskTarget:
           state.activeSmartFilterMaskTarget?.layerId === action.activeId ? state.activeSmartFilterMaskTarget : null,
+        maskEditLayerId: state.maskEditLayerId === action.activeId ? state.maskEditLayerId : null,
       }
     }
     case "toggle-layer-visibility":
@@ -437,11 +452,15 @@ function reduceEditorState(
         ...d,
         layers: d.layers.map((l) => (l.id === action.id && !isLayerLocked(l) ? { ...l, style: action.style } : l)),
       }))
-    case "set-layer-mask":
-      return mutateActiveDoc(state, (d) => ({
+    case "set-layer-mask": {
+      const next = mutateActiveDoc(state, (d) => ({
         ...d,
         layers: d.layers.map((l) => (l.id === action.id && !isLayerLocked(l) ? { ...l, mask: action.mask, maskEnabled: action.mask ? l.maskEnabled ?? true : undefined } : l)),
       }))
+      // Adding a mask selects it, the way Photoshop does; removing one has to
+      // release the paint target or the brush would write to a dead canvas.
+      return { ...next, maskEditLayerId: action.mask ? action.id : next.maskEditLayerId === action.id ? null : next.maskEditLayerId }
+    }
     case "set-layer-mask-enabled":
       return mutateActiveDoc(state, (d) => ({
         ...d,

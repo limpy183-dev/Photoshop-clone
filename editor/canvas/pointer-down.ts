@@ -112,7 +112,9 @@ export function handleCanvasPointerDown(ctx: CanvasPointerContext, e: React.Poin
   if (e.altKey && showBrushCursor && (e.button === 0 || e.button === 2)) {
     e.preventDefault()
     drawingRef.current = { type: "brush-resize", start: pt }
-    brushResizeRef.current = { startClientX: e.clientX, startSize: brush.size }
+    brushResizeRef.current = { startSize: brush.size, deltaX: 0 }
+    // Pointer lock keeps the cursor parked while the drag scrubs the size.
+    Promise.resolve((e.currentTarget as Element).requestPointerLock?.()).catch(() => { })
     return
   }
 

@@ -260,7 +260,10 @@ export function ToolPalette() {
   }, [])
 
   return (
-    <div className="w-[44px] shrink-0 bg-[var(--ps-chrome)] border-r border-[var(--ps-divider)] flex flex-col items-center py-1 gap-0.5 select-none overflow-y-auto">
+    <div
+      className="shrink-0 bg-[var(--ps-chrome)] border-r border-[var(--ps-divider)] flex flex-col items-center py-1 gap-0.5 select-none overflow-y-auto"
+      style={{ width: "var(--ps-tool-palette-width, 44px)" }}
+    >
       {TOOL_GROUPS.map((group, i) => {
         const isActive = group.primary.id === tool || group.others?.some((o) => o.id === tool)
         const ActiveIcon =
@@ -333,7 +336,8 @@ export function ToolPalette() {
                 ref={flyoutRef}
                 role="menu"
                 aria-label={`${group.primary.name} group`}
-                className="absolute left-[42px] top-0 z-50 bg-[var(--ps-panel)] border border-[var(--ps-divider)] rounded-sm shadow-lg py-1 min-w-[220px]"
+                className="absolute top-0 z-50 bg-[var(--ps-panel)] border border-[var(--ps-divider)] rounded-sm shadow-lg py-1 min-w-[220px]"
+                style={{ left: "calc(var(--ps-tool-palette-width, 44px) - 2px)" }}
                 onMouseLeave={() => setOpenGroup(null)}
                 onKeyDown={(e) => {
                   if (e.key === "Escape") {

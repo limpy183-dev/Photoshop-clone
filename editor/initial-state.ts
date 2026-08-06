@@ -62,6 +62,7 @@ export const initialState: EditorState = {
     [initialDoc.id]: makeDocumentLifecycle(initialDoc, 0),
   },
   activeSmartFilterMaskTarget: null,
+  maskEditLayerId: null,
   transform: null,
   /** Current selection options for selection tools */
   selectionOptions: {

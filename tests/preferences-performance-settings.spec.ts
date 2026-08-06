@@ -39,7 +39,7 @@ test("normalizes legacy preference sets into the full schema", () => {
     smoothing: 123,
   })
 
-  expect(prefs.schemaVersion).toBe(5)
+  expect(prefs.schemaVersion).toBe(6)
   expect(prefs.undoLimit).toBe(500)
   expect(prefs.memory.historyStates).toBe(500)
   expect(prefs.gridSize).toBe(4)
@@ -442,7 +442,7 @@ test("normalizes technology preview feature flags with per-toggle help and risk 
 
   const previewFlags = summarizeTechnologyPreviewFlags(prefs)
 
-  expect(prefs.schemaVersion).toBe(5)
+  expect(prefs.schemaVersion).toBe(6)
   expect(TECHNOLOGY_PREVIEW_FLAGS.map((flag) => flag.id)).toEqual([
     "hdrCanvasCompositor",
     "webgpuAcceleration",

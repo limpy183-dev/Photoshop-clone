@@ -81,7 +81,10 @@ export function OptionsBar() {
   }, [])
 
   return (
-    <div className="h-9 bg-[var(--ps-panel)] border-b border-[var(--ps-divider)] flex items-center px-2 gap-2 text-[11px]">
+    <div
+      className="bg-[var(--ps-panel)] border-b border-[var(--ps-divider)] flex items-center px-2 gap-2 text-[11px]"
+      style={{ height: "var(--ps-options-bar-height, 36px)" }}
+    >
       <ToolBadge tool={tool} />
       <Divider />
       {tool === "brush" || tool === "pencil" || tool === "mixer-brush" || tool === "pattern-stamp" || tool === "art-history-brush" || tool === "eraser" || tool === "background-eraser" || tool === "magic-eraser" || tool === "red-eye" || tool === "color-replace" ? (

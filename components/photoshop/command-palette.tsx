@@ -628,6 +628,16 @@ export function CommandPalette({ open, onOpenChange, onOpenNew }: CommandPalette
         },
       },
       {
+        id: "edit-settings-page",
+        group: "Edit",
+        title: "Settings Page",
+        searchText: "settings interface layout appearance theme hide panels",
+        run: () => {
+          window.open("/settings", "_blank", "noopener")
+          close()
+        },
+      },
+      {
         id: "edit-shortcuts",
         group: "Edit",
         title: "Keyboard Shortcuts",

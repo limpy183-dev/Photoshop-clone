@@ -67,6 +67,7 @@ export function projectEditorContextValue(
     recordingActionId: state.recordingActionId,
     isPlayingAction: state.isPlayingAction,
     activeSmartFilterMaskTarget: state.activeSmartFilterMaskTarget,
+    maskEditLayerId: state.maskEditLayerId,
     activeDoc,
     activeLayer,
     selectedLayers: selectSelectedLayers(activeDoc),

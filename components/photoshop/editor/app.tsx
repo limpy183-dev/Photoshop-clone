@@ -9,6 +9,7 @@ import { EditorErrorBoundary } from "@/components/photoshop/editor/error-boundar
 import { FeatureErrorBoundary } from "@/components/photoshop/feature-error-boundary"
 import { useShortcuts } from "@/editor/use-shortcuts"
 import { useMounted } from "@/editor/use-mounted"
+import { useInterfacePreferences } from "@/editor/use-interface-preferences"
 import {
   applyPreferencesToDocumentSettings,
   loadPreferencesFromStorage,
@@ -140,6 +141,9 @@ function Workspace() {
   const [colorPicker, setColorPicker] = React.useState<ColorPickerState | null>(null)
   const [screenMode, setScreenMode] = React.useState<ScreenMode>("standard")
   const screenModeState = React.useMemo(() => resolveScreenModeState(screenMode), [screenMode])
+  // Per-element visibility and sizes from Settings ▸ Interface & Layout. Screen
+  // modes still win while active, so F-cycling always restores a usable canvas.
+  const interfaceElements = useInterfacePreferences().elements
   // Tracks whether the Home/Start workspace is explicitly open. The view is
   // also shown automatically whenever no documents are open, so this flag
   // only matters for "Window ▸ Home" toggling while a doc is active.
@@ -349,7 +353,14 @@ function Workspace() {
     const preferencesHandler = (detail: unknown) => {
       applyPreferences(detail ?? loadPreferencesFromStorage())
     }
-    return addPhotoshopEventListener("ps-preferences-changed", preferencesHandler)
+    // `storage` covers the settings page saving from its own tab.
+    const storageHandler = () => applyPreferences(loadPreferencesFromStorage())
+    window.addEventListener("storage", storageHandler)
+    const removePreferences = addPhotoshopEventListener("ps-preferences-changed", preferencesHandler)
+    return () => {
+      removePreferences()
+      window.removeEventListener("storage", storageHandler)
+    }
   }, [activeDocId, dispatch])
 
   return (
@@ -363,10 +374,12 @@ function Workspace() {
         <ImageAssetsGeneratorRunner />
       </React.Suspense>
       <EditorShell
-        hideMenuBar={screenModeState.hideMenuBar}
-        hidePanels={screenModeState.hidePanels}
-        hideStatusBar={screenModeState.hideStatusBar}
-        hideToolPalette={screenModeState.hideToolPalette}
+        hideMenuBar={screenModeState.hideMenuBar || !interfaceElements.menuBar.visible}
+        hideOptionsBar={screenModeState.hideMenuBar || !interfaceElements.optionsBar.visible}
+        hideDocumentTabs={screenModeState.hideMenuBar || !interfaceElements.documentTabs.visible}
+        hidePanels={screenModeState.hidePanels || !interfaceElements.panelDock.visible}
+        hideStatusBar={screenModeState.hideStatusBar || !interfaceElements.statusBar.visible}
+        hideToolPalette={screenModeState.hideToolPalette || !interfaceElements.toolPalette.visible}
         statusBarVisible={statusBarVisible}
         showCanvas={!homeOpen && !!activeDoc}
         centerContent={(

@@ -100,12 +100,15 @@ interface MenuBarProps {
   onOpenNew: () => void
   statusBarVisible?: boolean
   onToggleStatusBar?: () => void
+  /** Hides the bar but keeps it mounted — every menu dialog lives in this subtree. */
+  hidden?: boolean
 }
 
 export function MenuBar({
   onOpenNew,
   statusBarVisible = true,
   onToggleStatusBar,
+  hidden = false,
 }: MenuBarProps) {
   const {
     documents,
@@ -1420,6 +1423,31 @@ export function MenuBar({
     return addPhotoshopEventListener("ps-save-document", (_detail, event) => handler(event))
   }, [saveProjectDocument])
 
+  const openFileAsDocument = async (
+    file: File,
+    picked?: { handle?: ReadableFileHandle; permission?: PermissionState | "unsupported" },
+  ) => {
+    try {
+      const { createDocumentReport, deserializePsdFile, loadRasterCanvasFromFile } = await loadDocumentCommands()
+      const photoshopFamily = /\.(?:psd|psb)$/i.test(file.name) || file.type === "image/vnd.adobe.photoshop"
+      if (await preflightLargeDocumentImport(file, "open", picked)) return
+      if (photoshopFamily) {
+        const doc = await deserializePsdFile(file)
+        const kind = /\.psb$/i.test(file.name) ? "PSB" : "PSD"
+        doc.metadata = { ...(doc.metadata ?? {}), title: doc.metadata?.title ?? file.name, source: file.name }
+        createDocument(doc, `Open ${kind}`, lifecycleForPickedFile(file, picked, "psd"))
+        dispatch({ type: "add-document-report", report: createDocumentReport(doc, "PSD Import") })
+        rememberDoc(doc, "psd")
+        return
+      }
+      const raster = await loadRasterCanvasFromFile(file)
+      openRasterCanvasAsDocument(file, raster, picked)
+    } catch (err) {
+      if (await buildLargeDocumentRecovery(file, "open", err, picked)) return
+      toast.error(err instanceof Error ? err.message : "Could not open file")
+    }
+  }
+
   const openImageOrPsd = () => {
     void (async () => {
       let picked: { file: File; handle?: ReadableFileHandle; permission: PermissionState | "unsupported" }
@@ -1440,29 +1468,57 @@ export function MenuBar({
         toast.error(err instanceof Error ? err.message : "Could not open file")
         return
       }
-
-      const file = picked.file
-      try {
-        const { createDocumentReport, deserializePsdFile, loadRasterCanvasFromFile } = await loadDocumentCommands()
-        const photoshopFamily = /\.(?:psd|psb)$/i.test(file.name) || file.type === "image/vnd.adobe.photoshop"
-        if (await preflightLargeDocumentImport(file, "open", picked)) return
-        if (photoshopFamily) {
-          const doc = await deserializePsdFile(file)
-          const kind = /\.psb$/i.test(file.name) ? "PSB" : "PSD"
-          doc.metadata = { ...(doc.metadata ?? {}), title: doc.metadata?.title ?? file.name, source: file.name }
-          createDocument(doc, `Open ${kind}`, lifecycleForPickedFile(file, picked, "psd"))
-          dispatch({ type: "add-document-report", report: createDocumentReport(doc, "PSD Import") })
-          rememberDoc(doc, "psd")
-          return
-        }
-        const raster = await loadRasterCanvasFromFile(file)
-        openRasterCanvasAsDocument(file, raster, picked)
-      } catch (err) {
-        if (await buildLargeDocumentRecovery(file, "open", err, picked)) return
-        toast.error(err instanceof Error ? err.message : "Could not open file")
-      }
+      await openFileAsDocument(picked.file, picked)
     })()
   }
+
+  // Files dragged from the OS onto the canvas: place into the open document
+  // (what Photoshop does when you drop on a document window), or open as a new
+  // document when nothing is open or the file is a PSD/PSB.
+  const dropFilesOnCanvas = async (files: File[]) => {
+    for (const file of files) {
+      const photoshopFamily = /\.(?:psd|psb)$/i.test(file.name) || file.type === "image/vnd.adobe.photoshop"
+      if (!activeDoc || photoshopFamily) {
+        await openFileAsDocument(file)
+        continue
+      }
+      try {
+        const { loadRasterCanvasFromFile } = await loadDocumentCommands()
+        if (await preflightLargeDocumentImport(file, "place", undefined)) return
+        const raster = await loadRasterCanvasFromFile(file)
+        await placeRasterCanvas(file, raster.canvas, "Place Embedded")
+      } catch (err) {
+        if (await buildLargeDocumentRecovery(file, "place", err, undefined)) return
+        toast.error(err instanceof Error ? err.message : "Could not place image")
+      }
+    }
+  }
+
+  const dropFilesOnCanvasRef = React.useRef(dropFilesOnCanvas)
+  dropFilesOnCanvasRef.current = dropFilesOnCanvas
+  React.useEffect(() => {
+    const overCanvas = (event: DragEvent) =>
+      !!(event.target as Element | null)?.closest?.("[data-canvas-root]") && !!event.dataTransfer?.types.includes("Files")
+    const onDragOver = (event: DragEvent) => {
+      if (!overCanvas(event)) return
+      event.preventDefault()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy"
+    }
+    const onDrop = (event: DragEvent) => {
+      if (!overCanvas(event)) return
+      event.preventDefault()
+      const files = Array.from(event.dataTransfer?.files ?? []).filter(
+        (file) => file.type.startsWith("image/") || /\.(?:psd|psb)$/i.test(file.name),
+      )
+      if (files.length) void dropFilesOnCanvasRef.current(files)
+    }
+    window.addEventListener("dragover", onDragOver)
+    window.addEventListener("drop", onDrop)
+    return () => {
+      window.removeEventListener("dragover", onDragOver)
+      window.removeEventListener("drop", onDrop)
+    }
+  }, [])
 
   // The home workspace (and anything else without access to the pickers)
   // triggers File > Open through this event. openImageOrPsd is recreated
@@ -1687,7 +1743,10 @@ export function MenuBar({
 
   return (
     <>
-      <div className="flex items-center h-7 bg-[var(--ps-chrome)] border-b border-[var(--ps-divider)] px-1 select-none">
+      <div
+        className="flex items-center bg-[var(--ps-chrome)] border-b border-[var(--ps-divider)] px-1 select-none"
+        style={{ height: "var(--ps-menu-bar-height, 28px)", display: hidden ? "none" : undefined }}
+      >
         <div className="flex items-center pr-2 mr-1 border-r border-[var(--ps-divider)]">
           <div className="w-5 h-5 rounded-sm bg-[var(--ps-accent)] text-white text-[10px] font-semibold flex items-center justify-center mx-1">
             Ps

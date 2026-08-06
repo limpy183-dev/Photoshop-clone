@@ -15,9 +15,9 @@ import { heldRepeatShouldStep, heldStepMagnitude } from "@/editor/history-jump-s
 import { selectionToMaskCanvas } from "@/editor/tool/helpers"
 import {
   createAdjustmentLayer as createAdjustmentLayerModel,
-  invertAdjustmentMask,
   isAdjustmentNoop,
 } from "@/editor/adjustment-layers"
+import { invertMaskCanvas } from "@/editor/layer-workflows"
 import { FILTERS } from "@/editor/filters"
 
 type ToolShortcutGroup = {
@@ -156,12 +156,9 @@ export function useShortcuts(onOpenNew: () => void, onOpenCommandPalette?: () =>
 
       const invertActiveAdjustmentMask = () => {
         if (!activeDoc || !activeLayer || activeLayer.kind !== "adjustment") return false
-        const mask = invertAdjustmentMask({
-          layer: activeLayer,
-          width: activeDoc.width,
-          height: activeDoc.height,
-          makeCanvas,
-        })
+        const mask = invertMaskCanvas(
+          activeLayer.mask ?? makeCanvas(activeDoc.width, activeDoc.height, "#ffffff"),
+        )
         dispatch({ type: "set-layer-mask", id: activeLayer.id, mask })
         requestRender()
         window.setTimeout(() => commit("Invert Adjustment Mask", [activeLayer.id]), 0)

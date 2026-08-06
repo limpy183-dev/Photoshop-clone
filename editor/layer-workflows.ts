@@ -659,6 +659,53 @@ export function applyLuminanceMaskToCanvas(source: HTMLCanvasElement, mask: HTML
   return out
 }
 
+/**
+ * A clipping mask is the base layer's *alpha*, never its luminance — clipping a
+ * texture onto black artwork must keep the texture, not erase it. Masks stay on
+ * `applyLuminanceMaskToCanvas`; clipping groups all route through here.
+ */
+export function clipCanvasToAlpha(source: HTMLCanvasElement, clip: HTMLCanvasElement | null | undefined): HTMLCanvasElement {
+  if (!clip) return source
+  const out = document.createElement("canvas")
+  out.width = source.width
+  out.height = source.height
+  const ctx = out.getContext("2d")!
+  ctx.drawImage(source, 0, 0)
+  // destination-in clears everything the clip canvas does not cover, including
+  // the region past its edges when it is smaller than the layer.
+  ctx.globalCompositeOperation = "destination-in"
+  ctx.drawImage(clip, 0, 0)
+  return out
+}
+
+/** Coverage of a clipping base at one pixel: alpha only, matching `clipCanvasToAlpha`. */
+export function clipAlphaAt(clip: ImageData | null | undefined, x: number, y: number) {
+  if (!clip) return 1
+  if (x < 0 || y < 0 || x >= clip.width || y >= clip.height) return 0
+  return clip.data[(y * clip.width + x) * 4 + 3] / 255
+}
+
+/**
+ * The clipping base for `layers[index]`: the nearest layer below it, among its
+ * own siblings, that is not itself clipped. Groups cannot be a base — a layer
+ * clipped above one renders unclipped, which is the case `validateClippingGroup`
+ * warns about on PSD export.
+ *
+ * ponytail: a hidden base still clips rather than hiding the whole clipping
+ * group the way Photoshop does; make this tri-state if that ever matters.
+ */
+export function clipBaseCanvas(layers: readonly Layer[], index: number): HTMLCanvasElement | null {
+  const layer = layers[index]
+  if (!layer?.clipped) return null
+  const parentId = layer.parentId ?? null
+  for (let j = index - 1; j >= 0; j--) {
+    const candidate = layers[j]
+    if ((candidate.parentId ?? null) !== parentId || candidate.clipped) continue
+    return candidate.kind === "group" ? null : candidate.canvas ?? null
+  }
+  return null
+}
+
 function drawPath(ctx: CanvasRenderingContext2D, path: PathProps) {
   const drawOne = (item: PathProps) => {
     if (!item.points.length) return
@@ -1173,6 +1220,15 @@ export function filterLayersByPredicate(layers: readonly Layer[], predicates: La
   })
 }
 
+/**
+ * Inverts what the mask actually covers, not just its RGB. Masks reach us in two
+ * shapes — opaque grey (Reveal/Hide All, painting) and a white shape on
+ * transparency (anything built from a selection) — and compositing reads both as
+ * luminance x alpha. Inverting RGB alone left the transparent shape at zero
+ * coverage, so inverting a selection mask hid the layer instead of swapping which
+ * half showed. Normalising to opaque grey makes the operation an involution
+ * whichever shape came in.
+ */
 export function invertMaskCanvas(mask: HTMLCanvasElement): HTMLCanvasElement {
   const canvas = document.createElement("canvas")
   canvas.width = mask.width
@@ -1181,9 +1237,13 @@ export function invertMaskCanvas(mask: HTMLCanvasElement): HTMLCanvasElement {
   ctx.drawImage(mask, 0, 0)
   const image = ctx.getImageData(0, 0, canvas.width, canvas.height)
   for (let i = 0; i < image.data.length; i += 4) {
-    image.data[i] = 255 - image.data[i]
-    image.data[i + 1] = 255 - image.data[i + 1]
-    image.data[i + 2] = 255 - image.data[i + 2]
+    const coverage =
+      ((0.299 * image.data[i] + 0.587 * image.data[i + 1] + 0.114 * image.data[i + 2]) * image.data[i + 3]) / 255
+    const inverted = 255 - Math.round(coverage)
+    image.data[i] = inverted
+    image.data[i + 1] = inverted
+    image.data[i + 2] = inverted
+    image.data[i + 3] = 255
   }
   ctx.putImageData(image, 0, 0)
   return canvas

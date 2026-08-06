@@ -128,6 +128,15 @@ Last 12 history entries are kept as raw snapshots; older canvas-bearing history 
 
 Panels are registered in `panel-registry.tsx` — this is the single source of truth for the right dock, workspace presets, and command-palette discovery. Heavy dialogs (`CommandPalette`, `ImageSizeDialog`, etc.) are lazy-loaded with `React.lazy` to reduce first-paint bundle size.
 
+`preferences-dialog.tsx` renders both surfaces: the in-editor dialog and the
+`/settings` route (`PreferencesPage`, `surface="page"`). Add a preferences tab
+once and both get it. The Interface & Layout tab is backed by
+`editor/ui-layout.ts`, which is the single source of truth for which chrome
+elements can be hidden or resized. A size knob is published as a CSS variable on
+the document root (`--ps-menu-bar-height`, `--ps-tool-palette-width`, …), so a
+chrome component opts in by reading its own variable with the old hard-coded
+value as the fallback — nothing threads props through the shell for it.
+
 The big panels and dialogs are split rather than grown, along two seams. Anything
 pure — a probe, a picker list, an image-math pass — belongs in `editor/`, not in a
 `.tsx` file; `editor/document/` collects the layer-side ones (`mask-state.ts`,
@@ -196,6 +205,8 @@ Trace is captured on first retry. Base URL is `http://127.0.0.1:3000`.
 | `editor/webgl-compositor.ts` | WebGL composition with Canvas fallback |
 | `editor/history-storage.ts` | Lossless, cancellable history blob storage |
 | `components/photoshop/panel-registry.tsx` | Panel definitions + workspace presets |
+| `editor/ui-layout.ts` | Customizable chrome elements, interface themes, CSS variables |
+| `app/settings/page.tsx` | `/settings` route hosting the full preferences UI |
 | `editor/filters.ts` | Filter registry (60+ filters) |
 | `editor/filters/worker.ts` | Async + tiled filter execution |
 | `editor/document/io.ts` | PSD + raster file I/O |

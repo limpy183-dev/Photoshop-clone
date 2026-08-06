@@ -1,3 +1,4 @@
+import { clipBaseCanvas } from "@/editor/layer-workflows"
 import type { Layer } from "@/editor/types"
 import type { WebGLCompositeDocumentOptions, WebGLCompositeFallback, WebGLCompositeLayerContext, WebGLCompositeResult, WebGLEffectFallback, WebGLLayerInput } from "@/editor/webgl-compositor/types"
 import { GPU_ADJUSTMENT_TYPES, positiveInt } from "@/editor/webgl-compositor/shared"
@@ -15,14 +16,6 @@ let scratchTarget: HTMLCanvasElement | null = null
  */
 export function sharedCompositeTarget(): HTMLCanvasElement {
   return (scratchTarget ??= document.createElement("canvas"))
-}
-
-function resolveClipMask(layers: readonly Layer[], index: number): HTMLCanvasElement | null {
-  if (!layers[index]?.clipped) return null
-  for (let j = index - 1; j >= 0; j--) {
-    if (!layers[j].clipped) return layers[j].canvas
-  }
-  return null
 }
 
 function appendFallbacks(target: WebGLCompositeFallback[], layer: Layer, effects: readonly WebGLEffectFallback[]) {
@@ -119,7 +112,7 @@ export function compositeDocumentWithWebGL(
   for (let index = 0; index < layers.length; index++) {
     const layer = layers[index]
     if (!layer.visible || layer.kind === "group") continue
-    const clipMask = resolveClipMask(layers, index)
+    const clipMask = clipBaseCanvas(layers, index)
     const context: WebGLCompositeLayerContext = {
       width,
       height,

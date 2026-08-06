@@ -351,8 +351,9 @@ export function handleCanvasPointerMove(ctx: CanvasPointerContext, e: React.Poin
   }
 
   if (drag.type === "brush-resize" && brushResizeRef.current) {
-    const deltaX = e.clientX - brushResizeRef.current.startClientX
-    const newSize = Math.max(1, Math.min(2000, Math.round(brushResizeRef.current.startSize + deltaX)))
+    // movementX, not clientX: under pointer lock the cursor never moves.
+    brushResizeRef.current.deltaX += e.movementX
+    const newSize = Math.max(1, Math.min(2000, Math.round(brushResizeRef.current.startSize + brushResizeRef.current.deltaX)))
     dispatch({ type: "set-brush", brush: { size: newSize } })
     return
   }

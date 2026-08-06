@@ -14,6 +14,7 @@ export interface CanvasRuntimePreferences {
   screenDpi: number
   printResolution: number
   rulerUnits: RulerUnitPreference
+  showRulers: boolean
 }
 
 export type MoveToolRuntimeOptions = {
@@ -222,6 +223,7 @@ export function canvasRuntimePreferencesFrom(
     screenDpi: prefs.rulerGrid.screenDpi,
     printResolution: prefs.rulerGrid.printResolution,
     rulerUnits: prefs.rulerGrid.rulerUnits,
+    showRulers: prefs.interface.elements.canvasRulers.visible,
   }
 }
 

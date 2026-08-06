@@ -9,7 +9,7 @@
 
 import { applyModeAndColorManagement } from "@/editor/document/color-management"
 import { isEmptyDirtyRect } from "@/editor/dirty-rect"
-import { normalizeAdvancedBlending } from "@/editor/layer-workflows"
+import { clipBaseCanvas, normalizeAdvancedBlending } from "@/editor/layer-workflows"
 import { planMemoryBudget } from "@/editor/memory-budget"
 import { planCompositeCache } from "@/editor/performance-engine"
 import { planProgressiveRender } from "@/editor/progressive-renderer"
@@ -265,16 +265,7 @@ function compositeLayersWithCanvas2D(
       snapshot.getContext("2d")!.drawImage(cv, 0, 0)
       shallowKnockoutBackdrops.set(groupKey, snapshot)
     }
-    let clipMask: HTMLCanvasElement | null = null
-    if (layer.clipped) {
-      const idx = document.layers.indexOf(layer)
-      for (let j = idx - 1; j >= 0; j--) {
-        if (!document.layers[j].clipped) {
-          clipMask = document.layers[j].canvas
-          break
-        }
-      }
-    }
+    const clipMask = clipBaseCanvas(document.layers, document.layers.indexOf(layer))
     if (layer.kind === "adjustment" && layer.adjustment) {
       applyAdjustmentLayer(ctx, layer, document.width, document.height, clipMask, prefixFp)
     } else {

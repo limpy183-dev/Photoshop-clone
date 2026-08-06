@@ -186,6 +186,53 @@ function cloneLayerExact(layer: Layer, idMap: Map<string, string>): Layer {
   }
 }
 
+/**
+ * A layer plus every descendant beneath it, walked over `parentId` (the link
+ * the panel and PSD export both trust — `childIds` drifts on reorder).
+ */
+export function layerSubtreeIds(layers: Layer[], rootId: string): Set<string> {
+  const byId = new Map(layers.map((l) => [l.id, l]))
+  const ids = new Set<string>()
+  for (const layer of layers) {
+    let cur: Layer | undefined = layer
+    for (let hops = 0; cur && hops <= layers.length; hops += 1) {
+      if (cur.id === rootId) {
+        ids.add(layer.id)
+        break
+      }
+      cur = cur.parentId ? byId.get(cur.parentId) : undefined
+    }
+  }
+  return ids
+}
+
+/**
+ * Clone a layer and, when it is a group, every descendant under it. Ids are
+ * remapped so `parentId`/`childIds` inside the copy point at the copies. The
+ * returned layers keep their source order (children below their group), so the
+ * caller can splice the block in as-is.
+ */
+export function cloneLayerSubtree(layers: Layer[], rootId: string) {
+  const byId = new Map(layers.map((l) => [l.id, l]))
+  const root = byId.get(rootId)
+  const subtreeIds = layerSubtreeIds(layers, rootId)
+  const subtree = layers.filter((l) => subtreeIds.has(l.id))
+  const idMap = new Map<string, string>()
+  subtree.forEach((l) => idMap.set(l.id, uid("layer")))
+  const copies = subtree.map((l) => {
+    const copy = cloneLayerExact(l, idMap)
+    if (l.id !== rootId) return copy
+    return {
+      ...copy,
+      name: `${l.name} copy`,
+      locked: false,
+      parentId: root?.parentId,
+      linkGroupId: undefined,
+    }
+  })
+  return { copies, rootCopyId: idMap.get(rootId) ?? rootId }
+}
+
 export function duplicateDocumentDeep(doc: PsDocument): PsDocument {
   const idMap = new Map<string, string>()
   doc.layers.forEach((layer) => idMap.set(layer.id, uid("layer")))

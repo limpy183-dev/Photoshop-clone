@@ -4,6 +4,7 @@ import { isEmptyDirtyRect, intersectDirtyRect, unionDirtyRect, unionDirtyRects, 
 import { getFilter } from "@/editor/filters"
 import { planExpensiveFilterTiling } from "@/editor/filters/worker"
 import { renderLayerContentTile, type TileCanvasRect } from "@/editor/layer-tile-renderer"
+import { clipAlphaAt, clipBaseCanvas, clipCanvasToAlpha } from "@/editor/layer-workflows"
 import { planTileGrid } from "@/editor/performance-engine"
 import { smartFilterMaskAmountAt, smartFilterMaskToImageData } from "@/editor/smart-filter-masks"
 import type { BlendMode, Layer, LayerKind, PsDocument, ToolId } from "@/editor/types"
@@ -427,7 +428,7 @@ function renderLayerTileForComposite(layer: Layer, rect: TileCanvasRect, doc: Pi
     const vectorMask = rasterizeVectorMaskForWebGL(layer, doc.width, doc.height, rect)
     tile = applyMaskCanvas(tile, vectorMask)
   }
-  if (clipMask) tile = applyMaskCanvas(tile, clipMask)
+  if (clipMask) tile = clipCanvasToAlpha(tile, clipMask)
   return tile
 }
 function maskAmountAt(mask: ImageData | null, x: number, y: number) {
@@ -458,7 +459,7 @@ function applyAdjustmentTile(
   for (let y = 0; y < rect.h; y++) {
     for (let x = 0; x < rect.w; x++) {
       const i = (y * rect.w + x) * 4
-      const amount = opacity * maskAmountAt(mask, x, y) * maskAmountAt(clip, x, y)
+      const amount = opacity * maskAmountAt(mask, x, y) * clipAlphaAt(clip, x, y)
       for (let channel = 0; channel < 4; channel++) {
         after.data[i + channel] = before.data[i + channel] * (1 - amount) + after.data[i + channel] * amount
       }
@@ -467,11 +468,8 @@ function applyAdjustmentTile(
   ctx.putImageData(after, 0, 0)
 }
 function clippedBaseLayerCanvas(doc: Pick<PsDocument, "layers">, index: number, rect: TileCanvasRect) {
-  for (let j = index - 1; j >= 0; j--) {
-    const candidate = doc.layers[j]
-    if (!candidate.clipped) return cropCanvas(candidate.canvas, rect)
-  }
-  return null
+  const base = clipBaseCanvas(doc.layers, index)
+  return base ? cropCanvas(base, rect) : null
 }
 export function composeDocumentTile(
   doc: Pick<PsDocument, "width" | "height" | "layers" | "background">,
@@ -488,7 +486,7 @@ export function composeDocumentTile(
     const layer = doc.layers[index]
     if (!layer.visible || layer.kind === "group") continue
     if (!supportsTileOnlyLayer(layer)) continue
-    const clipMask = layer.clipped ? clippedBaseLayerCanvas(doc, index, rect) : null
+    const clipMask = clippedBaseLayerCanvas(doc, index, rect)
     if (layer.kind === "adjustment" && layer.adjustment) {
       applyAdjustmentTile(ctx, layer, rect, clipMask)
       continue

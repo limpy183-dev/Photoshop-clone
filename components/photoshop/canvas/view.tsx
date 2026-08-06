@@ -90,6 +90,7 @@ export function CanvasView() {
     toggleQuickMask: editor.toggleQuickMask,
     filterPreviews: editor.filterPreviews,
     activeSmartFilterMaskTarget: editor.activeSmartFilterMaskTarget,
+    maskEditLayerId: editor.maskEditLayerId,
   }), shallowEqualEditorSelection)
   const {
     activeDoc,
@@ -112,6 +113,7 @@ export function CanvasView() {
     toggleQuickMask,
     filterPreviews,
     activeSmartFilterMaskTarget,
+    maskEditLayerId,
   } = ed
 
   const compositeRef = React.useRef<HTMLCanvasElement>(null)
@@ -187,7 +189,7 @@ export function CanvasView() {
 
   const removeRef = React.useRef<{ points: { x: number; y: number }[] } | null>(null)
   const patchRef = React.useRef<{ mask: HTMLCanvasElement; bounds: { x: number; y: number; w: number; h: number } } | null>(null)
-  const brushResizeRef = React.useRef<{ startClientX: number; startSize: number } | null>(null)
+  const brushResizeRef = React.useRef<{ startSize: number; deltaX: number } | null>(null)
   /** The live floating selection, carried between move-tool drags. */
   const moveFloatRef = React.useRef<MoveFloat | null>(null)
   const mouseMoveCoalescerRef = React.useRef<RafCoalescer<MouseMoveDetail> | null>(null)
@@ -205,6 +207,7 @@ export function CanvasView() {
     cloneSource,
     symmetry,
     activeSmartFilterMaskTarget,
+    maskEditLayerId,
     compositeRef,
     drawingRef,
     requestRender,
@@ -740,8 +743,8 @@ export function CanvasView() {
 
   if (!activeDoc) {
     return (
-      <div className="flex-1 bg-[var(--ps-canvas-bg)] flex items-center justify-center text-[var(--ps-text-dim)]">
-        No document open. Use File ▸ New… to start.
+      <div data-canvas-root className="flex-1 bg-[var(--ps-canvas-bg)] flex items-center justify-center text-[var(--ps-text-dim)]">
+        No document open. Use File ▸ New… or drop an image here to start.
       </div>
     )
   }
@@ -758,7 +761,7 @@ export function CanvasView() {
       role="region"
       aria-label="Image editor canvas"
     >
-      {activeDoc && <Rulers
+      {activeDoc && canvasPrefs.showRulers && <Rulers
         width={activeDoc.width}
         height={activeDoc.height}
         zoom={viewZoom}
@@ -778,7 +781,7 @@ export function CanvasView() {
         />
       ) : null}
       <div
-        className="absolute inset-0 pt-[18px] pl-[18px] flex items-center justify-center overflow-auto"
+        className={cn("absolute inset-0 flex items-center justify-center overflow-auto", canvasPrefs.showRulers && "pt-[18px] pl-[18px]")}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}

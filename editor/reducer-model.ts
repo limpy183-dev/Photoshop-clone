@@ -305,6 +305,8 @@ export interface EditorState {
   documentLifecycle: Record<string, DocumentLifecycleState>
   /** Canvas painting target when editing a smart-filter mask in place. */
   activeSmartFilterMaskTarget: ActiveSmartFilterMaskTarget | null
+  /** Layer whose mask thumbnail is selected, so paint tools write the mask. */
+  maskEditLayerId: string | null
 }
 
 export function changedLayerIdsForHistoryLog(changedLayerIds: ChangedLayerIds | undefined): string[] | undefined {
@@ -359,6 +361,7 @@ export type Action =
   | { type: "set-transform"; transform: TransformState }
   | { type: "clear-transform" }
   | { type: "set-active-smart-filter-mask"; target: ActiveSmartFilterMaskTarget | null }
+  | { type: "set-mask-edit-layer"; id: string | null }
   | { type: "apply-brush-preset"; preset: BrushPreset }
   | { type: "add-brush-preset"; preset: BrushPreset }
   | { type: "remove-brush-preset"; id: string }

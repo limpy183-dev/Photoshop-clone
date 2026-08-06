@@ -101,6 +101,27 @@ export function nextAdjustmentLayerName(filterId: AdjustmentType, layers: readon
   return `${base} ${max + 1}`
 }
 
+/**
+ * Where a new adjustment layer belongs: directly above the active layer, above any
+ * adjustments already stacked on it, and inside the active layer's group. A selected
+ * group takes the adjustment at the top of its own children.
+ */
+export function adjustmentInsertIndex(layers: readonly Layer[], activeLayerId: string | undefined) {
+  const idx = layers.findIndex((layer) => layer.id === activeLayerId)
+  if (idx < 0) return { index: layers.length, parentId: undefined as string | undefined }
+  const active = layers[idx]
+  if (active.kind === "group") return { index: idx, parentId: active.id }
+  let index = idx + 1
+  while (
+    index < layers.length &&
+    layers[index].kind === "adjustment" &&
+    layers[index].parentId === active.parentId
+  ) {
+    index += 1
+  }
+  return { index, parentId: active.parentId }
+}
+
 export function createAdjustmentLayer({
   filterId,
   width,
@@ -131,31 +152,6 @@ export function createAdjustmentLayer({
     mask: withMask ? makeCanvas(width, height, "#ffffff") : null,
     adjustment: { type: filterId, params: defaultAdjustmentParams(filterId) },
   }
-}
-
-export function invertAdjustmentMask({
-  layer,
-  width,
-  height,
-  makeCanvas,
-}: {
-  layer: Layer
-  width: number
-  height: number
-  makeCanvas: (width: number, height: number, fill?: string) => HTMLCanvasElement
-}) {
-  const source = layer.mask ?? makeCanvas(width, height, "#ffffff")
-  const next = makeCanvas(source.width || width, source.height || height)
-  const ctx = next.getContext("2d")!
-  ctx.drawImage(source, 0, 0)
-  const img = ctx.getImageData(0, 0, next.width, next.height)
-  for (let i = 0; i < img.data.length; i += 4) {
-    img.data[i] = 255 - img.data[i]
-    img.data[i + 1] = 255 - img.data[i + 1]
-    img.data[i + 2] = 255 - img.data[i + 2]
-  }
-  ctx.putImageData(img, 0, 0)
-  return next
 }
 
 function escapeRegExp(value: string) {

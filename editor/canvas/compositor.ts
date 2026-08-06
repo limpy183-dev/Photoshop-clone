@@ -10,7 +10,7 @@ import {
 import { acquirePooledCanvas, makeCanvas, releasePooledCanvas } from "@/editor/canvas/utils"
 import { isAdjustmentNoop } from "@/editor/adjustment-layers"
 import { smartFilterMaskAmountAt, smartFilterMaskToImageData } from "@/editor/smart-filter-masks"
-import { applyLuminanceMaskToCanvas, normalizeAdvancedBlending } from "@/editor/layer-workflows"
+import { clipCanvasToAlpha, normalizeAdvancedBlending } from "@/editor/layer-workflows"
 import {
   canvasIdFor,
   layerStyleCacheKey,
@@ -54,13 +54,13 @@ export function renderLayerSourceForCompositor(layer: Layer, filterPreviewCanvas
   const advanced = normalizeAdvancedBlending(layer.advancedBlending)
   const vectorMask = layer.vectorMask ? rasterizeVectorMaskForWebGL(layer, content.width, content.height) : null
   const layerMask = layer.mask && layer.maskEnabled !== false ? layer.mask : null
-  const fillMasks = [layerMask, vectorMask].filter(Boolean) as HTMLCanvasElement[]
-  let fillContent = content
-  for (const mask of fillMasks) fillContent = applyLuminanceMaskToCanvas(fillContent, mask)
+  const fillContent = applyMasksToCanvas(content, layerMask, vectorMask)
 
-  let effectContent = content
-  if (advanced.layerMaskHidesEffects && layerMask) effectContent = applyLuminanceMaskToCanvas(effectContent, layerMask)
-  if (advanced.vectorMaskHidesEffects && vectorMask) effectContent = applyLuminanceMaskToCanvas(effectContent, vectorMask)
+  const effectContent = applyMasksToCanvas(
+    content,
+    advanced.layerMaskHidesEffects ? layerMask : null,
+    advanced.vectorMaskHidesEffects ? vectorMask : null,
+  )
 
   const renderLayer = { ...layer, canvas: fillContent }
   let toDraw: HTMLCanvasElement = fillContent
@@ -143,7 +143,9 @@ export function drawLayer(
   const rendered = renderLayerSourceForCompositor(layer, filterPreviewCanvas)
   let toDraw: HTMLCanvasElement = rendered.canvas
   if (clipMask) {
-    toDraw = applyLuminanceMaskToCanvas(toDraw, clipMask)
+    // Not applyMasksToCanvas: a clipping base contributes its alpha, not its
+    // luminance, so clipping onto dark artwork must not dim what is clipped.
+    toDraw = clipCanvasToAlpha(toDraw, clipMask)
   }
   const advanced = normalizeAdvancedBlending(layer.advancedBlending)
   if (advanced.knockout !== "none") {
@@ -347,13 +349,15 @@ export function applySmartFilters(
   return output
 }
 
-const maskAlphaCache = new WeakMap<HTMLCanvasElement, {
-  epoch: number
-  result: HTMLCanvasElement
-}>()
+type MaskLuma = "average" | "rec601"
 
-function getMaskAsAlphaCanvas(mask: HTMLCanvasElement): HTMLCanvasElement | null {
-  const cached = maskAlphaCache.get(mask)
+type MaskAlphaEntry = { epoch: number; result: HTMLCanvasElement }
+
+const maskAlphaCache = new WeakMap<HTMLCanvasElement, Partial<Record<MaskLuma, MaskAlphaEntry>>>()
+
+function getMaskAsAlphaCanvas(mask: HTMLCanvasElement, luma: MaskLuma = "average"): HTMLCanvasElement | null {
+  const entry = maskAlphaCache.get(mask) ?? {}
+  const cached = entry[luma]
   if (
     cached &&
     cached.epoch === maskAlphaEpoch &&
@@ -378,17 +382,49 @@ function getMaskAsAlphaCanvas(mask: HTMLCanvasElement): HTMLCanvasElement | null
   const sourceData = source.data
   const destinationData = destination.data
   for (let index = 0; index < sourceData.length; index += 4) {
-    const luminance =
-      ((sourceData[index] + sourceData[index + 1] + sourceData[index + 2]) *
-        (sourceData[index + 3] / 255)) /
-      3
+    const grey =
+      luma === "rec601"
+        ? 0.299 * sourceData[index] + 0.587 * sourceData[index + 1] + 0.114 * sourceData[index + 2]
+        : (sourceData[index] + sourceData[index + 1] + sourceData[index + 2]) / 3
     destinationData[index] = 255
     destinationData[index + 1] = 255
     destinationData[index + 2] = 255
-    destinationData[index + 3] = luminance
+    destinationData[index + 3] = grey * (sourceData[index + 3] / 255)
   }
   outputContext.putImageData(destination, 0, 0)
-  maskAlphaCache.set(mask, { epoch: maskAlphaEpoch, result: output })
+  entry[luma] = { epoch: maskAlphaEpoch, result: output }
+  maskAlphaCache.set(mask, entry)
+  return output
+}
+
+/**
+ * Punch one or more luminance masks into a copy of `source`, on the GPU.
+ *
+ * The CPU twin of this (`applyLuminanceMaskToCanvas`) reads back *both* the
+ * source and the mask and walks every pixel in JS. The compositor runs this
+ * once per masked layer per frame, so on a large document a single layer mask
+ * stalled every brush stroke. Here only the mask is read back, and only when
+ * its cached alpha copy is stale; the masking itself is a destination-in draw.
+ *
+ * ponytail: the mask->alpha cache is dropped wholesale on every forced render
+ * (see invalidateMaskAlphaCache), so a stroke still rebuilds it once a frame.
+ * Give mask canvases a content version if that shows up in a profile.
+ */
+function applyMasksToCanvas(
+  source: HTMLCanvasElement,
+  ...masks: (HTMLCanvasElement | null | undefined)[]
+): HTMLCanvasElement {
+  const present = masks.filter(Boolean) as HTMLCanvasElement[]
+  if (!present.length) return source
+  const output = makeCanvas(source.width, source.height)
+  const context = output.getContext("2d")!
+  context.drawImage(source, 0, 0)
+  context.globalCompositeOperation = "destination-in"
+  for (const mask of present) {
+    const alpha = getMaskAsAlphaCanvas(mask, "rec601")
+    if (alpha) context.drawImage(alpha, 0, 0)
+  }
+  context.globalCompositeOperation = "source-over"
   return output
 }
 

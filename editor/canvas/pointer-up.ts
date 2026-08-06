@@ -132,7 +132,8 @@ export function handleCanvasPointerUp(ctx: CanvasPointerContext, e: React.Pointe
 
   // Alt+drag brush resize: if no drag happened, do eyedropper pick instead
   if (drag.type === "brush-resize") {
-    const moved = brushResizeRef.current ? Math.abs(e.clientX - brushResizeRef.current.startClientX) > 3 : false
+    document.exitPointerLock?.()
+    const moved = brushResizeRef.current ? Math.abs(brushResizeRef.current.deltaX) > 3 : false
     if (!moved && drag.start) {
       const cv = compositeRef.current!
       const px = sampleCanvasColor(cv, drag.start, getEyedropperSampleSize())
@@ -672,6 +673,7 @@ export function handleCanvasPointerCancel(ctx: CanvasPointerContext, e: React.Po
     return
   }
   drawingRef.current = { type: null }
+  if (brushResizeRef.current) document.exitPointerLock?.()
   brushResizeRef.current = null
   removeRef.current = null
   paint.resetStrokeState()

@@ -190,6 +190,11 @@ export function EditMenu({
             <DropdownMenuItem onSelect={() => setPreferencesOpen(true)}>
               Preferences
             </DropdownMenuItem>
+            {/* Opened in a new tab so the current document survives; the editor
+                picks the change up through the storage event. */}
+            <DropdownMenuItem onSelect={() => window.open("/settings", "_blank", "noopener")}>
+              Settings Page…
+            </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => setShortcutsOpen(true)}>Keyboard Shortcuts…</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => setMenuCustomizationOpen(true)}>Menus…</DropdownMenuItem>
           </DropdownMenuContent>

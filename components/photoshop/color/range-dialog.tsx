@@ -241,11 +241,11 @@ export function ColorRangeDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[520px] bg-[var(--ps-panel)] border-[var(--ps-divider)] text-[var(--ps-text)]">
+      <DialogContent className="sm:max-w-[680px] bg-[var(--ps-panel)] border-[var(--ps-divider)] text-[var(--ps-text)]">
         <DialogHeader>
           <DialogTitle>Color Range</DialogTitle>
         </DialogHeader>
-        <div className="grid grid-cols-[1fr_300px] gap-4">
+        <div className="grid grid-cols-[minmax(0,1fr)_300px] gap-4">
           <div className="flex flex-col gap-3">
             <div className="grid grid-cols-2 gap-3">
               <label className="grid gap-1.5">
@@ -368,7 +368,7 @@ export function ColorRangeDialog({
           <div className="flex flex-col gap-1">
             <div className="text-[11px] text-[var(--ps-text-dim)]">Selection preview</div>
             <div className="border border-[var(--ps-divider)] bg-black p-1 inline-block">
-              <canvas ref={previewRef} onClick={samplePreview} className="block cursor-crosshair" />
+              <canvas ref={previewRef} onClick={samplePreview} className="block max-w-full cursor-crosshair" />
             </div>
           </div>
         </div>

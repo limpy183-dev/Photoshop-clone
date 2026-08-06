@@ -594,7 +594,7 @@ export function ExportAsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[calc(100vh-32px)] overflow-y-auto sm:max-w-[760px] bg-[var(--ps-panel)] border-[var(--ps-divider)] text-[var(--ps-text)]">
+      <DialogContent className="max-h-[calc(100vh-32px)] overflow-y-auto sm:max-w-[900px] bg-[var(--ps-panel)] border-[var(--ps-divider)] text-[var(--ps-text)]">
         <DialogHeader>
           <DialogTitle>Export As</DialogTitle>
           <DialogDescription className="sr-only">
@@ -667,7 +667,7 @@ export function ExportAsDialog({
             </div>
           ) : null}
         </div>
-        <div className="grid grid-cols-[360px_1fr] gap-4">
+        <div className="grid grid-cols-[360px_minmax(0,1fr)] gap-4">
           <div className="space-y-3">
             <div className="ps-checker border border-[var(--ps-divider)] rounded-sm min-h-[250px] flex items-center justify-center overflow-hidden">
               <canvas ref={previewRef} className="block max-w-full max-h-[250px]" />

@@ -15,6 +15,9 @@ import {
   Type as TypeIcon,
   Square as SquareIcon,
   Image as ImageIcon,
+  CornerDownRight,
+  Folder,
+  FolderOpen,
   PenTool,
   Palette,
 } from "lucide-react"
@@ -108,6 +111,118 @@ export function AdjustmentMaskThumb({ layer, maskState }: { layer: Layer; maskSt
       aria-label={`Adjustment mask ${maskState}`}
       className="h-6 w-8 shrink-0 rounded-[2px] border border-[var(--ps-divider)] bg-[var(--ps-panel-2)]"
     />
+  )
+}
+
+/** The icon/thumbnail cluster at the head of a layer row, per layer kind. */
+export function LayerRowThumbs({
+  layer,
+  isGroup,
+  maskState,
+  maskEditing,
+  onOpenAdjustment,
+  onSelectMask,
+}: {
+  layer: Layer
+  isGroup: boolean
+  maskState: string
+  maskEditing: boolean
+  onOpenAdjustment: () => void
+  onSelectMask: () => void
+}) {
+  if (isGroup) {
+    const Icon = layer.expanded ? FolderOpen : Folder
+    return <Icon className="w-4 h-4 text-[var(--ps-accent-2)] shrink-0" />
+  }
+  if (layer.kind === "adjustment") {
+    return (
+      <>
+        {layer.clipped ? (
+          <CornerDownRight
+            className="h-3 w-3 shrink-0 text-[var(--ps-accent-2)]"
+            data-testid={`adjustment-clip-icon-${layer.name}`}
+            aria-label="Adjustment clipped to layer below"
+          />
+        ) : (
+          <span className="h-3 w-3 shrink-0" aria-hidden />
+        )}
+        {/* Adjustment settings still open from the thumbnail; the row itself renames. */}
+        <span onDoubleClick={(e) => { e.stopPropagation(); onOpenAdjustment() }}>
+          <AdjustmentThumb layer={layer} />
+        </span>
+        <AdjustmentMaskThumb layer={layer} maskState={maskState} />
+      </>
+    )
+  }
+  return (
+    <>
+      <LayerThumb layer={layer} />
+      <LayerMaskThumb layer={layer} editing={maskEditing} onSelect={onSelectMask} />
+    </>
+  )
+}
+
+/**
+ * A pixel layer's own mask, and the control that makes it the paint target.
+ *
+ * Like the smart-filter mask thumbnail, this redraws off the render bus: the
+ * brush mutates the mask canvas in place without changing its identity.
+ */
+export function LayerMaskThumb({
+  layer,
+  editing,
+  onSelect,
+}: {
+  layer: Layer
+  editing: boolean
+  onSelect: () => void
+}) {
+  const ref = React.useRef<HTMLCanvasElement>(null)
+  const mask = layer.mask
+  const enabled = layer.maskEnabled !== false
+  const state = maskCoverageState(mask, enabled)
+
+  const draw = React.useCallback(() => {
+    const dst = ref.current
+    if (!dst || !mask || typeof mask.getContext !== "function") return
+    const ctx = dst.getContext("2d")!
+    ctx.fillStyle = "#222"
+    ctx.fillRect(0, 0, dst.width, dst.height)
+    ctx.globalAlpha = enabled ? 1 : 0.35
+    const ratio = Math.min(dst.width / mask.width, dst.height / mask.height)
+    const w = mask.width * ratio
+    const h = mask.height * ratio
+    ctx.drawImage(mask, (dst.width - w) / 2, (dst.height - h) / 2, w, h)
+    ctx.globalAlpha = 1
+  }, [mask, enabled])
+
+  React.useEffect(() => { draw() }, [draw])
+  useRenderSubscription(
+    React.useCallback(
+      (change: MergedRenderChange) => {
+        if (change.layerIds === "all" || change.layerIds.includes(layer.id)) draw()
+      },
+      [draw, layer.id],
+    ),
+  )
+
+  if (!mask) return null
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); onSelect() }}
+      data-testid={`layer-mask-thumb-${layer.name}`}
+      data-layer-mask-editing={editing ? "true" : "false"}
+      title={editing ? `Layer mask (${state}) — painting here` : `Layer mask (${state}) — click to paint it`}
+      aria-label={editing ? `Editing layer mask of ${layer.name}` : `Select layer mask of ${layer.name}`}
+      aria-pressed={editing}
+      className={cn(
+        "shrink-0 rounded-[2px] border",
+        editing ? "border-[var(--ps-accent)] ring-1 ring-[var(--ps-accent)]" : "border-[var(--ps-divider)]",
+      )}
+    >
+      <canvas ref={ref} width={32} height={24} className="block h-6 w-8" />
+    </button>
   )
 }
 

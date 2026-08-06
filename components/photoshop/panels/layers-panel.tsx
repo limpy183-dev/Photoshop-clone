@@ -16,12 +16,9 @@ import {
   ChevronDown,
   ChevronRight,
   FolderPlus,
-  Folder,
-  FolderOpen,
   Link2,
   Link2Off,
   CircleSlash2,
-  CornerDownRight,
   Search,
   Filter,
   ListChecks,
@@ -69,10 +66,8 @@ import { BLEND_MODE_OPTIONS, COLOR_LABELS } from "@/editor/document/layer-option
 import { LAYER_FILTER_PRESETS, LAYER_FILTER_TOKENS, type FilterKind } from "@/editor/document/layer-filtering"
 import { analyzeLayerHealth } from "@/editor/document/layer-health"
 import {
-  AdjustmentMaskThumb,
-  AdjustmentThumb,
   KindIcon,
-  LayerThumb,
+  LayerRowThumbs,
   PanelBtn,
   SmartFilterMaskThumb,
 } from "@/components/photoshop/panels/layers-panel-thumbs"
@@ -93,11 +88,13 @@ export function LayersPanel() {
     requestRender,
     selectedLayers,
     activeSmartFilterMaskTarget,
+    maskEditLayerId,
   } = useEditorSelector((editor) => editor)
   const [search, setSearch] = React.useState("")
   const [filterKind, setFilterKind] = React.useState<FilterKind>("all")
   const [dragId, setDragId] = React.useState<string | null>(null)
   const [hoverId, setHoverId] = React.useState<string | null>(null)
+  const [editingNameId, setEditingNameId] = React.useState<string | null>(null)
   const [hoverPos, setHoverPos] = React.useState<"above" | "below" | "into">("above")
   const [altDown, setAltDown] = React.useState(false)
   const [altClipLayerId, setAltClipLayerId] = React.useState<string | null>(null)
@@ -212,6 +209,18 @@ export function LayersPanel() {
 
   // ---- Batch operations across the current multi-selection ----
   const batchTargets = (): Layer[] => (selectedLayers.length ? selectedLayers : active ? [active] : [])
+
+  // Delete/Backspace with a layer row focused removes the layer (groups take
+  // their contents with them). The canvas shortcut that clears pixels to
+  // transparent skips anything already handled here, via defaultPrevented.
+  const deleteFocusedLayers = (row: Layer) => {
+    const targets = (activeDoc.selectedLayerIds.includes(row.id) ? batchTargets() : [row]).filter(
+      (l) => !layerLocked(l),
+    )
+    if (!targets.length) return
+    for (const target of targets) dispatch({ type: "remove-layer", id: target.id })
+    setTimeout(() => commit(targets.length > 1 ? "Delete Layers" : "Delete Layer", []), 0)
+  }
 
   const batchRenameSelected = () => {
     const targets = batchTargets().filter((l) => !layerLocked(l))
@@ -958,7 +967,18 @@ export function LayersPanel() {
                 setHoverId(null)
               }}
               onClick={(e) => onLayerClick(e, l)}
-              onDoubleClick={() => openAdjustmentSettings(l)}
+              onDoubleClick={() => {
+                if (!isLocked) setEditingNameId(l.id)
+              }}
+              // Focusable by click only — one tab stop per layer would drown
+              // the dock's tab order, and the row is reached by pointer anyway.
+              tabIndex={-1}
+              onKeyDown={(e) => {
+                if (e.key !== "Delete" && e.key !== "Backspace") return
+                if (editingNameId === l.id) return
+                e.preventDefault()
+                deleteFocusedLayers(l)
+              }}
               onMouseEnter={() => {
                 if (canAltClip) setAltClipLayerId(l.id)
               }}
@@ -1070,29 +1090,16 @@ export function LayersPanel() {
                 )}
               </button>
 
-              {isGroup ? (
-                l.expanded ? (
-                  <FolderOpen className="w-4 h-4 text-[var(--ps-accent-2)] shrink-0" />
-                ) : (
-                  <Folder className="w-4 h-4 text-[var(--ps-accent-2)] shrink-0" />
-                )
-              ) : l.kind === "adjustment" ? (
-                <>
-                  {l.clipped ? (
-                    <CornerDownRight
-                      className="h-3 w-3 shrink-0 text-[var(--ps-accent-2)]"
-                      data-testid={`adjustment-clip-icon-${l.name}`}
-                      aria-label="Adjustment clipped to layer below"
-                    />
-                  ) : (
-                    <span className="h-3 w-3 shrink-0" aria-hidden />
-                  )}
-                  <AdjustmentThumb layer={l} />
-                  <AdjustmentMaskThumb layer={l} maskState={maskState ?? "none"} />
-                </>
-              ) : (
-                <LayerThumb layer={l} />
-              )}
+              <LayerRowThumbs
+                layer={l}
+                isGroup={isGroup}
+                maskState={maskState ?? "none"}
+                maskEditing={maskEditLayerId === l.id}
+                onOpenAdjustment={() => openAdjustmentSettings(l)}
+                onSelectMask={() =>
+                  dispatch({ type: "set-mask-edit-layer", id: maskEditLayerId === l.id ? null : l.id })
+                }
+              />
 
               {l.kind === "adjustment" ? null : <KindIcon kind={l.kind || "raster"} />}
 
@@ -1104,19 +1111,33 @@ export function LayersPanel() {
               ) : null}
 
               <input
+                ref={(el) => {
+                  if (el && editingNameId === l.id && document.activeElement !== el) {
+                    el.focus()
+                    el.select()
+                  }
+                }}
                 aria-label={`Layer name: ${l.name}`}
                 value={l.name}
                 disabled={isLocked}
+                readOnly={editingNameId !== l.id}
                 onChange={(e) => {
                   if (isLocked) return
                   dispatch({ type: "rename-layer", id: l.id, name: e.target.value })
                 }}
                 onBlur={() => {
+                  setEditingNameId((id) => (id === l.id ? null : id))
                   if (!isLocked) commitLayerChange("Rename Layer", [l.id])
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === "Escape") e.currentTarget.blur()
                 }}
                 onClick={(e) => e.stopPropagation()}
                 onDoubleClick={(e) => e.stopPropagation()}
-                className="bg-transparent flex-1 text-[11px] outline-none focus:bg-[var(--ps-panel-2)] px-1 rounded-sm min-w-0 disabled:cursor-not-allowed disabled:opacity-70"
+                className={cn(
+                  "bg-transparent flex-1 text-[11px] outline-none focus:bg-[var(--ps-panel-2)] px-1 rounded-sm min-w-0 disabled:cursor-not-allowed disabled:opacity-70",
+                  editingNameId !== l.id && "pointer-events-none select-none",
+                )}
               />
 
               {/* Color label picker */}

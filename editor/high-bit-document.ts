@@ -13,6 +13,7 @@ import {
 import { resolveColorReplacementPixel, type BrushRgba } from "@/editor/brush-engine"
 import { getFilter, type FilterContext } from "@/editor/filters"
 import { DIRECT_HIGH_BIT_ADJUSTMENTS, HIGH_BIT_BLUR_FILTERS, HIGH_BIT_SHARPEN_FILTERS } from "@/editor/high-bit-filter-sets"
+import { clipBaseCanvas } from "@/editor/layer-workflows"
 import type { SelectionImageSource } from "@/editor/selection-algorithms"
 import type { BlendMode, Layer, PsDocument } from "@/editor/types"
 
@@ -1267,12 +1268,13 @@ export function compositeHighBitEditingSurface(
   }
 }
 
-function maskAmount(mask: HTMLCanvasElement | null | undefined, x: number, y: number, width: number, height: number) {
+/** `alphaOnly` is the clipping-base reading: a base clips by alpha, never by luminance. */
+function maskAmount(mask: HTMLCanvasElement | null | undefined, x: number, y: number, width: number, height: number, alphaOnly = false) {
   if (!mask || typeof mask.getContext !== "function") return 1
   const mx = Math.max(0, Math.min(mask.width - 1, Math.floor((x / width) * mask.width)))
   const my = Math.max(0, Math.min(mask.height - 1, Math.floor((y / height) * mask.height)))
   const px = mask.getContext("2d")!.getImageData(mx, my, 1, 1).data
-  return ((px[0] + px[1] + px[2]) / 765) * (px[3] / 255)
+  return (alphaOnly ? 1 : (px[0] + px[1] + px[2]) / 765) * (px[3] / 255)
 }
 
 function blendChannel(src: number, dst: number, mode: BlendMode) {
@@ -1300,7 +1302,7 @@ function compositeHighBit(base: HighBitImage, layer: HighBitImage, options: {
   for (let y = 0; y < base.height; y++) {
     for (let x = 0; x < base.width; x++) {
       const i = (y * base.width + x) * 4
-      const coverage = opacity * maskAmount(options.mask, x, y, base.width, base.height) * maskAmount(options.clipMask, x, y, base.width, base.height)
+      const coverage = opacity * maskAmount(options.mask, x, y, base.width, base.height) * maskAmount(options.clipMask, x, y, base.width, base.height, true)
       if (coverage <= 0) continue
       const srcAlpha = readUnit(layer, i + 3) * coverage
       const dstAlpha = readUnit(base, i + 3)
@@ -1329,7 +1331,7 @@ function mixAdjusted(base: HighBitImage, adjusted: HighBitImage, layer: Layer, c
       const i = (y * base.width + x) * 4
       const amount = opacity *
         (layer.maskEnabled === false ? 1 : maskAmount(layer.mask, x, y, base.width, base.height)) *
-        maskAmount(clipMask, x, y, base.width, base.height)
+        maskAmount(clipMask, x, y, base.width, base.height, true)
       if (amount <= 0) continue
       for (let c = 0; c < 4; c++) {
         writeUnit(out, i + c, readUnit(base, i + c) * (1 - amount) + readUnit(adjusted, i + c) * amount)
@@ -1351,16 +1353,7 @@ export function renderDocumentHighBitComposite(
 
   for (const layer of doc.layers) {
     if (!layer.visible || layer.kind === "group") continue
-    let clipMask: HTMLCanvasElement | null = null
-    if (layer.clipped) {
-      const idx = doc.layers.indexOf(layer)
-      for (let j = idx - 1; j >= 0; j--) {
-        if (!doc.layers[j].clipped) {
-          clipMask = doc.layers[j].canvas
-          break
-        }
-      }
-    }
+    const clipMask = clipBaseCanvas(doc.layers, doc.layers.indexOf(layer))
     if (layer.kind === "adjustment" && layer.adjustment) {
       if (layer.opacity <= 0) continue
       const adjusted = applyHighBitFilter(current, layer.adjustment.type, layer.adjustment.params)

@@ -4,6 +4,7 @@ import {
   alphaBounds,
   cloneCanvas,
   cloneLayerIntoDocument,
+  cloneLayerSubtree,
   duplicateDocumentDeep,
 } from "@/editor/document-cloning"
 import type { AlphaChannel, Layer, PsDocument } from "@/editor/types"
@@ -196,4 +197,32 @@ test("duplicateDocumentDeep rekeys document-owned identifiers and deep clones ed
 
   duplicated.metadata!.title = "Changed"
   expect(doc.metadata?.title).toBe("Original")
+})
+
+test("cloneLayerSubtree copies a group with its nested contents", () => {
+  const inner = rasterLayer("inner", transparentCanvas(10, 8, [{ x: 1, y: 1 }]))
+  const innerGroup = rasterLayer("innerGroup", transparentCanvas(10, 8))
+  const outer = rasterLayer("outer", transparentCanvas(10, 8))
+  const outsider = rasterLayer("outsider", transparentCanvas(10, 8, [{ x: 3, y: 3 }]))
+  innerGroup.kind = "group"
+  outer.kind = "group"
+  inner.parentId = innerGroup.id
+  innerGroup.parentId = outer.id
+  innerGroup.childIds = [inner.id]
+  outer.childIds = [innerGroup.id]
+
+  const { copies, rootCopyId } = cloneLayerSubtree([outsider, inner, innerGroup, outer], "outer")
+
+  expect(copies).toHaveLength(3)
+  expect(copies.map((l) => l.name)).toEqual(["inner", "innerGroup", "outer copy"])
+  const [innerCopy, innerGroupCopy, outerCopy] = copies
+  expect(outerCopy.id).toBe(rootCopyId)
+  expect(copies.map((l) => l.id)).not.toContain("outer")
+  expect(innerCopy.parentId).toBe(innerGroupCopy.id)
+  expect(innerGroupCopy.parentId).toBe(outerCopy.id)
+  expect(innerGroupCopy.childIds).toEqual([innerCopy.id])
+  expect(outerCopy.childIds).toEqual([innerGroupCopy.id])
+  expect(outerCopy.parentId).toBeUndefined()
+  expect(innerCopy.canvas).not.toBe(inner.canvas)
+  expect(pixels(innerCopy.canvas)).toEqual(pixels(inner.canvas))
 })

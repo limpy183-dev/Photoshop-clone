@@ -155,6 +155,7 @@ export interface PaintSessionOptions {
   cloneSource: CloneSourceSettings
   symmetry: SymmetrySettings
   activeSmartFilterMaskTarget: { layerId: string; filterId: string } | null | undefined
+  maskEditLayerId: string | null | undefined
   compositeRef: React.RefObject<HTMLCanvasElement | null>
   drawingRef: CanvasDragRef
   requestRender: (change?: RenderChange) => void
@@ -174,6 +175,7 @@ export function useCanvasPaintSession(options: PaintSessionOptions) {
     cloneSource,
     symmetry,
     activeSmartFilterMaskTarget,
+    maskEditLayerId,
     compositeRef,
     drawingRef,
     requestRender,
@@ -216,6 +218,18 @@ export function useCanvasPaintSession(options: PaintSessionOptions) {
     return filter.mask
   }
 
+  /**
+   * The active layer's own mask, when its thumbnail is the selected target.
+   * Adjustment layers are excluded: they always paint their mask anyway.
+   */
+  function activeLayerMaskCanvas(): HTMLCanvasElement | null {
+    if (!activeLayer || activeDoc?.quickMask) return null
+    if (maskEditLayerId !== activeLayer.id || activeLayer.kind === "adjustment") return null
+    if (activeLayer.maskEnabled === false || !activeLayer.mask) return null
+    if (!layerAllowsDrawing(activeLayer)) return null
+    return activeLayer.mask
+  }
+
   function getActiveCtx(): PaintTarget | null {
     if (activeDoc?.quickMask && activeDoc.quickMaskCanvas) {
       const cv = activeDoc.quickMaskCanvas
@@ -227,6 +241,11 @@ export function useCanvasPaintSession(options: PaintSessionOptions) {
       return ctx ? { ctx, canvas: smartFilterMask, targetKind: "smart-filter-mask" } : null
     }
     if (!layerAllowsDrawing(activeLayer)) return null
+    const layerMask = activeLayerMaskCanvas()
+    if (layerMask) {
+      const ctx = layerMask.getContext("2d")
+      return ctx ? { ctx, canvas: layerMask } : null
+    }
     if (activeLayer.kind === "adjustment") {
       if (activeLayer.maskEnabled === false || !activeLayer.mask) return null
       const ctx = activeLayer.mask.getContext("2d")
@@ -240,7 +259,8 @@ export function useCanvasPaintSession(options: PaintSessionOptions) {
 
   function prepareTransparencyLockMask() {
     transparencyLockMaskRef.current = null
-    if (!activeDoc || activeDoc.quickMask || activeSmartFilterMaskCanvas() || !activeLayer?.lockTransparency) return
+    if (!activeDoc || activeDoc.quickMask || activeSmartFilterMaskCanvas() || activeLayerMaskCanvas()) return
+    if (!activeLayer?.lockTransparency) return
     if (typeof activeLayer.canvas.getContext !== "function") return
     const mask = makeCanvas(activeLayer.canvas.width, activeLayer.canvas.height)
     mask.getContext("2d")!.drawImage(activeLayer.canvas, 0, 0)
@@ -261,7 +281,7 @@ export function useCanvasPaintSession(options: PaintSessionOptions) {
   function captureHighBitPaintSource() {
     highBitStrokeSourceRef.current = null
     if (!activeDoc || activeDoc.bitDepth <= 8 || activeDoc.quickMask || !activeLayer) return
-    if (activeLayer.kind === "adjustment" || activeSmartFilterMaskCanvas()) return
+    if (activeLayer.kind === "adjustment" || activeSmartFilterMaskCanvas() || activeLayerMaskCanvas()) return
     if (!layerAllowsDrawing(activeLayer) || typeof activeLayer.canvas.getContext !== "function") return
     highBitStrokeSourceRef.current = cloneCanvasForTool(activeLayer.canvas)
   }
@@ -390,7 +410,7 @@ export function useCanvasPaintSession(options: PaintSessionOptions) {
     // which drops every later frame of the stroke onto the slow path.
     const dirty = drag.type === "stroke" ? drag.frameDirty : undefined
     drag.frameDirty = undefined
-    if (!activeDoc || !activeLayer || !dirty || activeDoc.quickMask || activeSmartFilterMaskCanvas()) {
+    if (!activeDoc || !activeLayer || !dirty || activeDoc.quickMask || activeSmartFilterMaskCanvas() || activeLayerMaskCanvas()) {
       requestRender()
       return
     }
@@ -822,7 +842,7 @@ export function useCanvasPaintSession(options: PaintSessionOptions) {
     const drag = drawingRef.current
     if (drag.type !== "stroke") return
     const smartFilterMaskLayerId = activeSmartFilterMaskCanvas() ? activeSmartFilterMaskTarget?.layerId : null
-    const label = smartFilterMaskLayerId ? "Smart Filter Mask" : labelForTool(tool)
+    const label = smartFilterMaskLayerId ? "Smart Filter Mask" : activeLayerMaskCanvas() ? "Layer Mask" : labelForTool(tool)
     const changedLayerIds =
       activeLayer && drag.dirty && !activeDoc?.quickMask
         ? { ids: [smartFilterMaskLayerId ?? activeLayer.id], bounds: { [smartFilterMaskLayerId ?? activeLayer.id]: drag.dirty } }

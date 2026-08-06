@@ -184,7 +184,7 @@ export function CameraRawDialog({ open, onOpenChange }: { open: boolean; onOpenC
             Adjust rendered layer pixels with camera-raw-style controls; this is not a RAW demosaic or high-bit pipeline.
           </DialogDescription>
         </DialogHeader>
-        <div className="grid grid-cols-[1fr_280px] min-h-[520px]">
+        <div className="grid grid-cols-[minmax(0,1fr)_280px] min-h-[520px]">
           <div className="flex items-center justify-center overflow-hidden bg-[#1b1b1b] p-4">
             <div className="ps-checker overflow-hidden rounded-sm border border-[var(--ps-divider)]">
               <canvas ref={previewRef} className="block max-h-[460px] max-w-full" />
@@ -233,8 +233,8 @@ export function CameraRawDialog({ open, onOpenChange }: { open: boolean; onOpenC
                 </div>
                 <div className="space-y-2 p-2">
                   {group.keys.map((key) => (
-                    <label key={key} className="grid grid-cols-[74px_1fr_48px] items-center gap-2">
-                      <span className="text-[var(--ps-text-dim)]">{LABELS[key]}</span>
+                    <label key={key} className="grid grid-cols-[74px_minmax(0,1fr)_48px] items-center gap-2">
+                      <span className="truncate text-[var(--ps-text-dim)]">{LABELS[key]}</span>
                       <input
                         type="range"
                         min={key === "exposure" ? -5 : -100}
@@ -244,6 +244,7 @@ export function CameraRawDialog({ open, onOpenChange }: { open: boolean; onOpenC
                         onChange={(event) =>
                           setSettings((current) => ({ ...current, [key]: Number(event.target.value) }))
                         }
+                        className="w-full min-w-0"
                       />
                       <input
                         type="number"
@@ -254,7 +255,7 @@ export function CameraRawDialog({ open, onOpenChange }: { open: boolean; onOpenC
                         onChange={(event) =>
                           setSettings((current) => ({ ...current, [key]: Number(event.target.value) }))
                         }
-                        className="h-6 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-right"
+                        className="h-6 w-full min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-right"
                       />
                     </label>
                   ))}
@@ -269,12 +270,12 @@ export function CameraRawDialog({ open, onOpenChange }: { open: boolean; onOpenC
                 <NestedSlider label="Distortion" value={settings.optics?.distortion ?? 0} onChange={(value) => setSettings((current) => ({ ...current, optics: { ...(current.optics ?? {}), distortion: value } }))} />
                 <NestedSlider label="Vignette" value={settings.optics?.vignette ?? 0} onChange={(value) => setSettings((current) => ({ ...current, optics: { ...(current.optics ?? {}), vignette: value } }))} />
                 <NestedSlider label="Chromatic" value={settings.optics?.chromaticAberration ?? 0} onChange={(value) => setSettings((current) => ({ ...current, optics: { ...(current.optics ?? {}), chromaticAberration: value } }))} />
-                <label className="grid grid-cols-[74px_1fr] items-center gap-2">
-                  <span className="text-[var(--ps-text-dim)]">Profile</span>
+                <label className="grid grid-cols-[74px_minmax(0,1fr)] items-center gap-2">
+                  <span className="truncate text-[var(--ps-text-dim)]">Profile</span>
                   <select
                     value={settings.optics?.profileId ?? "none"}
                     onChange={(event) => setSettings((current) => ({ ...current, optics: { ...(current.optics ?? {}), profileId: event.target.value as keyof typeof CAMERA_RAW_LENS_PROFILES } }))}
-                    className="h-6 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1"
+                    className="h-6 w-full min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1"
                     aria-label="Camera Raw lens profile"
                   >
                     {Object.values(CAMERA_RAW_LENS_PROFILES).map((profile) => (
@@ -341,9 +342,9 @@ function NestedSlider({
   max?: number
 }) {
   return (
-    <label className="grid grid-cols-[74px_1fr_48px] items-center gap-2">
-      <span className="text-[var(--ps-text-dim)]">{label}</span>
-      <input type="range" min={min} max={max} step={1} value={value} onChange={(event) => onChange(Number(event.target.value))} />
+    <label className="grid grid-cols-[74px_minmax(0,1fr)_48px] items-center gap-2">
+      <span className="truncate text-[var(--ps-text-dim)]">{label}</span>
+      <input type="range" min={min} max={max} step={1} value={value} onChange={(event) => onChange(Number(event.target.value))} className="w-full min-w-0" />
       <input
         type="number"
         min={min}
@@ -351,7 +352,7 @@ function NestedSlider({
         step={1}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
-        className="h-6 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-right"
+        className="h-6 w-full min-w-0 rounded-sm border border-[var(--ps-divider)] bg-[var(--ps-panel-2)] px-1 text-right"
       />
     </label>
   )

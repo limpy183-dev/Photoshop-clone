@@ -11,7 +11,13 @@ import {
   type HighBitLayer,
 } from "@/editor/high-bit-document"
 import { applyLayerStyle } from "@/editor/layer-styles"
-import { applyLuminanceMaskToCanvas, normalizeAdvancedBlending } from "@/editor/layer-workflows"
+import {
+  applyLuminanceMaskToCanvas,
+  clipAlphaAt,
+  clipBaseCanvas,
+  clipCanvasToAlpha,
+  normalizeAdvancedBlending,
+} from "@/editor/layer-workflows"
 import { smartFilterMaskAmountAt, smartFilterMaskToImageData } from "@/editor/smart-filter-masks"
 import type { Layer, PsDocument } from "@/editor/types"
 
@@ -138,7 +144,7 @@ function applyAdjustmentForIo(ctx: CanvasRenderingContext2D, layer: Layer, width
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const i = (y * width + x) * 4
-      const amount = opacity * maskAmountAt(mask, x, y) * maskAmountAt(clip, x, y)
+      const amount = opacity * maskAmountAt(mask, x, y) * clipAlphaAt(clip, x, y)
       for (let k = 0; k < 4; k++) {
         after.data[i + k] = before.data[i + k] * (1 - amount) + after.data[i + k] * amount
       }
@@ -167,21 +173,12 @@ export function renderDocumentComposite(
   for (const layer of doc.layers) {
     if (!layer.visible || layer.kind === "group") continue
     if (typeof layer.canvas?.getContext !== "function") continue
-    let clipMask: HTMLCanvasElement | null = null
-    if (layer.clipped) {
-      const idx = doc.layers.indexOf(layer)
-      for (let j = idx - 1; j >= 0; j--) {
-        if (!doc.layers[j].clipped) {
-          clipMask = doc.layers[j].canvas
-          break
-        }
-      }
-    }
+    const clipMask = clipBaseCanvas(doc.layers, doc.layers.indexOf(layer))
     if (layer.kind === "adjustment" && layer.adjustment) {
       applyAdjustmentForIo(ctx, layer, doc.width, doc.height, clipMask)
       continue
     }
-    const toDraw = withLayerMask(renderableLayer(layer), clipMask)
+    const toDraw = clipCanvasToAlpha(renderableLayer(layer), clipMask)
     compositeLayer(ctx, toDraw, layer.blendMode, layer.opacity, layer.style ? 1 : layer.fillOpacity ?? 1)
   }
   return applyModeAndColorManagement(flat, doc, { purpose: options.colorPurpose ?? "preview" })

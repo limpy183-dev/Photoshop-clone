@@ -20,7 +20,8 @@ export function StatusBar({ onHide }: { onHide?: () => void }) {
     return (
       <div
         data-testid="status-bar"
-        className="flex h-6 items-center border-t border-[var(--ps-divider)] bg-[var(--ps-chrome)] px-2 text-[11px] text-[var(--ps-text-dim)]"
+        className="flex items-center border-t border-[var(--ps-divider)] bg-[var(--ps-chrome)] px-2 text-[11px] text-[var(--ps-text-dim)]"
+        style={{ height: "var(--ps-status-bar-height, 24px)" }}
       >
         <span>Ready</span>
         <div className="flex-1" />
@@ -44,7 +45,8 @@ export function StatusBar({ onHide }: { onHide?: () => void }) {
   return (
     <div
       data-testid="status-bar"
-      className="flex h-6 items-center gap-3 overflow-hidden border-t border-[var(--ps-divider)] bg-[var(--ps-chrome)] px-2 text-[11px] text-[var(--ps-text-dim)]"
+      className="flex items-center gap-3 overflow-hidden border-t border-[var(--ps-divider)] bg-[var(--ps-chrome)] px-2 text-[11px] text-[var(--ps-text-dim)]"
+      style={{ height: "var(--ps-status-bar-height, 24px)" }}
     >
       <input
         value={zoomInput}

@@ -3,7 +3,7 @@
 import * as React from "react"
 import { useEditorSelector } from "@/components/photoshop/editor/context"
 import { dispatchPhotoshopEvent } from "@/editor/events"
-import { Copy, RotateCcw, X } from "lucide-react"
+import { MoreHorizontal, RotateCcw, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
   DropdownMenu,
@@ -58,7 +58,12 @@ export function DocumentTabs() {
   }
 
   return (
-    <div role="toolbar" aria-label="Open documents" className="h-7 bg-[var(--ps-chrome)] border-b border-[var(--ps-divider)] flex items-end gap-px overflow-x-auto">
+    <div
+      role="toolbar"
+      aria-label="Open documents"
+      className="bg-[var(--ps-chrome)] border-b border-[var(--ps-divider)] flex items-end gap-px overflow-x-auto"
+      style={{ height: "var(--ps-document-tabs-height, 28px)" }}
+    >
       {documents.map((d) => {
         const isActive = d.id === activeDocId
         return (
@@ -115,7 +120,7 @@ export function DocumentTabs() {
                   className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-[var(--ps-tool-hover)] rounded-sm w-4 h-4 flex items-center justify-center"
                   aria-label={`Document options for ${d.name}`}
                 >
-                  <Copy className="w-3 h-3" />
+                  <MoreHorizontal className="w-3 h-3" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-56">
